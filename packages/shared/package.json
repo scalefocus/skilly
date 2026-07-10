@@ -1,0 +1,57 @@
+{
+  "name": "@skilly/shared",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./external-tool": {
+      "types": "./dist/external-tool.d.ts",
+      "default": "./dist/external-tool.js"
+    },
+    "./harness": {
+      "types": "./dist/harness.d.ts",
+      "default": "./dist/harness.js"
+    },
+    "./agents": {
+      "types": "./dist/agents.d.ts",
+      "default": "./dist/agents.js"
+    },
+    "./skills-hub": {
+      "types": "./dist/skills-hub.d.ts",
+      "default": "./dist/skills-hub.js"
+    },
+    "./version": {
+      "types": "./dist/version.d.ts",
+      "default": "./dist/version.js"
+    },
+    "./email": {
+      "types": "./dist/email.d.ts",
+      "default": "./dist/email.js"
+    },
+    "./email-template": {
+      "types": "./dist/email-template.d.ts",
+      "default": "./dist/email-template.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "default": "./dist/notifications.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && find dist -name '*.test.js' | xargs node --test",
+    "lint": "echo \"(configure eslint)\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^6.0.0"
+  }
+}

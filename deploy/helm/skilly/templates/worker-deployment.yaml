@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "skilly.fullname" . }}-git
+  labels:
+    {{- include "skilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.worker.gitStorage.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.worker.gitStorage.size | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "skilly.fullname" . }}-worker
+  labels:
+    {{- include "skilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  # Leader-locked (Postgres advisory lock): replicas >1 are safe — only the leader runs the
+  # SCIM reconcile / publish / mirror / scan / token / pointer-refresh loops. Raising this
+  # requires ReadWriteMany git storage so all replicas can serve the synthesized repos.
+  replicas: {{ .Values.worker.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "skilly.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Run unprivileged (audit M-5). fsGroup makes the git PVC group-writable for uid 1000; the
+      # worker writes synthesized repos there and clones into the container's writable /tmp.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: {{ include "skilly.workerImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.worker.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 4000
+          env:
+            - name: APP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: APP_DB_PASSWORD
+            - name: DATABASE_URL
+              value: "postgres://skilly_app:$(APP_DB_PASSWORD)@{{ include "skilly.pgHost" . }}:{{ include "skilly.pgPort" . }}/{{ .Values.postgres.database }}"
+            - name: WORKER_PORT
+              value: "4000"
+            - name: PUBLIC_BASE_URL
+              value: {{ .Values.publicBaseUrl | quote }}
+            - name: GIT_REPO_ROOT
+              value: /data/git
+            - name: SCIM_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: SCIM_BEARER_TOKEN
+            {{- if .Values.clamav.enabled }}
+            - name: CLAMAV_HOST
+              value: {{ include "skilly.fullname" . }}-clamav
+            {{- end }}
+            - name: ENTRA_TENANT_ID
+              value: {{ .Values.config.entraTenantId | quote }}
+            - name: ENTRA_CLIENT_ID
+              value: {{ .Values.config.entraClientId | quote }}
+            - name: ENTRA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: ENTRA_CLIENT_SECRET
+            - name: S3_ENDPOINT
+              value: {{ include "skilly.s3Endpoint" . | quote }}
+            - name: S3_ACCESS_KEY
+              value: {{ include "skilly.s3AccessKey" . | quote }}
+            - name: S3_BUCKET
+              value: {{ include "skilly.s3Bucket" . | quote }}
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: S3_SECRET_KEY
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: METRICS_TOKEN
+            - name: POINTER_REFRESH_INTERVAL_MS
+              value: {{ .Values.config.pointerRefreshIntervalMs | quote }}
+            - name: SMTP_HOST
+              value: {{ .Values.config.smtp.host | quote }}
+            - name: SMTP_PORT
+              value: {{ .Values.config.smtp.port | quote }}
+            - name: SMTP_USER
+              value: {{ .Values.config.smtp.user | quote }}
+            - name: SMTP_FROM
+              value: {{ .Values.config.smtp.from | quote }}
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: SMTP_PASSWORD
+            - name: NOTIFY_WEBHOOK_URL
+              value: {{ .Values.config.webhookUrl | quote }}
+            # §12 Graph email service account: decrypts the stored tokens for the delivery sweep.
+            - name: EMAIL_TOKEN_ENC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: EMAIL_TOKEN_ENC_KEY
+                  optional: true # pre-0053 operator-managed Secrets lack this key
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          {{- with .Values.worker.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: git
+              mountPath: /data/git
+      volumes:
+        - name: git
+          persistentVolumeClaim:
+            claimName: {{ include "skilly.fullname" . }}-git
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "skilly.fullname" . }}-worker
+  labels:
+    {{- include "skilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  ports:
+    - port: 4000
+      targetPort: 4000
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: worker

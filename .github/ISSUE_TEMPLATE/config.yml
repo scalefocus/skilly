@@ -1,0 +1,9 @@
+# Funnel reporters into the structured templates and keep security reports out of public issues.
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/scalefocus/skilly/security/advisories/new
+    about: >-
+      Never file a security issue publicly. Use GitHub private vulnerability reporting
+      (see SECURITY.md). Public disclosure before a fix ships puts every self-hosted
+      instance at risk.

@@ -1,0 +1,46 @@
+# Reverse proxy (SKILLY_SPEC.md §13).
+# Production: TLS terminates at the org reverse proxy; this Caddy instance handles
+# internal routing on port 8080.  It forwards X-Forwarded-Proto and X-Forwarded-Host
+# so Next.js (15+) and NextAuth can reconstruct the correct public URL.
+:8080 {
+	# Baseline security headers on every proxied response (defense-in-depth, SKILLY_SPEC.md §22).
+	# The web app and worker already set these at the app tier; plain `header` = set/replace (not
+	# append), so this never produces duplicates. Belt-and-suspenders for operators whose edge is
+	# the enforcement point — but SECURITY.md notes this sample Caddyfile is dev-only.
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+
+	# SCIM provisioning endpoint -> worker (keep /scim prefix; worker mounts at /scim/v2)
+	handle /scim/* {
+		reverse_proxy worker:4000 {
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+	# Git smart-HTTP (npx skills add https://.../<ns>/<skill>.git#<tag>) -> worker.
+	# Matches all paths under any *.git/ prefix: smart-HTTP endpoints (info/refs,
+	# git-upload-pack, git-receive-pack) plus HEAD (requested by git ≥2.28 on Windows
+	# after info/refs to resolve the default branch; a 404 here aborts the clone).
+	@git path_regexp git ^/[^/]+/[^/]+\.git(/.*)?$
+	handle @git {
+		reverse_proxy worker:4000 {
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+	# everything else -> web app (UI + API)
+	handle {
+		reverse_proxy web:3000 {
+			# Pass the original protocol/host so NextAuth builds correct callback URLs.
+			# The org proxy terminates TLS and must set X-Forwarded-Proto: https upstream.
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+}

@@ -1,0 +1,10 @@
+# Code owners for skilly. GitHub auto-requests review from these owners on matching paths.
+# Pair with branch protection → "Require review from Code Owners" to actually enforce it.
+
+* @scalefocus/skilly-maintainers
+
+# Load-bearing surfaces — these gate everything and change rarely. Keep them owned
+# by core maintainers even if you later open up `*` to a broader contributor team.
+/SKILLY_SPEC.md                        @scalefocus/skilly-maintainers
+/packages/shared/src/external-tool.ts  @scalefocus/skilly-maintainers
+/db/migrations/                        @scalefocus/skilly-maintainers

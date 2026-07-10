@@ -1,0 +1,112 @@
+# skilly Helm chart values. See deploy/helm/skilly/templates/NOTES.txt for post-install steps.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  web:
+    repository: skilly/web
+    tag: ""            # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  worker:
+    repository: skilly/worker
+    tag: ""
+    pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# External HTTPS URL (OIDC redirect + install-command generation). Must match the Ingress host.
+publicBaseUrl: "https://skilly.example.com"
+
+# ── Web (stateless; scale horizontally) ────────────────────────────────────
+web:
+  replicas: 2
+  resources: {}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+
+# ── Worker (leader-locked via Postgres advisory lock; replicas >1 are safe) ─
+worker:
+  replicas: 1
+  resources: {}
+  gitStorage:
+    size: 10Gi
+    storageClass: ""
+
+# ── Ingress (terminate TLS here or at an upstream LB) ───────────────────────
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  host: skilly.example.com
+  tls:
+    enabled: true
+    secretName: skilly-tls
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+# In production set secrets.existingSecret to a Secret you manage (keys below). Otherwise
+# the chart renders a Secret from these values (fine for evaluation, not for prod).
+secrets:
+  existingSecret: ""
+  nextauthSecret: "change-me-generate-with-openssl-rand-base64-32"
+  scimBearerToken: "change-me-long-random"
+  entraClientSecret: ""
+  appDbPassword: "change-me-app"
+  postgresPassword: "change-me-owner"
+  metricsToken: ""
+  smtpPassword: ""
+  # §12 Graph email service account: encrypts the stored OAuth tokens (32 bytes base64,
+  # `openssl rand -base64 32`). Empty = the admin "Set email service account" flow is disabled.
+  emailTokenEncKey: ""
+  s3SecretKey: "change-me-minio"
+
+# ── Non-secret config ────────────────────────────────────────────────────────
+config:
+  entraTenantId: ""
+  entraClientId: ""
+  bootstrapAdminGroup: ""
+  oneTimeTokenTtlSeconds: "300"
+  pointerRefreshIntervalMs: "86400000"
+  smtp:
+    host: ""
+    port: "587"
+    user: ""
+    from: "skilly@example.com"
+  webhookUrl: ""
+
+# ── Migrations ────────────────────────────────────────────────────────────────
+# The migrate Job applies the SQL files from a ConfigMap. Create it once from the repo:
+#   kubectl -n <ns> create configmap skilly-migrations --from-file=db/migrations
+migrations:
+  existingConfigMap: "skilly-migrations"
+
+# ── Bundled stateful dependencies (disable to use managed services) ───────────
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  user: skilly          # owner role (migrations run as this; app connects as skilly_app)
+  database: skilly
+  storage:
+    size: 10Gi
+    storageClass: ""
+  external:
+    host: ""           # used when enabled=false
+    port: 5432
+
+minio:
+  enabled: true
+  image: minio/minio:latest
+  rootUser: skilly
+  bucket: skilly-artifacts
+  storage:
+    size: 20Gi
+    storageClass: ""
+  external:
+    endpoint: ""       # used when enabled=false (e.g. https://s3.amazonaws.com)
+    accessKey: ""
+    bucket: ""
+
+clamav:
+  enabled: true
+  image: clamav/clamav:latest

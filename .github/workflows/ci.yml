@@ -1,0 +1,119 @@
+# skilly CI — guards every push/PR. Mirrors the local commands in README.md.
+#   typecheck : build shared, then type-check every package
+#   test      : hermetic unit/integration tests (live-DB suites gated-skip)
+#   db-test   : gated live-DB suite against a real Postgres (publish chain + admin flows)
+#   build     : production build of the UI (proves the standalone server compiles)
+#   helm-lint : lint + render the Helm chart (bundled and external-dependency value sets)
+#
+# No secrets are used in any job — everything here is safe to run on fork pull requests.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # pnpm version comes from "packageManager" in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # shared must build before web/worker can resolve @skilly/shared types.
+      - run: pnpm --filter @skilly/shared build
+      - run: pnpm -r typecheck
+
+  # Hermetic — the live-DB suites are gated behind SKILLY_DB_E2E and skip here.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r test
+
+  # Live-DB integration: real Postgres + real `git clone`. Applies ALL migrations in order,
+  # then runs the publish chain (hosted + pointer + pending-mirror) and the admin-flows tests.
+  db-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: skilly
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: skilly
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skilly"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      SKILLY_DB_E2E: "1"
+      DATABASE_URL: postgres://skilly:test@127.0.0.1:5432/skilly
+      PGPASSWORD: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # ubuntu-latest ships a Postgres client, but guard against runner-image changes.
+      - name: Ensure psql
+        run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client)
+      - name: Apply migrations
+        run: |
+          for f in db/migrations/*.sql; do
+            echo "applying $f"
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U skilly -d skilly -f "$f"
+          done
+      - run: pnpm --filter @skilly/shared build
+      - run: pnpm --filter @skilly/worker build
+      - run: node --test packages/worker/dist/integration/publishFlow.test.js
+      - run: pnpm --filter @skilly/web test:db
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @skilly/shared build
+      - run: pnpm --filter @skilly/web build
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: helm lint deploy/helm/skilly
+      - run: helm template skilly deploy/helm/skilly > /dev/null
+      - run: >-
+          helm template skilly deploy/helm/skilly
+          --set postgres.enabled=false --set postgres.external.host=pg
+          --set minio.enabled=false --set minio.external.endpoint=https://s3
+          --set minio.external.bucket=b
+          --set clamav.enabled=false > /dev/null

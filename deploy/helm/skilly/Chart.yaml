@@ -1,0 +1,17 @@
+apiVersion: v2
+name: skilly
+description: |
+  Self-hosted registry for governing Anthropic-style SKILL.md agent skills, anchored in
+  Microsoft Entra ID. Deploys the stateless web app (HA-capable), the leader-locked worker
+  (SCIM + git smart server + sweeps), a migration Job, and optionally bundled Postgres,
+  MinIO, and ClamAV.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - skills
+  - registry
+  - entra
+  - scim
+maintainers:
+  - name: skilly

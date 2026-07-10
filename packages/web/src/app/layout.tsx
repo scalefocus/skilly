@@ -1,0 +1,40 @@
+// Self-hosted (vendored) fonts — no runtime CDN/Google dependency. Variable woff2 served
+// from the app bundle via @fontsource-variable. SKILLY_SPEC.md (self-hosted/on-prem).
+// Montserrat (display) + Open Sans (body) per the Scalefocus brand book; JetBrains Mono is
+// skilly's technical extension for commands/metadata (the brand book defines no mono).
+import "@fontsource-variable/montserrat";
+import "@fontsource-variable/open-sans";
+import "@fontsource-variable/jetbrains-mono";
+import "./globals.css";
+import type { ReactNode } from "react";
+import { headers } from "next/headers";
+import { Providers } from "../components/Providers";
+import { AppShell } from "../components/AppShell";
+
+export const metadata = {
+  title: "skilly — agent skills registry",
+  description: "Self-hosted registry for governing SKILL.md agent skills, anchored in Microsoft Entra ID.",
+};
+
+// Set the theme before first paint to avoid a flash of the wrong theme. A brand-new user (no saved
+// preference) defaults to LIGHT — we intentionally do NOT follow the OS prefers-color-scheme; the
+// user can switch to dark via the toggle, which persists. SKILLY_SPEC.md §2 (UI).
+const themeBootstrap = `(function(){try{var t=localStorage.getItem('skilly-theme');if(t!=='light'&&t!=='dark'){t='light';}document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();`;
+
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // CSP nonce minted per-request by middleware.ts (§22). Undefined under the dev/legacy policy
+  // (which allows 'unsafe-inline'), so the attribute is simply omitted then.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
+      </head>
+      <body>
+        <Providers>
+          <AppShell>{children}</AppShell>
+        </Providers>
+      </body>
+    </html>
+  );
+}

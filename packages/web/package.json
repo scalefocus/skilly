@@ -1,0 +1,48 @@
+{
+  "name": "@skilly/web",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --webpack -p 3000",
+    "build": "next build --webpack",
+    "start": "node .next/standalone/server.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint",
+    "test": "node --import tsx --test src/lib/csp.test.ts src/middleware.test.ts src/app/api/csp-report/route.test.ts src/lib/pageLabel.test.ts src/lib/presence.test.ts",
+    "test:unit": "node --import tsx --test src/lib/csp.test.ts src/middleware.test.ts src/app/api/csp-report/route.test.ts src/lib/pageLabel.test.ts src/lib/presence.test.ts",
+    "test:db": "node --import tsx --test src/lib/admin.dbtest.ts src/lib/ratings.dbtest.ts src/lib/maintainers.dbtest.ts src/lib/proposals.dbtest.ts src/lib/usage.dbtest.ts src/lib/catalog.dbtest.ts src/lib/messages.dbtest.ts src/lib/email.dbtest.ts src/lib/leaderboard.dbtest.ts src/lib/featured.dbtest.ts src/lib/settings.dbtest.ts src/lib/presence.dbtest.ts src/lib/requests.dbtest.ts",
+    "e2e": "playwright test -c e2e/playwright.config.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@fontsource-variable/jetbrains-mono": "^5.0.0",
+    "@fontsource-variable/montserrat": "^5.2.8",
+    "@fontsource-variable/open-sans": "^5.2.7",
+    "@skilly/shared": "workspace:*",
+    "@tiptap/extension-color": "^3.27.3",
+    "@tiptap/extension-text-align": "^3.27.3",
+    "@tiptap/extension-text-style": "^3.27.3",
+    "@tiptap/react": "^3.27.3",
+    "@tiptap/starter-kit": "^3.27.3",
+    "adm-zip": "^0.5.12",
+    "next": "^16.0.0",
+    "next-auth": "^4.24.14",
+    "pg": "^8.12.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^3.8.1",
+    "tar": "^7.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0",
+    "@types/adm-zip": "^0.5.5",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^6.0.0"
+  }
+}

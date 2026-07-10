@@ -1,0 +1,36 @@
+{
+  "name": "@skilly/worker",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env.local src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && find dist -name '*.test.js' | xargs node --test",
+    "lint": "echo \"(configure eslint)\""
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@skilly/shared": "workspace:*",
+    "adm-zip": "^0.5.12",
+    "express": "^5.1.0",
+    "nodemailer": "^6.9.0",
+    "pg": "^8.12.0",
+    "tar": "^7.4.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.14.0",
+    "@types/nodemailer": "^6.4.15",
+    "@types/pg": "^8.11.0",
+    "@types/supertest": "^6.0.2",
+    "supertest": "^7.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^6.0.0"
+  }
+}

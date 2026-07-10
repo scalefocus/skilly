@@ -1,0 +1,56 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullName := include "skilly.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "skilly.labels" . | nindent 4 }}
+  annotations:
+    # Routing requires regex to send the git smart-HTTP paths (*.git/...) to the worker.
+    # These annotations target ingress-nginx; adapt for other controllers (see NOTES.txt).
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # SCIM 2.0 provisioning endpoint → worker.
+          - path: /scim
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-worker
+                port:
+                  number: 4000
+          # Git smart-HTTP (clone/fetch of skill repos) → worker. Tightened to the actual
+          # smart-HTTP endpoints so arbitrary URLs merely containing ".git" don't route here
+          # (audit L-4); matches the worker's parseGitPath + the Caddyfile.
+          - path: /[^/]+/[^/]+\.git/(info/refs|git-upload-pack|git-receive-pack)$
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $fullName }}-worker
+                port:
+                  number: 4000
+          # Everything else (UI + REST API + OIDC) → web.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-web
+                port:
+                  number: 3000
+{{- end }}

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "skilly-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@skilly/web", "dev"],
+      "port": 3000
+    }
+  ]
+}

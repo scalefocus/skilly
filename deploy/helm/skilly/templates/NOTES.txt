@@ -1,0 +1,30 @@
+skilly {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
+
+1. Migrations are applied by a pre-install/pre-upgrade Job from a ConfigMap. Create it ONCE
+   from the repo (the chart does not bundle the SQL to avoid drift):
+
+     kubectl -n {{ .Release.Namespace }} create configmap {{ .Values.migrations.existingConfigMap }} --from-file=db/migrations
+
+   Re-create it (and `helm upgrade`) whenever you add a migration.
+
+{{- if .Values.minio.enabled }}
+2. Create the artifact bucket once in the bundled MinIO:
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "skilly.fullname" . }}-minio -- \
+       sh -c 'mc alias set local http://localhost:9000 {{ .Values.minio.rootUser }} "$MINIO_ROOT_PASSWORD" && mc mb -p local/{{ .Values.minio.bucket }}'
+{{- else }}
+2. Ensure bucket "{{ include "skilly.s3Bucket" . }}" exists in your external object store.
+{{- end }}
+
+3. App URL: {{ .Values.publicBaseUrl }}
+   Configure the Entra app redirect URI:  {{ .Values.publicBaseUrl }}/api/auth/callback/azure-ad
+   Configure SCIM provisioning tenant URL: {{ .Values.publicBaseUrl }}/scim/v2
+
+{{- if .Values.ingress.enabled }}
+4. Ingress routes /scim and *.git → worker, everything else → web. The git path uses a regex
+   (ingress-nginx annotations are set by default). On other controllers, ensure *.git/...
+   requests reach the worker Service on port 4000, or `npx skills add` clones will fail.
+{{- end }}
+
+5. Health: /healthz, /readyz. Metrics: /metrics on web + worker (set secrets.metricsToken to
+   require a bearer token). The worker is leader-locked, so worker.replicas > 1 is safe but
+   needs ReadWriteMany git storage.

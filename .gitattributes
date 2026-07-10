@@ -1,0 +1,20 @@
+# Normalize all text to LF in the repository (cross-platform consistency).
+* text=auto eol=lf
+
+# Shell scripts MUST be LF (executed in Linux containers).
+*.sh text eol=lf
+
+# Treat known binary/asset types as binary (no eol munging).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.gz binary
+*.tgz binary
+*.zip binary
+*.skill binary

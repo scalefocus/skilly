@@ -1,0 +1,76 @@
+name: 🐛 Bug report
+description: Something in skilly behaves incorrectly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not report security vulnerabilities here** — report them
+        privately per `SECURITY.md`. Public issues are world-readable.
+  - type: input
+    id: version
+    attributes:
+      label: skilly version
+      description: The `APP_VERSION` shown in the sidebar colophon.
+      placeholder: v1.115.2
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - web (UI / REST API / OIDC)
+        - worker (SCIM / reconciliation / git smart server / scan / publish)
+        - shared (domain / RBAC / semver / validation)
+        - deploy (docker-compose / Helm / migrations)
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running skilly?
+      options:
+        - docker-compose (deploy/docker-compose.yml)
+        - Kubernetes (Helm chart)
+        - local dev (pnpm + dev auth)
+        - other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+      description: What you expected to happen, and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >-
+        Structured JSON logs from web/worker, browser console, or `docker compose logs`.
+        Redact tokens, secrets, and any `?…` query strings before pasting.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go to SECURITY.md, privately).
+          required: true

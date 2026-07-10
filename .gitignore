@@ -1,0 +1,40 @@
+node_modules/
+dist/
+.next/
+out/
+*.tsbuildinfo
+coverage/
+
+# secrets / local env
+deploy/.env
+.env
+.env.local
+*.pem
+
+# data volumes (dev)
+deploy/data/
+# local dev runtime state (synthesized git repos, scratch bundles)
+.local/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code machine-local settings (keep launch.json, ignore local settings)
+.claude/settings.local.json
+
+# worker runtime serving repos (dev: GIT_REPO_ROOT=./data/git)
+packages/worker/data/
+
+# Playwright artifacts (e2e runs)
+packages/web/test-results/
+packages/web/playwright-report/
+
+# Office lock/owner files
+~$*
+
+# screenshot scratch dir (recreated by packages/web/e2e/shots.mjs; the user manual is
+# built ad-hoc outside the repo and is not tracked)
+docs/manual/

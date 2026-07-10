@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- skilly's own mark (not the Scalefocus eye): brand-navy tile, cyan diamond — flat,
+       geometric, two-color, per the SF brand book's minimal graphic style. -->
+  <rect width="64" height="64" rx="14" fill="#082773"/>
+  <rect x="21.5" y="21.5" width="21" height="21" rx="3" transform="rotate(45 32 32)" fill="#14ABE3"/>
+</svg>

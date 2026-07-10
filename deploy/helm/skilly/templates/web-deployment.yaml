@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "skilly.fullname" . }}-web
+  labels:
+    {{- include "skilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  {{- if not .Values.web.autoscaling.enabled }}
+  replicas: {{ .Values.web.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        {{- include "skilly.labels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Run unprivileged with a hardened pod/container context (audit M-5).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: {{ include "skilly.webImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.web.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: APP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: APP_DB_PASSWORD
+            - name: DATABASE_URL
+              value: "postgres://skilly_app:$(APP_DB_PASSWORD)@{{ include "skilly.pgHost" . }}:{{ include "skilly.pgPort" . }}/{{ .Values.postgres.database }}"
+            - name: NEXTAUTH_URL
+              value: {{ .Values.publicBaseUrl | quote }}
+            - name: SKILLY_REGISTRY_URL
+              value: {{ .Values.publicBaseUrl | quote }}
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: NEXTAUTH_SECRET
+            - name: ENTRA_TENANT_ID
+              value: {{ .Values.config.entraTenantId | quote }}
+            - name: ENTRA_CLIENT_ID
+              value: {{ .Values.config.entraClientId | quote }}
+            - name: ENTRA_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: ENTRA_CLIENT_SECRET
+            - name: SKILLY_BOOTSTRAP_ADMIN_GROUP
+              value: {{ .Values.config.bootstrapAdminGroup | quote }}
+            - name: ONE_TIME_TOKEN_TTL_SECONDS
+              value: {{ .Values.config.oneTimeTokenTtlSeconds | quote }}
+            - name: S3_ENDPOINT
+              value: {{ include "skilly.s3Endpoint" . | quote }}
+            - name: S3_ACCESS_KEY
+              value: {{ include "skilly.s3AccessKey" . | quote }}
+            - name: S3_BUCKET
+              value: {{ include "skilly.s3Bucket" . | quote }}
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: S3_SECRET_KEY
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: METRICS_TOKEN
+            # §12 email channel: token key for the connect flow / test send, plus SMTP_HOST
+            # so the admin card can tell "SMTP fallback" from "email down".
+            - name: EMAIL_TOKEN_ENC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: EMAIL_TOKEN_ENC_KEY
+                  optional: true # pre-0053 operator-managed Secrets lack this key
+            - name: SMTP_HOST
+              value: {{ .Values.config.smtp.host | quote }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          {{- with .Values.web.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "skilly.fullname" . }}-web
+  labels:
+    {{- include "skilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: web
+{{- if .Values.web.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "skilly.fullname" . }}-web
+  labels:
+    {{- include "skilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "skilly.fullname" . }}-web
+  minReplicas: {{ .Values.web.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.web.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.web.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
