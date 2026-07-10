@@ -31,6 +31,6 @@
     "@types/supertest": "^6.0.2",
     "supertest": "^7.0.0",
     "tsx": "^4.16.0",
-    "typescript": "^6.0.0"
+    "typescript": "^7.0.2"
   }
 }
