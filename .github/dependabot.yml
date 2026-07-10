@@ -1,0 +1,22 @@
+# Dependabot: weekly version-update PRs. Security updates are governed separately
+# (Settings → Advanced Security → Dependabot security updates).
+version: 2
+updates:
+  # pnpm workspace (root pnpm-lock.yaml covers all packages/*)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # One grouped PR for routine bumps instead of a PR per package.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions pinned in .github/workflows/
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
