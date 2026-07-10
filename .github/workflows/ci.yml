@@ -110,9 +110,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: helm lint deploy/helm/skilly
-      - run: helm template skilly deploy/helm/skilly > /dev/null
+      # secret.yaml fails closed on placeholder values (Audit M-8), so renders need
+      # real-looking dummies. This one exercises the generated-Secret path…
       - run: >-
           helm template skilly deploy/helm/skilly
+          --set secrets.nextauthSecret=ci-dummy
+          --set secrets.scimBearerToken=ci-dummy
+          --set secrets.appDbPassword=ci-dummy
+          --set secrets.postgresPassword=ci-dummy
+          --set secrets.s3SecretKey=ci-dummy > /dev/null
+      # …and this one the bring-your-own-Secret path, with external dependencies.
+      - run: >-
+          helm template skilly deploy/helm/skilly
+          --set secrets.existingSecret=skilly-secrets
           --set postgres.enabled=false --set postgres.external.host=pg
           --set minio.enabled=false --set minio.external.endpoint=https://s3
           --set minio.external.bucket=b
