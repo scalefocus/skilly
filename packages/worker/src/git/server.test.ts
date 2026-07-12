@@ -11,7 +11,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
 import { resolveAccess, type RoleMapping } from "@skilly/shared";
-import { gitServer, type GitServerDeps } from "./server.js";
+import { gitServer, type GitServerDeps, type OwnerInactiveRefusal } from "./server.js";
 import { synthesizeVersion } from "./synth.js";
 import { repoPath } from "./repoStore.js";
 
@@ -29,6 +29,7 @@ let port: number;
 const used: string[] = [];
 const ips: string[] = [];
 const logged: { skillId: string; userId: string | null; isSystem: boolean; countInstall: boolean }[] = [];
+const refusals: OwnerInactiveRefusal[] = [];
 
 const mappings: RoleMapping[] = [{ id: "m1", groupId: "g-a", namespaceId: NSID, role: "namespace_member" }];
 
@@ -44,6 +45,8 @@ const deps: GitServerDeps = {
     if (raw === "good-secret") return { userId: "u1", tokenId: "t1", type: "install", scopedSkillId: "s-secret", isSystem: false };
     // System installation: platform-owned, no user; clones the restricted skill without ns access (§23).
     if (raw === "system-secret") return { userId: null, tokenId: "t-sys", type: "install", scopedSkillId: "s-secret", isSystem: true };
+    // Owner-status gate (§5/§23): valid row, but the owning user is inactive.
+    if (raw === "inactive-pdf") return { userId: "u-gone", tokenId: "t-gone", type: "install", scopedSkillId: "s-pdf", isSystem: false, ownerInactive: true };
     return null;
   },
   async resolveAccess(userId) {
@@ -57,6 +60,9 @@ const deps: GitServerDeps = {
   },
   async logAccess(skillId, userId, isSystem, countInstall) {
     logged.push({ skillId, userId, isSystem, countInstall });
+  },
+  async recordOwnerInactiveRefusal(e) {
+    refusals.push(e);
   },
 };
 
@@ -110,6 +116,40 @@ test("any skill without a token is rejected (org included)", async () => {
 test("restricted skill without a token is rejected", async () => {
   const dest = join(workDir, "c-noauth-secret");
   await assert.rejects(exec("git", ["clone", ...noCred, `${base()}/team-a/secret.git`, dest], { env: cloneEnv }));
+});
+
+test("token of an inactive owner: generic 401, nothing served, refusal recorded with the owner as subject", async () => {
+  used.length = 0;
+  logged.length = 0;
+  refusals.length = 0;
+
+  // Raw HTTP first: the response must be byte-identical to a plain invalid token's 401 —
+  // no hint that the account (rather than the token) is the problem. §5/§23.
+  const auth = "Basic " + Buffer.from("x-access-token:inactive-pdf").toString("base64");
+  const res = await fetch(`${base()}/team-a/pdf.git/info/refs?service=git-upload-pack`, { headers: { authorization: auth } });
+  assert.equal(res.status, 401);
+  assert.equal(res.headers.get("www-authenticate"), 'Basic realm="skilly"');
+  assert.equal(await res.text(), "invalid or expired token");
+
+  // A real clone attempt fails the same way.
+  const dest = join(workDir, "c-inactive");
+  await assert.rejects(exec("git", ["clone", ...noCred, `http://x-access-token:inactive-pdf@127.0.0.1:${port}/team-a/pdf.git`, dest], { env: cloneEnv }));
+
+  // The refusal was recorded (once per refused request) with the token OWNER as the subject,
+  // the matched route template, and the concrete path — never the query string. §25 carve-out.
+  assert.ok(refusals.length >= 1);
+  assert.deepEqual(refusals[0], {
+    method: "GET",
+    route: "/[ns]/[slug].git/info/refs",
+    path: "/team-a/pdf.git/info/refs",
+    ownerUserId: "u-gone",
+    namespaceSlug: "team-a",
+    skillSlug: "pdf",
+  });
+
+  // Nothing was stamped or counted — the clone never happened.
+  assert.equal(used.length, 0);
+  assert.equal(logged.length, 0);
 });
 
 test("restricted skill with a valid token clones, marks token used once, logs access once", async () => {

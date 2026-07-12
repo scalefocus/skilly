@@ -32,6 +32,9 @@ function deps(over: Partial<GitAuthDeps> = {}): GitAuthDeps {
       if (raw === "good-ns-outsider") return { userId: "u2", tokenId: "t3", type: "install", scopedSkillId: "s2", isSystem: false } as TokenPrincipal;
       // System installation: no user, skips the clone-time namespace re-check (§23).
       if (raw === "system-ns") return { userId: null, tokenId: "t4", type: "install", scopedSkillId: "s2", isSystem: true } as TokenPrincipal;
+      // Owner-status gate (§5/§23): the token row matched but its owning user is inactive.
+      if (raw === "inactive-org") return { userId: "u-gone", tokenId: "t5", type: "install", scopedSkillId: "s1", isSystem: false, ownerInactive: true } as TokenPrincipal;
+      if (raw === "inactive-ns") return { userId: "u-gone", tokenId: "t6", type: "install", scopedSkillId: "s2", isSystem: false, ownerInactive: true } as TokenPrincipal;
       return null;
     },
     async resolveAccess(userId) {
@@ -121,6 +124,40 @@ test("namespace skill: SYSTEM token allowed without namespace access (deliberate
     }),
   );
   assert.equal(d.allow, true);
+});
+
+test("org skill: token of an inactive owner refused with the GENERIC invalid-token 401", async () => {
+  const d = await authorizeGitRequest(
+    { namespaceSlug: "team-a", skillSlug: "org-skill", operation: "upload-pack", isServiceRpc: false },
+    "inactive-org",
+    deps(),
+  );
+  // Same reason string as a plain invalid token (no account-state oracle); the internal
+  // ownerInactive marker is what drives the system_event record. §5/§23.
+  assert.deepEqual(d, {
+    allow: false,
+    status: 401,
+    reason: "invalid or expired token",
+    ownerInactive: { ownerUserId: "u-gone" },
+  });
+});
+
+test("namespace skill: inactive owner refused before any namespace re-check", async () => {
+  const d = await authorizeGitRequest(
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "upload-pack", isServiceRpc: true },
+    "inactive-ns",
+    deps({
+      async resolveAccess() {
+        throw new Error("resolveAccess must not be called for an inactive owner");
+      },
+    }),
+  );
+  assert.equal(d.allow, false);
+  if (!d.allow) {
+    assert.equal(d.status, 401);
+    assert.equal(d.reason, "invalid or expired token");
+    assert.deepEqual(d.ownerInactive, { ownerUserId: "u-gone" });
+  }
 });
 
 test("token scoped to a different skill is forbidden", async () => {

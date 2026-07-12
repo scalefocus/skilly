@@ -37,6 +37,11 @@ export interface TokenPrincipal {
   scopedSkillId: string;
   /** System installation: platform-admin-minted, no owning user, no clone-time namespace re-check. */
   isSystem: boolean;
+  /** The token row matched but its owning user is not status='active' (deprovisioned/disabled —
+   *  SKILLY_SPEC.md §5/§23): the token is refused with the SAME generic 401 as an invalid token
+   *  (no account-state oracle for a leaked URL), and the refusal is recorded to system_event.
+   *  Never set on system tokens (no owner). */
+  ownerInactive?: boolean;
 }
 
 export interface GitAuthDeps {
@@ -48,7 +53,14 @@ export interface GitAuthDeps {
 
 export type GitDecision =
   | { allow: true; skill: SkillRef; principal: TokenPrincipal | null }
-  | { allow: false; status: 401 | 403 | 404; reason: string };
+  | {
+      allow: false;
+      status: 401 | 403 | 404;
+      reason: string;
+      /** Present only on the owner-inactive refusal: lets the server record the system_event
+       *  (§23/§25) while the HTTP response stays indistinguishable from any invalid token. */
+      ownerInactive?: { ownerUserId: string };
+    };
 
 /** Parse a smart-HTTP path like `/team-a/pdf-tools.git/info/refs` or `/ns/s.git/git-upload-pack`.
  *  Also handles `/ns/s.git/HEAD` (dumb-HTTP default-branch lookup): git ≥2.28 on Windows
@@ -120,6 +132,19 @@ export async function authorizeGitRequest(
   if (!rawToken) return { allow: false, status: 401, reason: "authentication required" };
   const principal = await deps.validateToken(rawToken);
   if (!principal) return { allow: false, status: 401, reason: "invalid or expired token" };
+
+  // A personal token whose owning user is not active (deprovisioned/disabled) is invalid — checked
+  // before the scope check so an inactive user's token reveals nothing at all. The reason string is
+  // deliberately the same as the plain invalid-token 401; only the internal decision carries the
+  // distinction, for the server's system_event record. SKILLY_SPEC.md §5/§23.
+  if (principal.ownerInactive && principal.userId) {
+    return {
+      allow: false,
+      status: 401,
+      reason: "invalid or expired token",
+      ownerInactive: { ownerUserId: principal.userId },
+    };
+  }
 
   // The install token is bound to the skill it was minted for — reject it against any other
   // skill, even an org-wide one (a leaked token must not become a general org-read key).
