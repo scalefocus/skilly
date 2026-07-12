@@ -1,5 +1,58 @@
 # skilly
 
+**skilly** — a self-hosted registry that turns your organization's
+AI agent skills into a governed, versioned company asset. Among the
+first platforms of its kind — and the most complete free and
+open-source offering for enterprise skill governance.
+
+- **Own your real IP.** Anyone can rent the same model by Tuesday —
+  the moat is the know-how that makes it do *your* work to *your*
+  standard. Today it lives in chat threads and one analyst's head,
+  and walks out the door with them. skilly captures it once, for good.
+- **One preferred way, improved by everyone.** Each skill is your
+  org's single best-known way to do a task — a living standard, not
+  a rotting wiki page. Anyone can propose an improvement, reviewers
+  gate what lands, and every accepted contribution ships as the new
+  version for everyone. Your standards evolve like open source,
+  governed like production.
+- **A trusted source, not a public free-for-all.** Every skill is
+  vetted twice before anyone can install it — automatically (malware,
+  secrets, risky-pattern scans) and by your own admins. External
+  skills are mirrored at a pinned, immutable ref and re-checked for
+  upstream drift, so a future version can never silently swap in
+  something you didn't approve. No random skills slipping in — what
+  your agents run is exactly what your reviewers signed off.
+- **Full control over what runs.** Nothing publishes without clearing
+  your review gates and security scans (ClamAV, secret detection,
+  static heuristics). You decide what ships, to whom — and what
+  gets pulled.
+- **Control every install — by version, user, and time.** A first
+  among skill registries: every installation is an attributed,
+  skill-scoped credential — pinned to a version or tracking latest,
+  tied to a specific person, expiring when you say. Revoke it and
+  access stops. You always know who runs what, which version, and
+  until when.
+- **The whole user lifecycle, not just the skill lifecycle.** Users
+  are provisioned automatically through SCIM 2.0 and roles follow
+  your Entra ID groups — joiners get access on day one, movers'
+  permissions shift with them, and the moment someone is
+  decommissioned every install token and URL they hold stops
+  serving. No orphaned credentials, no loose ends.
+- **Immutable versioning.** Every release is a semver-tagged,
+  immutable version: pin it, promote beta → stable, roll back, or
+  yank it and it vanishes from every install path instantly.
+- **Tamper-evident audit trail.** Every governance action lands in a
+  hash-chained, append-only log — audits stop being archaeology.
+- **End the reinvention.** One searchable catalog, org-wide or
+  team-scoped, so twelve teams stop rebuilding the same skill and
+  start compounding on each other's work.
+- **Zero new tooling.** No custom CLI — each skill is served as an
+  authenticated git repo, installed with the standard `npx skills add`.
+- **Yours, entirely.** Self-hosted via docker compose or Helm,
+  Apache 2.0, nothing leaves your network.
+
+---
+
 Enterprise-grade, open-source, self-hosted registry for governing Anthropic-style
 `SKILL.md` agent skills across an organization and its business units, with identity
 and access anchored in Microsoft Entra ID.
