@@ -7,6 +7,7 @@ import {
   tokenFromAuthHeader,
   authorizeGitRequest,
   type GitAuthDeps,
+  type ParsedGitRequest,
   type TokenPrincipal,
 } from "./authorize.js";
 import type { Request } from "express";
@@ -40,7 +41,31 @@ export interface GitServerDeps extends GitAuthDeps {
    * token's first clone (bumps install_count once per system installation, §21/§23).
    */
   logAccess(skillId: string, userId: string | null, isSystem: boolean, countInstall: boolean): Promise<void>;
+  /**
+   * Record a clone refused because the install token's owning user is not status='active'
+   * (SKILLY_SPEC.md §23/§25): a system_event row — source='worker', status 401,
+   * error_code 'install_token_owner_inactive' — whose actor is the TOKEN OWNER (the requester is
+   * an anonymous machine). Fire-and-forget at the call site; a failure never changes the response.
+   */
+  recordOwnerInactiveRefusal(e: OwnerInactiveRefusal): Promise<void>;
   repoRoot?: string;
+}
+
+export interface OwnerInactiveRefusal {
+  method: string;
+  /** The matched git endpoint template, e.g. `/[ns]/[slug].git/info/refs` — never the query string. */
+  route: string;
+  /** Concrete path hit — never the query string. */
+  path: string;
+  ownerUserId: string;
+  namespaceSlug: string;
+  skillSlug: string;
+}
+
+/** The matched-template form of a git smart-HTTP request, for system_event.route (§25). */
+function gitRouteTemplate(parsed: ParsedGitRequest): string {
+  const endpoint = parsed.isHead ? "HEAD" : parsed.isServiceRpc ? `git-${parsed.operation}` : "info/refs";
+  return `/[ns]/[slug].git/${endpoint}`;
 }
 
 export function gitServer(deps: GitServerDeps): Router {
@@ -57,6 +82,18 @@ export function gitServer(deps: GitServerDeps): Router {
       const decision = await authorizeGitRequest(parsed, token, deps);
 
       if (!decision.allow) {
+        if (decision.ownerInactive) {
+          void deps
+            .recordOwnerInactiveRefusal({
+              method: req.method,
+              route: gitRouteTemplate(parsed),
+              path: url.pathname,
+              ownerUserId: decision.ownerInactive.ownerUserId,
+              namespaceSlug: parsed.namespaceSlug,
+              skillSlug: parsed.skillSlug,
+            })
+            .catch(() => {});
+        }
         if (decision.status === 401) {
           res.setHeader("WWW-Authenticate", 'Basic realm="skilly"');
         }

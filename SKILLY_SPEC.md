@@ -335,6 +335,14 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 
 ### Leaver handling
 - **Disable (reversible) — `PATCH active:false`:** SCIM deprovision → user `status = inactive`, **all PATs/tokens revoked**. Entra can re-enable the user; their data survives. Unchanged.
+- **Serve-time owner-status gate (belt-and-suspenders):** independently of the deletion above, the
+  git gateway **refuses any personal install token whose owning user is not `status = 'active'`**
+  (§23 Gateway). This covers every path that can flip a user inactive *without* the token-deleting
+  deprovision transaction: a SCIM **`PUT /Users/:id` replace** carrying `active:false` (routes
+  through `upsertUser`, which writes `status` but never touches tokens), **Graph reconciliation**
+  (maps `accountEnabled → status` on upsert), and any other drift. The PATCH path keeps
+  hard-deleting tokens (defense in depth); the gate is what guarantees an inactive user's minted
+  URLs stop serving even when deletion didn't happen.
 - **Permanent removal — `DELETE /Users/:id`:** runs the **full GDPR erasure** (the same as the admin "Delete User Info" flow, §4) **without a maintainer transfer** — scrub + detach the row (`entra_object_id → null`, so a later re-provision yields a fresh account), delete the user's personal data (group memberships, ratings, watches, notifications, tokens, explicit maintainerships), and de-identify messages/proposals/reviews to "`<email> - Deleted`". **Idempotent** (no-op if already erased) and still returns **204**. Records a `user.erased` audit row with a **null actor** and **`source = 'scim'`**. The worker's `eraseUserByExternalId` mirrors web's `lib/eraseUser.ts` (kept in sync).
 - **Authored skills remain** (owned by the namespace, not the individual).
 - **Audit log preserves identity** (provenance survives personnel changes; immutable per invariant #5 — deliberately exempt from erasure, §4).
@@ -894,7 +902,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
 
 **Consumption (git gateway — on the worker, NOT `/api/fetch`)**
-- The authenticated **git smart server** serves `/<ns>/<slug>.git/{info/refs,git-upload-pack}` with token-in-URL basic auth; validates the token, enforces visibility, logs to `access_log` (never credentials), stamps install-token use. There is **no `/api/fetch`** route.
+- The authenticated **git smart server** serves `/<ns>/<slug>.git/{info/refs,git-upload-pack}` with token-in-URL basic auth; validates the token (including, for personal tokens, that the **owning user is `status='active'`** — §23 Gateway), enforces visibility, logs to `access_log` (never credentials), stamps install-token use. There is **no `/api/fetch`** route.
 
 **Installs (§23)**
 - `GET /api/installs` (+ `?scope=system` — all system installations, **platform-admin only**), `DELETE /api/installs/:id` (uninstall), `PATCH /api/installs/:id {expiresAt}` (reactivate) — owner-checked for personal rows; on **system** rows the DELETE/PATCH check is **platform admin** instead (any admin). *(Replaces the old `POST /api/tokens` PAT path.)*
@@ -1171,7 +1179,9 @@ responsibilities. Hardening that pins or clarifies invariants here:
 - **Install tokens** (invariant #6 carve-out, §23): they are random + **skill-scoped** +
   **reusable** (no single-use grace) + **user-TTL'd** (explicit dates within the admin-configured horizon — `install_max_ttl_months`, default 12 — or an explicit "Never")
   + **not deleted on use/expiry**; the gateway **rejects a token presented against a different
-  skill** than it was minted for. Revocation is via uninstall (owner hard-delete) or a passing TTL
+  skill** than it was minted for, and **rejects a personal token whose owning user is not
+  `status = 'active'`** (deprovisioned/disabled users can't clone with pre-minted URLs — §5
+  Leaver handling, §23 Gateway). Revocation is via uninstall (owner hard-delete) or a passing TTL
   (inactive). **System installations** (§23) relax two further terms — no owning user
   (platform-admin-managed, provenance via `created_by_user_id`) and **no clone-time
   visibility/namespace re-check** (a deliberate admin grant) — compensated by admin-only minting
@@ -1311,9 +1321,25 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   retro-erasure of past clones).
 
 ### Gateway
-- `validateToken` accepts only `type='install'`, valid while `expires_at` is null-or-future and
-  the row exists. **No one-time-use grace** — reuse is intentional. Per-clone analytics
-  (`access_log`, `install_count`, `install_counters`) are unchanged.
+- `validateToken` accepts only `type='install'`, valid while `expires_at` is null-or-future, the
+  row exists, **and — for personal tokens (`user_id` set) — the owning user is `status = 'active'`**
+  (one query; the users join rides the token lookup). **No one-time-use grace** — reuse is
+  intentional. Per-clone analytics (`access_log`, `install_count`, `install_counters`) are unchanged.
+- **Owner-status refusals are client-indistinguishable:** a token whose owner is inactive gets the
+  **same 401 "invalid or expired token"** as a deleted/expired token — the response never reveals
+  that the account was disabled (no account-state oracle for whoever holds a leaked URL).
+  Internally the gateway *does* distinguish the case and records a **`system_event`** row
+  (§25): `source='worker'`, `status=401`, `error_code='install_token_owner_inactive'`,
+  `method`/`route` (the matched git endpoint template) / `path` (concrete, never the query string),
+  `user_id` + actor snapshot = the **token owner** (the forensic subject — the requester is an
+  anonymous machine), and a short message naming `@ns/slug`. One event per refused request, no
+  dedup (high-volume, trimmable telemetry per §25); fire-and-forget, a logging failure never
+  changes the response. This is a deliberate **carve-out from §25's "401 is excluded" rule** and
+  the first `source='worker'` event.
+- **System installations are exempt** from the owner-status gate — `user_id` is NULL, there is no
+  owner to check, and `created_by_user_id` going inactive (or being erased) never invalidates the
+  token: it is provenance only, no authority attaches (§23 System installations). Revocation of a
+  system install remains explicit (any platform admin, one click).
 - **Client IP** is the originating client address (the consumer running `npx skills add`), not the
   reverse proxy in front of the git server. The worker Express app sets `trust proxy` from the
   **`TRUST_PROXY`** env var (number of hops, `true`/`false`, a preset like `loopback`, or a
@@ -1363,7 +1389,9 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   **any platform admin** may uninstall, reactivate, or extend any system install regardless of
   who minted it. GDPR erasure (§4) does **not** touch system installs — its token sweep deletes
   the user's *own* keys (`user_id`), and a system token has none; an erased minter simply renders
-  as the tombstone label via the live `users` join.
+  as the tombstone label via the live `users` join. The gateway's **owner-status gate** (Gateway
+  above) likewise never applies to system tokens — a minter going `inactive` doesn't stop the CI
+  credential.
 - **Visibility bypass (deliberate):** the gateway **skips the clone-time namespace-access
   re-check** for system tokens — there is no user to check, and the mint itself is a platform
   admin deliberately granting machine access to that skill. The grant survives later visibility
@@ -1529,8 +1557,9 @@ sorted ascending, bounds-checked on save); platform-admin only; audited like the
 
 ## 25. System log
 
-An operational view, for **platform admins only**, of the **user-facing HTTP errors** the web tier
-returned — the issues the platform encountered, with the user who hit them. Linked in the sidebar
+An operational view, for **platform admins only**, of the **user-facing HTTP errors** the platform
+returned — primarily the web tier, plus the worker's git-gateway refusal event below — the issues
+the platform encountered, with the user who hit them. Linked in the sidebar
 directly under **Audit log** (but, unlike Audit log, *not* shown to namespace admins).
 
 This is **not** the audit log: it is high-volume, mutable operational telemetry, so it deliberately
@@ -1538,7 +1567,12 @@ has **no** tamper-evident hash chain and **no** append-only trigger (cheap inser
 
 ### What is recorded
 - **5XX always.** Of 4XX, only the meaningful ones: **403 / 409 / 422 / 429**. **401 is excluded**
-  entirely (constant noise from expired/anonymous polling) and `/api/*` **404**s are polling noise.
+  (constant noise from expired/anonymous polling) and `/api/*` **404**s are polling noise —
+  with **one deliberate 401 carve-out**: the worker's git gateway records
+  **`install_token_owner_inactive`** (a clone refused because the install token's owning user is
+  not `status='active'`, §23 Gateway) as a `source='worker'`, `status=401` event. It is the only
+  401 in the log and the first worker-sourced event; an ex-employee's token still being tried is a
+  signal worth surfacing, not polling noise.
 - **Capture path (primary):** a `withSystemLog(routeTemplate, handler)` wrapper records, **in the
   route's own context**, both the error **responses** a handler returns *and* errors it **throws**
   (logging the stack to stdout, recording a 500, and answering with a JSON 500). This is the reliable
@@ -1555,12 +1589,16 @@ has **no** tamper-evident hash chain and **no** append-only trigger (cheap inser
 `status`, `method`, `route` (matched **template**), `path` (concrete, **no query string**), `user_id`
 (null = anonymous) + a **point-in-time `actor_name`/`actor_email` snapshot** (denormalized at insert),
 `error_code`, sanitized one-line `message` (**no stack trace**), `request_id`, `duration_ms`,
-`source` (`web` for v1; the column is ready for `worker`). **Privacy:** never the query string, body,
+`source` (`web`, or `worker` — used by the git gateway's `install_token_owner_inactive` event,
+§23; for that event `user_id`/actor snapshot identify the **token owner**, not the anonymous git
+client). **Privacy:** never the query string, body,
 headers, or a stack (CLAUDE.md #6). A **trigram (`pg_trgm`) GIN index** over
 `path‖error_code‖message‖user_id‖actor_email‖actor_name` powers fast substring search.
 
 ### Surface & API
-- **`/system-log`**: status-class chips (All / 5XX / 403 / 422 / 429 — note **409** events are recorded but have no dedicated chip; they appear under All) + a search box + a **From/To
+- **`/system-log`**: status-class chips (All / 5XX / 403 / 422 / 429 — note **409** and the
+  gateway's **401** carve-out events are recorded but have no dedicated chip; they appear under
+  All) + a search box + a **From/To
   date range** (same native-date-input widget as `/audit`; local day → UTC, To inclusive end-of-day)
   + a **`✕ clear filters`** button (shown when status/search/dates are non-default; resets all),
   **infinite scroll** in pages of 100, rows showing a color-coded status pill, `METHOD path`, error
