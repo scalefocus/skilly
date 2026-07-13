@@ -16,7 +16,9 @@ before(async () => {
   // Fake clamd: reads an INSTREAM body, responds FOUND if it sees the EICAR marker.
   server = net.createServer((sock) => {
     let buf = Buffer.alloc(0);
-    sock.on("data", (d) => {
+    // No encoding is set on the socket, so data is always a Buffer — the annotation keeps the
+    // Buffer.concat call typecheckable under @types/node 26 (data: string | NonSharedBuffer).
+    sock.on("data", (d: Buffer) => {
       buf = Buffer.concat([buf, d]);
       const term = buf.length >= 4 && buf.subarray(buf.length - 4).equals(Buffer.from([0, 0, 0, 0]));
       if (term) {
