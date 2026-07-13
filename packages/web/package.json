@@ -16,7 +16,7 @@
     "e2e": "playwright test -c e2e/playwright.config.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.1085.0",
     "@fontsource-variable/jetbrains-mono": "^5.0.0",
     "@fontsource-variable/montserrat": "^5.2.8",
     "@fontsource-variable/open-sans": "^5.2.7",
@@ -26,23 +26,23 @@
     "@tiptap/extension-text-style": "^3.27.3",
     "@tiptap/react": "^3.27.3",
     "@tiptap/starter-kit": "^3.27.3",
-    "adm-zip": "^0.5.12",
-    "next": "^16.0.0",
+    "adm-zip": "^0.6.0",
+    "next": "^16.2.10",
     "next-auth": "^4.24.14",
-    "pg": "^8.12.0",
+    "pg": "^8.22.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "recharts": "^3.8.1",
-    "tar": "^7.4.0"
+    "recharts": "^3.9.2",
+    "tar": "^7.5.20"
   },
   "devDependencies": {
-    "@playwright/test": "^1.47.0",
+    "@playwright/test": "^1.61.1",
     "@types/adm-zip": "^0.5.5",
     "@types/node": "^20.14.0",
     "@types/pg": "^8.11.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "tsx": "^4.16.0",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3"
   }
 }
