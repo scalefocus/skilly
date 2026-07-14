@@ -6,7 +6,7 @@
 // (no clone/checkout/hooks), so it's strictly less powerful than the mirror's clone. §6.
 import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
-import { validatePointerUrl, isBlockedIp, isSkillsHubUrl, parseSkillsHubApiUrl } from "@skilly/shared";
+import { validatePointerUrl, isBlockedIp, isSkillsHubUrl, parseSkillsHubApiUrl, skillsHubApiUrl } from "@skilly/shared";
 
 const LS_REMOTE_TIMEOUT_MS = Number(process.env.POINTER_REFS_TIMEOUT_MS ?? 15_000);
 // Generous cap so a valid ref is never missed (which would mis-fire the "ref not found" warning);
@@ -75,9 +75,14 @@ export type PointerRefsResult =
 const HUB_FETCH_TIMEOUT_MS = Number(process.env.POINTER_REFS_TIMEOUT_MS ?? 15_000);
 const HUB_MAX_RESPONSE_BYTES = 1024 * 1024;
 
-async function listSkillsHubVersions(apiUrl: string): Promise<PointerRefsResult> {
-  const hubSlug = parseSkillsHubApiUrl(apiUrl);
+async function listSkillsHubVersions(rawUrl: string): Promise<PointerRefsResult> {
+  const hubSlug = parseSkillsHubApiUrl(rawUrl);
   if (!hubSlug) return { ok: false, error: "not a valid skills-hub skill URL" };
+  // SSRF hardening (§6): fetch a URL REBUILT from the constant host + the validated slug, never
+  // the caller's raw string — so the request target can't be steered by trailing path/query noise
+  // even though isSkillsHubUrl already pins the host. skillsHubApiUrl(hubSlug) is identical to a
+  // canonical origin URL. Defends the js/request-forgery sink CodeQL flags here.
+  const apiUrl = skillsHubApiUrl(hubSlug);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), HUB_FETCH_TIMEOUT_MS);
   try {

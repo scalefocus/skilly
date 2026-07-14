@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create } from "tar";
-import { validatePointerUrl, parseSkillsHubApiUrl, buildSkillsHubSkillMd, type BundleEntry } from "@skilly/shared";
+import { validatePointerUrl, parseSkillsHubApiUrl, skillsHubApiUrl, buildSkillsHubSkillMd, type BundleEntry } from "@skilly/shared";
 
 const FETCH_TIMEOUT_MS = Number(process.env.SKILLS_HUB_FETCH_TIMEOUT_MS ?? 30_000);
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // a SKILL.md body, not an artifact — 5MB is generous
@@ -34,12 +34,17 @@ async function getJson(url: string): Promise<Record<string, unknown>> {
  * `ref` is the registry VERSION (e.g. "1.0.0") — it must exist upstream; a missing version
  * fails loudly (404), mirroring the pinned-ref discipline of git pointers (§6/§7).
  */
-export async function fetchSkillsHubBundle(apiUrl: string, ref: string, skillSlug: string): Promise<{ files: BundleEntry[]; targz: Buffer }> {
+export async function fetchSkillsHubBundle(rawUrl: string, ref: string, skillSlug: string): Promise<{ files: BundleEntry[]; targz: Buffer }> {
   // Same boundary as the git path: the worker re-validates the user-supplied origin URL.
-  const urlErr = validatePointerUrl(apiUrl);
+  const urlErr = validatePointerUrl(rawUrl);
   if (urlErr) throw new Error(`unsafe pointer URL: ${urlErr}`);
-  const hubSlug = parseSkillsHubApiUrl(apiUrl);
-  if (!hubSlug) throw new Error(`not a skills-hub origin URL: ${apiUrl}`);
+  const hubSlug = parseSkillsHubApiUrl(rawUrl);
+  if (!hubSlug) throw new Error(`not a skills-hub origin URL: ${rawUrl}`);
+
+  // SSRF hardening (§6): fetch URLs REBUILT from the constant host + the validated slug, never
+  // the stored/raw string — the request target can't be steered by trailing path/query noise.
+  // Identical to a canonical origin URL; only the base is now provably host-pinned.
+  const apiUrl = skillsHubApiUrl(hubSlug);
 
   // Pointer refs follow the git-tag convention ("v1.0.0") but skills-hub version ids are
   // bare semver ("1.0.0") — normalize so either stored form resolves upstream.
