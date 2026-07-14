@@ -9,6 +9,7 @@ import { Pool, type PoolClient } from "pg";
 import { scimRouter } from "./scim/router.js";
 import { pgStore } from "./scim/store.js";
 import { gitServer } from "./git/server.js";
+import { workerRateLimiter } from "./rateLimit.js";
 import { pgGitDeps } from "./git/pgDeps.js";
 import { publishPendingVersions, reprovisionMissingRepos } from "./git/publish.js";
 import { withdrawYankedVersions } from "./git/withdraw.js";
@@ -350,6 +351,13 @@ function buildServer() {
     res.setHeader("Referrer-Policy", "no-referrer");
     next();
   });
+
+  // App-wide rate limit (SKILLY_SPEC.md §22): caps request volume on every worker surface — the
+  // git smart server, SCIM, and the /healthz /readyz /metrics endpoints — before any auth or
+  // DB-touching handler runs. Mounted here (after the security headers, before the git handler and
+  // any body parser) because it only reads req.ip/headers and never touches the raw request stream
+  // the git backend consumes.
+  app.use(workerRateLimiter());
 
   // Git smart-HTTP must read the RAW request stream — mount before any body parser.
   // Non-git paths fall through via next(). SKILLY_SPEC.md §9.

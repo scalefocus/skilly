@@ -883,7 +883,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
   diamond**, echoed by the favicon's diamond-in-navy-tile) — deliberately NOT the Scalefocus eye
   logo, which stays reserved for Scalefocus corporate collateral (documents, decks).
 - **Backup/DR:** documented Postgres + object-store backup/restore; skilly stateless beyond those.
-- **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6.
+- **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6. The **worker's** HTTP surfaces — the git smart server (§9), the SCIM provisioning target (§5), and the operational `/healthz` `/readyz` `/metrics` endpoints — are additionally rate-limited **app-wide** via `express-rate-limit` (see §22 *Rate limiting (worker HTTP surfaces)*).
 
 ---
 
@@ -1204,6 +1204,27 @@ responsibilities. Hardening that pins or clarifies invariants here:
   session (state-bound), and the flow grants no skilly session or role (invariant #1, §5).
 - **Decompression limits**: archive extraction caps cumulative *actual* (not declared) bytes +
   entry count on both the upload and the publish/mirror paths.
+- **Rate limiting (worker HTTP surfaces)**: every worker HTTP endpoint — the git smart server
+  (§9), the SCIM provisioning target (§5), and the operational `/healthz` `/readyz` `/metrics`
+  endpoints — is fronted by a single **`express-rate-limit`** middleware mounted **app-wide** in
+  `buildServer()` (`worker/src/index.ts`), immediately after the baseline security-headers
+  middleware and **before** the git handler and any body parser. Mounting it there is safe because
+  the limiter only reads `req.ip`/headers and never touches the raw request stream the git backend
+  consumes (the same reason the security-headers middleware precedes the git handler). This closes
+  CodeQL `js/missing-rate-limiting` (CWE-307/400/770) on **all three** worker surfaces: the
+  authorization-bearing handlers (SCIM bearer auth, git token-in-URL basic auth) and the DB-touching
+  handlers no longer accept unbounded request volume. Configuration:
+  - **Keyed by client IP**, honoring the already-configured `trust proxy` (§ worker `buildServer`)
+    so the real client is counted behind the edge proxy rather than the proxy itself.
+  - **Limits match the `express-rate-limit` example: `windowMs: 15 * 60 * 1000` (15 min), `max: 100`
+    requests per window per IP.**
+  - Standard `RateLimit-*` + `Retry-After` response headers; **`429`** when exceeded.
+  - **Health/ops endpoints are NOT exempt** — `/healthz`, `/readyz`, and `/metrics` are covered by
+    the same app-wide limit (a deliberate choice; operators whose probe/scrape cadence approaches
+    100 requests / 15 min per source IP must widen the limit or place probes on an unthrottled path).
+  This is the worker analogue of the web app's in-memory limiter (`web/lib/ratelimit.ts`, §14/§15);
+  both remain **per-instance** — the HA note (§14, build-plan #20) applies, and a shared store is the
+  next upgrade.
 - **Transport/headers**: a **nonce-based, per-request CSP** on document responses (`frame-ancestors
   'none'`, `object-src 'none'`, `base-uri 'self'`, `default-src 'self'`), plus `X-Frame-Options: DENY`,
   `nosniff`, `Referrer-Policy: no-referrer`, HSTS, and `Cache-Control: no-store` on `/api/*`. The
