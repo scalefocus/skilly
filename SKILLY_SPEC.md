@@ -401,6 +401,15 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     The propose form's ref pre-check (`GET /api/pointer/refs`) recognizes skills-hub origins and
     lists the registry's **published versions** (from the skill's root API document) instead of
     git refs, plus its `latestVersion` — feeding the same exists-upstream check and quick-picks.
+    **SSRF hardening — the fetched URL is rebuilt, never the raw input.** Both skills-hub HTTP
+    sinks (the web ref pre-check `lib/pointerRefs.ts` and the worker mirror `git/skillsHub.ts`)
+    first extract the slug with `parseSkillsHubApiUrl` (which enforces exact host `skills-hub.ai`
+    + the `/api/v1/skills/` prefix + the kebab slug charset), then fetch a URL **reconstructed
+    from the constant host + the validated slug** via `skillsHubApiUrl(slug)` — the user-supplied
+    string is used only to derive the slug, never as the request target. Combined with the
+    existing https-only + `redirect: "error"` + timeout + size cap, a caller cannot steer the
+    request at an arbitrary or internal host (defends the `js/request-forgery` sink; behaviour is
+    identical for a canonical origin URL — only trailing query/path noise is dropped).
 
 **Unified rules (both types):**
 - Users always `npx skills add` **only skilly's git URL** (single gateway). No direct
