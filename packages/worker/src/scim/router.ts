@@ -159,7 +159,7 @@ export function scimRouter(store: ScimStore): Router {
   // ---------------- List + get (filter + pagination) ----------------
   r.get("/Users", async (req, res, next) => {
     try {
-      const filter = parseScimFilter(req.query.filter as string | undefined);
+      const filter = parseScimFilter(req.query.filter);
       const { startIndex, count } = parsePaging(req.query.startIndex, req.query.count);
       const { total, resources } = await store.listUsers({ filter, startIndex, count });
       res.json(listResponse(total, startIndex, resources.map(toUserResource)));
@@ -180,7 +180,7 @@ export function scimRouter(store: ScimStore): Router {
 
   r.get("/Groups", async (req, res, next) => {
     try {
-      const filter = parseScimFilter(req.query.filter as string | undefined);
+      const filter = parseScimFilter(req.query.filter);
       const { startIndex, count } = parsePaging(req.query.startIndex, req.query.count);
       const { total, resources } = await store.listGroups({ filter, startIndex, count });
       res.json(listResponse(total, startIndex, resources.map(toGroupResource)));
