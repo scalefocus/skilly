@@ -14,6 +14,14 @@ test("returns null for absent/unsupported filters", () => {
   assert.equal(parseScimFilter('userName co "ja"'), null); // 'co' not supported
 });
 
+test("rejects non-string input (type confusion via repeated query params, CWE-843)", () => {
+  // Express parses `?filter=a&filter=b` as an array, not a string. A sanitizer that
+  // trusts the declared `string` type without a runtime check can be bypassed this way.
+  assert.equal(parseScimFilter(["userName eq \"a\"", "userName eq \"b\""]), null);
+  assert.equal(parseScimFilter({ userName: 'eq "a"' }), null);
+  assert.equal(parseScimFilter(123 as unknown as string), null);
+});
+
 test("paging defaults and clamps", () => {
   assert.deepEqual(parsePaging(undefined, undefined), { startIndex: 1, count: 100 });
   assert.deepEqual(parsePaging("5", "20"), { startIndex: 5, count: 20 });

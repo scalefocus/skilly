@@ -12,8 +12,8 @@ export interface ScimEqFilter {
  * this is defense in depth against attacker-shaped input on an otherwise-unbounded query param. */
 const MAX_FILTER_LENGTH = 200;
 
-export function parseScimFilter(filter: string | undefined | null): ScimEqFilter | null {
-  if (!filter) return null;
+export function parseScimFilter(filter: unknown): ScimEqFilter | null {
+  if (typeof filter !== "string" || !filter) return null;
   if (filter.length > MAX_FILTER_LENGTH) return null;
   const m = /^\s*([\w.:-]+)\s+eq\s+(?:"([^"]*)"|(\S+))\s*$/i.exec(filter);
   if (!m) return null;
