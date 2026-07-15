@@ -42,7 +42,10 @@ function safeUrlValue(raw: string): boolean {
 
 /** Rebuild one tag keeping only safe attributes (drops on* handlers and js: URLs). */
 function sanitizeTag(tag: string): string {
-  const m = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([\s\S]*?)(\/?)>$/.exec(tag);
+  // The attrs group is only entered after a mandatory whitespace boundary, so the greedy tag-name
+  // charclass and the lazy attrs charclass can never both claim the same run of `-` characters —
+  // that overlap was a polynomial-time ReDoS on malformed input (CodeQL js/polynomial-redos).
+  const m = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?:\s([\s\S]*?))?(\/?)>$/.exec(tag);
   if (!m) return ""; // malformed pseudo-tag — drop it rather than guess
   const [, close, name, rawAttrs, selfClose] = m;
   // Belt-and-suspenders: a drop-tag that reaches this pass (e.g. reassembled by an earlier

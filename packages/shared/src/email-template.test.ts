@@ -77,6 +77,17 @@ test("sanitize resists ReDoS on adversarial unclosed-comment/tag input (js/polyn
   assert.ok(Date.now() - start < 1000, "sanitizeWrapperHtml must run in linear time on adversarial input");
 });
 
+test("sanitize: malformed unterminated tag with many hyphens does not cause polynomial backtracking in sanitizeTag's own regex", () => {
+  // Shape CodeQL originally flagged for the tag-parsing regex: '<A' followed by many '-' with no
+  // closing '>'. The ambiguity between the tag-name charclass and the (formerly unguarded) attrs
+  // charclass was quadratic in isolation; this hardens sanitizeTag itself, in addition to the
+  // outer tokenizer fix above, so it stays safe even if ever called with unconstrained input.
+  const evil = `<A${"-".repeat(80000)}`;
+  const start = Date.now();
+  sanitizeWrapperHtml(evil);
+  assert.ok(Date.now() - start < 1000, "sanitizeWrapperHtml should stay fast on pathological input");
+});
+
 test("placeholder contract: exactly one required", () => {
   assert.equal(validateWrapperHtml(`<div>no placeholder</div>`).ok, false);
   assert.equal(validateWrapperHtml(`<div>${EMAIL_WRAPPER_PLACEHOLDER} and ${EMAIL_WRAPPER_PLACEHOLDER}</div>`).ok, false);
