@@ -178,3 +178,11 @@ test("normalizeOriginUrl: strips wrapped/mixed quote and backtick chars", () => 
   const adversarial = "`".repeat(50_000) + "x";
   assert.equal(normalizeOriginUrl(adversarial), "x".toLowerCase());
 });
+
+test("parseInstallCommand resists ReDoS on adversarial quote runs (js/polynomial-redos)", () => {
+  const evilPrefix = '"'.repeat(200_000);
+  const start = Date.now();
+  const r = parseInstallCommand(`${evilPrefix}npx skills add owner/repo#v1`);
+  assert.ok(Date.now() - start < 1000, "parseInstallCommand must run in linear time on adversarial quote runs");
+  assert.ok(r.ok && r.url === "https://github.com/owner/repo.git" && r.ref === "v1");
+});
