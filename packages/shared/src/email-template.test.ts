@@ -130,6 +130,14 @@ test("flattenMarkdownLinks: [label](url) becomes 'label: url' for the plain-text
   assert.equal(flattenMarkdownLinks("Hi. [See it](https://s.example.com/x)"), "Hi. See it: https://s.example.com/x");
 });
 
+test("textToHtmlFragment / flattenMarkdownLinks resist ReDoS on adversarial input (js/polynomial-redos)", () => {
+  const evil = "[".repeat(100_000) + "\\".repeat(100_000);
+  const start = Date.now();
+  textToHtmlFragment(evil);
+  flattenMarkdownLinks(evil);
+  assert.ok(Date.now() - start < 1000, "markdown-link scanning must run in linear time on adversarial input");
+});
+
 test("renderWrappedEmailHtml: substitutes once and always appends the manage footer", () => {
   const html = renderWrappedEmailHtml(`<div>${EMAIL_WRAPPER_PLACEHOLDER}</div>`, "hello $& world", "https://s.example.com/");
   assert.ok(html.includes("hello $&amp; world")); // `$&` in the message must not trigger replace() patterns
