@@ -116,7 +116,7 @@ export type ParsedInstallCommand =
  * git repo) name nothing for skilly to mirror and are rejected with a clear message.
  */
 export function parseInstallCommand(raw: string): ParsedInstallCommand {
-  const cleaned = raw.trim().replace(/^\$\s+/, "").replace(/^[`'"]+|[`'"]+$/g, "");
+  const cleaned = stripWrappingQuotes(raw.trim().replace(/^\$\s+/, ""));
   if (!cleaned) return { ok: false, error: "paste an npx skills add command" };
 
   const tokens = cleaned.split(/\s+/);
@@ -128,7 +128,8 @@ export function parseInstallCommand(raw: string): ParsedInstallCommand {
     (t, i) => t === "install" && tokens.slice(0, i).some((p) => p === "@skills-hub-ai/cli" || p.startsWith("@skills-hub-ai/cli@") || p === "skills-hub"),
   );
   if (hubIdx >= 0) {
-    const slug = tokens.slice(hubIdx + 1).find((t) => !t.startsWith("-"))?.replace(/^[`'"]+|[`'"]+$/g, "");
+    const slugToken = tokens.slice(hubIdx + 1).find((t) => !t.startsWith("-"));
+    const slug = slugToken ? stripWrappingQuotes(slugToken) : undefined;
     if (!slug) return { ok: false, error: "no skill name found — expected `npx @skills-hub-ai/cli install <skill>`" };
     const slugErr = validateSkillsHubSlug(slug);
     if (slugErr) return { ok: false, error: slugErr };
@@ -142,7 +143,7 @@ export function parseInstallCommand(raw: string): ParsedInstallCommand {
   // `--skill <name>` sets the folder. CLIs that only reference a proprietary registry slug
   // (a private marketplace, not a git repo) carry no git repo, so they fall through to the
   // clear error below — there is nothing for skilly to mirror.
-  const strip = (s: string) => s.replace(/^[`'"]+|[`'"]+$/g, "");
+  const strip = stripWrappingQuotes;
   const isGitSource = (t: string) =>
     /^(https?|git|ssh):\/\//i.test(t) ||
     /^git@/.test(t) ||
