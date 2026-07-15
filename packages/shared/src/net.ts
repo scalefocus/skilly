@@ -15,7 +15,12 @@ const PRIVATE_V4 =
  * worker can re-check every DNS-resolved address (DNS-rebinding defense), not just the literal.
  */
 export function isBlockedIp(ipRaw: string): boolean {
-  let ip = ipRaw.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/%.*$/, ""); // strip brackets + zone id
+  let ip = ipRaw.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, ""); // strip brackets
+  // Strip a zone id ("fe80::1%eth0") via indexOf rather than a /%.*$/ regex — on a long,
+  // '%'-heavy resolved-address string an unanchored `.*$` after a literal can be walked from
+  // every position, an O(n^2) DoS surface for attacker-influenced DNS results (js/polynomial-redos).
+  const zoneIdx = ip.indexOf("%");
+  if (zoneIdx >= 0) ip = ip.slice(0, zoneIdx);
   if (!ip) return true;
 
   // Pure dotted-decimal IPv4.

@@ -55,6 +55,19 @@ test("isBlockedIp classifies resolved addresses (DNS-rebinding defense)", () => 
   }
 });
 
+test("isBlockedIp strips zone ids without regressing on the underlying address", () => {
+  assert.equal(isBlockedIp("fe80::1%eth0"), true); // link-local, zone id stripped
+  assert.equal(isBlockedIp("[fe80::1%eth0]"), true); // bracketed + zone id
+  assert.equal(isBlockedIp("2606:4700:4700::1111%0"), false); // public, zone id stripped
+});
+
+test("isBlockedIp resists ReDoS on adversarial '%'-heavy input (js/polynomial-redos)", () => {
+  const evil = "::1" + "%".repeat(200_000);
+  const start = Date.now();
+  isBlockedIp(evil);
+  assert.ok(Date.now() - start < 1000, "isBlockedIp must run in linear time on adversarial input");
+});
+
 test("validateGitRef accepts tags/commits, rejects flags and metachars", () => {
   assert.equal(validateGitRef("v1.2.0"), null);
   assert.equal(validateGitRef("main"), null);
