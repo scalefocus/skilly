@@ -20,6 +20,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   migrate:
     image: postgres:16-alpine
@@ -53,6 +54,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   git-perms:
     # The git repo root is a bind mount, which Docker creates ROOT-owned on the host. The worker
@@ -77,6 +79,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    restart: unless-stopped
 
   web:
     build:
@@ -115,6 +118,8 @@ services:
       # §12 email channel: token encryption key (shared with the worker) + SMTP_HOST so the
       # admin card's status pill can tell "SMTP fallback" from "email down".
       EMAIL_TOKEN_ENC_KEY: ${EMAIL_TOKEN_ENC_KEY:-}
+      ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
+      ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       SMTP_HOST: ${SMTP_HOST:-}
     restart: unless-stopped
     expose:
@@ -161,6 +166,8 @@ services:
       NOTIFY_WEBHOOK_URL: ${NOTIFY_WEBHOOK_URL:-}
       # §12 Graph email service account: decrypts the stored tokens for the delivery sweep.
       EMAIL_TOKEN_ENC_KEY: ${EMAIL_TOKEN_ENC_KEY:-}
+      ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
+      ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       POINTER_REFRESH_INTERVAL_MS: ${POINTER_REFRESH_INTERVAL_MS:-86400000}
       # Entra Graph credentials for group membership reconciliation (§4b).
@@ -184,3 +191,4 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     ports:
       - "8080:8080"
+    restart: unless-stopped
