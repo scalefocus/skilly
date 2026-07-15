@@ -6,6 +6,7 @@ import {
   versionTag,
   parseInstallCommand,
   normalizeSubdir,
+  normalizeOriginUrl,
 } from "./external-tool.js";
 
 test("version maps to v-prefixed git tag", () => {
@@ -166,4 +167,14 @@ test("normalizeSubdir stays fast on an adversarial run of slashes (ReDoS regress
   const start = performance.now();
   normalizeSubdir(adversarial);
   assert.ok(performance.now() - start < 1000, "normalizeSubdir must run in linear time, not blow up on many slashes");
+});
+
+test("normalizeOriginUrl: strips wrapped/mixed quote and backtick chars", () => {
+  assert.equal(normalizeOriginUrl('`https://github.com/team/skill`'), "https://github.com/team/skill");
+  assert.equal(normalizeOriginUrl(`"'https://github.com/team/skill'"`), "https://github.com/team/skill");
+  assert.equal(normalizeOriginUrl(null), "");
+  assert.equal(normalizeOriginUrl("   "), "");
+  // adversarial input that made the old /^[`'"]+|[`'"]+$/g pattern polynomial-time
+  const adversarial = "`".repeat(50_000) + "x";
+  assert.equal(normalizeOriginUrl(adversarial), "x".toLowerCase());
 });

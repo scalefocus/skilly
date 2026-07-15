@@ -16,8 +16,13 @@ export function countWrapperPlaceholders(html: string): number {
 const DROP_WITH_CONTENT = ["script", "iframe", "object", "embed"];
 // Tags whose open/close markers are stripped but whose children are kept (§12 strips `form`).
 const DROP_TAG_ONLY = ["form"];
-// URL-bearing attributes checked for javascript:/data: payloads.
+// URL-bearing attributes checked against the scheme/type allowlist below.
 const URL_ATTRS = new Set(["href", "src", "action", "formaction", "xlink:href", "background"]);
+
+// Allowed non-data schemes, and allowed data: subtypes (inline raster images only — no
+// data:image/svg+xml or data:application/xhtml+xml, both of which can carry executable script).
+const SAFE_SCHEMES = ["http:", "https:", "mailto:"];
+const SAFE_DATA_SUBTYPES = ["data:image/png", "data:image/jpeg", "data:image/gif", "data:image/webp"];
 
 function safeUrlValue(raw: string): boolean {
   // Strip quotes, whitespace and control characters before checking the scheme — defeats
@@ -29,7 +34,10 @@ function safeUrlValue(raw: string): boolean {
     if (c > 32 && c !== 127) v += ch; // drop whitespace + ASCII control chars
   }
   v = v.toLowerCase();
-  return !v.startsWith("javascript:") && !v.startsWith("vbscript:") && !v.startsWith("data:text/html");
+  // A bare fragment/relative reference (no scheme) is safe — only an explicit scheme is checked.
+  if (!/^[a-z][a-z0-9+.-]*:/.test(v)) return true;
+  if (v.startsWith("data:")) return SAFE_DATA_SUBTYPES.some((t) => v.startsWith(t));
+  return SAFE_SCHEMES.some((s) => v.startsWith(s));
 }
 
 /** Rebuild one tag keeping only safe attributes (drops on* handlers and js: URLs). */
