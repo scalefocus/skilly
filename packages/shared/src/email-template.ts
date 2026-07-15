@@ -64,6 +64,57 @@ function sanitizeTag(tag: string): string {
   return `<${name!.toLowerCase()}${attrs}${selfClose ? " /" : ""}>`;
 }
 
+/**
+ * Scan `html` left to right rewriting every `<...>` token through `sanitizeTag` while passing
+ * `<!--...-->` comments through unchanged (conditional comments are load-bearing in HTML email).
+ *
+ * This replaces a single `/<!--[\s\S]*?-->|<[^>]+>/g` regex, which CodeQL flags as
+ * polynomial-time (js/polynomial-redos): on attacker-controlled input with many `<!--` or `<`
+ * openers and no matching closer, the engine re-scans the remaining string from every opener,
+ * an O(n²) blowup. `indexOf` calls below only ever move forward, and the two "closer not found
+ * anywhere in the remainder" cases (`commentsExhausted`, `gt === -1`) are each hit at most once
+ * for the whole string, so the total work stays O(n).
+ */
+function rewriteTagsAndComments(html: string): string {
+  let out = "";
+  let i = 0;
+  const n = html.length;
+  let commentsExhausted = false;
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      out += html.slice(i);
+      break;
+    }
+    out += html.slice(i, lt);
+    if (!commentsExhausted && html.startsWith("<!--", lt)) {
+      const close = html.indexOf("-->", lt + 4);
+      if (close !== -1) {
+        out += html.slice(lt, close + 3);
+        i = close + 3;
+        continue;
+      }
+      // No "-->" anywhere at or after lt + 4 — none can appear later in the string either, so
+      // never try the comment branch again.
+      commentsExhausted = true;
+    }
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) {
+      // No '>' anywhere in the remainder — nothing can ever match again.
+      out += html.slice(lt);
+      break;
+    }
+    if (gt > lt + 1) {
+      out += sanitizeTag(html.slice(lt, gt + 1));
+      i = gt + 1;
+    } else {
+      out += html[lt]; // "<>" — not a tag match (needs at least one char between the brackets)
+      i = lt + 1;
+    }
+  }
+  return out;
+}
+
 function sanitizePass(html: string): string {
   let out = html;
   for (const t of DROP_WITH_CONTENT) {
@@ -73,9 +124,7 @@ function sanitizePass(html: string): string {
   for (const t of DROP_TAG_ONLY) {
     out = out.replace(new RegExp(`</?${t}\\b[^>]*>`, "gi"), "");
   }
-  // Rewrite every remaining tag through the attribute filter (comments pass through —
-  // conditional comments are load-bearing in HTML email).
-  return out.replace(/<!--[\s\S]*?-->|<[^>]+>/g, (tok) => (tok.startsWith("<!--") ? tok : sanitizeTag(tok)));
+  return rewriteTagsAndComments(out);
 }
 
 /**

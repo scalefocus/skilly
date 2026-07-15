@@ -67,6 +67,16 @@ test("sanitize: conditional comments and style attributes survive (email idioms)
   assert.equal(sanitizeWrapperHtml(html), html);
 });
 
+test("sanitize resists ReDoS on adversarial unclosed-comment/tag input (js/polynomial-redos)", () => {
+  const evilComments = "<!--".repeat(100_000);
+  const evilTags = "<".repeat(100_000);
+  const start = Date.now();
+  sanitizeWrapperHtml(evilComments);
+  sanitizeWrapperHtml(evilTags);
+  sanitizeWrapperHtml(`<!--a>`.repeat(20_000));
+  assert.ok(Date.now() - start < 1000, "sanitizeWrapperHtml must run in linear time on adversarial input");
+});
+
 test("placeholder contract: exactly one required", () => {
   assert.equal(validateWrapperHtml(`<div>no placeholder</div>`).ok, false);
   assert.equal(validateWrapperHtml(`<div>${EMAIL_WRAPPER_PLACEHOLDER} and ${EMAIL_WRAPPER_PLACEHOLDER}</div>`).ok, false);
