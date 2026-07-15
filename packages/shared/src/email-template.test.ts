@@ -31,6 +31,24 @@ test("sanitize: obfuscated javascript: scheme (whitespace/control chars) still d
   assert.ok(!clean.includes("href"));
 });
 
+test("sanitize: vbscript: and non-image data: subtypes dropped (scheme allowlist, not denylist)", () => {
+  const clean = sanitizeWrapperHtml(`<a href="vbscript:msgbox(1)">a</a><a href="data:text/html,<script>alert(1)</script>">b</a><a href="data:image/svg+xml,<svg onload=alert(1)>">c</a><a href="data:application/xhtml+xml,x">d</a>`);
+  assert.ok(!/href/.test(clean), clean);
+});
+
+test("sanitize: safe data: image subtypes kept", () => {
+  const clean = sanitizeWrapperHtml(`<img src="data:image/png;base64,iVBORw0KGgo="><img src="data:image/jpeg;base64,x"><img src="data:image/gif;base64,x"><img src="data:image/webp;base64,x">`);
+  assert.equal(
+    clean,
+    `<img src="data:image/png;base64,iVBORw0KGgo="><img src="data:image/jpeg;base64,x"><img src="data:image/gif;base64,x"><img src="data:image/webp;base64,x">`,
+  );
+});
+
+test("sanitize: mailto: links and scheme-less (relative/fragment) URLs are kept", () => {
+  const clean = sanitizeWrapperHtml(`<a href="mailto:x@y.com">mail</a><a href="/relative">rel</a><a href="#frag">frag</a>`);
+  assert.equal(clean, `<a href="mailto:x@y.com">mail</a><a href="/relative">rel</a><a href="#frag">frag</a>`);
+});
+
 test("sanitize: nested/split drop-tags cannot reassemble into live active content (fixpoint)", () => {
   // Removing the inner <iframe></iframe> pair would rejoin the halves into <script> — the
   // sanitizer must re-scan until stable and drop whatever reassembles.
