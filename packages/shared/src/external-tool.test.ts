@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildInstallSource, buildInstallCommand, versionTag, parseInstallCommand } from "./external-tool.js";
+import {
+  buildInstallSource,
+  buildInstallCommand,
+  versionTag,
+  parseInstallCommand,
+  normalizeSubdir,
+} from "./external-tool.js";
 
 test("version maps to v-prefixed git tag", () => {
   assert.equal(versionTag("1.2.0"), "v1.2.0");
@@ -145,4 +151,19 @@ test("parseInstallCommand: --all rejected; junk rejected", () => {
   assert.equal(parseInstallCommand("").ok, false);
   assert.equal(parseInstallCommand("npx skills add").ok, false);
   assert.equal(parseInstallCommand("npx skills add not a url at all !!").ok, false);
+});
+
+test("normalizeSubdir strips leading/trailing slashes, trims, lowercases", () => {
+  assert.equal(normalizeSubdir("/Docs/Skill/"), "docs/skill");
+  assert.equal(normalizeSubdir("  //nested//path//  "), "nested//path");
+  assert.equal(normalizeSubdir(null), "");
+  assert.equal(normalizeSubdir(undefined), "");
+  assert.equal(normalizeSubdir("///"), "");
+});
+
+test("normalizeSubdir stays fast on an adversarial run of slashes (ReDoS regression)", () => {
+  const adversarial = "/".repeat(200_000) + "x";
+  const start = performance.now();
+  normalizeSubdir(adversarial);
+  assert.ok(performance.now() - start < 1000, "normalizeSubdir must run in linear time, not blow up on many slashes");
 });
