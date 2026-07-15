@@ -1479,15 +1479,22 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   skills → stay in the loop, plus a "want to contribute?" pointer and a closing CTA. Reached any
   time from the **account menu, above What's new** (the menu's first item).
 - **"If you're new to the AI skill game"** (fixed, unnumbered — sits right after the intro, before
-  Step 1): explains that skills run on the **user's own machine**, not skilly's servers, so two
+  Step 1): explains that skills run on the **user's own machine**, not skilly's servers, so three
   free local tools matter before installing a first skill — **Node.js** (runs the `npx skills add`
-  command used in the install step) and **Python** (many skills, including several in skilly's own
-  catalog, run Python scripts when used). Covers, at a beginner level: downloading the installer
-  for the user's OS (Windows/macOS/Linux; 64-bit on Windows) from the official Node.js and Python
-  download pages (linked as buttons), running the installer (Windows Python install must tick "Add
-  python.exe to PATH"), how to open a command line on **Windows** (Win key → `cmd`/`PowerShell`/
-  "Windows Terminal"), **macOS** (Cmd+Space → `Terminal`), and **Linux** (terminal app / Ctrl+Alt+T),
-  and verifying with `node -v` / `python --version` (`python3 --version` on macOS/Linux).
+  command used in the install step), **Git** (the command it shells out to: per the pinned
+  external-tool contract, `npx skills add` runs `git clone --depth 1 --branch <ref>` against the
+  minted install URL — Node.js runs the command, Git is what actually fetches the skill's files),
+  and **Python** (many skills, including several in skilly's own catalog, run Python scripts when
+  used). Covers, at a beginner level: downloading the installer for the user's OS (Windows/macOS/
+  Linux; 64-bit on Windows) from the official Node.js, Git, and Python download pages (linked as
+  buttons — Git's links to the OS-detecting `git-scm.com/downloads`, matching how the Node.js and
+  Python links behave), running the installer (Windows Python install must tick "Add python.exe to
+  PATH"), a note that **macOS and Linux ship with Git already installed or one prompt/package-manager
+  step away** (unlike Node.js/Python, which need a real installer there too) — so the Git button
+  mainly matters for Windows users or the rare machine where it's missing — how to open a command
+  line on **Windows** (Win key → `cmd`/`PowerShell`/"Windows Terminal"), **macOS** (Cmd+Space →
+  `Terminal`), and **Linux** (terminal app / Ctrl+Alt+T), and verifying with `node -v` / `git
+  --version` / `python --version` (`python3 --version` on macOS/Linux).
 - **Content** is a hand-authored module (`app/quick-start/content.ts`) rendered by the page.
   **Screenshots** are served from `packages/web/public/quickstart/` (Next only serves images from
   `public/`); they are a curated subset of the screenshots captured by **`e2e/shots.mjs`** (which
