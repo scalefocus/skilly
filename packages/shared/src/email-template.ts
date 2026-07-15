@@ -167,12 +167,51 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+type MarkdownLinkMatch = { index: number; length: number; label: string; url: string };
+
 /**
- * Match a markdown-style link `[label](https://…)` — the only markup the notification renderer
+ * Find markdown-style links `[label](https://…)` — the only markup the notification renderer
  * emits (§12 Notification content). The URL must be absolute http(s); the label is any run
  * without a closing `]`.
+ *
+ * Hand-rolled scan (not a regex) so matching stays linear on attacker/library-controlled text:
+ * a regex equivalent — `/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g` — re-attempts the label match at
+ * every `[` in the input, and on inputs shaped like many `[...` runs with no valid link, that is
+ * O(n) restarts × O(n) work each = quadratic (flagged by CodeQL as js/polynomial-redos). `indexOf`
+ * and a single forward index advance make each character visited a bounded number of times.
  */
-const MARKDOWN_LINK = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+function findMarkdownLinks(text: string): MarkdownLinkMatch[] {
+  const links: MarkdownLinkMatch[] = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const open = text.indexOf("[", i);
+    if (open === -1) break;
+    const close = text.indexOf("]", open + 1);
+    if (close === -1) break;
+    if (close === open + 1 || text[close + 1] !== "(") {
+      i = open + 1;
+      continue;
+    }
+    const urlStart = close + 2;
+    let end = urlStart;
+    while (end < n && text[end] !== ")" && text[end] !== " " && text[end] !== "\t" && text[end] !== "\n" && text[end] !== "\r") {
+      end++;
+    }
+    if (end === urlStart || text[end] !== ")") {
+      i = open + 1;
+      continue;
+    }
+    const url = text.slice(urlStart, end);
+    if (!/^https?:\/\//.test(url)) {
+      i = open + 1;
+      continue;
+    }
+    links.push({ index: open, length: end + 1 - open, label: text.slice(open + 1, close), url });
+    i = end + 1;
+  }
+  return links;
+}
 
 /**
  * Turn a notification's rendered text into an HTML fragment: `[label](url)` call-to-actions
@@ -187,15 +226,12 @@ export function textToHtmlFragment(text: string): string {
   const autolink = (s: string) => s.replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}">${url}</a>`);
   let out = "";
   let last = 0;
-  for (const m of text.matchAll(MARKDOWN_LINK)) {
-    const at = m.index ?? 0;
-    out += autolink(escapeHtml(text.slice(last, at)));
-    const label = m[1]!;
-    const url = m[2]!;
-    out += safeUrlValue(url)
-      ? `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`
-      : escapeHtml(label); // unreachable for http(s), but degrade to plain text defensively
-    last = at + m[0].length;
+  for (const m of findMarkdownLinks(text)) {
+    out += autolink(escapeHtml(text.slice(last, m.index)));
+    out += safeUrlValue(m.url)
+      ? `<a href="${escapeHtml(m.url)}">${escapeHtml(m.label)}</a>`
+      : escapeHtml(m.label); // unreachable for http(s), but degrade to plain text defensively
+    last = m.index + m.length;
   }
   out += autolink(escapeHtml(text.slice(last)));
   return out.replace(/\n/g, "<br>\n");
@@ -203,7 +239,13 @@ export function textToHtmlFragment(text: string): string {
 
 /** Flatten `[label](url)` to `label: url` for the plain-text part (keeps the URL clickable). */
 export function flattenMarkdownLinks(text: string): string {
-  return text.replace(MARKDOWN_LINK, (_m, label: string, url: string) => `${label}: ${url}`);
+  let out = "";
+  let last = 0;
+  for (const m of findMarkdownLinks(text)) {
+    out += text.slice(last, m.index) + `${m.label}: ${m.url}`;
+    last = m.index + m.length;
+  }
+  return out + text.slice(last);
 }
 
 /** The always-appended opt-out pointer (§12). Absolute when the base URL is known. */
