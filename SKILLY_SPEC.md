@@ -1225,6 +1225,31 @@ responsibilities. Hardening that pins or clarifies invariants here:
   This is the worker analogue of the web app's in-memory limiter (`web/lib/ratelimit.ts`, §14/§15);
   both remain **per-instance** — the HA note (§14, build-plan #20) applies, and a shared store is the
   next upgrade.
+- **SCIM filter parsing (ReDoS hardening)**: `parseScimFilter` (`worker/src/scim/filter.ts`) parses
+  the single `eq` filter grammar Entra issues (`<attr> eq "<value>"` or bare `<attr> eq <value>`)
+  against the `filter` query string on `GET /scim/v2/Users` and `GET /scim/v2/Groups` (§5) —
+  bearer-token-gated but the token is a shared provisioning secret, not per-user, and the string is
+  otherwise unbounded and attacker-shaped. The original regex's independently-optional leading/
+  trailing quote markers around a whitespace-permissive capture created three quantifiers (`\s+`,
+  the capture, and the trailing `\s*$`) that could all match the same run of whitespace, giving
+  **O(n²)** catastrophic-backtracking behavior on crafted input (confirmed empirically: a ~16KB
+  crafted filter string blocks the regex engine for over a minute) — CodeQL `js/polynomial-redos`
+  (CWE-1333/400/730), high severity. Because the worker is a **singleton, leader-locked,
+  single-threaded** process (§2), one such request stalls SCIM reconciliation, the git gateway, and
+  health checks simultaneously. Fix:
+  - **Regex rewritten to remove the overlap**: the quoted-value and bare-value cases become disjoint
+    alternatives (`"([^"]*)"` vs `\S+`) instead of independently-optional quote markers around a
+    whitespace-inclusive capture, so there is exactly one way to match any given input — no
+    backtracking ambiguity, linear-time parsing.
+  - **Length cap on the incoming filter, as defense in depth**: `parseScimFilter` rejects (returns
+    `null` — i.e. "no filter applied", the same outcome an unparseable filter already produces
+    today) any `filter` string over **200 characters** before it ever reaches the regex. Entra's
+    real `eq` filters (one attribute + operator + one value) are always far shorter; 200 characters
+    comfortably covers any legitimate value while foreclosing the input length an attacker would
+    need even against the now-linear regex.
+  - No change to the supported filter grammar or to legitimate Entra provisioning traffic — this is
+    parser hardening only, closing code-scanning alert
+    [#10](https://github.com/scalefocus/skilly/security/code-scanning/10).
 - **Transport/headers**: a **nonce-based, per-request CSP** on document responses (`frame-ancestors
   'none'`, `object-src 'none'`, `base-uri 'self'`, `default-src 'self'`), plus `X-Frame-Options: DENY`,
   `nosniff`, `Referrer-Policy: no-referrer`, HSTS, and `Cache-Control: no-store` on `/api/*`. The

@@ -7,11 +7,17 @@ export interface ScimEqFilter {
   value: string;
 }
 
+/** Hard cap on the incoming filter string, checked before it ever reaches the regex below.
+ * Entra's real `eq` filters (one attribute + operator + one value) are always far shorter;
+ * this is defense in depth against attacker-shaped input on an otherwise-unbounded query param. */
+const MAX_FILTER_LENGTH = 200;
+
 export function parseScimFilter(filter: string | undefined | null): ScimEqFilter | null {
   if (!filter) return null;
-  const m = /^\s*([\w.:-]+)\s+eq\s+"?([^"]*)"?\s*$/i.exec(filter);
+  if (filter.length > MAX_FILTER_LENGTH) return null;
+  const m = /^\s*([\w.:-]+)\s+eq\s+(?:"([^"]*)"|(\S+))\s*$/i.exec(filter);
   if (!m) return null;
-  return { attr: m[1]!, value: m[2]! };
+  return { attr: m[1]!, value: (m[2] ?? m[3])! };
 }
 
 /** SCIM 1-based startIndex + count, clamped to sane bounds. */
