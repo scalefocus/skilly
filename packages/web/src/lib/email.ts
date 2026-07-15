@@ -30,8 +30,8 @@ export function webBaseUrl(): string {
 export function webGraphMailEnv(): GraphMailEnv | null {
   const key = parseEmailTokenKey(process.env.EMAIL_TOKEN_ENC_KEY);
   const tenantId = process.env.ENTRA_TENANT_ID;
-  const clientId = process.env.EMAIL_CLIENT_ID ?? process.env.ENTRA_CLIENT_ID;
-  const clientSecret = process.env.EMAIL_CLIENT_SECRET ?? process.env.ENTRA_CLIENT_SECRET;
+  const clientId = process.env.ENTRA_EMAIL_CLIENT_ID;
+  const clientSecret = process.env.ENTRA_EMAIL_CLIENT_SECRET;
   if (!key || !tenantId || !clientId || !clientSecret) return null;
   return { tenantId, clientId, clientSecret, key };
 }

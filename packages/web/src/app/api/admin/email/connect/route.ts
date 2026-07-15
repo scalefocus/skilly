@@ -20,7 +20,7 @@ export async function GET(req: Request) {
   if (!access?.userId || !access.isPlatformAdmin) return Response.json({ error: "platform admin required" }, { status: 403 });
   const env = webGraphMailEnv();
   if (!env) {
-    return Response.json({ error: "EMAIL_TOKEN_ENC_KEY (or the Entra credentials) is not configured — the connect flow is disabled" }, { status: 422 });
+    return Response.json({ error: "EMAIL_TOKEN_ENC_KEY, ENTRA_EMAIL_CLIENT_ID, or ENTRA_EMAIL_CLIENT_SECRET is not configured — the connect flow is disabled" }, { status: 422 });
   }
 
   const state = randomBytes(24).toString("base64url");
