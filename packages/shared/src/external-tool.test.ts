@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildInstallSource, buildInstallCommand, versionTag, parseInstallCommand } from "./external-tool.js";
+import {
+  buildInstallSource,
+  buildInstallCommand,
+  versionTag,
+  parseInstallCommand,
+  normalizeOriginUrl,
+} from "./external-tool.js";
 
 test("version maps to v-prefixed git tag", () => {
   assert.equal(versionTag("1.2.0"), "v1.2.0");
@@ -145,4 +151,14 @@ test("parseInstallCommand: --all rejected; junk rejected", () => {
   assert.equal(parseInstallCommand("").ok, false);
   assert.equal(parseInstallCommand("npx skills add").ok, false);
   assert.equal(parseInstallCommand("npx skills add not a url at all !!").ok, false);
+});
+
+test("normalizeOriginUrl: strips wrapped/mixed quote and backtick chars", () => {
+  assert.equal(normalizeOriginUrl('`https://github.com/team/skill`'), "https://github.com/team/skill");
+  assert.equal(normalizeOriginUrl(`"'https://github.com/team/skill'"`), "https://github.com/team/skill");
+  assert.equal(normalizeOriginUrl(null), "");
+  assert.equal(normalizeOriginUrl("   "), "");
+  // adversarial input that made the old /^[`'"]+|[`'"]+$/g pattern polynomial-time
+  const adversarial = "`".repeat(50_000) + "x";
+  assert.equal(normalizeOriginUrl(adversarial), "x".toLowerCase());
 });

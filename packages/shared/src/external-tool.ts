@@ -229,8 +229,20 @@ export function parseInstallCommand(raw: string): ParsedInstallCommand {
  * safety (validatePointerUrl owns that) and is deliberately conservative: when in doubt it
  * lowercases the raw string rather than guessing, so a false MATCH is unlikely.
  */
+const WRAPPING_QUOTE_CHARS = "`'\"";
+
+/** Strips leading/trailing backtick/quote chars without regex backtracking (a `/^[..]+|[..]+$/g`
+ *  pattern here is polynomial-time on adversarial input — CodeQL js/polynomial-redos). */
+function stripWrappingQuotes(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && WRAPPING_QUOTE_CHARS.includes(s[start]!)) start++;
+  while (end > start && WRAPPING_QUOTE_CHARS.includes(s[end - 1]!)) end--;
+  return s.slice(start, end);
+}
+
 export function normalizeOriginUrl(raw: string | null | undefined): string {
-  let u = (raw ?? "").trim().replace(/^[`'"]+|[`'"]+$/g, "");
+  let u = stripWrappingQuotes((raw ?? "").trim());
   if (!u) return "";
   const scp = /^git@([^:/]+):(.+)$/.exec(u); // git@github.com:owner/repo(.git)
   if (scp) u = `https://${scp[1]}/${scp[2]}`;
