@@ -44,8 +44,13 @@ export function parseFrontmatter(md: string): Record<string, string> {
   if (!m) return {};
   const out: Record<string, string> = {};
   for (const line of m[1]!.split(/\r?\n/)) {
-    const kv = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
-    if (kv) out[kv[1]!] = kv[2]!.trim().replace(/^["']|["']$/g, "");
+    // Manual split on the first ':' (rather than a regex with adjacent \s* quantifiers around
+    // it) avoids a polynomial-time backtrack blowup on attacker-controlled SKILL.md content.
+    const idx = line.indexOf(":");
+    if (idx < 0) continue;
+    const key = line.slice(0, idx).trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(key)) continue;
+    out[key] = line.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
   }
   return out;
 }
