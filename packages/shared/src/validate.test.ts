@@ -11,6 +11,15 @@ test("parses frontmatter name/description", () => {
   assert.equal(fm.description, "work with pdfs");
 });
 
+test("parseFrontmatter resists ReDoS on adversarial lines (js/polynomial-redos)", () => {
+  const evilLine = "-:" + " ".repeat(200_000);
+  const md = `---\n${evilLine}\nname: ok\n---\nbody`;
+  const start = Date.now();
+  const fm = parseFrontmatter(md);
+  assert.ok(Date.now() - start < 1000, "parseFrontmatter must run in linear time on adversarial input");
+  assert.equal(fm.name, "ok");
+});
+
 test("valid bundle passes", () => {
   const files: BundleEntry[] = [
     { path: "SKILL.md", bytes: skillMd("pdf") },
