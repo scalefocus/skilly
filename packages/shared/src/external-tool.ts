@@ -263,7 +263,14 @@ export function normalizeOriginUrl(raw: string | null | undefined): string {
 /** Canonicalize a pointer subdir for duplicate matching: trimmed, slash-stripped, lowercased;
  *  null/empty/repo-root all collapse to "". */
 export function normalizeSubdir(raw: string | null | undefined): string {
-  return (raw ?? "").trim().replace(/^\/+|\/+$/g, "").toLowerCase();
+  const s = (raw ?? "").trim();
+  // Manual index scan (rather than a regex with the ambiguous alternation `^\/+|\/+$`) avoids a
+  // polynomial-time backtrack blowup on attacker-controlled subdir strings with many slashes.
+  let start = 0;
+  let end = s.length;
+  while (start < end && s.charCodeAt(start) === 47 /* / */) start++;
+  while (end > start && s.charCodeAt(end - 1) === 47 /* / */) end--;
+  return s.slice(start, end).toLowerCase();
 }
 
 /** Pinned contract metadata (verified from vercel-labs/skills source). */

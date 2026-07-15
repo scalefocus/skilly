@@ -5,6 +5,7 @@ import {
   buildInstallCommand,
   versionTag,
   parseInstallCommand,
+  normalizeSubdir,
   normalizeOriginUrl,
 } from "./external-tool.js";
 
@@ -151,6 +152,21 @@ test("parseInstallCommand: --all rejected; junk rejected", () => {
   assert.equal(parseInstallCommand("").ok, false);
   assert.equal(parseInstallCommand("npx skills add").ok, false);
   assert.equal(parseInstallCommand("npx skills add not a url at all !!").ok, false);
+});
+
+test("normalizeSubdir strips leading/trailing slashes, trims, lowercases", () => {
+  assert.equal(normalizeSubdir("/Docs/Skill/"), "docs/skill");
+  assert.equal(normalizeSubdir("  //nested//path//  "), "nested//path");
+  assert.equal(normalizeSubdir(null), "");
+  assert.equal(normalizeSubdir(undefined), "");
+  assert.equal(normalizeSubdir("///"), "");
+});
+
+test("normalizeSubdir stays fast on an adversarial run of slashes (ReDoS regression)", () => {
+  const adversarial = "/".repeat(200_000) + "x";
+  const start = performance.now();
+  normalizeSubdir(adversarial);
+  assert.ok(performance.now() - start < 1000, "normalizeSubdir must run in linear time, not blow up on many slashes");
 });
 
 test("normalizeOriginUrl: strips wrapped/mixed quote and backtick chars", () => {
