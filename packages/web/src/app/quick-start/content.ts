@@ -30,16 +30,18 @@ export const QUICK_START: QuickStartStep[] = [
     kind: "prereq",
     title: "If you're new to the AI skill game",
     lead:
-      "Skills run on your own machine, not on skilly's servers. Before you install your first one, make sure two free tools are set up locally: Node.js (needed to run the npx skills add command in Step 3) and Python (many skills — including several in this very catalog — run Python scripts when you use them). Both take a few minutes to install.",
+      "Skills run on your own machine, not on skilly's servers. Before you install your first one, make sure three free tools are set up locally: Node.js (needed to run the npx skills add command in Step 3), Git (that command clones a git repository behind the scenes — Node.js runs it, Git is what actually fetches the skill's files), and Python (many skills — including several in this very catalog — run Python scripts when you use them). Node.js and Python take a few minutes to install; macOS and Linux usually already have Git.",
     points: [
       "Download the installer for your operating system — Windows, macOS, or Linux — using the links below. On Windows, choose the 64-bit (x64) version unless you know you need 32-bit.",
+      "macOS and Linux typically already have Git (or install it with one prompt / your package manager), so that button mainly matters for Windows users, or the rare machine where it's missing.",
       "Run the downloaded installer and follow the prompts. On Windows, tick “Add python.exe to PATH” during the Python install so it works from the command line.",
       "Open a command line to check the install worked. Windows: press the Windows key, type “cmd” or “PowerShell”, and press Enter (or search “Windows Terminal”). macOS: press Cmd+Space, type “Terminal”, and press Enter (or find it in Applications → Utilities). Linux: open your terminal app from the applications menu (often Ctrl+Alt+T).",
       "Type the commands below and press Enter after each — each should print a version number. If nothing prints, close and reopen your terminal, or reinstall and make sure “Add to PATH” was checked.",
     ],
-    code: "node -v\npython --version   (macOS/Linux: python3 --version)",
+    code: "node -v\ngit --version\npython --version   (macOS/Linux: python3 --version)",
     links: [
       { label: "Download Node.js ↗", href: "https://nodejs.org/" },
+      { label: "Download Git ↗", href: "https://git-scm.com/downloads" },
       { label: "Download Python ↗", href: "https://www.python.org/downloads/" },
     ],
   },
