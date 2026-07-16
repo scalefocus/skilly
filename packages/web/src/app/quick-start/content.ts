@@ -50,7 +50,7 @@ export const QUICK_START: QuickStartStep[] = [
     n: 1,
     title: "Find a skill",
     lead:
-      "Open the Catalog from the left sidebar to browse everything you have access to. Search by name or keyword (Ctrl+F jumps to the search box), or narrow the list with the filters.",
+      "Open the Catalog from the left sidebar to browse everything you have access to. Search by name or keyword (Ctrl+K jumps to the search box), or narrow the list with the filters.",
     points: [
       "Filter by category, tool/harness, or hosted-vs-pointer.",
       "Toggle between the card grid and a compact list — whichever you prefer.",

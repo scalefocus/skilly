@@ -138,12 +138,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [q, onCatalog, router]);
 
-  // Ctrl/Cmd+F focuses the registry search instead of the browser's find bar (only while
-  // signed in, since the box only exists then). The placeholder advertises the shortcut.
+  // Ctrl/Cmd+K focuses the registry search (only while signed in, since the box only
+  // exists then). The kbd hint next to the box advertises the shortcut.
   useEffect(() => {
     if (status !== "authenticated") return;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
@@ -562,7 +562,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 aria-autocomplete="list"
                 autoComplete="off"
               />
-              <kbd>CTRL+F</kbd>
+              <kbd>CTRL+K</kbd>
               {acOpen && suggestions.length > 0 && (
                 <ul className="search-ac" role="listbox">
                   {suggestions.map((s, i) => (
