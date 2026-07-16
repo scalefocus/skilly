@@ -882,6 +882,34 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
   **own wordmark/mark** (lowercase Montserrat-bold navy wordmark whose terminal dot is a **cyan
   diamond**, echoed by the favicon's diamond-in-navy-tile) — deliberately NOT the Scalefocus eye
   logo, which stays reserved for Scalefocus corporate collateral (documents, decks).
+  - **Social share card (Open Graph / Twitter).** A **single static, app-wide** card — `og:image`
+    + `twitter:image` (`twitter:card = summary_large_image`), **1200×630** — surfaced on **every**
+    route via the root-layout `metadata` (`openGraph` / `twitter`) plus Next's **`opengraph-image`
+    file convention rendered with `ImageResponse`** (code-generated from brand tokens — **no binary
+    committed**, stays in sync with the palette). Text renders in **`next/og`'s bundled default
+    typeface (Geist)**: the vendored Montserrat ships only as **woff2**, which **Satori (behind
+    `next/og`) cannot consume**, and vendoring a separate TTF was judged unnecessary weight for one
+    card — the card's identity is carried by the **navy field + cyan diamond + layout**, not the
+    typeface. Artwork = the skilly
+    wordmark + mark (navy `#082773` field, cyan `#14ABE3` diamond) over the existing title/tagline
+    (`skilly — agent skills registry` and the §14 description). **`metadataBase` derives from
+    `PUBLIC_BASE_URL`** (an og:image URL must be absolute); **unset → the card degrades to a
+    relative reference** (same graceful-degradation posture as the §12 email CTA) — no absolute
+    social preview is emitted, nothing breaks. One card only: OG images are not theme-responsive, so
+    the single navy treatment serves both light and dark. The generated image route (Next 16 serves
+    it extension-less, e.g. `/opengraph-image?<hash>` / `/twitter-image?<hash>`) needs no auth and
+    carries no per-skill data; whatever CSP the §22 middleware applies to it is inert for an image
+    response.
+  - **Deliberately NOT per-skill / dynamic (invariant #3).** Auth gating is **client-side** (§2), so
+    the server returns **200 HTML for every route** and an unauthenticated unfurl crawler receives
+    whatever `<head>` metadata is generated. A per-skill/dynamic card (`generateMetadata` on
+    `/skills/[ns]/[slug]`) would stamp skill name/namespace/description into `og:*` and into the
+    rendered image for **anyone**, leaking **restricted (`namespace`-visibility) skills** and
+    creating an existence oracle — a direct **invariant #3** violation. The static app-wide card
+    carries **no per-skill data**, so it is safe to serve unauthenticated. Per-skill social cards are
+    **out of scope** and must not be re-introduced without an authenticated, visibility-filtered
+    metadata path. **App/browser icons** (apple-touch, PWA manifest) are likewise **out of scope**
+    here — the existing `icon.svg` favicon is unchanged.
 - **Backup/DR:** documented Postgres + object-store backup/restore; skilly stateless beyond those.
 - **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6. The **worker's** HTTP surfaces — the git smart server (§9), the SCIM provisioning target (§5), and the operational `/healthz` `/readyz` `/metrics` endpoints — are additionally rate-limited **app-wide** via `express-rate-limit` (see §22 *Rate limiting (worker HTTP surfaces)*).
 
