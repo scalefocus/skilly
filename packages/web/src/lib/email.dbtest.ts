@@ -11,8 +11,8 @@ const enabled = process.env.SKILLY_DB_E2E === "1";
 test("email channel: wrapper save + status pill + connect/disconnect audit", { skip: !enabled }, async () => {
   process.env.EMAIL_TOKEN_ENC_KEY = Buffer.alloc(32, 5).toString("base64");
   process.env.ENTRA_TENANT_ID ??= "t";
-  process.env.ENTRA_CLIENT_ID ??= "c";
-  process.env.ENTRA_CLIENT_SECRET ??= "s";
+  process.env.ENTRA_EMAIL_CLIENT_ID ??= "c";
+  process.env.ENTRA_EMAIL_CLIENT_SECRET ??= "s";
   const { Pool } = await import("pg");
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const { getEmailChannelStatus, saveEmailWrapper, disconnectEmail, finishConnect, webGraphMailEnv } = await import("./email");
