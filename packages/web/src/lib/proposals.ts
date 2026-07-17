@@ -30,7 +30,7 @@ import {
   type ProposalState,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
-import { autoAddSubmitter } from "./maintainers";
+import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
 import { findDuplicateSkill, type DuplicateMatch } from "./duplicate";
 import { fulfilOriginRequest } from "./requests";
 import { M } from "./metrics";
@@ -771,6 +771,15 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
         meta.tags ?? null, // [] is meaningful (clears tags); only undefined keeps the current value
       ],
     );
+    // Version-acceptance maintainer auto-add (§19): gated against the skill's CURRENT
+    // namespace/visibility — never touched by a re-version (visibility stays frozen above) — not
+    // the submitted payload's meta.visibility, which only ever applies to a brand-new skill.
+    const { rows: curRows } = await client.query<{ namespace_id: string; visibility: "org" | "namespace" }>(
+      `select namespace_id, visibility from skills where id = $1`,
+      [skillId],
+    );
+    const cur = curRows[0]!;
+    await autoAddSubmitterOnNewVersion(client, { id: skillId, namespaceId: cur.namespace_id, visibility: cur.visibility }, input.submittedBy);
   }
 
   const isPrerelease = channelOf(input.semver) !== "stable";

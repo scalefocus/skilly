@@ -128,27 +128,74 @@ export async function listCandidates(skill: MaintainerSkill, q: string, limit = 
   return rows.map((r) => ({ userId: r.id, displayName: userLabel(r.display_name, r.email), email: r.email, avatar: r.avatar }));
 }
 
+/** Shared eligibility check for the auto-add triggers below: can `userId` currently see `skill`? (invariant #3) */
+async function isEligibleForAutoAdd(client: PoolClient, skill: MaintainerSkill, userId: string): Promise<boolean> {
+  if (skill.visibility === "org") return true;
+  const { rows } = await client.query<{ ok: boolean }>(
+    `select exists (
+       select 1 from group_memberships gm
+       join role_mappings rm on rm.group_id = gm.group_id
+       where gm.user_id = $1 and (rm.role = 'platform_admin' or rm.namespace_id = $2)
+     ) as ok`,
+    [userId, skill.namespaceId],
+  );
+  return rows[0]?.ok === true;
+}
+
+/** True if `userId` is already an IMPLICIT maintainer of `skill` (a namespace admin of its own
+ *  namespace) — used by the version-acceptance trigger below to skip a redundant explicit row. */
+async function isImplicitMaintainer(client: PoolClient, skill: MaintainerSkill, userId: string): Promise<boolean> {
+  const { rows } = await client.query<{ ok: boolean }>(
+    `select exists (
+       select 1 from group_memberships gm
+       join role_mappings rm on rm.group_id = gm.group_id
+       where gm.user_id = $1 and rm.role = 'namespace_admin' and rm.namespace_id = $2
+     ) as ok`,
+    [userId, skill.namespaceId],
+  );
+  return rows[0]?.ok === true;
+}
+
 /**
  * Auto-add the proposal submitter as a maintainer of a newly created skill, iff they're
  * eligible to see it. Runs inside the materialize transaction. SKILLY_SPEC.md §19.
  */
 export async function autoAddSubmitter(client: PoolClient, skill: MaintainerSkill, userId: string): Promise<void> {
-  const eligible =
-    skill.visibility === "org"
-      ? true
-      : (
-          await client.query(
-            `select exists (
-               select 1 from group_memberships gm
-               join role_mappings rm on rm.group_id = gm.group_id
-               where gm.user_id = $1 and (rm.role = 'platform_admin' or rm.namespace_id = $2)
-             ) as ok`,
-            [userId, skill.namespaceId],
-          )
-        ).rows[0]?.ok === true;
-  if (!eligible) return;
+  if (!(await isEligibleForAutoAdd(client, skill, userId))) return;
   await client.query(
     `insert into skill_maintainers (skill_id, user_id, added_by) values ($1, $2, $2) on conflict do nothing`,
     [skill.id, userId],
   );
+}
+
+/**
+ * Auto-add the submitter of an ACCEPTED NEW VERSION of an already-existing skill as an explicit
+ * maintainer — the version-acceptance trigger (SKILLY_SPEC.md §19), a second trigger alongside
+ * `autoAddSubmitter` above (creation-only). Fires identically for a reviewed-proposal accept, a
+ * direct publish, or a metadata-only "Keep current files" re-version — materializeVersion calls
+ * this from the single existing-skill branch shared by all three. Same eligibility gate as
+ * creation, checked at accept time against the skill's CURRENT namespace/visibility (a re-version
+ * never changes either, so this is always the live row, not stale submission-time state). A
+ * no-op, with no audit entry, when the submitter is already an effective maintainer — explicit
+ * (unique-conflict) or implicit (already a namespace admin, where an explicit row would be
+ * redundant). Full parity with a manually-added maintainer once added: no cap, no expiry, the
+ * usual co-maintainer curation rights. Audited as a DISTINCT action (`skill.maintainer_auto_added`,
+ * actor = the submitter) so it stays distinguishable from an admin's manual add.
+ */
+export async function autoAddSubmitterOnNewVersion(client: PoolClient, skill: MaintainerSkill, userId: string): Promise<void> {
+  if (!(await isEligibleForAutoAdd(client, skill, userId))) return;
+  if (await isImplicitMaintainer(client, skill, userId)) return;
+  const { rowCount } = await client.query(
+    `insert into skill_maintainers (skill_id, user_id, added_by) values ($1, $2, $2) on conflict do nothing`,
+    [skill.id, userId],
+  );
+  if (!rowCount) return;
+  await appendAudit(client, {
+    actorUserId: userId,
+    action: "skill.maintainer_auto_added",
+    targetType: "skill",
+    targetId: skill.id,
+    namespaceId: skill.namespaceId,
+    after: { userId },
+  });
 }
