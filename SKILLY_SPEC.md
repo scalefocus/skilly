@@ -107,7 +107,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -765,7 +765,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Events:**
   - To namespace reviewers/admins: new proposal / resubmission in their namespace queue.
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
-  - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift. No review-queue notifications (they hold no review power).
+  - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
 - **Deferred:** —
@@ -823,6 +823,53 @@ current or future type can ever leak JSON to a user.
 - **No schema change.** Every field above already lives in the notification `payload` (§3
   `notifications`; §24 `message.new` coalescing) — this is a **rendering** change (plus the §24
   `?conversation=` deep link and the shared label map), **not** a migration.
+
+### Maintainer notification preferences (per-type opt-outs)
+
+- **Two per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
+  toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
+  **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
+  `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON). `GET /api/me`
+  returns them; `PATCH /api/me { driftNotifications, newVersionNotifications }` updates them.
+  Toggling is **silent** (not audited), matching the other profile prefs.
+- **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
+  filtered out of the recipient set **at insert time** in the worker (the publish sweep's
+  `skill.new_version` insert; the pointer-refresh `skill.drift` insert) — no in-app row, no bell
+  badge, no email, no webhook. The email toggle below stays channel-level and orthogonal
+  (it suppresses email for rows that *do* exist).
+- **They gate only the implicit-maintainer routes (§19):**
+  - `drift_notifications` gates `skill.drift` entirely — drift only ever targets effective
+    maintainers, so there is no other route to preserve.
+  - `new_version_notifications` gates only the **maintainer-derived** recipients of
+    `skill.new_version`. **An explicit watch always wins:** a `skill_watches` row keeps notifying
+    regardless of the toggle (watching is its own per-skill opt-in; its off-switch is unwatch).
+    The recipient set becomes: watchers ∪ ((explicit maintainers ∪ namespace admins) minus
+    opted-out users).
+- **No safety floor — deliberately.** Namespace admins can opt out like anyone, so a skill whose
+  effective maintainers have all opted out drifts with **no one pinged**. Accepted: the toggle
+  silences the *ping*, never the *record* — the `pointer.drift_detected` audit row, the
+  `pointer_ref` scan report (status `drift`, high-severity `upstream-ref-mutated` finding), and
+  the skill page's scan surface remain regardless of anyone's preference.
+- **Forward-only.** Flipping OFF deletes no already-created notification rows; flipping ON
+  backfills nothing missed while off.
+- **GDPR erasure:** nothing new — the columns live on `users` and are scrubbed with the row (§4).
+
+### Drift notifications fire once per onset (dedup)
+
+- **Problem this fixes:** the pointer-refresh job re-checks each pointer version roughly daily
+  (default `minAgeSeconds` 23h) and previously re-inserted `skill.drift` on **every** pass while
+  the drift persisted — a persistently-drifted version pinged its maintainers daily until
+  re-versioned.
+- **Rule:** on detecting drift, the job inserts `skill.drift` notifications **only at drift
+  onset** — when the version's most recent prior `pointer_ref` scan report, **ignoring
+  `unreachable` rows**, is not already `status = 'drift'`. Consecutive drift passes stay silent;
+  a pass that observes the content matching again (`scanned`) re-arms the notification, so a
+  later re-drift pings anew. An `unreachable` blip between two drift passes does **not** re-arm.
+- **Notification-only.** The audit row (`pointer.drift_detected`) and the per-pass `pointer_ref`
+  scan report keep recording **every** detection, unchanged — dedup narrows who gets *pinged*,
+  not what gets *recorded*.
+- Composed with the opt-outs above: recipients = effective maintainers minus
+  `drift_notifications = false` users, evaluated at onset time.
 
 ### Email channel (per-user opt-out + two transports)
 
@@ -965,7 +1012,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, §12), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
@@ -1016,6 +1063,9 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Phase 5 — Email notifications v2**
 23. **Graph email service account + HTML wrapper + per-user opt-out (§12):** platform-admin-connected Entra service mailbox (delegated `Mail.Send` + `offline_access` on the existing app registration; AES-256-GCM-encrypted refresh-token storage under `EMAIL_TOKEN_ENC_KEY`; silent renewal), a WYSIWYG-authored `[SYSTEM MESSAGE]` HTML wrapper that gates the Graph transport, a per-user `users.email_notifications` toggle (default on) governing the email channel across both transports, a collapsed-by-default admin card (status pill / connect / disconnect / test send / wrapper editor), audited connect/disconnect/template events, and the `message.new` coalescing refresh made delivery-preserving (update-in-place, §12/§24). *(Spec'd 2026-07-07; not yet built.)*
+
+**Phase 6 — Maintainer notification preferences**
+24. **Per-type notification opt-outs + drift-onset dedup (§12):** two per-user Profile toggles (`users.drift_notifications`, `users.new_version_notifications`, both default ON — migration 0057) that filter the **implicit-maintainer** recipients at insert time in the worker (row-level: no in-app row, no email — unlike the channel-level `email_notifications`); an explicit `skill_watches` row always outranks the new-version opt-out; **no safety floor** (namespace admins may opt out too — audit rows, scan reports, and the skill page keep recording drift regardless); and the pointer-refresh job notifying `skill.drift` **only at drift onset** (most recent non-`unreachable` `pointer_ref` report not already `drift`) instead of on every ~daily pass. *(Spec'd 2026-07-17; not yet built.)*
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -1093,7 +1143,7 @@ Per-skill **ownership + notification** layer. Designed to name accountable owner
 - **At version acceptance (new versions of an already-existing skill, not just creation):** every accepted version of an existing skill — reviewed-proposal accept, direct publish (`require_review=false`), or a metadata-only *Keep current files* re-version (§8) alike, no distinction between them — auto-adds its submitter (`skill_versions.created_by`) as an explicit maintainer, under the **same eligibility gate as creation**: added iff they can currently see the skill (`isSkillVisible`), checked **at accept time** against the final namespace/visibility (so a reviewer's mid-review namespace/visibility edit is what's evaluated, not the submission-time state); an ineligible cross-namespace submitter is skipped, same admin-only-coverage fallback as creation. **No-op** if already an effective maintainer (explicit, or implicit via namespace-admin role) — no duplicate row, no duplicate audit entry. **Full parity** with any other explicit maintainer once added — the usual co-maintainer curation rights above, no cap on how many a skill accumulates over its lifetime, permanent until manually removed. **Global and unconditional**, not a per-namespace setting (unlike `require_review`). **Silent** — no dedicated notification (matches the creation-time rule); the new maintainer discovers their status via the skill detail page, **My Skills**, or the audit log. **Forward-only** — versions accepted before this shipped are not backfilled. **Audited** as a distinct action, `skill.maintainer_auto_added` (actor = the submitter), so it stays distinguishable from an admin's manual add/remove. **Out of scope: promotion to global** (§8) — it materializes an independent, brand-new skill, so it's already covered by the *At creation* rule above, not this one.
 
 ### Notifications, display & lifecycle
-- Maintainers are **implicit watchers** of their skill: `skill.new_version` on publish (deduped vs explicit watchers) and `skill.drift` on detected pointer drift. No un-actionable review notifications.
+- Maintainers are **implicit watchers** of their skill: `skill.new_version` on publish (deduped vs explicit watchers) and `skill.drift` on detected pointer drift. Both are gated by the per-user **maintainer notification preferences** (§12) — suppressed at insert time for opted-out users, with an explicit `skill_watches` row always outranking the new-version opt-out — and drift pings fire **once per drift onset**, not per refresh pass (§12). No un-actionable review notifications.
 - The skill detail page shows maintainers as `display_name` + `email` to **anyone who can see the skill** (not only admins/maintainers) — the list is read-only for viewers, who can **Reach out** (direct message) to a maintainer; only platform admins, namespace admins, and the skill's own maintainers see the add field and the remove (✕) control. Coexists with the namespace `maintainer_contact` (namespace scope vs skill scope). Maintainer names are **not** in FTS (§10).
 - **Deprovision:** `ON DELETE CASCADE` (the implicit-admin half self-heals from live `role_mappings`).
 - **Visibility downgrade (`org→namespace`):** the effective-maintainer resolver always re-filters through `isSkillVisible` (defense-in-depth, so a stale row can never leak); a future visibility-downgrade path must additionally prune now-ineligible explicit rows (audited). v1 has no downgrade path, so read-filtering fully covers it.

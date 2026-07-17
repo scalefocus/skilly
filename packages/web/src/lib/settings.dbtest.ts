@@ -5,12 +5,12 @@
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… pnpm --filter @skilly/web test:db
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getSystemBanner, setSystemBanner, clearSystemBanner } from "./settings";
+import { getSystemBanner, setSystemBanner, clearSystemBanner, setUserDriftNotifications, setUserNewVersionNotifications } from "./settings";
 import { pool } from "./db";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
 
-test("system banner: validation, replace semantics, lazy expiry, clear, audit", { skip: !enabled }, async () => {
+test("system banner + maintainer notification prefs: validation, replace semantics, lazy expiry, clear, audit, pref defaults", { skip: !enabled }, async () => {
   try {
     const actor = (await pool.query<{ id: string }>(
       `insert into users (entra_object_id, email, display_name) values ('sysbanner-admin-oid','sbadmin@t','SBAdmin')
@@ -76,6 +76,30 @@ test("system banner: validation, replace semantics, lazy expiry, clear, audit", 
     assert.ok((setAudit.rowCount ?? 0) >= 1, "set is audited");
     const clearAudit = await pool.query(`select 1 from audit_log where action = 'system_banner.cleared' and actor_user_id = $1`, [actor]);
     assert.ok((clearAudit.rowCount ?? 0) >= 1, "clear is audited");
+
+    // §12 per-type maintainer-notification opt-outs (migration 0057): both columns default
+    // ON for a fresh user, and the two setters round-trip independently of each other.
+    await pool.query(`delete from users where entra_object_id = 'prefs-dbtest-oid'`);
+    const prefUser = (await pool.query<{ id: string }>(
+      `insert into users (entra_object_id, email, display_name) values ('prefs-dbtest-oid','prefs@t','Prefs') returning id`,
+    )).rows[0]!.id;
+    const prefs = async () =>
+      (await pool.query<{ drift_notifications: boolean; new_version_notifications: boolean }>(
+        `select drift_notifications, new_version_notifications from users where id = $1`,
+        [prefUser],
+      )).rows[0]!;
+    const p0 = await prefs();
+    assert.equal(p0.drift_notifications, true, "drift notifications default ON");
+    assert.equal(p0.new_version_notifications, true, "new-version notifications default ON");
+    await setUserDriftNotifications(prefUser, false);
+    const p1 = await prefs();
+    assert.equal(p1.drift_notifications, false, "drift opt-out persisted");
+    assert.equal(p1.new_version_notifications, true, "new-version pref untouched by the drift setter");
+    await setUserNewVersionNotifications(prefUser, false);
+    await setUserDriftNotifications(prefUser, true);
+    const p2 = await prefs();
+    assert.equal(p2.drift_notifications, true, "drift pref re-enabled");
+    assert.equal(p2.new_version_notifications, false, "new-version opt-out persisted independently");
   } finally {
     await pool.end();
   }

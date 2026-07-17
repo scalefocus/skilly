@@ -109,21 +109,35 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
           [`${row.skill_id}@${row.semver}`, row.namespace_id, JSON.stringify({ ref: row.external_ref, url: row.external_origin_url })],
         );
 
-        // Alert the skill's maintainers (explicit + namespace admins, §19) that upstream drifted.
-        await pool.query(
-          `insert into notifications (user_id, type, payload)
-           select uid, 'skill.drift',
-                  jsonb_build_object('namespaceSlug',$2::text,'skillSlug',$3::text,'semver',$4::text,'ref',$5::text)
-             from (
-               select sm.user_id as uid from skill_maintainers sm where sm.skill_id = $1
-               union
-               select gm.user_id
-                 from role_mappings rm
-                 join group_memberships gm on gm.group_id = rm.group_id
-                where rm.namespace_id = $6 and rm.role = 'namespace_admin'
-             ) recipients`,
-          [row.skill_id, row.ns_slug, row.skill_slug, row.semver, row.external_ref, row.namespace_id],
+        // Alert the skill's maintainers (explicit + namespace admins, §19) that upstream
+        // drifted — but only at drift ONSET (§12 "Drift notifications fire once per onset"):
+        // when the most recent prior pointer_ref report (ignoring unreachable blips) wasn't
+        // already drift. Consecutive drifted passes stay silent; a clean pass re-arms. The
+        // audit row above and the per-pass scan report below keep recording every detection.
+        // Per-user opt-out (users.drift_notifications) is row-level: no row minted at all.
+        const prior = await pool.query<{ status: string }>(
+          `select status from scan_reports
+            where subject_type = 'pointer_ref' and subject_id = $1 and status <> 'unreachable'
+            order by created_at desc limit 1`,
+          [row.id],
         );
+        if (prior.rows[0]?.status !== "drift") {
+          await pool.query(
+            `insert into notifications (user_id, type, payload)
+             select uid, 'skill.drift',
+                    jsonb_build_object('namespaceSlug',$2::text,'skillSlug',$3::text,'semver',$4::text,'ref',$5::text)
+               from (
+                 select sm.user_id as uid from skill_maintainers sm where sm.skill_id = $1
+                 union
+                 select gm.user_id
+                   from role_mappings rm
+                   join group_memberships gm on gm.group_id = rm.group_id
+                  where rm.namespace_id = $6 and rm.role = 'namespace_admin'
+               ) recipients
+               join users u on u.id = recipients.uid and u.drift_notifications`,
+            [row.skill_id, row.ns_slug, row.skill_slug, row.semver, row.external_ref, row.namespace_id],
+          );
+        }
       }
 
       await pool.query(
