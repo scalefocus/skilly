@@ -12,6 +12,8 @@ interface Me {
   systemDateFormat: "eu" | "us";
   leaderboardHidden: boolean;
   emailNotifications: boolean;
+  driftNotifications: boolean;
+  newVersionNotifications: boolean;
 }
 
 const FORMAT_HINT: Record<"eu" | "us", string> = { eu: "dd/mm/yyyy · 24h", us: "mm/dd/yyyy · AM/PM" };
@@ -170,6 +172,61 @@ function EmailNotificationsPref() {
   );
 }
 
+// §12 per-type maintainer opt-outs: row-level — off means the notification is never created
+// for you (no in-app row, no email), unlike the email toggle above which only mutes email.
+// Skills you explicitly watch still notify you of new versions regardless (unwatch to stop).
+function MaintainerNotificationsPref() {
+  const { data, reload } = useApi<Me>("/api/me");
+  const [busy, setBusy] = useState(false);
+  if (!data) return <div className="skeleton" style={{ height: 120, borderRadius: "var(--radius)" }} />;
+
+  const patch = async (field: "driftNotifications" | "newVersionNotifications", enabled: boolean) => {
+    setBusy(true);
+    try {
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: enabled }) });
+      reload();
+    } finally { setBusy(false); }
+  };
+
+  const rows: { field: "driftNotifications" | "newVersionNotifications"; label: string; offHint: string; value: boolean }[] = [
+    { field: "driftNotifications", label: "Upstream drift", offHint: "You won't be alerted when an external skill's pinned source changes.", value: data.driftNotifications },
+    { field: "newVersionNotifications", label: "New versions", offHint: "You won't be alerted when a skill you maintain publishes a version. Skills you watch still notify you.", value: data.newVersionNotifications },
+  ];
+  return (
+    <section className="reveal" style={{ marginBottom: 30 }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Skills I maintain</h2>
+      <p className="page-sub" style={{ marginBottom: 16 }}>
+        As a maintainer you’re alerted when a skill you maintain publishes a new version, or when an external (pointer)
+        skill’s pinned source drifts upstream. Turning one off stops that alert entirely — in-app and email. Skills you
+        explicitly watch keep notifying you of new versions either way.
+      </p>
+      {rows.map((r) => (
+        <div key={r.field} style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 130, fontWeight: 600, fontSize: 14 }}>{r.label}</div>
+          <div className="sort-toggle" role="group" aria-label={`${r.label} notifications`}>
+            {[{ label: "On", enabled: true }, { label: "Off", enabled: false }].map((o) => {
+              const active = o.enabled === r.value;
+              return (
+                <button
+                  key={o.label}
+                  type="button"
+                  className={`sort-opt${active ? " sort-on" : ""}`}
+                  aria-pressed={active}
+                  disabled={busy}
+                  onClick={() => !active && patch(r.field, o.enabled)}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+          {!r.value && <span className="muted" style={{ fontSize: 12 }}>{r.offHint}</span>}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function ProfileInner() {
   const { data: session } = useSession();
   const { data: me } = useApi<Me>("/api/me");
@@ -196,6 +253,7 @@ function ProfileInner() {
       <DateFormatPref />
       <LeaderboardPref />
       <EmailNotificationsPref />
+      <MaintainerNotificationsPref />
     </div>
   );
 }

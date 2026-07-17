@@ -124,6 +124,9 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
     // Notify everyone watching this skill that a new version is live, plus its maintainers
     // (explicit maintainers + the namespace's admins — implicit watchers, §19). UNION dedupes.
     // Single point covering both hosted and pointer, since both reach git_published here. §12.
+    // The per-user new_version_notifications opt-out gates ONLY the maintainer-derived half —
+    // an explicit watch always wins (its off-switch is unwatch), so a maintainer who watches
+    // keeps getting notified with the toggle off. Row-level: opted-out users get no row at all.
     await pool.query(
       `insert into notifications (user_id, type, payload)
        select uid, 'skill.new_version',
@@ -131,13 +134,17 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
          from (
            select w.user_id as uid from skill_watches w where w.skill_id = $1
            union
-           select sm.user_id from skill_maintainers sm where sm.skill_id = $1
-           union
-           select gm.user_id
-             from skills s
-             join role_mappings rm on rm.namespace_id = s.namespace_id and rm.role = 'namespace_admin'
-             join group_memberships gm on gm.group_id = rm.group_id
-            where s.id = $1
+           select m.uid
+             from (
+               select sm.user_id as uid from skill_maintainers sm where sm.skill_id = $1
+               union
+               select gm.user_id
+                 from skills s
+                 join role_mappings rm on rm.namespace_id = s.namespace_id and rm.role = 'namespace_admin'
+                 join group_memberships gm on gm.group_id = rm.group_id
+                where s.id = $1
+             ) m
+             join users u on u.id = m.uid and u.new_version_notifications
          ) recipients`,
       [row.skill_id, row.ns_slug, row.skill_slug, row.semver],
     );
