@@ -27,7 +27,7 @@
     "@types/adm-zip": "^0.5.5",
     "@types/express": "^5.0.0",
     "@types/node": "^26.1.1",
-    "@types/nodemailer": "^6.4.15",
+    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.11.0",
     "@types/supertest": "^7.2.1",
     "supertest": "^7.0.0",
