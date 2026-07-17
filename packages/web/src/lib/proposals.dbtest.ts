@@ -1,8 +1,11 @@
 // Live-DB integration test for the proposal materialize path (SKILLY_SPEC.md §8). Gated by
 // SKILLY_DB_E2E=1. The pure state machine is unit-tested in shared/proposal.test.ts; this
 // covers the DB-backed materialize-on-accept: skill + immutable version insert, submitter
-// auto-add as maintainer (§19), category attach, per-version usage_examples (§20), the
-// skill-level metadata sync on re-version, and the "Keep current files" reuse path (§8).
+// auto-add as maintainer on CREATION (§19), category attach, per-version usage_examples (§20),
+// the skill-level metadata sync on re-version, the "Keep current files" reuse path (§8), and
+// submitter auto-add as maintainer on an accepted NEW VERSION of an already-existing skill —
+// eligibility-gated, idempotent, and skipping a redundant row for an implicit namespace-admin
+// maintainer (§19).
 // Runs inside a transaction and rolls back — no persistent state, no audit/FK pollution.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -29,6 +32,17 @@ async function seed(client: PoolClient, key: string): Promise<{ ns: string; user
     [`${key}-sub`, `${key}@org`],
   )).rows[0]!.id;
   return { ns, user };
+}
+
+/** A bare extra user (no group membership) inside the caller's transaction — for maintainer eligibility tests. */
+async function mkUser(client: PoolClient, key: string): Promise<string> {
+  return (
+    await client.query<{ id: string }>(
+      `insert into users (entra_object_id, email, display_name) values ($1, $2, 'U')
+       on conflict (entra_object_id) do update set email = excluded.email returning id`,
+      [key, `${key}@org`],
+    )
+  ).rows[0]!.id;
 }
 
 test("proposal materialize: skill + version + maintainer + categories + usage", { skip: !enabled }, async () => {
@@ -151,6 +165,120 @@ test("re-version syncs skill-level metadata: title/description/categories/tags/h
     // The first version's own row is untouched (immutability, invariant #2).
     const v1 = (await client.query<{ usage_examples: string }>(`select usage_examples from skill_versions where id = $1`, [first.versionId])).rows[0]!;
     assert.equal(v1.usage_examples, "old usage", "prior version frozen");
+
+    await client.query("rollback");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+test("new-version acceptance auto-adds submitter as maintainer, idempotent, skips implicit admin (§19)", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const { ns, user: creator } = await seed(client, "vernew");
+    const contributor = await mkUser(client, "vernew-contrib");
+    const nsAdmin = await mkUser(client, "vernew-nsadmin");
+
+    const adminGroup = (await client.query<{ id: string }>(
+      `insert into groups (entra_object_id, display_name) values ($1, 'VerNew Admins')
+       on conflict (entra_object_id) do update set display_name = excluded.display_name returning id`,
+      ["vernew-admin-grp"],
+    )).rows[0]!.id;
+    await client.query(`insert into role_mappings (group_id, namespace_id, role) values ($1,$2,'namespace_admin') on conflict do nothing`, [adminGroup, ns]);
+    await client.query(`insert into group_memberships (group_id, user_id) values ($1,$2) on conflict do nothing`, [adminGroup, nsAdmin]);
+
+    const meta = { skillSlug: "vernew-skill", title: "VerNew Skill", description: "d", toolHarness: "claude-code", visibility: "org" as const };
+    const first = await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: null, semver: "1.0.0", submittedBy: creator,
+      payload: { metadata: meta, artifactObjectKey: "uploads/x/vn1.bundle", artifactSha256: "vn1" },
+    });
+
+    // A different, eligible contributor submits an accepted new version → auto-added as maintainer.
+    await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: first.skillId, semver: "1.1.0", submittedBy: contributor,
+      payload: { metadata: meta, artifactObjectKey: "uploads/x/vn2.bundle", artifactSha256: "vn2" },
+    });
+    let row = (await client.query(`select 1 from skill_maintainers where skill_id = $1 and user_id = $2`, [first.skillId, contributor])).rowCount;
+    assert.equal(row, 1, "new-version submitter auto-added as maintainer (§19)");
+    let autoAdds = (await client.query<{ action: string }>(
+      `select action from audit_log where target_id = $1 and action = 'skill.maintainer_auto_added'`,
+      [first.skillId],
+    )).rows;
+    assert.equal(autoAdds.length, 1, "audited as a distinct action, once");
+
+    // The SAME contributor submits another accepted version → no duplicate row, no duplicate audit.
+    await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: first.skillId, semver: "1.2.0", submittedBy: contributor,
+      payload: { metadata: meta, artifactObjectKey: "uploads/x/vn3.bundle", artifactSha256: "vn3" },
+    });
+    const count = (await client.query<{ n: string }>(
+      `select count(*)::text as n from skill_maintainers where skill_id = $1 and user_id = $2`,
+      [first.skillId, contributor],
+    )).rows[0]!.n;
+    assert.equal(count, "1", "idempotent — no duplicate row for a repeat contributor");
+    autoAdds = (await client.query<{ action: string }>(
+      `select action from audit_log where target_id = $1 and action = 'skill.maintainer_auto_added'`,
+      [first.skillId],
+    )).rows;
+    assert.equal(autoAdds.length, 1, "idempotent — no duplicate audit entry");
+
+    // A namespace ADMIN submits a version → already an implicit maintainer, so no redundant explicit row.
+    await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: first.skillId, semver: "1.3.0", submittedBy: nsAdmin,
+      payload: { metadata: meta, artifactObjectKey: "uploads/x/vn4.bundle", artifactSha256: "vn4" },
+    });
+    row = (await client.query(`select 1 from skill_maintainers where skill_id = $1 and user_id = $2`, [first.skillId, nsAdmin])).rowCount;
+    assert.equal(row, 0, "namespace admin NOT added explicitly — already an implicit maintainer");
+
+    await client.query("rollback");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+test("new-version acceptance respects the visibility-eligibility gate for a cross-namespace submitter (§19)", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const { ns } = await seed(client, "vergate");
+    const member = await mkUser(client, "vergate-member");
+    const outsider = await mkUser(client, "vergate-outsider"); // no role_mapping anywhere in `ns`
+
+    const memberGroup = (await client.query<{ id: string }>(
+      `insert into groups (entra_object_id, display_name) values ($1, 'VerGate Members')
+       on conflict (entra_object_id) do update set display_name = excluded.display_name returning id`,
+      ["vergate-member-grp"],
+    )).rows[0]!.id;
+    await client.query(`insert into role_mappings (group_id, namespace_id, role) values ($1,$2,'namespace_member') on conflict do nothing`, [memberGroup, ns]);
+    await client.query(`insert into group_memberships (group_id, user_id) values ($1,$2) on conflict do nothing`, [memberGroup, member]);
+
+    const meta = { skillSlug: "vergate-skill", title: "VerGate Skill", description: "d", toolHarness: "claude-code", visibility: "namespace" as const };
+    const first = await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: null, semver: "1.0.0", submittedBy: member,
+      payload: { metadata: meta, artifactObjectKey: "uploads/x/vg1.bundle", artifactSha256: "vg1" },
+    });
+    const creatorRow = (await client.query(`select 1 from skill_maintainers where skill_id = $1 and user_id = $2`, [first.skillId, member])).rowCount;
+    assert.equal(creatorRow, 1, "eligible creator auto-added at creation (§19 baseline)");
+
+    // An outsider with no role anywhere in `ns` submits an accepted new version of a namespace-restricted skill.
+    await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: first.skillId, semver: "1.1.0", submittedBy: outsider,
+      payload: { metadata: meta, artifactObjectKey: "uploads/x/vg2.bundle", artifactSha256: "vg2" },
+    });
+    const outsiderRow = (await client.query(`select 1 from skill_maintainers where skill_id = $1 and user_id = $2`, [first.skillId, outsider])).rowCount;
+    assert.equal(outsiderRow, 0, "ineligible cross-namespace submitter skipped (invariant #3)");
+    const auditRows = (await client.query<{ action: string }>(
+      `select action from audit_log where target_id = $1 and action = 'skill.maintainer_auto_added' and after->>'userId' = $2`,
+      [first.skillId, outsider],
+    )).rows;
+    assert.equal(auditRows.length, 0, "no audit entry for a skipped, ineligible submitter");
 
     await client.query("rollback");
   } catch (e) {
