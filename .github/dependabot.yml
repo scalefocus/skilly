@@ -14,6 +14,12 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # TypeScript 7 redesigned its package exports: require("typescript") now returns a
+      # version-only stub, which breaks Next.js's built-in TS integration during `next build`.
+      # Blocked until Next.js supports it; 6.x minors/patches still flow.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions pinned in .github/workflows/
   - package-ecosystem: github-actions
