@@ -11,7 +11,7 @@ export interface LeaderBadgeInfo { metric: LeaderMetric; window: "all" | "30d" }
 
 const BADGE_META: Record<LeaderMetric, { icon: string; color: string; label: string }> = {
   installs: { icon: "📥", color: "var(--accent)", label: "Installs leader" },
-  skills: { icon: "📝", color: "var(--accent-2)", label: "Proposals leader" },
+  skills: { icon: "📝", color: "var(--accent-2)", label: "Adoption leader" },
   requests: { icon: "🎁", color: "var(--ok)", label: "Fulfillment leader" },
   watched: { icon: "👁", color: "var(--warn)", label: "Watch leader" },
 };
