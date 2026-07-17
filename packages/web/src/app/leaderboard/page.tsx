@@ -18,7 +18,7 @@ interface Entry {
 
 function Leaderboard() {
   const [window, setWindow] = useState<"all" | "30d">("all");
-  // Ranking metric (§26): installs credited (default) / skills proposed / skill requests fulfilled / skills watched.
+  // Ranking metric (§26): installs credited (default) / skills adopted / skill requests fulfilled / skills watched.
   const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched">("installs");
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
   // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills).
@@ -53,7 +53,7 @@ function Leaderboard() {
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
         <div className="sort-toggle" role="group" aria-label="Rank by">
           <button type="button" className={`sort-opt${sort === "installs" ? " sort-on" : ""}`} onClick={() => setSort("installs")}>Installs</button>
-          <button type="button" className={`sort-opt${sort === "skills" ? " sort-on" : ""}`} onClick={() => setSort("skills")}>Skills proposed</button>
+          <button type="button" className={`sort-opt${sort === "skills" ? " sort-on" : ""}`} onClick={() => setSort("skills")}>Skills adopted</button>
           <button type="button" className={`sort-opt${sort === "requests" ? " sort-on" : ""}`} onClick={() => setSort("requests")}>Requests fulfilled</button>
           <button type="button" className={`sort-opt${sort === "watched" ? " sort-on" : ""}`} onClick={() => setSort("watched")}>Watched</button>
         </div>
@@ -85,7 +85,7 @@ function Leaderboard() {
               <div className="grow" style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 14.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.displayName}</div>
                 <div className="muted mono" style={{ fontSize: 11.5 }}>
-                  {e.skillCount} skill{e.skillCount === 1 ? "" : "s"} proposed
+                  {e.skillCount} skill{e.skillCount === 1 ? "" : "s"} adopted
                   {e.requestsFulfilled > 0 && <> · {e.requestsFulfilled} request{e.requestsFulfilled === 1 ? "" : "s"} fulfilled</>}
                   {e.skillsWatched > 0 && <> · {e.skillsWatched} skill{e.skillsWatched === 1 ? "" : "s"} watched</>}
                 </div>
@@ -95,7 +95,7 @@ function Leaderboard() {
                   {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : e.installs)}
                 </div>
                 <div className="muted mono" style={{ fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "skills" : sort === "watched" ? "watched" : "installs"}
+                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : "installs"}
                 </div>
               </div>
               <div className="lb-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
