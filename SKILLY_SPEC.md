@@ -1152,7 +1152,7 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 - **Attribution = current explicit maintainers, point-in-time, once per adopter.** A user's **first** install of a skill (a git clone or first download) is credited to **each explicit maintainer (`skill_maintainers`) of the skill at that moment, EXCEPT the installer themselves** — so re-installing never re-credits, and a maintainer earns **no self-credit** for installing a skill they maintain (a solo maintainer installing their own skill earns nothing). Namespace admins' *implicit* maintainership earns **nothing** (they must add themselves to the explicit list). One first-install with three (other) maintainers produces **+1 for each of the three** (equal credit, not split). A skill with no eligible explicit maintainers at that moment credits **no one** (forfeited, never reassigned). **System-installation clones credit no one, ever** (§23) — no user means no `skill_installs` first-install gate and no `install_credits` row, so a CI job cloning on a schedule can never manufacture leaderboard standing.
 - **Snapshot model (`install_credits`).** Attribution is frozen at first-install time into `install_credits (access_log_id, user_id)` — written **inside `record_git_access()` / `record_skill_download()`** only on the user's first install (gated by the shared `skill_installs` ledger). Because credit is captured when the adoption happens, **changing a skill's maintainers never moves existing credit**: removal stops only *future* credit; additions earn only *future* first-installs. This is the mechanism behind "new installs follow the current maintainers; old installs stay put."
 - **Backfill.** Installs that predate `install_credits` are seeded **once** (in the creating migration) to the skill's **original proposer(s)** — the prior attribution model — excluding already-erased users (`erased_at IS NULL`). This keeps the board continuous across the cutover and faithful to point-in-time (the proposer was, by default, the sole maintainer then). After the backfill the old proposer-based query is retired.
-- **Metrics.** Both displayed numbers derive from `install_credits` (so they are always mutually consistent): `installs` = count of the user's credit rows in the window; `skillCount` = distinct skills among them. Windows are **all-time** and **30d** (by the install's `access_log.created_at`). Because each install fans out to every maintainer, the board's summed installs **exceed** the real clone count — the number is "installs credited to you", not a global clone total.
+- **Metrics.** Both displayed numbers derive from `install_credits` (so they are always mutually consistent): `installs` = count of the user's credit rows in the window; `skillCount` = distinct skills among them — displayed as **"skills adopted"**, deliberately not "skills proposed": a skill this user proposed/maintains with zero credited installs in the window (too new, or only ever self-installed) contributes zero, even though they proposed or maintain it. That's intentional — the metric stays adoption-weighted for the anti-gaming reasons above — but the label must say what the number actually measures, so it never reads as "skills submitted/published by this user." Windows are **all-time** and **30d** (by the install's `access_log.created_at`). Because each install fans out to every maintainer, the board's summed installs **exceed** the real clone count — the number is "installs credited to you", not a global clone total.
 - **Erasure removes credit.** GDPR erasure (§4, both the admin and SCIM paths) **deletes the erased user's `install_credits`** — credits-only: the shared `access_log` row, `skills.install_count`, and co-maintainers' credit are untouched (the install still happened and still counts for everyone else). A deleted user therefore holds zero credits and never appears. A reversible **deprovision** (leaver → `status='inactive'`) does **not** delete credits — the board's `status='active'` filter hides them, and re-enabling restores their standing.
 - **Privacy (invariant #3).** The board exposes only per-person aggregates (display name, avatar, total installs, skill count) — **never skill identities, slugs, or namespaces** — so it cannot enumerate or identify restricted skills, and is identical for every viewer. Users may opt out via `leaderboard_hidden` (§13).
 - **Row actions.** Each row offers two actions: **Skills** and **Reach out**.
@@ -1164,8 +1164,8 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 A small marker under a user's avatar bubble — **everywhere one appears** — showing they currently
 top a leaderboard metric. Purely derived from the leaderboard's own data; no new user action.
 
-- **Four metrics, matching the leaderboard's own sort options** — Installs leader, Proposals
-  leader (skills proposed), Fulfillment leader (requests fulfilled), Watch leader (skills watched)
+- **Four metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
+  leader (skills adopted), Fulfillment leader (requests fulfilled), Watch leader (skills watched)
   — each in **two windows**, all-time and last-30-days, for up to 8 badges per user.
 - **Who's a leader:** whoever is **tied for the single highest value** of a metric in a window. A
   tie is a tie — everyone at the top value gets the badge, not just one canonical winner. A metric
@@ -1175,7 +1175,7 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   prefix matching the top row's value) — no new SQL, no new heavy aggregate.
 - **Visual:** each badge is a small colored circle with a glyph, sized proportionally to the avatar
   it sits under (floored so it stays legible on the smallest bubbles): 📥 installs (accent), 📝
-  proposals (accent-2), 🎁 fulfillment (ok/green), 👁 watched (warn/orange). The **all-time**
+  adoption (accent-2), 🎁 fulfillment (ok/green), 👁 watched (warn/orange). The **all-time**
   variant is the identical icon with a small crown overlaid on top; the **30-day** variant has no
   crown. **Every badge a user currently holds renders** (no cap, wrapping if needed) — most users
   have zero; a dominant contributor may show several.
@@ -1899,7 +1899,7 @@ skill that **already** satisfies it.
   installs). The all/30d window filters on the watch's `created_at` (a skill watched more than
   30 days ago and not since drops out of the 30d view, consistent with how the other three stats
   window on their own event timestamp).
-- A **sort toggle** above the board: **Installs** (default) / **Skills proposed** / **Requests
+- A **sort toggle** above the board: **Installs** (default) / **Skills adopted** / **Requests
   fulfilled** / **Watched** — re-ranks rows by the chosen stat (ties broken by the other stats,
   then name). All four stats stay visible on every row regardless of sort.
 

@@ -1,6 +1,6 @@
 // Leader badges: a small "you're #1" marker shown under a user's avatar bubble everywhere one
 // appears (SKILLY_SPEC.md §21 extension). Four metrics — the same ones the leaderboard already
-// ranks by (installs / skills proposed / requests fulfilled / skills watched) — each in two
+// ranks by (installs / skills adopted / requests fulfilled / skills watched) — each in two
 // windows (all-time / last-30-days), so up to 8 badges per user. A user is a "leader" for a
 // metric+window when they're tied for the TOP value of that metric in that window (ties all get
 // the badge — a tie is a tie); a metric with nobody above zero has no leader at all.
