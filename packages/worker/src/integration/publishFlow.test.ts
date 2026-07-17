@@ -8,7 +8,7 @@
 // through validate -> scan -> synthesize -> git clone, and git_published flips.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -160,6 +160,17 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     await pool.query(`insert into role_mappings (group_id, namespace_id, role) values ($1,$2,'namespace_admin') on conflict do nothing`, [adminGroup, ns]);
     await pool.query(`insert into group_memberships (group_id, user_id) values ($1,$2) on conflict do nothing`, [adminGroup, nsAdmin]);
 
+    // §12 maintainer notification prefs: an opted-out maintainer gets NO row at all
+    // (row-level), while an explicit watch outranks the new-version opt-out (watch wins).
+    const nvOff = (await pool.query<{ id: string }>(
+      `insert into users (entra_object_id, email, display_name, new_version_notifications) values ('e2e-nvoff','nv@org','NVOff',false)
+       on conflict (entra_object_id) do update set new_version_notifications = false returning id`,
+    )).rows[0]!.id;
+    await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1,$2) on conflict do nothing`, [hosted, nvOff]);
+    // The watcher seeded above is ALSO made an opted-out maintainer — their watch must still notify.
+    await pool.query(`update users set new_version_notifications = false where id = $1`, [user]);
+    await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1,$2) on conflict do nothing`, [hosted, user]);
+
     // Publish sweep handles hosted (tar.gz + zip) + both pointers.
     const repoRoot = join(work, "repos");
     const n = await publishPendingVersions(pool, { store, repoRoot });
@@ -184,12 +195,20 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     await clone(repoPath(repoRoot, "team-a", "ptr-pending"), ppClone);
     assert.match((await exec("git", ["-C", ppClone, "show", "v1.0.0:SKILL.md"])).stdout, /via pending/);
 
-    // The watcher received a new-version notification for the hosted skill.
+    // The watcher received a new-version notification for the hosted skill — even though
+    // they're also a maintainer who opted out: the explicit watch wins (§12).
     const watchNotif = await pool.query(
       `select 1 from notifications where user_id = $1 and type = 'skill.new_version' and payload->>'skillSlug' = 'pdf'`,
       [user],
     );
-    assert.ok(watchNotif.rowCount! >= 1, "watcher notified of the new version");
+    assert.ok(watchNotif.rowCount! >= 1, "watcher notified of the new version (watch outranks the opt-out)");
+
+    // The opted-out (non-watching) maintainer got nothing — the pref is row-level (§12).
+    assert.equal(
+      (await pool.query(`select 1 from notifications where user_id = $1 and type = 'skill.new_version'`, [nvOff])).rowCount,
+      0,
+      "opted-out maintainer receives no new-version notification row",
+    );
 
     // The explicit maintainer AND the namespace admin were notified too (§19 fan-out union).
     for (const [who, uid] of [["maintainer", maintainer], ["namespace admin", nsAdmin]] as const) {
@@ -224,6 +243,49 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
       (await pool.query(`select 1 from scan_reports where subject_type = 'pointer_ref' and status = 'scanned'`)).rowCount! >= 2,
       "pointer_ref scan reports written",
     );
+
+    // ── Upstream drift: onset-only notifications + per-user opt-out (§12) ──
+    // Maintainers of the pointer skill: an explicit maintainer who opted out of drift
+    // alerts, plus the namespace admin (implicit via the role mapping, default on).
+    const driftOff = (await pool.query<{ id: string }>(
+      `insert into users (entra_object_id, email, display_name, drift_notifications) values ('e2e-driftoff','d@org','DOff',false)
+       on conflict (entra_object_id) do update set drift_notifications = false returning id`,
+    )).rows[0]!.id;
+    await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1,$2) on conflict do nothing`, [pointer, driftOff]);
+    const driftCount = async (uid: string) =>
+      (await pool.query<{ n: number }>(
+        `select count(*)::int as n from notifications where user_id = $1 and type = 'skill.drift' and payload->>'skillSlug' = 'ptr'`,
+        [uid],
+      )).rows[0]!.n;
+
+    // Simulate upstream tampering: make the stored mirror artifact diverge from the clone.
+    const origArtifact = mem.get(mirrored.artifactKey)!;
+    const dsrc = join(work, "dsrc");
+    await mkdir(dsrc, { recursive: true });
+    await writeFile(join(dsrc, "SKILL.md"), "---\nname: ptr\ndescription: mirrored\n---\n# tampered\n");
+    const dtgz = join(work, "d.tgz");
+    await create({ gzip: true, file: dtgz, cwd: dsrc }, ["."]);
+    const tampered = await readFile(dtgz);
+    mem.set(mirrored.artifactKey, tampered);
+
+    const drift1 = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
+    assert.ok(drift1.drift >= 1, "drift detected once stored artifact and upstream diverge");
+    assert.equal(await driftCount(nsAdmin), 1, "namespace admin (implicit maintainer) alerted at drift onset");
+    assert.equal(await driftCount(driftOff), 0, "opted-out maintainer gets no drift row (row-level, §12)");
+
+    // Persistent drift stays silent (onset dedup): the next pass re-detects but never re-pings.
+    const drift2 = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
+    assert.ok(drift2.drift >= 1, "drift still detected on the following pass");
+    assert.equal(await driftCount(nsAdmin), 1, "no re-notification while the same drift persists");
+
+    // Recovery re-arms: a clean pass, then a fresh divergence is a NEW onset and pings again.
+    mem.set(mirrored.artifactKey, origArtifact);
+    const cleanPass = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
+    assert.equal(cleanPass.drift, 0, "restored artifact matches upstream again");
+    mem.set(mirrored.artifactKey, tampered);
+    await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
+    assert.equal(await driftCount(nsAdmin), 2, "a new drift onset after recovery pings again");
+    mem.set(mirrored.artifactKey, origArtifact);
 
     // Yank withdrawal (§7): yanking a version drops its tag so it stops cloning.
     await pool.query(`update skill_versions set status = 'yanked' where skill_id = $1 and semver = '1.0.0'`, [zipped]);

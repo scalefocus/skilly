@@ -173,6 +173,17 @@ export async function setUserEmailNotifications(userId: string, enabled: boolean
   await pool.query(`update users set email_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
+/** The §12 per-type maintainer-notification opt-outs. Row-level, unlike the email toggle:
+ *  the worker filters an opted-out user out of the recipient set at insert time, so no
+ *  in-app row and no email exist at all. Self-service — no audit. */
+export async function setUserDriftNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set drift_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
+export async function setUserNewVersionNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set new_version_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
 /** When the user last opened the Catalog / Review queue / System log / Requested skills — drives
  *  the nav badges. */
 export interface NavSeen {
