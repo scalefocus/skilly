@@ -13,6 +13,7 @@ import { TagInput } from "../../components/TagInput";
 import { MarkdownField } from "../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../components/ToolHarnessPicker";
 import { fmtSize, bundleUploadError } from "../../lib/uploadError";
+import { uploadBundle as uploadBundleRequest } from "../../lib/uploadBundleClient";
 
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
@@ -134,6 +135,11 @@ function ProposeForm() {
   // Admin-configured max hosted-bundle size (bytes); shown below the upload box and enforced
   // client-side before upload (the server re-enforces). Default 200 MB until /api/me loads.
   const [maxBundleBytes, setMaxBundleBytes] = useState(200 * 1024 * 1024);
+  // Chunked-upload chunk size (bytes, §6): a bundle above it uploads in pieces with a progress
+  // bar. Default 5 MB until /api/me loads; the server re-issues the authoritative value at start.
+  const [uploadChunkBytes, setUploadChunkBytes] = useState(5 * 1024 * 1024);
+  // Determinate chunked-upload progress (0–100), or null when no chunked upload is running.
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
   // §26: any edit to the request fields invalidates a prior similar-check acknowledgement, so
   // "Post anyway" can never post a changed request that was never checked against the catalog.
   // Clearing reqSimilar also retires the now-stale similar-match banner.
@@ -286,6 +292,7 @@ function ProposeForm() {
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (typeof j?.maxBundleBytes === "number") setMaxBundleBytes(j.maxBundleBytes);
+        if (typeof j?.uploadChunkBytes === "number") setUploadChunkBytes(j.uploadChunkBytes);
       })
       .catch(() => {});
   }, []);
@@ -526,11 +533,15 @@ function ProposeForm() {
     enforcement: "block" | "warn";
   }> {
     if (!file) throw new Error("Attach a SKILL.md bundle (.tar.gz, .zip, or .skill).");
-    const fd = new FormData();
-    fd.append("bundle", file);
-    fd.append("skillSlug", f.skillSlug);
-    const up = await fetch("/api/uploads", { method: "POST", body: fd });
-    const j = await up.json().catch(() => ({}));
+    // Single multipart POST at or below the chunk size; chunked (with determinate progress)
+    // above it — one helper, same response contract either way (§6).
+    let up;
+    try {
+      up = await uploadBundleRequest(file, f.skillSlug, uploadChunkBytes, (sent, total) => setUploadPct(Math.min(100, Math.round((sent / total) * 100))));
+    } finally {
+      setUploadPct(null);
+    }
+    const j = up.json as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
     if (!up.ok) {
       // Tell the user EXACTLY what's wrong. `details` holds the specific validation failures
       // (no top-level SKILL.md, missing/mismatched frontmatter name, disallowed file type, size
@@ -868,6 +879,14 @@ function ProposeForm() {
               )}
             </div>
             <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Maximum size: {fmtSize(maxBundleBytes)}. Larger bundles are rejected.</p>
+            {uploadPct !== null && (
+              <div style={{ marginTop: 10 }} role="progressbar" aria-valuenow={uploadPct} aria-valuemin={0} aria-valuemax={100} aria-label="Upload progress">
+                <div style={{ height: 6, borderRadius: 3, background: "var(--line)", overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${uploadPct}%`, background: "var(--accent)", transition: "width 200ms ease" }} />
+                </div>
+                <p className="muted mono" style={{ fontSize: 11, marginTop: 5 }}>Uploading… {uploadPct}%</p>
+              </div>
+            )}
           </div>
         ) : (
           <>

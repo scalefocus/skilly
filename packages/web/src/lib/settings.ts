@@ -18,6 +18,32 @@ export type DuplicateEnforcement = "block" | "warn";
 export const BUNDLE_SIZE_OPTIONS = [100 * 1024, 1024 * 1024, 10 * 1024 * 1024, 50 * 1024 * 1024, 100 * 1024 * 1024, 200 * 1024 * 1024, 1024 * 1024 * 1024] as const;
 const DEFAULT_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
 
+/** Chunked-upload chunk size (§6): bundles larger than this upload in per-request pieces of this
+ *  size, bounding every HTTP request so proxy body caps can't cut a large upload. Admin-set as a
+ *  free-form whole number of MB (1–50), stored in bytes. Default 5 MB. */
+export const UPLOAD_CHUNK_MB_MIN = 1;
+export const UPLOAD_CHUNK_MB_MAX = 50;
+export const DEFAULT_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
+
+/** Parse an admin-entered chunk size (whole MB, 1–50) into bytes. Throws a clear error on
+ *  anything else so the admin save surfaces why. */
+export function parseUploadChunkMb(input: unknown): number {
+  const n = typeof input === "string" ? Number(input.trim()) : input;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < UPLOAD_CHUNK_MB_MIN || n > UPLOAD_CHUNK_MB_MAX) {
+    throw new Error(`upload chunk size must be a whole number of MB between ${UPLOAD_CHUNK_MB_MIN} and ${UPLOAD_CHUNK_MB_MAX}`);
+  }
+  return n * 1024 * 1024;
+}
+
+/** Coerce a stored value into valid chunk bytes, falling back to the default on anything
+ *  malformed (non-integer, out of the MB bounds, or not a whole MB). */
+function coerceUploadChunkBytes(value: unknown): number {
+  const MB = 1024 * 1024;
+  return typeof value === "number" && Number.isInteger(value) && value % MB === 0 && value >= UPLOAD_CHUNK_MB_MIN * MB && value <= UPLOAD_CHUNK_MB_MAX * MB
+    ? value
+    : DEFAULT_UPLOAD_CHUNK_BYTES;
+}
+
 /** Smart-polling cadence for chat (§24). An ascending, deduped list of integer seconds; `set[0]`
  *  is the floor (open-thread interval + the conversation-list backoff reset target). Default is a
  *  prime sequence so the polls rarely coincide with other periodic requests. */
@@ -96,6 +122,8 @@ export interface PlatformSettings {
   duplicateEnforcement: DuplicateEnforcement;
   /** maximum allowed size (bytes) of an uploaded hosted-skill bundle (§6). */
   maxBundleBytes: number;
+  /** chunked-upload chunk size (bytes) — bundles larger than this upload in pieces (§6). */
+  uploadChunkBytes: number;
   /** chat smart-polling cadence — ascending seconds; set[0] is the floor (§24). */
   chatPollIntervals: number[];
   /** how far ahead (calendar months) a user may set an install URL's expiry (§23). */
@@ -104,7 +132,7 @@ export interface PlatformSettings {
   maxFeaturedSkills: number;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined) };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -118,6 +146,7 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     dateFormat: df === "eu" || df === "us" ? df : DEFAULTS.dateFormat,
     duplicateEnforcement: dup === "block" || dup === "warn" ? dup : DEFAULTS.duplicateEnforcement,
     maxBundleBytes: (BUNDLE_SIZE_OPTIONS as readonly number[]).includes(mbb as number) ? (mbb as number) : DEFAULTS.maxBundleBytes,
+    uploadChunkBytes: coerceUploadChunkBytes(map.get("upload_chunk_bytes")),
     chatPollIntervals: coerceChatPollIntervals(map.get("chat_poll_intervals")),
     installMaxTtlMonths: coerceInstallTtlMonths(map.get("install_max_ttl_months")),
     maxFeaturedSkills: coerceMaxFeatured(map.get("max_featured_skills")),
@@ -138,6 +167,10 @@ export async function getDuplicateEnforcement(db: Pool = pool): Promise<Duplicat
 
 export async function getMaxBundleBytes(db: Pool = pool): Promise<number> {
   return (await getPlatformSettings(db)).maxBundleBytes;
+}
+
+export async function getUploadChunkBytes(db: Pool = pool): Promise<number> {
+  return (await getPlatformSettings(db)).uploadChunkBytes;
 }
 
 export async function getProposalsOpen(db: Pool = pool): Promise<boolean> {
@@ -253,6 +286,26 @@ export async function setMaxBundleBytes(bytes: number, actorUserId: string): Pro
     targetId: "max_bundle_bytes",
     after: { maxBundleBytes: bytes },
   });
+}
+
+/** Set the chunked-upload chunk size from an admin-entered whole number of MB (1–50). Throws on
+ *  invalid input (surfaced by the admin save); stores bytes. Audited. §6. */
+export async function setUploadChunkMb(mbInput: unknown, actorUserId: string): Promise<number> {
+  const bytes = parseUploadChunkMb(mbInput); // throws on invalid input
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('upload_chunk_bytes', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(bytes), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "upload_chunk_bytes",
+    after: { uploadChunkBytes: bytes },
+  });
+  return bytes;
 }
 
 export async function setInstallMaxTtlMonths(months: number, actorUserId: string): Promise<void> {

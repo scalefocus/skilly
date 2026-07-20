@@ -203,7 +203,11 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), etc.
+
+### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
+- `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
+- Pure staging bookkeeping — the part bytes live in object storage under `uploads/staging/<id>/<index>`. Row + parts are deleted on complete/abort, and any session **older than 2 h** is swept (with its parts) at the start of every new chunked upload (§6). Never referenced by catalog tables; staged parts are never servable.
 
 ### `install_counters` (migration 0018)
 - Monthly install rollup: `month` (date PK), `total` (bigint). Feeds catalog/usage aggregates without scanning `access_log`.
@@ -321,7 +325,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Roles resolved from synced `group_memberships` + `role_mappings`**, not token claims.
 - **Admin sync diagnostics.** The Administration page surfaces an **Identity sync (SCIM)** panel above the role-mapping editors: the count of provisioned **groups** and **users** and the most recent group-sync time. The group→role pickers can only list groups SCIM has provisioned (the `groups` table), so when that count is **0** the panel explains why — and distinguishes the two common causes: **users syncing but no groups** (Entra is provisioning Users but Group provisioning is off / no groups assigned to the app → enable Groups in the Enterprise App's provisioning scope) vs **nothing synced at all** (provisioning off, or wrong SCIM URL/token). This turns the previously bare "No synced groups yet" picker into an actionable self-diagnosis.
 - **Every Administration card is collapsible.** The Administration page is the platform admin's single console, and its cards grow over time, so **every** card is a collapsible panel (not just Namespaces): Contribution policy, Duplicate proposals, Maximum upload size, Date & time format, Chat refresh cadence, Install URL expiry, Email notifications (§12), Identity sync (SCIM), Platform admins, Maintenance, Delete User Info, Currently online, and Namespaces. **Card order and the per-card body content are unchanged** — only the header/collapse chrome is added. (Namespaces and Email notifications, previously collapsible on their own, now use this same shared mechanism.)
-  - **Header.** Each card's always-visible header shows the card **title**, a **compact live summary** of its current value where that value is already loaded (e.g. Contribution policy → `open to all` / `members only`; Duplicate proposals → `block` / `warn`; Maximum upload size → the selected size; Date & time format → `EU` / `US`; Install URL expiry → `12 months`; Platform admins → mapped-group count; Currently online → the user count; Namespaces → the total namespace count), and a chevron. **Identity sync (SCIM)** additionally shows its **`N groups synced` / `N users synced` ok/warn pills in the header**, and **Email notifications** shows its **status pill** (operational / SMTP fallback / down), so a broken sync or channel stays visible while collapsed (answer 2a). Clicking anywhere on the header toggles the card. The **Currently online** window toggle (`5m/1h/8h/24h/30d`) **moves out of the header into the top of the card body**, so the header is purely the collapse control.
+  - **Header.** Each card's always-visible header shows the card **title**, a **compact live summary** of its current value where that value is already loaded (e.g. Contribution policy → `open to all` / `members only`; Duplicate proposals → `block` / `warn`; Maximum upload size → the selected size · the chunk size; Date & time format → `EU` / `US`; Install URL expiry → `12 months`; Platform admins → mapped-group count; Currently online → the user count; Namespaces → the total namespace count), and a chevron. **Identity sync (SCIM)** additionally shows its **`N groups synced` / `N users synced` ok/warn pills in the header**, and **Email notifications** shows its **status pill** (operational / SMTP fallback / down), so a broken sync or channel stays visible while collapsed (answer 2a). Clicking anywhere on the header toggles the card. The **Currently online** window toggle (`5m/1h/8h/24h/30d`) **moves out of the header into the top of the card body**, so the header is purely the collapse control.
   - **Default + persistence.** Every card starts **collapsed**. Each card's open/closed choice is **remembered per browser** under its own key (`skilly.admin.card.<id>-open`, same localStorage mechanism as the remembered chart windows; `"1"` = open, anything else = collapsed). The legacy `skilly.admin.ns-open` and `skilly.admin.email-open` keys are **retired** — no migration; all admins get a one-time reset to all-collapsed (answer 4).
   - **Animation.** Expand/collapse animates the body open/closed via a height transition (~200ms ease) with the chevron rotating as today; `prefers-reduced-motion` gets an instant toggle with no height animation.
   - **Data & polling unchanged (answer 3c).** Collapsing only hides a card's body — it does **not** stop that card's data fetching or polling. Currently online keeps its 60s poll and trend-chart fetch, Maintenance keeps polling a running rebuild, and Namespaces keeps its loaded pages and active search/filter, all regardless of collapse state. Reopening a card shows current data with no reload flash.
@@ -509,6 +513,63 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   **`.tar.gz`**; Hosted skills keep the single verbatim-download button. Like the install
   version picker (§23), this dropdown **dismisses on an outside click (anywhere off the menu
   and its ▾ toggle) and on Escape**, in addition to closing when a format is chosen.
+
+### Chunked upload (large hosted bundles)
+- **Why.** The app imposes no request-body ceiling of its own, but real deployments sit behind
+  reverse proxies/gateways whose body-size or timeout limits can silently cut a large multipart
+  POST — observed as an opaque `Failed to parse body as FormData` 500 at `/api/uploads`. Chunking
+  bounds every HTTP request to the configured chunk size, so any bundle within `max_bundle_bytes`
+  uploads reliably regardless of intermediary caps — and gives the uploader a real progress bar.
+- **When.** Client-side rule: a bundle **strictly larger than the configured chunk size** uses the
+  chunked flow; anything at or below it keeps the existing single multipart `POST /api/uploads`
+  (that contract is unchanged). Applies to **both** hosted-upload surfaces — the propose form and
+  the proposal page's new-version upload.
+- **Chunk size (admin setting).** `upload_chunk_bytes` in `platform_settings` — Administration →
+  the **Maximum upload size** card gains an **Upload chunk size** control: a **free-form integer
+  megabyte input, 1–50 MB, default 5 MB** (a malformed/out-of-range stored value coerces to the
+  default; the save validates and rejects out-of-range input with a clear error; audited like the
+  other settings). Surfaced to the client alongside the max-bundle limit (`/api/me`), and the card
+  header summary shows both (e.g. `200 MB · 5 MB chunks`). Changing it never affects in-flight
+  sessions — each session freezes its `chunk_bytes` at start.
+- **Flow** (all session-authenticated, same actor requirements as `/api/uploads`; `start` shares
+  the `uploads` rate bucket; part PUTs are **not** count-rate-limited — they are bounded by session
+  ownership + exact byte accounting instead):
+  1. **`POST /api/uploads/chunked`** `{ skillSlug, filename, totalBytes }` — rejects
+     `totalBytes > max_bundle_bytes` (413, same message as the single-shot path). **Sweeps orphans
+     first:** every staging session (row + parts) **older than 2 h** is deleted before the new
+     session is created. Enforces **≤ 3 open sessions per user** (409 otherwise). Returns
+     `{ uploadId, chunkBytes }` — the server-authoritative chunk size; the client slices by the
+     returned value.
+  2. **`PUT /api/uploads/chunked/:id/parts/:index`** — **raw `application/octet-stream`** body (no
+     multipart anywhere in this flow). Owner-checked; `0 ≤ index < ceil(totalBytes / chunkBytes)`;
+     the received length must be **exactly** `chunkBytes` (non-final part) or the exact remainder
+     (final part). Stored at the dedicated staging prefix `uploads/staging/<uploadId>/<index>` in
+     the artifact bucket. Re-PUT of the same index overwrites — retry-safe/idempotent.
+  3. **`POST /api/uploads/chunked/:id/complete`** — owner-checked; verifies every part is present
+     with its expected size, assembles in index order, then runs the **identical** single-shot
+     pipeline (extract → blocking validation → advisory scan → verbatim store at an immutable
+     artifact key → artifact-keyed scan report → advisory duplicate pre-check) and returns the
+     **same response shape** as `POST /api/uploads` (§15). The session row + staging parts are
+     deleted on completion **whatever the outcome** (success, 422 validation failure, 503 storage
+     failure) — a retry starts a fresh session.
+  4. **`DELETE /api/uploads/chunked/:id`** — abort; owner-checked; deletes the session + parts.
+     The upload UI calls it best-effort when the user removes/replaces a staged file mid-upload.
+- **Resilience: session-only.** Parts are sent **sequentially**, each retried client-side (3
+  attempts, short backoff) on network failure. A page reload/navigation abandons the session — no
+  cross-session resume; the 2 h sweep collects the leftovers.
+- **Progress.** Chunked uploads show a **determinate progress bar** (bytes-uploaded / total,
+  advancing per part) on both surfaces; single-request uploads keep today's indeterminate busy
+  state.
+- **Isolation & invariants.** Staged parts live only under `uploads/staging/…` — never a catalog
+  artifact, never servable, invisible to every download/serving path (invariant #4 untouched).
+  Nothing lands at a real artifact key until the complete-step pipeline has run, so the
+  "validate + scan before store" semantics are identical to the single-shot path. Assembly buffers
+  the full bundle in memory (the §6 large-upload caveat above is unchanged). Staging works across
+  web replicas because parts live in the shared artifact bucket, not pod-local disk/memory.
+- **Single-shot hardening (same change).** `POST /api/uploads` answers an unparseable multipart
+  body with a clear **400** (wording indicative: *"the upload didn't arrive intact — a proxy
+  between your browser and skilly may have cut it off"*) instead of an opaque 500 in the System
+  log.
 
 ### Security scanning — pluggable pipeline
 - Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns).
@@ -999,7 +1060,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `DELETE /api/proposals/:id` — permanently delete a proposal (reviewer of its namespace; any state except `accepted`). Housekeeping, silent, audited (`proposal.deleted`); cleans the review conversation + pointer scan + dangling notifications. §8.
 - `GET /api/proposals/:id/files` (bundle browser, §8), `.../artifact`, `.../duplicate-check`, `GET|POST /api/proposals/:id/messages` (review discussion, §24).
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
-- `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
+- `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6); an unparseable multipart body is a clear 400, not a 500 (§6). **Chunked variant** for bundles larger than the configured chunk size (§6): `POST /api/uploads/chunked` (start; sweeps ≥2h-old orphans, returns `{uploadId, chunkBytes}`), `PUT /api/uploads/chunked/:id/parts/:index` (raw octet-stream part), `POST /api/uploads/chunked/:id/complete` (assemble → identical validate/scan/store; same response shape as the single-shot upload), `DELETE /api/uploads/chunked/:id` (abort). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
 
 **Consumption (git gateway — on the worker, NOT `/api/fetch`)**
 - The authenticated **git smart server** serves `/<ns>/<slug>.git/{info/refs,git-upload-pack}` with token-in-URL basic auth; validates the token (including, for personal tokens, that the **owning user is `status='active'`** — §23 Gateway), enforces visibility, logs to `access_log` (never credentials), stamps install-token use. There is **no `/api/fetch`** route.
@@ -1023,7 +1084,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Administration**
 - `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
-- `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), …).
+- `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), …).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**

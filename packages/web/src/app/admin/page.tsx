@@ -40,7 +40,7 @@ interface Mapping { id: string; role: Role; namespaceId: string | null; groupId:
 interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -164,6 +164,47 @@ function ChatPollSetting({ value, busy, call, open, onToggle }: { value: number[
 // Install URL expiry horizon (§23): how far ahead (calendar months) a user may set an install
 // command's expiry. A positive integer 1–120, default 12. Bounds the ExpiryPicker; the mint +
 // extend endpoints re-validate. Mirrors the ChatPollSetting save UX.
+// Chunked-upload chunk size (§6): bundles larger than this upload in per-request pieces of this
+// size (with a progress bar), so proxy body-size ceilings can't cut a large upload. A whole
+// number of MB, 1–50, default 5. Lives inside the "Maximum upload size" card; mirrors the
+// InstallTtlSetting save UX (free-form number + Save, server validates + banner shows errors).
+function UploadChunkSetting({ valueBytes, busy, call }: { valueBytes: number; busy: boolean; call: (input: RequestInfo, init: RequestInit) => Promise<boolean> }) {
+  const saved = String(Math.round(valueBytes / (1024 * 1024)));
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => { setDraft(saved); }, [saved]);
+  const dirty = draft.trim() !== saved && draft.trim() !== "";
+  const onSave = async () => {
+    const ok = await call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ uploadChunkMb: Number(draft.trim()) }) });
+    if (!ok) setDraft(draft); // keep the user's text on a validation error (the banner shows why)
+  };
+  return (
+    <div style={{ marginTop: 18 }}>
+      <span style={label}>Upload chunk size</span>
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 10 }}>
+        Bundles larger than this upload in pieces of this size (with a progress bar), so a proxy’s
+        request-size limit can’t cut off a large upload. Whole megabytes, 1–50; default 5. Uploads
+        already in progress keep the size they started with.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <input
+          type="number"
+          min={1}
+          max={50}
+          step={1}
+          aria-label="Upload chunk size (MB)"
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && dirty && !busy) void onSave(); }}
+          style={{ ...field, fontFamily: "var(--font-mono)", width: 110 }}
+        />
+        <span className="muted" style={{ fontSize: 13.5 }}>MB</span>
+        <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave()}>Save</button>
+      </div>
+    </div>
+  );
+}
+
 function InstallTtlSetting({ value, busy, call, open, onToggle }: { value: number; busy: boolean; call: (input: RequestInfo, init: RequestInit) => Promise<boolean>; open: boolean; onToggle: () => void }) {
   const saved = String(value);
   const [draft, setDraft] = useState(saved);
@@ -433,11 +474,11 @@ export default function AdminPage() {
         </p>
       </CollapsibleCard>
 
-      {/* Max upload size */}
+      {/* Max upload size + chunk size (§6) */}
       <CollapsibleCard
         cardId="upload"
         title="Maximum upload size"
-        summary={BUNDLE_SIZE_CHOICES.find((c) => c.bytes === data.settings.maxBundleBytes)?.label}
+        summary={`${BUNDLE_SIZE_CHOICES.find((c) => c.bytes === data.settings.maxBundleBytes)?.label ?? ""} · ${Math.round(data.settings.uploadChunkBytes / (1024 * 1024))} MB chunks`}
         open={cards.open.upload}
         onToggle={() => cards.toggle("upload")}
       >
@@ -459,6 +500,7 @@ export default function AdminPage() {
             <path d="m6 9 6 6 6-6" />
           </svg>
         </div>
+        <UploadChunkSetting valueBytes={data.settings.uploadChunkBytes} busy={busy} call={call} />
       </CollapsibleCard>
 
       {/* Date & time format */}
