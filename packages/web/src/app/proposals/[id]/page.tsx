@@ -13,6 +13,7 @@ import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
 import { UserBubble } from "../../../components/UserBubble";
 import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
+import { bundleUploadError } from "../../../lib/uploadError";
 import { uploadBundle as uploadBundleRequest } from "../../../lib/uploadBundleClient";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string }
@@ -433,7 +434,9 @@ function ProposalDetailInner() {
       // same response contract either way.
       const r = await uploadBundleRequest(file, skillSlug, uploadChunkBytes, (sent, total) => setUploadPct(Math.min(100, Math.round((sent / total) * 100))));
       const j = r.json as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-      if (!r.ok) throw new Error(typeof j.error === "string" && j.error ? j.error : `Upload failed (${r.status})`);
+      // Server error string if present; a body-less 413 (a reverse proxy rejected the request
+      // before skilly saw it, §6) gets friendly too-large copy quoting the attempted size.
+      if (!r.ok) throw new Error(bundleUploadError(r.status, j.error, file.size));
       setEdit((e) => (e ? { ...e, newArtifact: { artifactObjectKey: j.artifactObjectKey, artifactSha256: j.artifactSha256, contentSha256: j.contentSha256, artifactFilename: j.artifactFilename ?? file.name } } : e));
     } catch (e) {
       setMsg({ kind: "err", text: String((e as Error).message) });

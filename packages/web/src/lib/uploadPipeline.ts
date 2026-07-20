@@ -9,15 +9,8 @@ import { s3ArtifactStore } from "./objectStore";
 import { extractBundle } from "./bundle";
 import { findDuplicateSkill } from "./duplicate";
 import { getDuplicateEnforcement } from "./settings";
+import { fmtSize } from "./uploadError";
 import { validateBundle, runScanners, PURE_SCANNERS, maxSeverity, contentDigest, bundleContentCap, type EffectiveAccess } from "@skilly/shared";
-
-/** Human-readable size for the configured limit ("100 KB" / "50 MB" / "1 GB"). */
-export function fmtSize(bytes: number): string {
-  const GB = 1024 * 1024 * 1024;
-  const MB = 1024 * 1024;
-  if (bytes >= GB) return `${Math.round(bytes / GB)} GB`;
-  return bytes >= MB ? `${Math.round(bytes / MB)} MB` : `${Math.round(bytes / 1024)} KB`;
-}
 
 /**
  * Validate + scan + store an uploaded hosted bundle and answer with the upload contract

@@ -12,7 +12,8 @@ import { resolveUserAccess } from "../../../lib/access";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { getMaxBundleBytes } from "../../../lib/settings";
 import { withSystemLog } from "../../../lib/apiLog";
-import { processBundleUpload, fmtSize } from "../../../lib/uploadPipeline";
+import { fmtSize } from "../../../lib/uploadError";
+import { processBundleUpload } from "../../../lib/uploadPipeline";
 
 export const dynamic = "force-dynamic";
 

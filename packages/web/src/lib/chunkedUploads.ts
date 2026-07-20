@@ -8,7 +8,7 @@ import type { Pool } from "pg";
 import { pool } from "./db";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { partCount, partSize } from "./chunkMath";
-import { fmtSize } from "./uploadPipeline";
+import { fmtSize } from "./uploadError";
 
 export const STAGING_PREFIX = "uploads/staging/";
 /** A staging session (row + parts) older than this is an orphan — swept on every new start. §6. */
