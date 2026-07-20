@@ -1,12 +1,22 @@
 // S3-compatible object storage (web side). Stores uploaded skill bundles. Mirrors the
 // worker's store so both read/write the same bucket. SKILLY_SPEC.md §2, §6.
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 
 const BUCKET = process.env.S3_BUCKET ?? "skilly-artifacts";
+
+export interface ObjectListing {
+  key: string;
+  lastModified: Date | null;
+}
 
 export interface ArtifactStore {
   get(key: string): Promise<Buffer>;
   put(key: string, body: Buffer, contentType?: string): Promise<void>;
+  /** Delete one object; missing keys are a no-op (S3 semantics). */
+  delete(key: string): Promise<void>;
+  /** List every object under a key prefix (paginated internally). Used only by the
+   *  chunked-upload staging sweep (§6) — the staging prefix stays small by construction. */
+  list(prefix: string): Promise<ObjectListing[]>;
 }
 
 export function s3ArtifactStore(): ArtifactStore {
@@ -30,6 +40,21 @@ export function s3ArtifactStore(): ArtifactStore {
     },
     async put(key, body, contentType = "application/gzip") {
       await client.send(new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body, ContentType: contentType }));
+    },
+    async delete(key) {
+      await client.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+    },
+    async list(prefix) {
+      const out: ObjectListing[] = [];
+      let token: string | undefined;
+      do {
+        const page = await client.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: prefix, ContinuationToken: token }));
+        for (const o of page.Contents ?? []) {
+          if (o.Key) out.push({ key: o.Key, lastModified: o.LastModified ?? null });
+        }
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+      return out;
     },
   };
 }

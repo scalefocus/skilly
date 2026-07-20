@@ -13,6 +13,7 @@ import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
 import { UserBubble } from "../../../components/UserBubble";
 import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
+import { uploadBundle as uploadBundleRequest } from "../../../lib/uploadBundleClient";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string }
 interface Meta {
@@ -343,6 +344,18 @@ function ProposalDetailInner() {
   // the resubmit (proposer).
   const [edit, setEdit] = useState<EditDraft | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Chunked-upload chunk size (bytes, §6) — a replacement bundle above it uploads in pieces with
+  // a determinate progress bar. Default 5 MB until /api/me loads.
+  const [uploadChunkBytes, setUploadChunkBytes] = useState(5 * 1024 * 1024);
+  const [uploadPct, setUploadPct] = useState<number | null>(null);
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (typeof j?.uploadChunkBytes === "number") setUploadChunkBytes(j.uploadChunkBytes);
+      })
+      .catch(() => {});
+  }, []);
   // Same option source as the propose form (existing categories; the tool/harness picker is the
   // closed shared TOOL_OPTIONS list — §8).
   const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
@@ -416,17 +429,17 @@ function ProposalDetailInner() {
     setUploading(true);
     setMsg(null);
     try {
-      const fd = new FormData();
-      fd.append("bundle", file);
-      fd.append("skillSlug", skillSlug);
-      const r = await fetch("/api/uploads", { method: "POST", body: fd });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error ?? `Upload failed (${r.status})`);
+      // Single multipart POST at or below the chunk size; chunked with progress above it (§6) —
+      // same response contract either way.
+      const r = await uploadBundleRequest(file, skillSlug, uploadChunkBytes, (sent, total) => setUploadPct(Math.min(100, Math.round((sent / total) * 100))));
+      const j = r.json as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      if (!r.ok) throw new Error(typeof j.error === "string" && j.error ? j.error : `Upload failed (${r.status})`);
       setEdit((e) => (e ? { ...e, newArtifact: { artifactObjectKey: j.artifactObjectKey, artifactSha256: j.artifactSha256, contentSha256: j.contentSha256, artifactFilename: j.artifactFilename ?? file.name } } : e));
     } catch (e) {
       setMsg({ kind: "err", text: String((e as Error).message) });
     } finally {
       setUploading(false);
+      setUploadPct(null);
     }
   };
 
@@ -708,7 +721,15 @@ function ProposalDetailInner() {
                       <div>
                         <label style={labelStyle}>Replace bundle <span style={{ textTransform: "none", letterSpacing: 0 }}>· optional — leave empty to keep the current files</span></label>
                         <input type="file" accept=".zip,.tar.gz,.tgz,.skill" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadReplacement(f); }} style={{ fontSize: 13 }} />
-                        {uploading && <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Uploading &amp; scanning…</p>}
+                        {uploading && uploadPct !== null && (
+                          <div style={{ marginTop: 8 }} role="progressbar" aria-valuenow={uploadPct} aria-valuemin={0} aria-valuemax={100} aria-label="Upload progress">
+                            <div style={{ height: 6, borderRadius: 3, background: "var(--line)", overflow: "hidden", maxWidth: 320 }}>
+                              <div style={{ height: "100%", width: `${uploadPct}%`, background: "var(--accent)", transition: "width 200ms ease" }} />
+                            </div>
+                            <p className="muted mono" style={{ fontSize: 11, marginTop: 5 }}>Uploading… {uploadPct}%</p>
+                          </div>
+                        )}
+                        {uploading && uploadPct === null && <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Uploading &amp; scanning…</p>}
                         {edit.newArtifact && (
                           <p style={{ fontSize: 12.5, color: "var(--ok)", marginTop: 6 }}>
                             New bundle staged{edit.newArtifact.artifactFilename ? `: ${edit.newArtifact.artifactFilename}` : ""} ✓ — it'll replace the current files on resubmit.

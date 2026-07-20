@@ -83,6 +83,9 @@ export async function GET() {
     // Max uploaded hosted-bundle size (bytes) — surfaced on the propose form so the limit is
     // explicit and a too-large bundle is rejected client-side before upload. §6.
     maxBundleBytes: settings.maxBundleBytes,
+    // Chunked-upload chunk size (bytes) — bundles above it upload in per-request pieces with a
+    // progress bar; the server re-issues the authoritative value at session start. §6.
+    uploadChunkBytes: settings.uploadChunkBytes,
     // Chat smart-polling cadence — read once at mount; drives the messages poller backoff (§24).
     chatPollIntervals: settings.chatPollIntervals,
     // How far ahead (calendar months) an install URL's expiry may be set — bounds the ExpiryPicker
