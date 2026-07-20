@@ -13,6 +13,7 @@ import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
 import { UserBubble } from "../../../components/UserBubble";
 import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
+import { bundleUploadError } from "../../../lib/uploadError";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string }
 interface Meta {
@@ -421,7 +422,9 @@ function ProposalDetailInner() {
       fd.append("skillSlug", skillSlug);
       const r = await fetch("/api/uploads", { method: "POST", body: fd });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error ?? `Upload failed (${r.status})`);
+      // Server error string if present; a body-less 413 (a reverse proxy rejected the request
+      // before skilly saw it, §6) gets friendly too-large copy quoting the attempted size.
+      if (!r.ok) throw new Error(bundleUploadError(r.status, j.error, file.size));
       setEdit((e) => (e ? { ...e, newArtifact: { artifactObjectKey: j.artifactObjectKey, artifactSha256: j.artifactSha256, contentSha256: j.contentSha256, artifactFilename: j.artifactFilename ?? file.name } } : e));
     } catch (e) {
       setMsg({ kind: "err", text: String((e as Error).message) });

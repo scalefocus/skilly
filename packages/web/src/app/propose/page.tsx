@@ -12,6 +12,7 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
 import { MarkdownField } from "../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../components/ToolHarnessPicker";
+import { fmtSize, bundleUploadError } from "../../lib/uploadError";
 
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
@@ -24,13 +25,6 @@ const lockedStyle = { opacity: 0.6, cursor: "not-allowed" } as const;
 // Accepted bundle extensions — kept in sync with the file input's `accept`.
 const BUNDLE_EXTS = [".tar.gz", ".tgz", ".gz", ".tar", ".zip", ".skill"];
 const isBundleFile = (name: string) => BUNDLE_EXTS.some((ext) => name.toLowerCase().endsWith(ext));
-/** Human-readable size ("100 KB" / "50 MB" / "1 GB") for the upload limit + over-limit message. */
-const fmtSize = (bytes: number) =>
-  bytes >= 1024 * 1024 * 1024
-    ? `${Math.round(bytes / (1024 * 1024 * 1024))} GB`
-    : bytes >= 1024 * 1024
-      ? `${Math.round(bytes / (1024 * 1024))} MB`
-      : `${Math.round(bytes / 1024)} KB`;
 /** Derive a skill slug from an uploaded bundle's filename: drop the bundle extension, then
  *  slugify (lowercase, separators → '-', strip the rest) — "Case Study Creator.skill" → "case-study-creator". */
 const slugFromFilename = (name: string): string => {
@@ -544,8 +538,9 @@ function ProposeForm() {
       // last resort a status-coded message. Never a bare generic "validation failed".
       const details = Array.isArray(j.details) ? j.details.filter((d: unknown): d is string => typeof d === "string" && d.length > 0) : [];
       if (details.length) throw new Error(`This bundle didn’t pass validation: ${details.join("; ")}`);
-      if (typeof j.error === "string" && j.error) throw new Error(j.error);
-      throw new Error(`Upload failed (HTTP ${up.status}).`);
+      // Server error string if present; a body-less 413 (a reverse proxy rejected the request
+      // before skilly saw it, §6) gets friendly too-large copy quoting the attempted size.
+      throw new Error(bundleUploadError(up.status, j.error, file.size));
     }
     setScan(j.scan);
     return {

@@ -385,7 +385,12 @@ The git smart server (worker) validates the token, enforces visibility, and logs
 - **Outbound network** is needed for pointer mirroring, ClamAV signature updates, and Graph
   reconciliation. Fonts are vendored (no CDN).
 - **Large hosted-skill uploads (the 200 MB default and the 1 GB tier):** the admin "Maximum upload
-  size" setting is honored end-to-end, but two infra limits gate very large bundles:
+  size" setting is honored end-to-end, but three infra limits gate very large bundles:
+  - **Reverse-proxy body limit:** any proxy in front of skilly must accept request bodies at
+    least as large as the configured cap (nginx: `client_max_body_size`, whose default is only
+    1 MB). A proxy with a lower limit answers **413 itself** — the request never reaches skilly,
+    so the uploader gets the app's generic too-large message instead of the cap-quoting one, and
+    the rejection cannot appear in the admin System log. The bundled dev Caddyfile sets no limit.
   - **ClamAV `clamd`** refuses streams larger than its `StreamMaxLength` (the `clamav/clamav`
     image default is well under 1 GB). To keep AV scanning bundles up to your chosen cap, raise it,
     e.g. `clamd --max-scansize=1100M --max-filesize=1100M --stream-max-length=1100M` (or set

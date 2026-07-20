@@ -11,12 +11,15 @@
 import { pool } from "./db";
 
 // ── What we record ──────────────────────────────────────────────────────────────────────────
-// 5XX always; of the 4XX only the meaningful authz/validation/rate ones (403/409/422/429).
-// 401 is excluded entirely (constant noise from expired/anonymous polling of the bell, messages,
-// /api/me) and /api/* 404s are polling noise too — both fall through the final return as false.
+// 5XX always; of the 4XX only the meaningful authz/validation/size/rate ones
+// (403/409/413/422/429). A recorded 413 is app-origin (an upload over the configured
+// max_bundle_bytes, §6) — a 413 from a reverse proxy in front of skilly never reaches the app
+// and so can never appear here. 401 is excluded entirely (constant noise from expired/anonymous
+// polling of the bell, messages, /api/me) and /api/* 404s are polling noise too — both fall
+// through the final return as false.
 export function shouldRecord(status: number, _path: string): boolean {
   if (status >= 500) return true;
-  return status === 403 || status === 409 || status === 422 || status === 429;
+  return status === 403 || status === 409 || status === 413 || status === 422 || status === 429;
 }
 
 export function sanitizeMessage(input: unknown, max = 300): string {
@@ -86,7 +89,7 @@ export interface SystemEventView {
 export interface SystemEventQuery {
   /** free-text substring across path/error_code/message/user_id + actor email/name */
   q?: string;
-  /** status chip: "5xx" | "403" | "409" | "422" | "429" | "" (all) */
+  /** status chip: "5xx" | "403" | "409" | "413" | "422" | "429" | "" (all) */
   status?: string;
   /** inclusive date range on created_at (ISO instants); each end optional */
   from?: string;
