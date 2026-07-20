@@ -32,6 +32,7 @@ const STATUS_CHIPS = [
   { label: "All", value: "" },
   { label: "5XX", value: "5xx" },
   { label: "403", value: "403" },
+  { label: "413", value: "413" },
   { label: "422", value: "422" },
   { label: "429", value: "429" },
 ];
@@ -147,7 +148,7 @@ export default function SystemLogPage() {
       <div className="page-head reveal">
         <div className="eyebrow">Governance</div>
         <h1 className="page-title">System log.</h1>
-        <p className="page-sub">Errors the platform returned to users — server faults (5XX) and the meaningful client errors (403/409/422/429), with who hit them. Platform admins only.</p>
+        <p className="page-sub">Errors the platform returned to users — server faults (5XX) and the meaningful client errors (403/409/413/422/429), with who hit them. Platform admins only.</p>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>

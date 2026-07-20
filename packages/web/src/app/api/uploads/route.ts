@@ -13,17 +13,10 @@ import { enforceRateLimit } from "../../../lib/ratelimit";
 import { findDuplicateSkill } from "../../../lib/duplicate";
 import { getDuplicateEnforcement, getMaxBundleBytes } from "../../../lib/settings";
 import { withSystemLog } from "../../../lib/apiLog";
+import { fmtSize } from "../../../lib/uploadError";
 import { validateBundle, runScanners, PURE_SCANNERS, maxSeverity, contentDigest, bundleContentCap } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
-
-/** Human-readable size for the configured limit ("100 KB" / "50 MB" / "1 GB"). */
-function fmtSize(bytes: number): string {
-  const GB = 1024 * 1024 * 1024;
-  const MB = 1024 * 1024;
-  if (bytes >= GB) return `${Math.round(bytes / GB)} GB`;
-  return bytes >= MB ? `${Math.round(bytes / MB)} MB` : `${Math.round(bytes / 1024)} KB`;
-}
 
 export const POST = withSystemLog("/api/uploads", async function POST(req: Request) {
   const session = await getServerSession(authOptions);
