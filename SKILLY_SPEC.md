@@ -226,7 +226,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### Messaging tables (migration 0031, detailed in §24)
 - **`conversations`** — `id`, `subject_type`, `subject_id` (polymorphic; partial unique on `(subject_type, subject_id)`), `created_at`, `updated_at`.
 - **`conversation_participants`** — `conversation_id`, `user_id`, `last_read_at`, `created_at` (PK first two).
-- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `created_at`. Immutable (no edit/delete in v1).
+- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `context_semver` (nullable TEXT, migration 0059 — **skill-discussion context only**: the skill version the comment is about, §24), `created_at`. Immutable — no edits for anyone; the **only** delete is the skill-discussion **moderator delete** (§24).
 
 ### `system_event` (migration 0032, detailed in §25)
 - Operational/system-log telemetry (NOT audit — mutable, no hash chain, cheap inserts/retention): `id`, `created_at`, `status`, `method`, `route` (template), `path` (concrete, no query string), `user_id`, `actor_name`/`actor_email` (point-in-time snapshot), `error_code`, `message` (one line, no stack), `request_id`, `duration_ms`, `source`. Trigram GIN index for substring search.
@@ -807,6 +807,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
   - Catalog mutations (publish, new version, yank, archive, **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive or last-version yank, §7), visibility change, namespace reassignment).
   - **Scan overrides** (`proposal.scan_override`).
+  - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable.
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
@@ -854,6 +855,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) in their namespace queue.
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
+  - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
 - **Deferred:** —
@@ -892,6 +894,7 @@ current or future type can ever leak JSON to a user.
   | `message.new` — direct | Direct message | You have a new direct message from {fromName}. | See the message → `/?conversation={conversationId}` |
   | `message.new` — proposal/request thread | New message | {fromName} posted a new message in "{title}". | View the discussion → `/proposals/{proposalId}` or `/requests/{requestId}` |
   | `skill.new_version` | New version published | {ns}/{slug} published version {semver}. | View the skill → `/skills/{ns}/{slug}` |
+  | `skill.discussion` | New discussion comment | {fromName} commented on {ns}/{slug}. | View the discussion → `/skills/{ns}/{slug}#discussion` |
   | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
   | `skill.marked_official` | Skill marked official | {ns}/{slug} was marked official. | View the skill → `/skills/{ns}/{slug}` |
   | `request.fulfilled` | Skill request fulfilled | Your skill request "{requestTitle}" was fulfilled by {byName} with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
@@ -915,18 +918,21 @@ current or future type can ever leak JSON to a user.
 
 ### Maintainer notification preferences (per-type opt-outs)
 
-- **Two per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
+- **Three per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
-  `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON). `GET /api/me`
-  returns them; `PATCH /api/me { driftNotifications, newVersionNotifications }` updates them.
+  `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
+  **"Discussion comments on skills I maintain or watch"** (`users.discussion_notifications`,
+  `BOOLEAN NOT NULL DEFAULT true`, migration 0059; gates `skill.discussion` — §24 *Skill
+  discussion*). `GET /api/me` returns them; `PATCH /api/me { driftNotifications,
+  newVersionNotifications, discussionNotifications }` updates them.
   Toggling is **silent** (not audited), matching the other profile prefs.
 - **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
   filtered out of the recipient set **at insert time** in the worker (the publish sweep's
   `skill.new_version` insert; the pointer-refresh `skill.drift` insert) — no in-app row, no bell
   badge, no email, no webhook. The email toggle below stays channel-level and orthogonal
   (it suppresses email for rows that *do* exist).
-- **They gate only the implicit-maintainer routes (§19):**
+- **What each gates:**
   - `drift_notifications` gates `skill.drift` entirely — drift only ever targets effective
     maintainers, so there is no other route to preserve.
   - `new_version_notifications` gates only the **maintainer-derived** recipients of
@@ -934,6 +940,11 @@ current or future type can ever leak JSON to a user.
     regardless of the toggle (watching is its own per-skill opt-in; its off-switch is unwatch).
     The recipient set becomes: watchers ∪ ((explicit maintainers ∪ namespace admins) minus
     opted-out users).
+  - `discussion_notifications` gates `skill.discussion` for **every** recipient route —
+    maintainer-derived **and** watcher-derived (deliberate contrast with `new_version`: it is the
+    only way to keep watching a skill for versions while muting its chatter). Recipient set:
+    (watchers ∪ effective maintainers) minus the author, minus opted-out users, visibility-filtered
+    at insert time (§24 *Skill discussion*).
 - **No safety floor — deliberately.** Namespace admins can opt out like anyone, so a skill whose
   effective maintainers have all opted out drifts with **no one pinged**. Accepted: the toggle
   silences the *ping*, never the *record* — the `pointer.drift_detected` audit row, the
@@ -1083,6 +1094,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Messaging (§24)**
 - `GET /api/messages` (list + unread), `GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `POST /api/messages/direct {userId}`.
+- `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET paginated newest-first, 100/page; POST `{body, contextSemver}`) and `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator hard delete, audited `skill.discussion_message_deleted`) — the skill Discussion card, §24.
 
 **Presence**
 - `POST /api/presence/page {label}` — any authenticated user (401 if not); stamps `users.last_seen_page` (+ `last_seen`) via the throttled `touchLastSeen`, §4.
@@ -1711,37 +1723,44 @@ does not extend here), unchanged per-skill scope, and the same one-click hard-de
 A **general** conversation/message layer. Its first use is **review discussion** between a
 proposal's submitter and its reviewers; the model is deliberately context-polymorphic, and a second
 context — a **skill request's discussion** — was added in §26 without changing the review-discussion
-context's own access rules or lifecycle.
+context's own access rules or lifecycle. A third context — the **skill discussion** (the skill
+detail page's Discussion card, below) — follows the same pattern.
 
 ### Data model
-- **`conversations`** — `subject_type` + `subject_id` (polymorphic context: `'proposal'`→`proposals.id`; `'request'`→`skill_requests.id` (§26); `'direct'` with `subject_id` NULL = a **1:1 direct conversation**, e.g. "Reach out" to a maintainer), `created_at`, `updated_at` (bumped per message, for list ordering). One conversation per concrete subject (partial unique index); direct conversations are deduped by their exact two-participant set.
-- **`conversation_participants`** — `(conversation_id, user_id, last_read_at)`. Created when a user first opens/posts; `last_read_at` is their personal read clock.
-- **`messages`** — `author_id`, `body` (plain UTF-8 text → **native emoji**), `created_at`. **Immutable** (no edit/delete in v1). Bodies are escaped on render; newlines preserved; no markdown.
+- **`conversations`** — `subject_type` + `subject_id` (polymorphic context: `'proposal'`→`proposals.id`; `'request'`→`skill_requests.id` (§26); `'skill'`→`skills.id` (the **skill discussion**, below); `'direct'` with `subject_id` NULL = a **1:1 direct conversation**, e.g. "Reach out" to a maintainer), `created_at`, `updated_at` (bumped per message, for list ordering). One conversation per concrete subject (partial unique index); direct conversations are deduped by their exact two-participant set.
+- **`conversation_participants`** — `(conversation_id, user_id, last_read_at)`. Created when a user first opens/posts; `last_read_at` is their personal read clock. **Skill discussions use no participant rows** — they are open forums, not participant-scoped threads (below).
+- **`messages`** — `author_id`, `body` (plain UTF-8 text → **native emoji**), `context_semver` (nullable, migration 0059 — skill-discussion only: the version the comment is about, stamped at post time), `created_at`. **Immutable** — no edits for anyone, and no deletes except the skill-discussion **moderator delete** (below). Bodies are escaped on render; newlines preserved; no markdown — **except** skill-discussion messages, which render **sanitized markdown** (the shared renderer used for descriptions/usage).
 
 ### Access
 - **Proposal context:** see/post = **submitter ∪ namespace reviewers (platform/ns admin) ∪ target-skill maintainers**, checked **dynamically** (so it tracks admin-group changes). A non-member 404s (no leak, like the proposal itself). Threads are created **lazily** on the first message, by either side.
 - **Request context (§26):** see/post = **any authenticated user** — a skill request has no namespace or reviewers and is already org-visible to everyone, so its discussion is correspondingly open. The requester's own messages carry an **"Original Requester"** tag under their name (in both the request's Discussion card and the topbar messages window).
+- **Skill context:** see/post = **any authenticated user who can see the skill** — the discussion inherits the skill's own visibility exactly (invariant #3): an `org` skill's discussion is open to everyone signed in; a `namespace`-restricted skill's discussion is open only to that namespace's members/admins + platform admins. A non-viewer 404s with the skill. Threads are created **lazily** on the first message.
 - **Direct context:** access = **being one of the two participants**. A **"Reach out"** button on each maintainer card (skill detail page → Maintainers) get-or-creates the direct conversation with that maintainer and opens it in the messages menu (`POST /api/messages/direct {userId}`; not offered for yourself).
 
 ### Lifecycle
 Postable while the proposal is open (proposed / under_review / changes_requested); **read-only once
 accepted or rejected** — the discussion stays as part of the review record. A **request's** discussion
 is postable while the request is `open`; **read-only once `fulfilled`** (withdrawn/removed requests
-are hard-deleted — §26 — so their threads are deleted with them, not merely locked).
+are hard-deleted — §26 — so their threads are deleted with them, not merely locked). A **skill's**
+discussion is postable while the skill is `active`; **read-only while archived** (which, per §7, only
+owners can see anyway) and postable again on restore.
 
 **Deletion follows the subject.** A proposal thread is bound to its proposal; if the proposal is
 deleted (which happens when its skill is permanently deleted — §7), the conversation and its messages
 are deleted with it. A request thread is bound to its request; withdrawing or removing a request
 (both hard-delete the row — §26) deletes its conversation the same way. Because the context is
 polymorphic (no DB foreign key on `subject_id`), these cascades are enforced in application code:
-`deleteSkill` removes conversations for the proposals it deletes, and `closeRequest` removes the
-conversation for the request it deletes — both also purge the dangling `message.new` alerts. As
-belt-and-suspenders, a conversation whose proposal/request no longer exists is treated as **not
-found** everywhere (never listed, never opened) so a stale thread can never render as `@null/?`.
+`deleteSkill` removes conversations for the proposals it deletes **and the skill's own discussion
+conversation** (its messages cascade) plus dangling `skill.discussion` notifications, and
+`closeRequest` removes the conversation for the request it deletes — both also purge the dangling
+`message.new` alerts. As belt-and-suspenders, a conversation whose proposal/request/skill no longer
+exists is treated as **not found** everywhere (never listed, never opened) so a stale thread can
+never render as `@null/?`.
 
 ### Surfaces
 - **Review page**: a rich **submitter card** (avatar, name, role-in-namespace, prior-submission count, email mailto + copy, Message button) for reviewers/maintainers, plus the **thread embedded inline**.
 - **Request detail page** (§26): a **Discussion card** with the thread embedded inline — same composer/read/lock behavior as the review discussion, no submitter card (the requester is already shown in the page header).
+- **Skill detail page**: a **collapsible Discussion card** (dedicated subsection below). Skill discussions do **not** appear in the topbar messages dropdown — they are page-anchored open forums with no participant rows, so the messages menu (a participant surface) never lists them.
 - **Topbar messages icon (left of the bell)**: an unread badge + a **full inline chat dropdown** — conversation list that opens into a thread with a composer (emoji picker), read & reply in place. Request threads appear here exactly like proposal threads (title `Request: <title>`, opens to `/requests/[id]`). **Desktop:** opens/closes with the shared `.menu-pop` fade+scale animation (§23, Account menu). **Mobile (full-screen sheet):** instead slides up from the bottom edge on open and slides back down on close, matching native sheet/modal conventions.
 - **General notifications**: one **coalesced** `message.new` per conversation per recipient, refreshed until read, so the bell/inbox reflect chat without flooding. Its **email** (§12 *Notification content*) reads "You have a new direct message from {name}" (direct) or "{name} posted a new message in "{title}"" (proposal/request thread). The call-to-action links to the **proposal/request page** for a context thread, or — for a **direct** conversation, which has **no page of its own** — to **`<PUBLIC_BASE_URL>/?conversation=<id>`**. Loading any page with a `?conversation=<id>` query param **auto-opens that thread** in the topbar Messages panel (via the existing `skilly:open-conversation` event) and then strips the param (`history.replaceState`) so a refresh doesn't reopen it.
 
@@ -1761,18 +1780,21 @@ under HA). Chat messages themselves have no external fan-out, but the coalesced 
 the row's delivery bookkeeping** (an atomic update-in-place upsert against the migration-0053
 partial unique index — a delete+reinsert would reset `delivered_at` and re-email every new
 message, and a non-atomic path could race duplicates), so chat emails **at most once per
-conversation until read** (§12). Bodies capped (~4000 chars) and
-posting is rate-limited. Endpoints: `GET /api/messages` (list + unread), `GET|POST /api/messages/:id`,
-`POST /api/messages/:id/read`, `GET|POST /api/proposals/:id/messages` (lazy get-or-create), and
-`GET|POST /api/requests/:id/messages` (lazy get-or-create, §26).
+conversation until read** (§12). Bodies capped (~4000 chars; **500 chars for skill-discussion
+messages**, below) and posting is rate-limited. Endpoints: `GET /api/messages` (list + unread),
+`GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `GET|POST /api/proposals/:id/messages`
+(lazy get-or-create), `GET|POST /api/requests/:id/messages` (lazy get-or-create, §26), and
+`GET|POST /api/skills/:ns/:slug/discussion` + `DELETE /api/skills/:ns/:slug/discussion/:messageId`
+(the skill discussion, below).
 
 **Smart polling (the poll cadence).** The two poll surfaces are driven by one admin-configurable
 interval set — `chat_poll_intervals`, a platform setting holding an **ascending, deduped list of
 integer seconds** (each `1..3600`, ≤20 entries). Default (and the fallback if the stored value is
 absent/invalid): **`[7, 11, 17, 19, 29, 41, 53]`** — primes, to minimise coincidence with other
 periodic requests. The smallest element `set[0]` (7s by default) is the **floor**:
-- **Open thread** (the messages-menu thread, the proposal review-discussion thread, *and* a request's
-  Discussion card) polls at a **fixed `set[0]`** while open — no backoff.
+- **Open thread** (the messages-menu thread, the proposal review-discussion thread, a request's
+  Discussion card, *and* a skill's Discussion card **while expanded** — collapsed = no polling) polls
+  at a **fixed `set[0]`** while open — no backoff.
 - **Conversation list + unread badge** uses a **backoff that walks the set**: it starts at `set[0]`,
   and each poll that sees **no new activity** advances one step up the set, clamping at the last value
   (53s) and **holding there indefinitely** until something resets it. It **resets to `set[0]`** when
@@ -1785,6 +1807,87 @@ The set is delivered to the client via `/api/me` and **read once at session/app 
 keep the set they loaded with; new page loads pick up an admin's change, so all clients converge as
 tabs reload. Edited in the Administration settings card as a comma-separated field (parsed, deduped,
 sorted ascending, bounds-checked on save); platform-admin only; audited like the other settings.
+
+### Skill discussion (the skill detail page's Discussion card)
+
+An open, per-skill comment thread on the skill detail page — the third messaging context
+(`subject_type='skill'`). One conversation per skill, created lazily on the first comment. Access,
+lifecycle, and deletion cascade are specified in the sections above; this subsection specifies the
+card and the skill-specific message semantics.
+
+**The card.**
+- **Placement:** on the skill detail page, **directly below the Maintainers card** (above the
+  `<hr>`/Versions divider).
+- **Collapsed by default** on every page load (state is not persisted). The collapsed header reads
+  **"Discussion (N)"** — N = the live comment count, returned by the detail API
+  (`GET /api/skills/:ns/:slug` gains a `discussionCount` field) so the count shows without expanding.
+  Expanding fetches the thread (`GET /api/skills/:ns/:slug/discussion`); the collapse/expand
+  interaction reuses the existing collapsible-card pattern (chevron, `aria-expanded`, animated
+  grid-rows transition).
+- **Deep link:** loading the page with a **`#discussion`** fragment auto-expands the card and scrolls
+  to it (used by the notification CTA below).
+
+**Messages.**
+- **Each comment renders:** the author's **`UserBubble`** avatar (Entra photo / initials — the shared
+  component), the author's display name, a **version pill** (below), and the comment's **date + time**
+  (viewer-local via the shared `useDateFmt()` formatter, per the timestamp convention).
+- **Ordering & pagination:** **newest-first**. The card shows the most recent **100**; a **"Show
+  more"** control appends the next 100 (offset paging on the GET endpoint).
+- **Composer:** the same textarea + emoji-picker composer as `ChatBox`, plus the **version picker**
+  (below). Body limit **500 characters** (client-counted, server-enforced — tighter than the general
+  ~4000 message cap). Bodies render as **sanitized markdown** (the shared renderer used for
+  descriptions/usage) — the one messaging context that renders markdown. Posting is rate-limited like
+  other message posting. Hidden (thread read-only) while the skill is archived.
+- **Live updates:** while the card is **expanded**, the thread polls via the shared smart-polling
+  hook at the fixed open-thread cadence (`set[0]`, §24 above); collapsed = no polling.
+
+**The version pill (`context_semver`).**
+- The composer includes a **version picker** listing the skill's **active versions** (stable *and*
+  beta; **yanked excluded**), **defaulting to the latest stable** — or the highest active version when
+  no stable exists. The selected semver is **stamped into the message at post time**
+  (`messages.context_semver`) and never changes afterwards.
+- The server **validates on post** that the submitted semver is an existing **active** version of
+  this skill; if the skill has **no active versions**, posting is still allowed and the message
+  carries no version (`context_semver` NULL → no pill).
+- Each comment renders its version as a **pill** (`v1.2.0`). If that version is **later yanked**, the
+  pill stays and takes the **yanked styling** (matching the Versions list). The pill is **clickable**:
+  it scrolls to that version's row in the Versions section (briefly highlighted). A dangling pill
+  cannot occur — versions are immutable and only leave the system via skill deletion, which deletes
+  the discussion with them.
+- Beta versions are commentable like any active version (the pill shows the prerelease semver).
+
+**Moderation (the only message delete in the system).**
+- **Who:** the skill's **effective maintainers** (explicit maintainers ∪ the namespace's admins, §19)
+  **∪ platform admins** can delete **any** comment in that skill's discussion. Authors have **no**
+  self-delete; nobody can edit.
+- **How:** **hard delete** of the `messages` row (`DELETE /api/skills/:ns/:slug/discussion/:messageId`,
+  authority re-verified server-side), behind a confirm dialog. The thread count decrements; no
+  placeholder row remains.
+- **Audit:** the deletion writes a **`skill.discussion_message_deleted`** audit row — actor
+  (moderator), the comment's author id, the skill, the message id, and timestamp. **The body is not
+  recorded** in the payload. Posting itself is **not** audited — the immutable message row is its own
+  provenance (and GDPR erasure de-identifies, never deletes, per §4).
+
+**Notifications (`skill.discussion`, §12).**
+- On each new comment the recipients are the skill's **watchers ∪ effective maintainers**, minus the
+  comment's author, minus users who opted out (below), **filtered against current visibility at
+  insert time** (a watcher who has since lost access to a now-restricted skill is skipped —
+  invariant #3).
+- **Coalesced like `message.new`:** one `skill.discussion` row per skill per recipient, refreshed
+  until read (same atomic update-in-place upsert, preserving delivery bookkeeping) — so email fires
+  **at most once per skill's discussion until read**. Expanding the Discussion card clears the
+  viewer's `skill.discussion` row for that skill (the read action), in addition to the standard
+  inbox read semantics.
+- **Per-user opt-out:** a third Profile toggle, **"Discussion comments on skills I maintain or
+  watch"** (`users.discussion_notifications`, BOOLEAN NOT NULL DEFAULT true — migration 0059),
+  grouped with the drift/new-version toggles (§12) and filtered the same way — **row-level, at
+  insert time**. **Deliberate contrast with `skill.new_version`:** here the opt-out silences
+  **watcher-derived recipients too** (an explicit watch does *not* outrank it) — it is the only way
+  to keep watching a skill for versions while muting its chatter; the watch's own off-switch remains
+  unwatch.
+
+**Schema (migration 0059).** `messages.context_semver TEXT NULL` +
+`users.discussion_notifications BOOLEAN NOT NULL DEFAULT true`. No new tables.
 
 ## 25. System log
 
