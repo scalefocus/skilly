@@ -217,6 +217,12 @@ export async function setUserNewVersionNotifications(userId: string, enabled: bo
   await pool.query(`update users set new_version_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
+/** §24 skill-discussion opt-out. Row-level like the two above, but gates EVERY recipient route
+ *  (watchers too) — the only way to keep watching a skill for versions while muting its chatter. */
+export async function setUserDiscussionNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set discussion_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
 /** When the user last opened the Catalog / Review queue / System log / Requested skills — drives
  *  the nav badges. */
 export interface NavSeen {

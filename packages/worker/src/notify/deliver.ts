@@ -92,6 +92,20 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
+  // A new comment on a skill's Discussion card (§24). Coalesced like message.new (one row per
+  // skill per recipient until read); deep-links to the card via the #discussion fragment.
+  if (n.type === "skill.discussion" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#discussion`;
+    const fromName = typeof p.fromName === "string" && p.fromName ? p.fromName : "Someone";
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${fromName} commented on ${slug}. ${cta("View the discussion", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, from: fromName, url: abs(path) },
+    };
+  }
+
   // Skill events — all three link to the skill page; only the sentence + CTA verb differ.
   if ((n.type === "skill.new_version" || n.type === "skill.drift" || n.type === "skill.marked_official") && typeof p.skillSlug === "string") {
     const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;

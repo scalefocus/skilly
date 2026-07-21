@@ -433,6 +433,18 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .ver-opt { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; background: none; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); cursor: pointer; }
 .ver-opt:hover { background: var(--surface-2); }
 
+/* A discussion comment's version pill is a button (clicking jumps to that version's row). The
+   button is chromeless — the Pill inside carries all the visuals. §24. */
+.version-pill-btn { border: 0; background: none; padding: 0; margin: 0; cursor: pointer; display: inline-flex; }
+
+/* Pulse-highlight a version row when a discussion pill scrolls to it (§24). */
+@keyframes row-flash {
+  0%   { background: color-mix(in oklab, var(--accent) 22%, transparent); }
+  100% { background: transparent; }
+}
+.row-flash { animation: row-flash 1.6s ease-out 1; }
+@media (prefers-reduced-motion: reduce) { .row-flash { animation: none; background: color-mix(in oklab, var(--accent) 16%, transparent); } }
+
 /* Pulse-highlight the offending field / error after a failed submit. The app smooth-scrolls
    the element into view, then adds .field-flash to draw the eye to it (two quick danger rings). */
 @keyframes field-flash {

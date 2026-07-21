@@ -6,6 +6,7 @@ import { findSkill, listVersions, latestStableSemver, latestVersionUsage, pointe
 import { isWatching, watcherCount } from "../../../../../lib/watch";
 import { getRating } from "../../../../../lib/ratings";
 import { getEffectiveMaintainers, canManageMaintainers } from "../../../../../lib/maintainers";
+import { skillDiscussionCount } from "../../../../../lib/messages";
 import { logView } from "../../../../../lib/usage";
 import { withSystemLog } from "../../../../../lib/apiLog";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, resolveLatest } from "@skilly/shared";
@@ -35,7 +36,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   // Record the view only for live consumption — not an owner inspecting an archived skill. §21.
   if (!archived && access.userId) logView(skill.id, skill.namespaceId, access.userId);
 
-  const [versions, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror] = await Promise.all([
+  const [versions, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount] = await Promise.all([
     listVersions(skill.id),
     latestStableSemver(skill.id),
     access.userId ? isWatching(access.userId, skill.id) : Promise.resolve(false),
@@ -46,6 +47,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     pointerSource(skill.id),
     skillFormDefaults(skill.id),
     pendingMirrorStatus(skill.id),
+    skillDiscussionCount(skill.id),
   ]);
   const isGlobal = skill.namespaceSlug === "global";
   // INSTALLABLE = latest stable version whose serving git repo is actually synthesized
@@ -73,6 +75,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     pointer,
     meta,
     pendingMirror,
+    // Live comment count for the collapsed Discussion card header ("Discussion (N)") — §24.
+    discussionCount,
     createdAt: skill.createdAt,
     updatedAt: skill.updatedAt,
     archived,

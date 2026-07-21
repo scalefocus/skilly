@@ -134,7 +134,8 @@ export default function NotificationsPage() {
             // fall back to whatever the payload carried.
             const nsSlug = n.namespaceSlug ?? (typeof n.payload.namespaceSlug === "string" ? n.payload.namespaceSlug : null);
             const skSlug = n.skillSlug ?? (typeof n.payload.skillSlug === "string" ? n.payload.skillSlug : null);
-            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}` : null;
+            // skill.discussion deep-links straight to the (auto-expanding) Discussion card. §24.
+            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" ? "#discussion" : ""}` : null;
             const skillName = n.skillTitle ?? skSlug;
             const semver = typeof n.payload.semver === "string" ? n.payload.semver : null;
             const isSystemLog = n.type === "system.error";
