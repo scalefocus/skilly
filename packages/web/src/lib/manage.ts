@@ -248,6 +248,18 @@ export async function deleteSkill(
         );
       }
     }
+    //  - the skill's OWN discussion conversation (subject_type='skill', §24 Skill discussion):
+    //    delete it (messages cascade) and its dangling skill.discussion alerts. Polymorphic, no FK.
+    const { rows: skillConvs } = await client.query<{ id: string }>(
+      `delete from conversations where subject_type = 'skill' and subject_id = $1 returning id`,
+      [skill.id],
+    );
+    if (skillConvs.length) {
+      await client.query(
+        `delete from notifications where type = 'skill.discussion' and payload->>'conversationId' = any($1::text[])`,
+        [skillConvs.map((c) => c.id)],
+      );
+    }
     //  - proposals targeting this skill or that materialized one of its versions (revisions cascade)
     await client.query(
       `delete from proposals

@@ -74,6 +74,16 @@ test("renderNotification: request.fulfilled names the request, fulfiller, and sk
   assert.match(r.text, /\/skills\/team-a\/pdf/);
 });
 
+test("renderNotification: skill.discussion names the commenter + skill, links to #discussion (§24)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const r = renderNotification({ type: "skill.discussion", payload: { namespaceSlug: "team-a", skillSlug: "pdf", fromName: "Ada", conversationId: "c9" } });
+  assert.equal(r.subject, "Skilly - New discussion comment");
+  assert.match(r.text, /Ada commented on team-a\/pdf\./);
+  assert.match(r.text, /\[View the discussion\]\(https:\/\/skilly\.test\/skills\/team-a\/pdf#discussion\)/);
+  assert.equal(r.webhook.event, "skill.discussion");
+  assert.equal(r.webhook.skill, "team-a/pdf");
+});
+
 test("renderNotification: skill.marked_official is human", () => {
   process.env.PUBLIC_BASE_URL = BASE;
   const r = renderNotification({ type: "skill.marked_official", payload: { namespaceSlug: "team-a", skillSlug: "pdf" } });

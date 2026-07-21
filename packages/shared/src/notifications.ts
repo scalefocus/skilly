@@ -28,6 +28,7 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "skill.new_version": { title: "New version published", tone: "ok" },
   "skill.marked_official": { title: "Skill marked official", tone: "ok" },
   "skill.drift": { title: "Upstream drift detected", tone: "danger" },
+  "skill.discussion": { title: "New discussion comment", tone: "warn" },
   "message.new": { title: "New message", tone: "warn" },
   "system.error": { title: "System log events", tone: "danger" },
   "request.fulfilled": { title: "Skill request fulfilled", tone: "ok" },

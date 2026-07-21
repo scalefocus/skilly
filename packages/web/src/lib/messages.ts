@@ -10,11 +10,14 @@
 // opening the thread (markRead advances last_read_at AND clears that conversation's notification).
 import { pool } from "./db";
 import { resolveUserAccess } from "./access";
+import { appendAudit } from "./audit";
 import { nameSql, userLabel as label } from "./userLabel";
 import type { RequestState } from "./requests";
-import { canReviewNamespace, type EffectiveAccess } from "@skilly/shared";
+import { canReviewNamespace, isSkillVisible, type EffectiveAccess } from "@skilly/shared";
 
 export const MAX_MESSAGE_LEN = 4000;
+/** Skill-discussion comments are capped tighter than the general message body (§24). */
+export const MAX_SKILL_DISCUSSION_LEN = 500;
 type Access = EffectiveAccess & { userId: string | null };
 
 export interface MessageView {
@@ -252,23 +255,34 @@ export async function postToConversation(access: Access, conversationId: string,
   return { ok: true, message };
 }
 
-async function insertMessage(conversationId: string, authorId: string, body: string): Promise<MessageView> {
+async function insertMessage(
+  conversationId: string,
+  authorId: string,
+  body: string,
+  opts: { contextSemver?: string | null; trackParticipant?: boolean } = {},
+): Promise<MessageView & { contextSemver: string | null }> {
+  const contextSemver = opts.contextSemver ?? null;
+  const trackParticipant = opts.trackParticipant ?? true;
   const { rows } = await pool.query<{ id: string; created_at: string; display_name: string; avatar: string | null }>(
     `with m as (
-       insert into messages (conversation_id, author_id, body) values ($1, $2, $3) returning id, created_at, author_id
+       insert into messages (conversation_id, author_id, body, context_semver) values ($1, $2, $3, $4) returning id, created_at, author_id
      )
      select m.id, m.created_at, u.display_name, u.avatar from m join users u on u.id = m.author_id`,
-    [conversationId, authorId, body],
+    [conversationId, authorId, body, contextSemver],
   );
   await pool.query(`update conversations set updated_at = now() where id = $1`, [conversationId]);
-  // The author has implicitly read up to their own message.
-  await pool.query(
-    `insert into conversation_participants (conversation_id, user_id, last_read_at) values ($1, $2, now())
-       on conflict (conversation_id, user_id) do update set last_read_at = now()`,
-    [conversationId, authorId],
-  );
+  // The author has implicitly read up to their own message. Skill discussions are open forums
+  // with NO participant rows (§24) — skip the upsert so a skill thread never surfaces in the
+  // topbar messages menu (which is participant-scoped).
+  if (trackParticipant) {
+    await pool.query(
+      `insert into conversation_participants (conversation_id, user_id, last_read_at) values ($1, $2, now())
+         on conflict (conversation_id, user_id) do update set last_read_at = now()`,
+      [conversationId, authorId],
+    );
+  }
   const r = rows[0]!;
-  return { id: r.id, authorId, authorName: r.display_name, authorAvatar: r.avatar, mine: true, body, createdAt: r.created_at };
+  return { id: r.id, authorId, authorName: r.display_name, authorAvatar: r.avatar, mine: true, body, createdAt: r.created_at, contextSemver };
 }
 
 /** Coalesced fan-out: one unread `message.new` notification per recipient per conversation. */
@@ -327,6 +341,10 @@ async function loadConversation(conversationId: string): Promise<{ id: string; s
   const { rows } = await pool.query<{ subject_type: string; subject_id: string | null }>(`select subject_type, subject_id from conversations where id = $1`, [conversationId]);
   const r = rows[0];
   if (!r) return null;
+  // Skill discussions (§24) are served ONLY by their dedicated endpoints, never the generic
+  // messages surface — treat them as not-found here so /api/messages/:id can't read or post to
+  // a skill thread (they carry no participant rows and are page-anchored, not in the inbox).
+  if (r.subject_type === "skill") return null;
   const ctx: ConvCtx | null =
     r.subject_type === "proposal" && r.subject_id ? await loadProposalCtx(r.subject_id) :
     r.subject_type === "request" && r.subject_id ? await loadRequestCtx(r.subject_id) :
@@ -415,6 +433,213 @@ export async function getRequestThread(access: Access, requestId: string): Promi
   if (!conversationId) return { conversationId: null, canPost: !closed, closed, messages: [] };
   const t = await getThread(access, conversationId);
   return { conversationId, canPost: !closed, closed, messages: t?.messages ?? [] };
+}
+
+// ── Skill discussion (§24 "Skill discussion") ───────────────────────────────
+// The skill detail page's Discussion card — a third messaging context
+// (subject_type='skill', subject_id=skills.id). An OPEN forum: read/post = anyone who can see
+// the skill (visibility inherited exactly, invariant #3; archived → owner-only, read-only). No
+// participant rows (so it never appears in the topbar messages menu). Each comment stamps the
+// version it's about (context_semver) at post time. Moderator hard-delete (effective
+// maintainers ∪ platform admins) is the only message delete in the system. New comments fan out
+// a coalesced `skill.discussion` notification to watchers ∪ effective maintainers.
+export interface SkillDiscussionSkill {
+  id: string;
+  namespaceId: string;
+  namespaceSlug: string;
+  skillSlug: string;
+  visibility: "org" | "namespace";
+  archived: boolean;
+}
+export interface SkillDiscussionMessage extends MessageView {
+  /** The version the comment is about (§24). Null when the skill had no active version at post time. */
+  contextSemver: string | null;
+}
+export interface SkillDiscussionThread {
+  conversationId: string | null;
+  count: number;
+  archived: boolean;
+  canPost: boolean;
+  canModerate: boolean;
+  messages: SkillDiscussionMessage[];
+  hasMore: boolean;
+}
+
+/** True if the caller may see the skill's discussion — mirrors the detail route's gate exactly. */
+export function canReadSkill(access: Access, skill: SkillDiscussionSkill, isOwner: boolean): boolean {
+  if (skill.archived) return isOwner; // archived skills are owner-only (§7)
+  return isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility });
+}
+
+/** True if the caller may delete comments: platform admin, the namespace's admin, or an
+ *  explicit maintainer of this skill (the effective-maintainer set, §19). */
+export async function canModerateSkillDiscussion(access: Access, skill: SkillDiscussionSkill): Promise<boolean> {
+  if (!access.userId) return false;
+  if (access.isPlatformAdmin) return true;
+  if (access.namespaceRoles.get(skill.namespaceId) === "namespace_admin") return true;
+  const { rowCount } = await pool.query(`select 1 from skill_maintainers where skill_id = $1 and user_id = $2`, [skill.id, access.userId]);
+  return (rowCount ?? 0) > 0;
+}
+
+/** Live comment count for the collapsed card header ("Discussion (N)") — 0 when no thread yet. */
+export async function skillDiscussionCount(skillId: string): Promise<number> {
+  const { rows } = await pool.query<{ n: string }>(
+    `select count(*)::text as n from messages m
+       join conversations c on c.id = m.conversation_id
+      where c.subject_type = 'skill' and c.subject_id = $1`,
+    [skillId],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Fetch a page of a skill's discussion (newest-first). `offset === 0` is the read action: it
+ *  clears the caller's coalesced `skill.discussion` alert for this skill (§24). */
+export async function getSkillDiscussion(
+  access: Access,
+  skill: SkillDiscussionSkill,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<SkillDiscussionThread> {
+  const limit = Math.min(100, Math.max(1, opts.limit ?? 100));
+  const offset = Math.max(0, opts.offset ?? 0);
+  const canModerate = await canModerateSkillDiscussion(access, skill);
+  const conversationId = await findConversation("skill", skill.id);
+  const canPost = !skill.archived;
+  if (!conversationId) return { conversationId: null, count: 0, archived: skill.archived, canPost, canModerate, messages: [], hasMore: false };
+
+  const [{ rows }, count] = await Promise.all([
+    pool.query<{ id: string; author_id: string; display_name: string; avatar: string | null; body: string; context_semver: string | null; created_at: string }>(
+      `select m.id, m.author_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar, m.body, m.context_semver, m.created_at
+         from messages m join users u on u.id = m.author_id
+        where m.conversation_id = $1 order by m.created_at desc, m.id desc limit $2 offset $3`,
+      [conversationId, limit + 1, offset],
+    ),
+    skillDiscussionCount(skill.id),
+  ]);
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+
+  // The read action: clear this user's coalesced skill.discussion bell for the thread.
+  if (offset === 0 && access.userId) {
+    await pool.query(
+      `update notifications set read_at = now() where user_id = $1 and type = 'skill.discussion' and read_at is null and payload->>'conversationId' = $2`,
+      [access.userId, conversationId],
+    );
+  }
+
+  return {
+    conversationId,
+    count,
+    archived: skill.archived,
+    canPost,
+    canModerate,
+    hasMore,
+    messages: page.map((m) => ({
+      id: m.id, authorId: m.author_id, authorName: m.display_name, authorAvatar: m.avatar,
+      mine: m.author_id === access.userId, body: m.body, createdAt: m.created_at, contextSemver: m.context_semver,
+    })),
+  };
+}
+
+/** Post a comment on a skill's discussion (get-or-creating the thread). Validates the body (≤500)
+ *  and that `contextSemver`, when given, is an ACTIVE version of the skill; a skill with no active
+ *  version accepts a comment with no version (null pill). Fans out a coalesced skill.discussion
+ *  notification. Read-only when the skill is archived. §24. */
+export async function postSkillDiscussionMessage(
+  access: Access,
+  skill: SkillDiscussionSkill,
+  rawBody: string,
+  contextSemver: string | null,
+): Promise<{ ok: true; conversationId: string; message: SkillDiscussionMessage } | { ok: false; status: number; error: string }> {
+  if (!access.userId) return { ok: false, status: 403, error: "unknown user" };
+  if (skill.archived) return { ok: false, status: 409, error: "this skill is archived — the discussion is read-only" };
+  const body = rawBody.trim();
+  if (!body) return { ok: false, status: 422, error: "message is empty" };
+  if (body.length > MAX_SKILL_DISCUSSION_LEN) return { ok: false, status: 422, error: `message too long (max ${MAX_SKILL_DISCUSSION_LEN})` };
+
+  // Resolve the version pill. A non-null semver must be an active (non-yanked) version of this
+  // skill; anything else is rejected (a stale/forged pick can't be stamped). Null is allowed
+  // only when the skill genuinely has no active version to reference.
+  let semver: string | null = null;
+  const { rows: active } = await pool.query<{ semver: string }>(
+    `select semver from skill_versions where skill_id = $1 and status = 'active'`,
+    [skill.id],
+  );
+  if (contextSemver != null) {
+    if (!active.some((v) => v.semver === contextSemver)) return { ok: false, status: 422, error: "unknown or inactive version" };
+    semver = contextSemver;
+  }
+
+  const conversationId = await getOrCreateConversation("skill", skill.id);
+  const message = await insertMessage(conversationId, access.userId, body, { contextSemver: semver, trackParticipant: false });
+  await fanOutSkillDiscussion(conversationId, skill, access.userId);
+  return { ok: true, conversationId, message };
+}
+
+/** Moderator hard-delete of a single comment (§24) — the only message delete in the system.
+ *  Authority (effective maintainer ∪ platform admin) is re-verified by the caller AND here.
+ *  Audited (`skill.discussion_message_deleted`); the body is never recorded. */
+export async function deleteSkillDiscussionMessage(
+  access: Access,
+  skill: SkillDiscussionSkill,
+  messageId: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  if (!access.userId) return { ok: false, status: 403, error: "unknown user" };
+  if (!(await canModerateSkillDiscussion(access, skill))) return { ok: false, status: 403, error: "not allowed" };
+  // Delete only if the message really belongs to THIS skill's discussion thread.
+  const { rows } = await pool.query<{ author_id: string }>(
+    `delete from messages m
+       using conversations c
+      where m.id = $1 and m.conversation_id = c.id and c.subject_type = 'skill' and c.subject_id = $2
+      returning m.author_id`,
+    [messageId, skill.id],
+  );
+  if (rows.length === 0) return { ok: false, status: 404, error: "not found" };
+  await appendAudit(pool, {
+    actorUserId: access.userId,
+    action: "skill.discussion_message_deleted",
+    targetType: "skill",
+    targetId: skill.id,
+    namespaceId: skill.namespaceId,
+    after: { messageId, authorId: rows[0]!.author_id }, // body intentionally NOT recorded (§24)
+  });
+  return { ok: true };
+}
+
+/** Coalesced fan-out for a new skill-discussion comment: one unread `skill.discussion` row per
+ *  recipient per skill (upsert against idx_notifications_skilldisc_unread, preserving delivery
+ *  bookkeeping — §12). Recipients = watchers ∪ effective maintainers (explicit ∪ ns admins),
+ *  minus the author, minus discussion_notifications=false users, visibility-filtered so a watcher
+ *  who lost access to a now-restricted skill is skipped (invariant #3). */
+async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscussionSkill, authorId: string): Promise<void> {
+  const fromName = (await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [authorId])).rows[0]?.display_name ?? "Someone";
+  const payload = JSON.stringify({ conversationId, namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug, fromName });
+  await pool.query(
+    `insert into notifications (user_id, type, payload)
+     select r.uid, 'skill.discussion', $2::jsonb
+       from (
+         select w.user_id as uid from skill_watches w where w.skill_id = $1
+         union
+         select sm.user_id from skill_maintainers sm where sm.skill_id = $1
+         union
+         select gm.user_id
+           from role_mappings rm
+           join group_memberships gm on gm.group_id = rm.group_id
+          where rm.namespace_id = $3 and rm.role = 'namespace_admin'
+       ) r
+       join users u on u.id = r.uid and u.status = 'active' and u.discussion_notifications
+      where r.uid <> $4
+        and (
+          $5 = 'org'
+          or exists (
+            select 1 from group_memberships gm2
+            join role_mappings rm2 on rm2.group_id = gm2.group_id
+            where gm2.user_id = r.uid and (rm2.role = 'platform_admin' or rm2.namespace_id = $3)
+          )
+        )
+     on conflict (user_id, (payload->>'conversationId')) where type = 'skill.discussion' and read_at is null
+     do update set payload = excluded.payload, created_at = now()`,
+    [skill.id, payload, skill.namespaceId, authorId, skill.visibility],
+  );
 }
 
 // ── Listing + unread (global messages UI) ───────────────────────────────────

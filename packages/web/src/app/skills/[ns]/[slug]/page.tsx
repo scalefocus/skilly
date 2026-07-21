@@ -11,6 +11,7 @@ import { UserBubble } from "../../../../components/UserBubble";
 import { OfficialBadge, SkillCard, type CatalogEntry } from "../../../../components/SkillCard";
 import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
+import { SkillDiscussion } from "./SkillDiscussion";
 
 // recharts is heavy (d3) and owner-only — code-split it out of the route's initial bundle.
 // ssr:false since the chart measures the DOM; a skeleton holds its height while it loads.
@@ -84,6 +85,7 @@ interface Detail {
   official: boolean; officialAt: string | null; officialByName: string | null; canMarkOfficial: boolean;
   featured: boolean; canFeature: boolean;
   canManage: boolean; canDelete: boolean; canPromote: boolean; isGlobal: boolean; canRetryMirror: boolean;
+  discussionCount: number;
 }
 
 export default function SkillDetail() {
@@ -540,6 +542,8 @@ export default function SkillDetail() {
 
       <MaintainersPanel ns={ns} slug={slug} />
 
+      <SkillDiscussion ns={ns} slug={slug} versions={data.versions} latest={data.latest} initialCount={data.discussionCount} />
+
       <hr className="divider" />
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 14 }}>Versions</h2>
@@ -548,7 +552,7 @@ export default function SkillDetail() {
       ) : (
         <div className="rows">
           {data.versions.map((v) => (
-            <div className="row version-row" key={v.semver}>
+            <div className="row version-row" id={`version-${v.semver}`} key={v.semver} style={{ scrollMarginTop: 80 }}>
               <div className="version-head">
                 <span className="mono" style={{ fontWeight: 500 }}>v{v.semver}</span>
                 {v.channel === "beta" ? <Pill tone="warn">beta</Pill> : <Pill tone="ok">stable</Pill>}
