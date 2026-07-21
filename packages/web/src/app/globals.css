@@ -543,6 +543,13 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
    under the header on collapsed cards). Padding lives one level deeper, where it collapses and
    clips away with the rest of the content. */
 .admin-card-body-inner { overflow: hidden; min-height: 0; }
+/* Once a card has fully opened (data-settled, set ~0.2s after data-open — see CollapsibleCard),
+   release the clip: overflow:hidden on the wrappers was cutting off the absolutely-positioned
+   in-card dropdowns (z-70 — Delete User Info's user search, tag/maintainer menus), leaving the
+   results invisible inside the card. Collapsing drops data-settled at once, so the close
+   animation still clips. */
+.admin-card-body[data-settled="true"] { overflow: visible; }
+.admin-card-body[data-settled="true"] > .admin-card-body-inner { overflow: visible; }
 .admin-card-body-pad { padding: 0 22px 22px; }
 @media (prefers-reduced-motion: reduce) {
   .admin-card-body { transition: none; }
