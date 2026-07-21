@@ -24,6 +24,15 @@ test("renderNotification: changes-requested includes the reviewer note", () => {
   assert.equal(r.webhook.note, "tighten the description");
 });
 
+test("renderNotification: proposal.revise — reviewer-directed body + [Review it] link (§8)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const r = renderNotification({ type: "proposal.revise", payload: { proposalId: "p7", skillSlug: "pdf", semver: "1.2.0" } });
+  assert.equal(r.subject, "Skilly - Proposal updated");
+  assert.match(r.text, /A skill proposal in your review queue was updated by the proposer\./);
+  assert.match(r.text, /\[Review it\]\(https:\/\/skilly\.test\/proposals\/p7\)/);
+  assert.equal(r.webhook.event, "proposal.revise");
+});
+
 test("renderNotification: direct message — friendly subject/body + ?conversation deep link", () => {
   process.env.PUBLIC_BASE_URL = BASE;
   const r = renderNotification({

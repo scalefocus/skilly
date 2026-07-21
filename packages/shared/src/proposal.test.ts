@@ -21,6 +21,22 @@ test("illegal transitions return null", () => {
   assert.equal(nextState("request_changes", "accepted"), null);
 });
 
+test("revise keeps the current state (§8)", () => {
+  assert.equal(nextState("revise", "proposed"), "proposed");
+  assert.equal(nextState("revise", "under_review"), "under_review");
+  assert.equal(nextState("revise", "changes_requested"), null); // that's resubmit's territory
+  assert.equal(nextState("revise", "accepted"), null);
+});
+
+test("only the submitter may revise, and only pre-decision", () => {
+  assert.deepEqual(canPerform("revise", "proposed", submitter), { ok: true, to: "proposed" });
+  assert.deepEqual(canPerform("revise", "under_review", submitter), { ok: true, to: "under_review" });
+  assert.equal(canPerform("revise", "under_review", reviewer).ok, false);
+  assert.equal(canPerform("revise", "under_review", bystander).ok, false);
+  assert.equal(canPerform("revise", "changes_requested", submitter).ok, false);
+  assert.equal(canPerform("revise", "accepted", submitter).ok, false);
+});
+
 test("terminal states", () => {
   assert.ok(isTerminal("accepted"));
   assert.ok(isTerminal("rejected"));

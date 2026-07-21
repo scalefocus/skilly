@@ -64,6 +64,7 @@ const ACTION_LABEL: Record<string, string> = {
   start_review: "Start review",
   request_changes: "Request changes",
   resubmit: "Resubmit",
+  revise: "Save changes",
   accept: "Accept & publish",
   reject: "Reject",
 };
@@ -96,6 +97,12 @@ interface EditDraft {
  * refs aren't guaranteed to be real branches/tags, and a wrong guess 404s. The one
  * exception: a skills-hub API origin maps to its public skill page (the API URL is JSON).
  */
+/** True when the proposal delivers a hosted bundle (fresh upload or hosted reuse). Pointer
+ *  proposals — fresh pointer or pointer reuse — have frozen files mid-review (§8). */
+function isHostedProposal(payload: Revision["payload"] | undefined): boolean {
+  return !!payload && !payload.pointer && !payload.reuse?.external;
+}
+
 function repoLinkFor(p: { url: string; ref: string; subdir?: string | null }): string {
   const hub = p.url.match(/^https:\/\/skills-hub\.ai\/api\/v1\/skills\/([^/]+)\/?$/i);
   if (hub) return `https://skills-hub.ai/skills/${hub[1]}`;
@@ -457,17 +464,29 @@ function ProposalDetailInner() {
           action,
           note: note || undefined,
           newPayload: editedPayload(),
-          // Proposer resubmit may revise the semver (only honored server-side on resubmit).
-          newSemver: edit && data?.caps.isSubmitter ? edit.semver.trim() || undefined : undefined,
-          // Keep current files (§8): only honored server-side on resubmit of a new-version proposal.
-          reuseCurrentFiles: action === "resubmit" && edit?.reuseFiles ? true : undefined,
+          // Proposer resubmit may revise the semver (only honored server-side on resubmit;
+          // a mid-review `revise` never changes the version — §8).
+          newSemver: action === "resubmit" && edit && data?.caps.isSubmitter ? edit.semver.trim() || undefined : undefined,
+          // Keep current files (§8): resubmit, or a hosted mid-review revise, of a new-version proposal.
+          reuseCurrentFiles: (action === "resubmit" || action === "revise") && edit?.reuseFiles ? true : undefined,
+          // Revision-pinned accept (§8 anti-swap): pin the revision on screen — a proposer revise
+          // that landed since bounces the accept with 409 and this page reloads to the new revision.
+          revisionNo: action === "accept" ? data?.revisions.at(-1)?.revisionNo : undefined,
           override: action === "accept" ? override : undefined,
           overrideReason: override ? note || undefined : undefined,
         }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error ?? `Action failed (${r.status})`);
-      setMsg({ kind: "ok", text: `Proposal is now “${j.state}”.${edit ? " Your edits were recorded as a new revision." : ""}` });
+      if (!r.ok) {
+        if (action === "accept" && r.status === 409 && !j.requiresOverride) reload(); // stale revision — show the current one
+        throw new Error(j.error ?? `Action failed (${r.status})`);
+      }
+      setMsg({
+        kind: "ok",
+        text: action === "revise"
+          ? "Your changes were saved as a new revision — the reviewers have been notified."
+          : `Proposal is now “${j.state}”.${edit ? " Your edits were recorded as a new revision." : ""}`,
+      });
       setNote("");
       setOverride(false);
       setEdit(null);
@@ -553,9 +572,16 @@ function ProposalDetailInner() {
         const isNewSkill = !data.targetSkillId;
         const isSubmitter = data.caps.isSubmitter;
         const canResubmit = data.allowedActions.includes("resubmit");
+        const canRevise = data.allowedActions.includes("revise");
+        // §8 revise: the proposer is editing mid-review (proposed/under_review, no state change) —
+        // the semver is locked and a pointer proposal's files are frozen. Resubmit (after
+        // changes-requested) keeps its wider powers.
+        const reviseMode = isSubmitter && canRevise && !canResubmit;
+        const isPointerProposal = !!latest.payload.pointer || !!latest.payload.reuse?.external;
         // Who can open the edit form: a reviewer with available actions, or the proposer when they
-        // may resubmit (changes_requested). Field rules below differ by actor/type (§8).
-        const canEdit = data.allowedActions.length > 0 && (data.caps.isReviewer || canResubmit);
+        // may resubmit (changes_requested) or revise mid-review (§8). Field rules below differ by
+        // actor/type/state.
+        const canEdit = data.allowedActions.length > 0 && (data.caps.isReviewer || canResubmit || canRevise);
         // Editable sets (§8): title, description, categories, tags, and tool/harness are editable
         // on BOTH proposal types — a re-version syncs them to the skill on accept. Only VISIBILITY
         // stays locked on a new-version proposal (skill-level frozen; a skill-management action).
@@ -625,7 +651,7 @@ function ProposalDetailInner() {
                   <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
                     New-version proposal — the slug and visibility are locked to the existing skill; title, description,
                     categories, tags, tool/harness and usage are editable and sync to the skill on accept (§8).
-                    {isSubmitter ? " You can also revise the files and the version below." : ""}
+                    {isSubmitter ? (reviseMode ? " You can also replace the files below — the version stays locked while in review." : " You can also revise the files and the version below.") : ""}
                   </p>
                 )}
                 <div><label style={labelStyle}>Title</label><input style={fieldStyle} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></div>
@@ -671,11 +697,27 @@ function ProposalDetailInner() {
                   <>
                     <div>
                       <label style={labelStyle}>Version <span style={{ textTransform: "none", letterSpacing: 0 }}>· semver</span></label>
-                      <input style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }} value={edit.semver} onChange={(e) => setEdit({ ...edit, semver: e.target.value })} spellCheck={false} placeholder="1.2.3" />
+                      {/* §8: the proposed semver is LOCKED mid-review — changeable only on
+                          resubmit after changes are requested. */}
+                      <input
+                        style={{ ...fieldStyle, fontFamily: "var(--font-mono)", ...(reviseMode ? { opacity: 0.6 } : {}) }}
+                        value={edit.semver}
+                        onChange={(e) => !reviseMode && setEdit({ ...edit, semver: e.target.value })}
+                        readOnly={reviseMode}
+                        title={reviseMode ? "The proposed version can’t change while the proposal is in review" : undefined}
+                        spellCheck={false}
+                        placeholder="1.2.3"
+                      />
+                      {reviseMode && (
+                        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                          The proposed version is locked while the proposal is in review.
+                        </p>
+                      )}
                     </div>
                     {/* New-version proposals: switch between "Keep current files" (§8 — the server
-                        re-snapshots the then-latest stable artifact on resubmit) and a fresh source. */}
-                    {!isNewSkill && (
+                        re-snapshots the then-latest stable artifact) and a fresh source. Hidden on
+                        a mid-review revise of a POINTER proposal — its files are frozen (§8). */}
+                    {!isNewSkill && !(reviseMode && isPointerProposal) && (
                       <div>
                         <label style={labelStyle}>Files</label>
                         <div className="sort-toggle" role="group" aria-label="Files for this version">
@@ -705,7 +747,14 @@ function ProposalDetailInner() {
                         )}
                       </div>
                     )}
-                    {!isNewSkill && edit.reuseFiles ? null : edit.pointer ? (
+                    {reviseMode && isPointerProposal ? (
+                      /* §8: a pointer proposal's files are frozen mid-review — no source editing
+                         until the reviewer requests changes and the proposer resubmits. */
+                      <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
+                        This is a pointer proposal — its source (URL, ref, folder) is locked while the proposal is in review.
+                        To change it, ask the reviewer to request changes, then resubmit.
+                      </p>
+                    ) : !isNewSkill && edit.reuseFiles ? null : edit.pointer ? (
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                         <div style={{ gridColumn: "1 / -1" }}>
                           <label style={labelStyle}>Repository URL</label>
@@ -735,7 +784,7 @@ function ProposalDetailInner() {
                         {uploading && uploadPct === null && <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Uploading &amp; scanning…</p>}
                         {edit.newArtifact && (
                           <p style={{ fontSize: 12.5, color: "var(--ok)", marginTop: 6 }}>
-                            New bundle staged{edit.newArtifact.artifactFilename ? `: ${edit.newArtifact.artifactFilename}` : ""} ✓ — it'll replace the current files on resubmit.
+                            New bundle staged{edit.newArtifact.artifactFilename ? `: ${edit.newArtifact.artifactFilename}` : ""} ✓ — it'll replace the current files {reviseMode ? "when you save your changes" : "on resubmit"}.
                           </p>
                         )}
                       </div>
@@ -744,9 +793,11 @@ function ProposalDetailInner() {
                 )}
 
                 <p style={{ fontSize: 12.5, color: "var(--accent-2)", margin: 0 }}>
-                  {isSubmitter
-                    ? "Your changes are saved as a new revision when you resubmit below."
-                    : "Edits are recorded as a new revision together with your decision below (accept publishes the edited details)."}
+                  {reviseMode
+                    ? "Your changes are saved as a new revision when you save below — the reviewers are notified of every update."
+                    : isSubmitter
+                      ? "Your changes are saved as a new revision when you resubmit below."
+                      : "Edits are recorded as a new revision together with your decision below (accept publishes the edited details)."}
                 </p>
               </div>
             ) : (
@@ -927,7 +978,9 @@ function ProposalDetailInner() {
             </label>
           )}
           <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-            {data.allowedActions.map((a) => (
+            {/* `revise` is the proposer's in-place edit (§8), not a decision — it lives in the
+                "Update proposal" section below, never among the reviewer buttons. */}
+            {data.allowedActions.filter((a) => a !== "revise").map((a) => (
               <button
                 key={a}
                 className={`btn ${a === "accept" ? "btn-primary" : a === "reject" ? "btn-danger" : ""}`}
@@ -939,6 +992,36 @@ function ProposalDetailInner() {
             ))}
           </div>
           {msg && <div style={{ marginTop: 14, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
+        </>
+      )}
+
+      {/* Proposer mid-review edit (§8 `revise`) — while the proposal is proposed/under review, the
+          submitter can update it in place: ✎ Edit above (details; a hosted proposal may also replace
+          the bundle — the version and a pointer's source stay locked), then save here. No state
+          change; every save is a new revision and the reviewers are notified. */}
+      {data.caps.isSubmitter && data.allowedActions.includes("revise") && (
+        <>
+          <hr className="divider" />
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, marginBottom: 12 }}>Update proposal</h2>
+          <p className="muted" style={{ fontSize: 13.5, marginBottom: 12 }}>
+            You can keep improving this proposal while it’s in review — use <span className="mono">✎ Edit</span> above to
+            revise the details{isHostedProposal(latest?.payload) ? " or upload a replacement bundle" : ""}, then save. The reviewers are
+            notified of every update; the proposed version doesn’t change.
+          </p>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Note for the reviewers (what you changed)… optional"
+            rows={3}
+            style={{ width: "100%", padding: 12, borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 14, resize: "vertical" }}
+          />
+          <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <button className="btn btn-primary" disabled={busy !== null || uploading || !edit} onClick={() => act("revise")}>
+              {busy === "revise" ? "…" : "Save changes"}
+            </button>
+            {!edit && <span className="muted" style={{ fontSize: 12.5 }}>Open <span className="mono">✎ Edit</span> above to make changes first.</span>}
+          </div>
+          {msg && !data.caps.isReviewer && <div style={{ marginTop: 14, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
         </>
       )}
 

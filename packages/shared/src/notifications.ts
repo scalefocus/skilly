@@ -24,6 +24,7 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "proposal.request_changes": { title: "Changes requested", tone: "warn" },
   "proposal.start_review": { title: "Proposal under review", tone: "muted" },
   "proposal.resubmit": { title: "Proposal resubmitted", tone: "muted" },
+  "proposal.revise": { title: "Proposal updated", tone: "warn" },
   "skill.new_version": { title: "New version published", tone: "ok" },
   "skill.marked_official": { title: "Skill marked official", tone: "ok" },
   "skill.drift": { title: "Upstream drift detected", tone: "danger" },

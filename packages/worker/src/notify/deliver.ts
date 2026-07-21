@@ -130,13 +130,18 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
-  if ((n.type === "proposal.needs_review" || n.type === "proposal.submitted") && typeof p.proposalId === "string") {
+  if ((n.type === "proposal.needs_review" || n.type === "proposal.submitted" || n.type === "proposal.revise") && typeof p.proposalId === "string") {
     const path = `/proposals/${p.proposalId}`;
-    const reviewer = n.type === "proposal.needs_review";
+    // needs_review + revise are reviewer-directed (§8/§12: reviewers are notified on every
+    // proposer mid-review edit); submitted is the proposer's confirmation.
+    const reviewer = n.type !== "proposal.submitted";
     const s = subj(title);
-    const sentence = reviewer
-      ? "A new skill proposal is awaiting your review."
-      : "Your skill proposal was submitted and is awaiting review.";
+    const sentence =
+      n.type === "proposal.needs_review"
+        ? "A new skill proposal is awaiting your review."
+        : n.type === "proposal.revise"
+          ? "A skill proposal in your review queue was updated by the proposer."
+          : "Your skill proposal was submitted and is awaiting review.";
     return {
       subject: s,
       text: `${sentence} ${cta(reviewer ? "Review it" : "View it", path)}`,

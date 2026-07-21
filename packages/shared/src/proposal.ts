@@ -4,18 +4,22 @@
 //                     │                                              └► rejected
 //                     └────────────────────────────────────────────────► rejected
 //
+// `revise` (§8) is the one non-transitioning action: in `proposed`/`under_review` the proposer
+// may update the proposal in place (new revision, same state).
+//
 // Terminal states: accepted, rejected. Acceptance materializes a SkillVersion (done by
 // the caller; this module only governs legality + who may act).
 import type { ProposalState } from "./types.js";
 
-export type ProposalAction = "start_review" | "request_changes" | "resubmit" | "accept" | "reject";
+export type ProposalAction = "start_review" | "request_changes" | "resubmit" | "revise" | "accept" | "reject";
 
 /** Which kind of actor may perform an action. */
 export type ActorKind = "reviewer" | "proposer";
 
 interface Rule {
   from: ProposalState[];
-  to: ProposalState;
+  /** Target state; "same" = an in-place action that never transitions (§8 `revise`). */
+  to: ProposalState | "same";
   actor: ActorKind;
 }
 
@@ -23,6 +27,8 @@ export const TRANSITIONS: Record<ProposalAction, Rule> = {
   start_review: { from: ["proposed", "changes_requested"], to: "under_review", actor: "reviewer" },
   request_changes: { from: ["under_review"], to: "changes_requested", actor: "reviewer" },
   resubmit: { from: ["changes_requested"], to: "under_review", actor: "proposer" },
+  // Proposer mid-review edit (§8): a new revision in place — no state change, review continues.
+  revise: { from: ["proposed", "under_review"], to: "same", actor: "proposer" },
   accept: { from: ["under_review"], to: "accepted", actor: "reviewer" },
   reject: { from: ["proposed", "under_review", "changes_requested"], to: "rejected", actor: "reviewer" },
 };
@@ -36,7 +42,8 @@ export function isTerminal(state: ProposalState): boolean {
 /** The next state for an action from a given state, or null if the transition is illegal. */
 export function nextState(action: ProposalAction, from: ProposalState): ProposalState | null {
   const rule = TRANSITIONS[action];
-  return rule.from.includes(from) ? rule.to : null;
+  if (!rule.from.includes(from)) return null;
+  return rule.to === "same" ? from : rule.to;
 }
 
 export interface ActorCaps {
@@ -65,7 +72,7 @@ export function canPerform(action: ProposalAction, from: ProposalState, caps: Ac
     return { ok: false, reason: "reviewer role required" };
   }
   if (rule.actor === "proposer" && !caps.isSubmitter) {
-    return { ok: false, reason: "only the proposer may resubmit" };
+    return { ok: false, reason: `only the proposer may ${action}` };
   }
   return { ok: true, to };
 }
