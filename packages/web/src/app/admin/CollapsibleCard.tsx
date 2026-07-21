@@ -1,5 +1,5 @@
 "use client";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 // Administration console: every card is a collapsible panel (SKILLY_SPEC.md §5). The header
 // (title + optional compact live summary + optional accessory such as the SCIM pills) is always
@@ -25,6 +25,17 @@ export function CollapsibleCard({
   children: ReactNode;
 }) {
   const bodyId = `admin-card-${cardId}`;
+  // The body wrappers clip (overflow:hidden) so the grid-rows transition looks right, but a
+  // permanent clip cuts off absolutely-positioned in-card dropdowns (the user search in Delete
+  // User Info, tag/maintainer menus). `settled` marks a card as fully open — the CSS then
+  // releases the clip. Timeout mirrors the 0.2s CSS transition; it also covers
+  // prefers-reduced-motion, where no transitionend would fire. Collapse re-clips instantly.
+  const [settled, setSettled] = useState(open);
+  useEffect(() => {
+    if (!open) { setSettled(false); return; }
+    const t = setTimeout(() => setSettled(true), 220);
+    return () => clearTimeout(t);
+  }, [open]);
   return (
     <section className="card reveal admin-card" style={{ marginBottom: 26 }}>
       <button
@@ -46,7 +57,7 @@ export function CollapsibleCard({
           <path d="m6 9 6 6 6-6" />
         </svg>
       </button>
-      <div className="admin-card-body" data-open={open} id={bodyId} role="region" aria-hidden={!open}>
+      <div className="admin-card-body" data-open={open} data-settled={settled} id={bodyId} role="region" aria-hidden={!open}>
         <div className="admin-card-body-inner">
           <div className="admin-card-body-pad">{children}</div>
         </div>
