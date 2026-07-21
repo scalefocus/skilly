@@ -14,5 +14,5 @@ export const POST = withSystemLog("/api/admin/users/[id]/erase", async function 
   const body = (await req.json().catch(() => ({}))) as { transferTo?: string | null };
   const r = await eraseUser(access.userId, id, body.transferTo?.trim() || null);
   if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
-  return Response.json({ ok: true, transferred: r.transferred, skipped: r.skipped });
+  return Response.json({ ok: true, transferred: r.transferred, skipped: r.skipped, creditsTransferred: r.creditsTransferred, creditsSkipped: r.creditsSkipped });
 });

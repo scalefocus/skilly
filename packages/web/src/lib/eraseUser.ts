@@ -26,12 +26,13 @@ export async function searchUsers(q: string, limit = 10): Promise<UserSearchResu
 }
 
 export type EraseResult =
-  | { ok: true; transferred: number; skipped: { ns: string; slug: string }[] }
+  | { ok: true; transferred: number; skipped: { ns: string; slug: string }[]; creditsTransferred: number; creditsSkipped: number }
   | { ok: false; status: number; error: string };
 
 /**
- * Erase a user: optionally transfer their explicit maintainerships to `transferTo`, delete their
- * personal data, then scrub + detach the row. One transaction. SKILLY_SPEC.md §4.
+ * Erase a user: optionally transfer their explicit maintainerships + leaderboard install credits
+ * to `transferTo`, delete their personal data, then scrub + detach the row. One transaction.
+ * SKILLY_SPEC.md §4.
  */
 export async function eraseUser(actorUserId: string, targetUserId: string, transferTo: string | null): Promise<EraseResult> {
   if (targetUserId === actorUserId) return { ok: false, status: 422, error: "you can’t delete your own account" };
@@ -81,8 +82,35 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
       }
     }
 
+    // Leaderboard credit transfer (SKILLY_SPEC.md §4/§21): with a transfer target, the erased
+    // user's install_credits are reassigned to the target instead of deleted, retaining their
+    // board standing under the successor. Two exceptions stay behind for the delete sweep below:
+    // would-be self-credits (the install was performed by the target — no-self-credit holds even
+    // through transfer) and duplicates (the target already holds credit for the same install).
+    // Deliberately independent of the maintainer-transfer eligibility check above — credits carry
+    // no skill identity on the board, so restricted skills' credits move too.
+    let creditsTransferred = 0;
+    let creditsSkipped = 0;
+    if (transferTo) {
+      const moved = await client.query(
+        `update install_credits ic
+            set user_id = $2
+          where ic.user_id = $1
+            and not exists (select 1 from access_log al
+                             where al.id = ic.access_log_id and al.actor_user_id = $2)
+            and not exists (select 1 from install_credits dup
+                             where dup.access_log_id = ic.access_log_id and dup.user_id = $2)`,
+        [targetUserId, transferTo],
+      );
+      creditsTransferred = moved.rowCount ?? 0;
+      creditsSkipped = Number((await client.query<{ n: string }>(
+        `select count(*)::text as n from install_credits where user_id = $1`, [targetUserId],
+      )).rows[0]!.n);
+    }
+
     // Delete the user's personal data (group memberships also strip implicit admin/maintainer
-    // status). install_credits goes too: the user's leaderboard attribution is erased (credits-only
+    // status). install_credits goes too — by now only the untransferred remainder (everything,
+    // with no transfer target): the user's leaderboard attribution is erased (credits-only
     // — the shared access_log clone events / install_count / co-maintainers' credit are untouched;
     // the install still counts for everyone else). SKILLY_SPEC.md §21/§4.
     for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens"]) {
@@ -106,14 +134,15 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
       action: "user.erased",
       targetType: "user",
       targetId: targetUserId,
-      after: { transferredTo: transferTo, skillsTransferred: transferred, skillsSkipped: skipped.length },
+      after: { transferredTo: transferTo, skillsTransferred: transferred, skillsSkipped: skipped.length, creditsTransferred, creditsSkipped },
     });
 
     await client.query("commit");
-    // Their install_credits are gone + the row is now inactive — drop the cached boards so they
-    // disappear immediately rather than after the TTL (best-effort, this web process only).
+    // Their install_credits are gone (or moved to the transfer target) + the row is now inactive —
+    // drop the cached boards so the change shows immediately rather than after the TTL
+    // (best-effort, this web process only).
     invalidateLeaderboard();
-    return { ok: true, transferred, skipped };
+    return { ok: true, transferred, skipped, creditsTransferred, creditsSkipped };
   } catch (e) {
     await client.query("rollback").catch(() => {});
     return { ok: false, status: 500, error: String((e as Error).message ?? e) };

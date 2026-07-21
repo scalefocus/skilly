@@ -12,7 +12,7 @@
     "lint": "next lint",
     "test": "node --import tsx --test src/lib/csp.test.ts src/middleware.test.ts src/app/api/csp-report/route.test.ts src/lib/pageLabel.test.ts src/lib/presence.test.ts src/lib/pointerRefs.test.ts src/app/site-metadata.test.ts src/lib/uploadError.test.ts src/lib/systemLog.test.ts src/lib/chunkMath.test.ts src/lib/chunkedUploads.test.ts",
     "test:unit": "node --import tsx --test src/lib/csp.test.ts src/middleware.test.ts src/app/api/csp-report/route.test.ts src/lib/pageLabel.test.ts src/lib/presence.test.ts src/lib/pointerRefs.test.ts src/app/site-metadata.test.ts src/lib/uploadError.test.ts src/lib/systemLog.test.ts src/lib/chunkMath.test.ts src/lib/chunkedUploads.test.ts",
-    "test:db": "node --import tsx --test src/lib/admin.dbtest.ts src/lib/ratings.dbtest.ts src/lib/maintainers.dbtest.ts src/lib/proposals.dbtest.ts src/lib/usage.dbtest.ts src/lib/catalog.dbtest.ts src/lib/messages.dbtest.ts src/lib/email.dbtest.ts src/lib/leaderboard.dbtest.ts src/lib/featured.dbtest.ts src/lib/settings.dbtest.ts src/lib/presence.dbtest.ts src/lib/requests.dbtest.ts src/lib/chunkedUploads.dbtest.ts",
+    "test:db": "node --import tsx --test src/lib/admin.dbtest.ts src/lib/ratings.dbtest.ts src/lib/maintainers.dbtest.ts src/lib/proposals.dbtest.ts src/lib/usage.dbtest.ts src/lib/catalog.dbtest.ts src/lib/messages.dbtest.ts src/lib/email.dbtest.ts src/lib/leaderboard.dbtest.ts src/lib/featured.dbtest.ts src/lib/settings.dbtest.ts src/lib/presence.dbtest.ts src/lib/requests.dbtest.ts src/lib/chunkedUploads.dbtest.ts src/lib/eraseUser.dbtest.ts",
     "e2e": "playwright test -c e2e/playwright.config.ts"
   },
   "dependencies": {

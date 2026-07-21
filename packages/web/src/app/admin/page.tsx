@@ -1157,6 +1157,7 @@ function DeleteUserInfo({ open, onToggle }: { open: boolean; onToggle: () => voi
       const parts = [`Deleted ${target.displayName}.`];
       if (j.transferred) parts.push(`Transferred ${j.transferred} skill${j.transferred === 1 ? "" : "s"}${replacement ? ` to ${replacement.displayName}` : ""}.`);
       if (skip) parts.push(`${skip} restricted skill${skip === 1 ? "" : "s"} couldn't be transferred (target lacks access).`);
+      if (j.creditsTransferred) parts.push(`Moved ${j.creditsTransferred} leaderboard install credit${j.creditsTransferred === 1 ? "" : "s"}.`);
       setMsg({ kind: "ok", text: parts.join(" ") });
       setTarget(null); setReplacement(null); setConfirming(false); setConfirmText("");
     } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusy(false); }
@@ -1167,7 +1168,7 @@ function DeleteUserInfo({ open, onToggle }: { open: boolean; onToggle: () => voi
   return (
     <CollapsibleCard cardId="deleteuser" title="Delete User Info" open={open} onToggle={onToggle}>
       <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
-        Permanently erase a user’s personal info (GDPR). Their <strong>skills are kept</strong>; they’re removed as a maintainer, and their messages &amp; review comments become “Deleted User”. Optionally transfer the skills they maintain to another user. This can’t be undone — but the person can return later as a new account.
+        Permanently erase a user’s personal info (GDPR). Their <strong>skills are kept</strong>; they’re removed as a maintainer, and their messages &amp; review comments become “Deleted User”. Optionally transfer the skills they maintain — and their leaderboard install credits — to another user. This can’t be undone — but the person can return later as a new account.
       </p>
       <div className="delete-user-form">
         <div style={{ flex: 1, minWidth: 240 }}>
@@ -1185,7 +1186,7 @@ function DeleteUserInfo({ open, onToggle }: { open: boolean; onToggle: () => voi
         <div className="card card-pad" style={{ marginTop: 14, background: "var(--surface-2)", border: "1px solid var(--danger)" }}>
           <p style={{ fontSize: 13.5, marginBottom: 10 }}>
             This permanently erases <strong>{target.displayName}</strong>’s info — PII deleted, removed as a maintainer, and their messages &amp; review comments will show “{target.email ? `${target.email} - Deleted` : "Deleted User"}”. Their skills stay.{" "}
-            {replacement ? <>Skills they maintain transfer to <strong>{replacement.displayName}</strong> (where it has access).</> : "Skills they maintain become unassigned."}{" "}
+            {replacement ? <>Skills they maintain transfer to <strong>{replacement.displayName}</strong> (where it has access), and their leaderboard install credits move to them (their board standing is retained).</> : "Skills they maintain become unassigned, and their leaderboard stats are removed."}{" "}
             <strong>This can’t be undone.</strong>
           </p>
           <label style={label}>Type <span className="mono" style={{ textTransform: "none", letterSpacing: 0 }}>{target.displayName}</span> to confirm</label>
