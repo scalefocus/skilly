@@ -30,6 +30,7 @@ import {
   type ProposalState,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
+import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
 import { findDuplicateSkill, type DuplicateMatch } from "./duplicate";
 import { fulfilOriginRequest } from "./requests";
@@ -359,14 +360,16 @@ async function notifyProposalCreated(
 }
 
 /**
- * Fan out a "needs review" notification to every reviewer of a namespace — platform admins
- * anywhere + that namespace's admins + the bootstrap admin group — excluding the submitter.
- * Used on first submission AND on proposer resubmit (so a resubmitted proposal doesn't
- * silently re-enter the queue). SKILLY_SPEC.md §8/§12.
+ * Fan out a notification to every reviewer of a namespace — platform admins anywhere + that
+ * namespace's admins + the bootstrap admin group — excluding the submitter. `type` defaults to
+ * "needs review": used on first submission AND on proposer resubmit (so a resubmitted proposal
+ * doesn't silently re-enter the queue); a proposer mid-review `revise` fans out as
+ * `proposal.revise` so edits are always visible to reviewers. SKILLY_SPEC.md §8/§12.
  */
 async function notifyReviewersNeedsReview(
   client: PoolClient,
   input: { proposalId: string; namespaceId: string; submitterId: string; skillSlug: string; semver: string },
+  type: "proposal.needs_review" | "proposal.revise" = "proposal.needs_review",
 ): Promise<void> {
   const bootstrap = process.env.SKILLY_BOOTSTRAP_ADMIN_GROUP?.trim() || null;
   await client.query(
@@ -385,8 +388,8 @@ async function notifyReviewersNeedsReview(
         where u.status = 'active' and $4::text is not null and g.entra_object_id = $4
      )
      insert into notifications (user_id, type, payload)
-     select id, 'proposal.needs_review', $2::jsonb from reviewers where id <> $3`,
-    [input.namespaceId, JSON.stringify({ proposalId: input.proposalId, skillSlug: input.skillSlug, semver: input.semver }), input.submitterId, bootstrap],
+     select id, $5, $2::jsonb from reviewers where id <> $3`,
+    [input.namespaceId, JSON.stringify({ proposalId: input.proposalId, skillSlug: input.skillSlug, semver: input.semver }), input.submitterId, bootstrap, type],
   );
 }
 
@@ -468,10 +471,16 @@ export interface ActionInput {
   access: EffectiveAccess;
   /** decision reason (reject) or change request note */
   note?: string | null;
-  /** new revision payload (resubmit, or reviewer edit before accept) */
+  /** new revision payload (resubmit, proposer mid-review revise, or reviewer edit before accept) */
   newPayload?: RevisionPayload;
-  /** updated proposed semver (proposer resubmit only — §8); validated strictly-increasing at accept. */
+  /** updated proposed semver (proposer resubmit only — §8; a revise never changes it); validated strictly-increasing at accept. */
   newSemver?: string | null;
+  /**
+   * Revision-pinned accept (§8 anti-swap): the revision number the reviewer inspected. REQUIRED
+   * on accept; if the proposal has since gained a newer revision (a proposer `revise` landed
+   * mid-review), the accept fails with 409 and the reviewer re-reviews the current revision.
+   */
+  expectedRevisionNo?: number | null;
   /** explicit reviewer override required to accept over high/critical scan findings (§9) */
   override?: boolean;
   overrideReason?: string | null;
@@ -499,8 +508,69 @@ async function loadArtifactScan(
   return rows[0] ?? null;
 }
 
-export async function performProposalAction(pool: Pool, input: ActionInput): Promise<ActionResult> {
+/** Field-wise pointer equality (url/ref/subdir), null-tolerant. */
+function samePointer(
+  a: { url: string; ref: string; subdir?: string | null } | null | undefined,
+  b: { url: string; ref: string; subdir?: string | null } | null | undefined,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return a.url === b.url && a.ref === b.ref && (a.subdir ?? null) === (b.subdir ?? null);
+}
+
+/**
+ * §8 revise no-op guard: true when the new payload changes NOTHING vs the previous revision —
+ * no metadata field, no files (artifact / pointer / reuse snapshot). Unlike the reuse guard
+ * (which compares against the SKILL's live state), this compares revision-to-revision, so a
+ * revise that merely re-sends the current revision is rejected instead of spamming the history.
+ */
+function payloadUnchanged(prev: RevisionPayload, next: RevisionPayload): boolean {
+  const a = prev.metadata;
+  const b = next.metadata;
+  const eqText = (x?: string | null, y?: string | null) => ((x ?? "").trim() || null) === ((y ?? "").trim() || null);
+  return (
+    eqText(a.title, b.title) &&
+    eqText(a.description, b.description) &&
+    eqText(a.toolHarness, b.toolHarness) &&
+    a.visibility === b.visibility &&
+    sameSet(normSet(a.categories, true), normSet(b.categories, true)) &&
+    sameSet(normSet(a.tags), normSet(b.tags)) &&
+    eqText(a.usageExamples, b.usageExamples) &&
+    (prev.artifactObjectKey ?? null) === (next.artifactObjectKey ?? null) &&
+    samePointer(prev.pointer, next.pointer) &&
+    (prev.reuse?.fromVersionId ?? null) === (next.reuse?.fromVersionId ?? null)
+  );
+}
+
+/**
+ * §8 revise file-freeze gate (pure): on a mid-review revise of a POINTER proposal — a fresh
+ * pointer source or a pointer Keep-current-files reuse — the files are fully frozen: url/ref/
+ * subdir, the staged artifact, and the reuse snapshot are all untouchable until the reviewer
+ * requests changes and the proposer resubmits. Returns the rejection message, or null when the
+ * revise is acceptable. Hosted proposals pass (their bundle may be replaced mid-review).
+ */
+export function reviseFileFreezeError(
+  prev: RevisionPayload,
+  next: RevisionPayload,
+  reuseCurrentFiles: boolean,
+): string | null {
+  const isPointerProposal = !!prev.pointer || !!prev.reuse?.external;
+  if (!isPointerProposal) return null;
+  const ptrChanged = !samePointer(prev.pointer, next.pointer);
+  const keyChanged = (next.artifactObjectKey ?? null) !== (prev.artifactObjectKey ?? null);
+  if (ptrChanged || keyChanged || reuseCurrentFiles) {
+    return "this is a pointer proposal — its files can’t change while it’s in review; ask the reviewer to request changes, then resubmit with the new source";
+  }
+  return null;
+}
+
+export async function performProposalAction(
+  pool: Pool,
+  input: ActionInput,
+  store: ArtifactStore = s3ArtifactStore(),
+): Promise<ActionResult> {
   const client = await pool.connect();
+  // Staged upload superseded by a revise (§8) — deleted from storage AFTER commit (eager cleanup).
+  let supersededKey: string | null = null;
   try {
     await client.query("begin");
     const p = await loadProposal(client, input.proposalId);
@@ -519,13 +589,56 @@ export async function performProposalAction(pool: Pool, input: ActionInput): Pro
       return { ok: false, status: 403, error: decision.reason };
     }
 
-    // Optionally append a new revision (resubmit / reviewer edit).
+    // Revision-pinned accept (§8 anti-swap): checked BEFORE any reviewer-edit revision is
+    // appended, so the pin refers to what the reviewer actually inspected. A proposer revise
+    // that landed since bounces the accept with 409 — never publish bytes nobody reviewed.
+    if (input.action === "accept") {
+      const { rows: mx } = await client.query<{ max: number | null }>(
+        `select max(revision_no)::int as max from proposal_revisions where proposal_id = $1`,
+        [input.proposalId],
+      );
+      const currentRev = mx[0]?.max ?? 0;
+      if (input.expectedRevisionNo == null) {
+        await client.query("rollback");
+        return { ok: false, status: 422, error: "accept requires the reviewed revision number (revisionNo)" };
+      }
+      if (input.expectedRevisionNo !== currentRev) {
+        await client.query("rollback");
+        return { ok: false, status: 409, error: "the proposal changed since you reviewed it — a newer revision exists; review the current revision and accept again" };
+      }
+    }
+
+    // Proposer mid-review revise (§8): a new revision in place, no state change. The payload is
+    // mandatory, and must actually change something vs the current revision (no-op guard).
+    if (input.action === "revise") {
+      if (!input.newPayload) {
+        await client.query("rollback");
+        return { ok: false, status: 422, error: "revise requires the updated proposal payload" };
+      }
+      const prev = await latestPayload(client, input.proposalId);
+      if (payloadUnchanged(prev, input.newPayload)) {
+        await client.query("rollback");
+        return { ok: false, status: 422, error: "nothing changed — edit at least one field or replace the bundle" };
+      }
+      // Eager cleanup of a replaced staged bundle (§8): only a PROPOSAL-STAGED upload — never a
+      // reuse snapshot (that key belongs to a published version) — and double-checked after
+      // commit against live skill_versions before the object is actually deleted.
+      const prevKey = prev.artifactObjectKey ?? null;
+      if (prevKey && prevKey !== (input.newPayload.artifactObjectKey ?? null) && !prev.reuse && prevKey.startsWith("uploads/")) {
+        supersededKey = prevKey;
+      }
+    }
+
+    // Optionally append a new revision (resubmit / revise / reviewer edit).
+    let newRevisionNo: number | null = null;
     if (input.newPayload) {
-      await client.query(
+      const { rows: revIns } = await client.query<{ revision_no: number }>(
         `insert into proposal_revisions (proposal_id, revision_no, payload, author, note)
-         select $1, coalesce(max(revision_no),0)+1, $2::jsonb, $3, $4 from proposal_revisions where proposal_id = $1`,
+         select $1, coalesce(max(revision_no),0)+1, $2::jsonb, $3, $4 from proposal_revisions where proposal_id = $1
+         returning revision_no`,
         [input.proposalId, JSON.stringify(input.newPayload), input.actorUserId, input.note ?? null],
       );
+      newRevisionNo = revIns[0]?.revision_no ?? null;
     }
 
     let materializedVersionId: string | undefined;
@@ -575,7 +688,9 @@ export async function performProposalAction(pool: Pool, input: ActionInput): Pro
       }
     }
 
-    // Proposer resubmit may also revise the proposed semver (§8); only honored on resubmit.
+    // Proposer resubmit may also revise the proposed semver (§8); only honored on resubmit —
+    // a mid-review `revise` never changes the version. A revise note documents the revision
+    // (stored on the revision row above), never the decision_reason.
     const newSemver = input.action === "resubmit" ? input.newSemver ?? null : null;
     await client.query(
       `update proposals
@@ -585,7 +700,7 @@ export async function performProposalAction(pool: Pool, input: ActionInput): Pro
               proposed_semver = coalesce($5, proposed_semver),
               updated_at = now()
         where id = $1`,
-      [input.proposalId, decision.to, input.note ?? null, materializedVersionId ?? null, newSemver],
+      [input.proposalId, decision.to, input.action === "revise" ? null : input.note ?? null, materializedVersionId ?? null, newSemver],
     );
 
     await appendAudit(client, {
@@ -595,30 +710,68 @@ export async function performProposalAction(pool: Pool, input: ActionInput): Pro
       targetId: input.proposalId,
       namespaceId: p.target_namespace_id,
       before: { state: p.state },
-      after: { state: decision.to, materializedVersionId },
+      after: {
+        state: decision.to,
+        materializedVersionId,
+        ...(newRevisionNo != null ? { revisionNo: newRevisionNo } : {}),
+        // §8 revise: record whether the bundle was replaced (the field diff lives in the
+        // attributed revision history; the audit row pins the artifact change).
+        ...(input.action === "revise"
+          ? { artifactChanged: supersededKey != null, supersededArtifactKey: supersededKey }
+          : {}),
+      },
     });
 
-    // Notify the submitter of the outcome.
-    await client.query(
-      `insert into notifications (user_id, type, payload)
-       values ($1, $2, $3::jsonb)`,
-      [p.submitted_by, `proposal.${input.action}`, JSON.stringify({ proposalId: input.proposalId, state: decision.to, note: input.note ?? null })],
-    );
-
-    // On resubmit, alert the namespace's reviewers that it's back and needs another look (§8) —
-    // the submitter outcome notification above only reaches the proposer.
-    if (input.action === "resubmit") {
+    if (input.action === "revise") {
+      // Reviewers are notified on EVERY revise (§8/§12) — edits can be impactful and must be
+      // visible; the proposer needs no self-notification for their own edit.
       const pl = await latestPayload(client, input.proposalId);
       await notifyReviewersNeedsReview(client, {
         proposalId: input.proposalId,
         namespaceId: p.target_namespace_id,
         submitterId: p.submitted_by,
         skillSlug: pl.metadata.skillSlug,
-        semver: newSemver ?? p.proposed_semver,
-      });
+        semver: p.proposed_semver,
+      }, "proposal.revise");
+    } else {
+      // Notify the submitter of the outcome.
+      await client.query(
+        `insert into notifications (user_id, type, payload)
+         values ($1, $2, $3::jsonb)`,
+        [p.submitted_by, `proposal.${input.action}`, JSON.stringify({ proposalId: input.proposalId, state: decision.to, note: input.note ?? null })],
+      );
+
+      // On resubmit, alert the namespace's reviewers that it's back and needs another look (§8) —
+      // the submitter outcome notification above only reaches the proposer.
+      if (input.action === "resubmit") {
+        const pl = await latestPayload(client, input.proposalId);
+        await notifyReviewersNeedsReview(client, {
+          proposalId: input.proposalId,
+          namespaceId: p.target_namespace_id,
+          submitterId: p.submitted_by,
+          skillSlug: pl.metadata.skillSlug,
+          semver: newSemver ?? p.proposed_semver,
+        });
+      }
     }
 
     await client.query("commit");
+
+    // Eager superseded-staged-artifact cleanup (§8 revise) — AFTER commit so a storage hiccup
+    // never fails the revise. Belt-and-braces: skip if any live version references the key
+    // (staged uploads are proposal-only by construction, but a delete is forever).
+    if (supersededKey) {
+      try {
+        const { rowCount } = await pool.query(`select 1 from skill_versions where artifact_object_key = $1`, [supersededKey]);
+        if (!rowCount) {
+          await store.delete(supersededKey);
+          await pool.query(`delete from scan_reports where subject_type = 'artifact' and subject_id = $1`, [supersededKey]);
+        }
+      } catch {
+        // Non-fatal: a stale staged object lingers unreferenced; the revise itself succeeded.
+      }
+    }
+
     M.proposalActions.inc({ action: input.action });
     return { ok: true, state: decision.to, materializedVersionId };
   } catch (e) {

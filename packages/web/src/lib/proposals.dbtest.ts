@@ -10,7 +10,12 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { PoolClient } from "pg";
-import { materializeVersion, resolveReuseSource, verifySubmissionPayload, applyReuseToPayload } from "./proposals";
+import type { EffectiveAccess } from "@skilly/shared";
+import {
+  materializeVersion, resolveReuseSource, verifySubmissionPayload, applyReuseToPayload,
+  createProposal, performProposalAction, reviseFileFreezeError, type RevisionPayload,
+} from "./proposals";
+import type { ArtifactStore } from "./objectStore";
 import { pool } from "./db";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
@@ -429,6 +434,257 @@ test("keep current files: no stable version → reuse unavailable (§8)", { skip
   } finally {
     client.release();
   }
+});
+
+// ── §8 proposer mid-review `revise` + revision-pinned accept ─────────────────────────────────────
+// These flows commit (performProposalAction manages its own transaction), so they clean up
+// manually in `finally` — audit_log rows stay (append-only, invariant #5).
+
+const noAccess: EffectiveAccess = { isPlatformAdmin: false, namespaceRoles: new Map() };
+const platformAdmin: EffectiveAccess = { isPlatformAdmin: true, namespaceRoles: new Map() };
+
+/** Cleanup helper: delete a committed skill (versions cascade) under the 0022 delete carve-out —
+ *  the immutability trigger forbids version deletes unless `skilly.allow_version_delete` is set. */
+async function deleteSkillRows(skillId: string): Promise<void> {
+  const c = await pool.connect();
+  try {
+    await c.query("begin");
+    await c.query("set local skilly.allow_version_delete = 'on'");
+    await c.query(`delete from skills where id = $1`, [skillId]);
+    await c.query("commit");
+  } catch (e) {
+    await c.query("rollback");
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
+/** ArtifactStore stub recording deletes; get/put/list are never expected in these flows. */
+function fakeStore(deleted: string[]): ArtifactStore {
+  return {
+    get: async () => { throw new Error("unexpected get"); },
+    put: async () => { throw new Error("unexpected put"); },
+    delete: async (key) => { deleted.push(key); },
+    list: async () => [],
+  };
+}
+
+function mkPayload(userId: string, key: string, over: Partial<RevisionPayload["metadata"]> = {}): RevisionPayload {
+  return {
+    metadata: {
+      skillSlug: "revise-skill", title: "Revise Skill", description: "d", toolHarness: "claude-code",
+      visibility: "org", categories: [], tags: [], usageExamples: null, ...over,
+    },
+    artifactObjectKey: key.startsWith("uploads/") ? key : `uploads/${userId}/${key}`,
+    artifactSha256: "sha-" + key,
+  };
+}
+
+test("revise: in-place revision, no state change, reviewers notified, staged bundle deleted eagerly (§8)", { skip: !enabled }, async () => {
+  const ns = (await pool.query<{ id: string }>(
+    `insert into namespaces (slug, display_name, require_review) values ('revise-ns','Revise NS', true)
+     on conflict (slug) do update set display_name = excluded.display_name returning id`,
+  )).rows[0]!.id;
+  const submitter = (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ('revise-sub','revise-sub@org','Sub')
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+  )).rows[0]!.id;
+  const reviewer = (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ('revise-rev','revise-rev@org','Rev')
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+  )).rows[0]!.id;
+  const group = (await pool.query<{ id: string }>(
+    `insert into groups (entra_object_id, display_name) values ('revise-admin-grp','Revise Admins')
+     on conflict (entra_object_id) do update set display_name = excluded.display_name returning id`,
+  )).rows[0]!.id;
+  await pool.query(`insert into role_mappings (group_id, namespace_id, role) values ($1,$2,'namespace_admin') on conflict do nothing`, [group, ns]);
+  await pool.query(`insert into group_memberships (group_id, user_id) values ($1,$2) on conflict do nothing`, [group, reviewer]);
+
+  const keyA = `uploads/${submitter}/revise-a.bundle`;
+  const keyB = `uploads/${submitter}/revise-b.bundle`;
+  const keyC = `uploads/${submitter}/revise-c.bundle`;
+  const { id: proposalId } = await createProposal(pool, {
+    submittedByUserId: submitter,
+    targetNamespaceId: ns,
+    proposedSemver: "1.0.0",
+    payload: mkPayload(submitter, keyA),
+  });
+  // Scan report keyed to the staged object — must be cleaned when the object is superseded.
+  await pool.query(
+    `insert into scan_reports (subject_type, subject_id, scanner, status) values ('artifact', $1, 'test', 'ok')`,
+    [keyA],
+  );
+
+  const deleted: string[] = [];
+  const store = fakeStore(deleted);
+  let liveVersionSkillId: string | null = null;
+  try {
+    // No-op guard: an identical payload is rejected, no revision appended.
+    const noop = await performProposalAction(pool, {
+      proposalId, action: "revise", actorUserId: submitter, access: noAccess,
+      newPayload: mkPayload(submitter, keyA),
+    }, store);
+    assert.equal(noop.ok, false, "no-op revise rejected");
+    assert.equal((noop as { status: number }).status, 422);
+
+    // A real revise: new title + replacement bundle. State stays `proposed`.
+    const r = await performProposalAction(pool, {
+      proposalId, action: "revise", actorUserId: submitter, access: noAccess,
+      newPayload: mkPayload(submitter, keyB, { title: "Revise Skill v2" }),
+      note: "swapped the bundle",
+    }, store);
+    assert.deepEqual(r, { ok: true, state: "proposed", materializedVersionId: undefined }, "in place — no state change");
+
+    const revs = (await pool.query<{ revision_no: number; author: string; note: string | null }>(
+      `select revision_no, author, note from proposal_revisions where proposal_id = $1 order by revision_no`,
+      [proposalId],
+    )).rows;
+    assert.equal(revs.length, 2, "one new revision appended");
+    assert.equal(revs[1]!.author, submitter, "revision attributed to the proposer");
+    assert.equal(revs[1]!.note, "swapped the bundle");
+
+    // Eager cleanup: the superseded STAGED object + its scan rows are gone.
+    assert.deepEqual(deleted, [keyA], "superseded staged bundle deleted from storage");
+    const scanRows = (await pool.query(`select 1 from scan_reports where subject_type = 'artifact' and subject_id = $1`, [keyA])).rowCount;
+    assert.equal(scanRows, 0, "object-keyed scan rows cleaned with the object");
+
+    // Reviewers notified with proposal.revise; the proposer gets NO self-notification.
+    const revNotif = (await pool.query(`select 1 from notifications where user_id = $1 and type = 'proposal.revise'`, [reviewer])).rowCount;
+    assert.equal(revNotif, 1, "reviewer notified on revise (§12)");
+    const subNotif = (await pool.query(`select 1 from notifications where user_id = $1 and type = 'proposal.revise'`, [submitter])).rowCount;
+    assert.equal(subNotif, 0, "no self-notification for the proposer");
+
+    // Audited with the new revision number + the artifact change.
+    const audit = (await pool.query<{ after: { revisionNo: number; artifactChanged: boolean } }>(
+      `select after from audit_log where action = 'proposal.revise' and target_id = $1 order by created_at desc limit 1`,
+      [proposalId],
+    )).rows[0];
+    assert.ok(audit, "proposal.revise audited");
+    assert.equal(audit!.after.revisionNo, 2);
+    assert.equal(audit!.after.artifactChanged, true);
+
+    // Belt-and-braces: an object referenced by a LIVE version is never deleted, even when a
+    // revise supersedes it in the proposal.
+    liveVersionSkillId = (await pool.query<{ id: string }>(
+      `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility)
+       values ($1, 'revise-live', 'Live', 'd', 'generic', 'hosted', 'org') returning id`,
+      [ns],
+    )).rows[0]!.id;
+    await pool.query(
+      `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by)
+       values ($1, '1.0.0', false, 'active', $2, 'x', $3)`,
+      [liveVersionSkillId, keyB, submitter],
+    );
+    const r2 = await performProposalAction(pool, {
+      proposalId, action: "revise", actorUserId: submitter, access: noAccess,
+      newPayload: mkPayload(submitter, keyC, { title: "Revise Skill v3" }),
+    }, store);
+    assert.equal(r2.ok, true);
+    assert.deepEqual(deleted, [keyA], "an object referenced by a live version is NOT deleted");
+
+    // Only the submitter may revise, and only pre-decision.
+    const denied = await performProposalAction(pool, {
+      proposalId, action: "revise", actorUserId: reviewer, access: platformAdmin,
+      newPayload: mkPayload(submitter, keyC, { title: "hijack" }),
+    }, store);
+    assert.equal(denied.ok, false, "non-submitter cannot revise");
+    assert.equal((denied as { status: number }).status, 403);
+    await pool.query(`update proposals set state = 'changes_requested' where id = $1`, [proposalId]);
+    const wrongState = await performProposalAction(pool, {
+      proposalId, action: "revise", actorUserId: submitter, access: noAccess,
+      newPayload: mkPayload(submitter, keyC, { title: "nope" }),
+    }, store);
+    assert.equal(wrongState.ok, false, "revise is not available in changes_requested — that's resubmit");
+  } finally {
+    await pool.query(`delete from notifications where user_id = any($1::uuid[])`, [[submitter, reviewer]]);
+    await pool.query(`delete from proposals where id = $1`, [proposalId]);
+    await pool.query(`delete from scan_reports where subject_type = 'artifact' and subject_id = any($1::text[])`, [[keyA, keyB, keyC]]);
+    if (liveVersionSkillId) await deleteSkillRows(liveVersionSkillId);
+    await pool.query(`delete from group_memberships where group_id = $1`, [group]);
+    await pool.query(`delete from role_mappings where group_id = $1`, [group]);
+    await pool.query(`delete from groups where id = $1`, [group]);
+  }
+});
+
+test("revision-pinned accept: stale revisionNo → 409, missing → 422, current accepts (§8)", { skip: !enabled }, async () => {
+  const ns = (await pool.query<{ id: string }>(
+    `insert into namespaces (slug, display_name, require_review) values ('pin-ns','Pin NS', true)
+     on conflict (slug) do update set display_name = excluded.display_name returning id`,
+  )).rows[0]!.id;
+  const submitter = (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ('pin-sub','pin-sub@org','Sub')
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+  )).rows[0]!.id;
+  const reviewer = (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ('pin-rev','pin-rev@org','Rev')
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+  )).rows[0]!.id;
+
+  const payload = { ...mkPayload(submitter, `uploads/${submitter}/pin-a.bundle`), metadata: { skillSlug: "pin-skill", title: "Pin Skill", description: "d", toolHarness: "claude-code", visibility: "org" as const } };
+  const { id: proposalId } = await createProposal(pool, {
+    submittedByUserId: submitter, targetNamespaceId: ns, proposedSemver: "1.0.0", payload,
+  });
+
+  const deleted: string[] = [];
+  const store = fakeStore(deleted);
+  let skillId: string | null = null;
+  try {
+    const started = await performProposalAction(pool, { proposalId, action: "start_review", actorUserId: reviewer, access: platformAdmin }, store);
+    assert.equal(started.ok, true);
+
+    // The proposer revises mid-review → revision 2; the reviewer's stale pin must bounce.
+    const revised = await performProposalAction(pool, {
+      proposalId, action: "revise", actorUserId: submitter, access: noAccess,
+      newPayload: { ...payload, metadata: { ...payload.metadata, title: "Pin Skill EDITED" } },
+    }, store);
+    assert.equal(revised.ok, true);
+    assert.equal((revised as { state: string }).state, "under_review", "revise keeps under_review");
+
+    const stale = await performProposalAction(pool, {
+      proposalId, action: "accept", actorUserId: reviewer, access: platformAdmin, expectedRevisionNo: 1,
+    }, store);
+    assert.equal(stale.ok, false, "stale pin bounces");
+    assert.equal((stale as { status: number }).status, 409);
+
+    const unpinned = await performProposalAction(pool, {
+      proposalId, action: "accept", actorUserId: reviewer, access: platformAdmin,
+    }, store);
+    assert.equal(unpinned.ok, false, "accept without a pin is rejected");
+    assert.equal((unpinned as { status: number }).status, 422);
+
+    const accepted = await performProposalAction(pool, {
+      proposalId, action: "accept", actorUserId: reviewer, access: platformAdmin, expectedRevisionNo: 2,
+    }, store);
+    assert.equal(accepted.ok, true, "current pin accepts");
+    const versionId = (accepted as { materializedVersionId?: string }).materializedVersionId;
+    assert.ok(versionId, "version materialized");
+    const row = (await pool.query<{ skill_id: string; semver: string }>(`select skill_id, semver from skill_versions where id = $1`, [versionId])).rows[0]!;
+    skillId = row.skill_id;
+    assert.equal(row.semver, "1.0.0");
+    const title = (await pool.query<{ title: string }>(`select title from skills where id = $1`, [skillId])).rows[0]!.title;
+    assert.equal(title, "Pin Skill EDITED", "the REVISED metadata is what got published");
+  } finally {
+    await pool.query(`delete from notifications where user_id = any($1::uuid[])`, [[submitter, reviewer]]);
+    await pool.query(`delete from proposals where id = $1`, [proposalId]);
+    if (skillId) await deleteSkillRows(skillId);
+  }
+});
+
+test("reviseFileFreezeError: pointer files frozen mid-review, hosted bundle replace allowed (§8)", { skip: !enabled }, () => {
+  const meta = { skillSlug: "s", title: "t", description: "d", toolHarness: "generic", visibility: "org" as const };
+  const ptr = { url: "https://github.com/org/repo.git", ref: "v1", subdir: null };
+
+  // Hosted: replacing the bundle passes.
+  assert.equal(reviseFileFreezeError({ metadata: meta, artifactObjectKey: "uploads/u/a" }, { metadata: meta, artifactObjectKey: "uploads/u/b" }, false), null);
+  // Pointer: url/ref/subdir untouchable; unchanged pointer + metadata-only edit passes.
+  assert.equal(reviseFileFreezeError({ metadata: meta, pointer: ptr }, { metadata: { ...meta, title: "new" }, pointer: ptr }, false), null);
+  assert.match(reviseFileFreezeError({ metadata: meta, pointer: ptr }, { metadata: meta, pointer: { ...ptr, ref: "v2" } }, false) ?? "", /pointer proposal/);
+  // Pointer reuse: the snapshot is frozen too — a reuse re-resolve or artifact swap is rejected.
+  const reusePayload: RevisionPayload = { metadata: meta, artifactObjectKey: "mirrors/s/1.tgz", reuse: { fromVersionId: "v", fromSemver: "1.0.0", external: { url: ptr.url, ref: "v1", subdir: null } } };
+  assert.equal(reviseFileFreezeError(reusePayload, reusePayload, false), null, "metadata-only revise on a pointer reuse passes");
+  assert.match(reviseFileFreezeError(reusePayload, reusePayload, true) ?? "", /pointer proposal/, "re-snapshot rejected");
+  assert.match(reviseFileFreezeError(reusePayload, { ...reusePayload, artifactObjectKey: "uploads/u/x" }, false) ?? "", /pointer proposal/);
 });
 
 test("tool/harness carve-out: unchanged legacy value passes, changed must be closed-list (§8)", { skip: !enabled }, async () => {

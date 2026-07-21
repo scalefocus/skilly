@@ -1,10 +1,10 @@
-// Perform a proposal lifecycle action (start_review/request_changes/resubmit/accept/reject).
+// Perform a proposal lifecycle action (start_review/request_changes/resubmit/revise/accept/reject).
 // Legality + actor permissions enforced by the shared state machine. SKILLY_SPEC.md §8.
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../lib/access";
 import { pool } from "../../../../../lib/db";
-import { performProposalAction, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, type RevisionPayload } from "../../../../../lib/proposals";
+import { performProposalAction, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, reviseFileFreezeError, type RevisionPayload } from "../../../../../lib/proposals";
 import { enforceRateLimit } from "../../../../../lib/ratelimit";
 import { withSystemLog } from "../../../../../lib/apiLog";
 import { findDuplicateSkill } from "../../../../../lib/duplicate";
@@ -18,14 +18,18 @@ interface ActionBody {
   action: ProposalAction;
   note?: string;
   newPayload?: RevisionPayload;
-  /** proposer resubmit: revised proposed semver (§8) */
+  /** proposer resubmit: revised proposed semver (§8; a mid-review `revise` never changes it) */
   newSemver?: string;
   /**
-   * Proposer resubmit only (§8): switch the files to "Keep current files" — the server re-resolves
-   * the snapshot against the THEN-latest stable version (any client-sent artifact/pointer in
-   * `newPayload` is ignored). Honored only on `resubmit` of a new-version proposal.
+   * Proposer resubmit or mid-review revise (§8): switch the files to "Keep current files" — the
+   * server re-resolves the snapshot against the THEN-latest stable version (any client-sent
+   * artifact/pointer in `newPayload` is ignored). New-version proposals only; on `revise`,
+   * hosted proposals only (a pointer proposal's files are frozen mid-review).
    */
   reuseCurrentFiles?: boolean;
+  /** Revision-pinned accept (§8): the revision number the reviewer inspected — required on accept;
+   *  409 when the proposal has since gained a newer revision. */
+  revisionNo?: number;
   /** explicit override to accept over high/critical scan findings (§9) */
   override?: boolean;
   overrideReason?: string;
@@ -49,15 +53,18 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     return Response.json({ error: "the version must be a valid semver (e.g. 1.2.3)" }, { status: 422 });
   }
 
-  // Reviewer edits / resubmits carry a fresh payload — gate it like an original submission
-  // (SSRF allowlist, harness normalization; previously unchecked here). The artifact key
-  // carried forward from the latest revision is pre-approved (it was gated at submission and
-  // the editor may not be its uploader); a NEW key still requires caller ownership + scan.
+  const isRevise = body.action === "revise";
+
+  // Reviewer edits / resubmits / mid-review revises carry a fresh payload — gate it like an
+  // original submission (SSRF allowlist, harness normalization; previously unchecked here). The
+  // artifact key carried forward from the latest revision is pre-approved (it was gated at
+  // submission and the editor may not be its uploader); a NEW key still requires caller
+  // ownership + scan.
   if (body.newPayload) {
     const { rows } = await pool.query<{
-      payload: RevisionPayload; target_skill_id: string | null; ns_slug: string;
+      payload: RevisionPayload; target_skill_id: string | null; ns_slug: string; proposed_semver: string;
     }>(
-      `select pr.payload, p.target_skill_id, n.slug as ns_slug
+      `select pr.payload, p.target_skill_id, n.slug as ns_slug, p.proposed_semver
          from proposal_revisions pr
          join proposals p on p.id = pr.proposal_id
          join namespaces n on n.id = p.target_namespace_id
@@ -67,10 +74,23 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     const prev = rows[0];
     const existingKey = prev?.payload.artifactObjectKey ?? null;
 
-    // Switch to "Keep current files" on resubmit (§8): drop any client-sent files — the server
-    // resolves the snapshot itself after the payload is verified/normalized below.
-    const reuse = body.action === "resubmit" && !!body.reuseCurrentFiles && !!prev?.target_skill_id;
-    if (body.action === "resubmit" && body.reuseCurrentFiles && !prev?.target_skill_id) {
+    // §8 revise locks: the proposed semver never changes mid-review (tolerate an echoed
+    // unchanged value), and a POINTER proposal's files are fully frozen — url/ref/subdir,
+    // the staged artifact, and the reuse snapshot are all untouchable until the reviewer
+    // requests changes and the proposer resubmits.
+    if (isRevise) {
+      if (body.newSemver != null && prev && body.newSemver !== prev.proposed_semver) {
+        return Response.json({ error: "the proposed version can’t change while the proposal is in review — it can only be revised after changes are requested" }, { status: 422 });
+      }
+      const freezeErr = prev ? reviseFileFreezeError(prev.payload, body.newPayload, !!body.reuseCurrentFiles) : null;
+      if (freezeErr) return Response.json({ error: freezeErr }, { status: 422 });
+    }
+
+    // Switch to "Keep current files" on resubmit or (hosted) revise (§8): drop any client-sent
+    // files — the server resolves the snapshot itself after the payload is verified/normalized
+    // below. (A pointer revise never reaches here — rejected above.)
+    const reuse = (body.action === "resubmit" || isRevise) && !!body.reuseCurrentFiles && !!prev?.target_skill_id;
+    if ((body.action === "resubmit" || isRevise) && body.reuseCurrentFiles && !prev?.target_skill_id) {
       return Response.json({ error: "keep-current-files applies only to new-version proposals" }, { status: 422 });
     }
     if (reuse) {
@@ -90,22 +110,22 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
       const r = await resolveReuseSource(pool, prev!.target_skill_id!, body.newPayload.metadata);
       if (!r.ok) return Response.json({ error: r.error }, { status: 422 });
       body.newPayload = applyReuseToPayload(body.newPayload, r.reuse);
-    } else if (body.newPayload.reuse && body.action === "resubmit" && (body.newPayload.artifactObjectKey !== existingKey || body.newPayload.pointer)) {
+    } else if (body.newPayload.reuse && (body.action === "resubmit" || isRevise) && (body.newPayload.artifactObjectKey !== existingKey || body.newPayload.pointer)) {
       // A fresh source replaces a prior reuse snapshot: drop the stale marker.
       body.newPayload = { ...body.newPayload, reuse: undefined };
     }
 
-    // When a resubmit CHANGES the content (new artifact, or new pointer url/ref/subdir), re-run the
-    // same gates the initial submission does (§8): pointer resolves to a real SKILL.md, and the
-    // content doesn't duplicate another visible skill. Unchanged content (reviewer metadata edit)
-    // skips these — the artifact was already gated. Keep-current-files resubmits skip too (the
-    // reused artifact key differs from the previous revision's, but its bytes are already live).
+    // When a resubmit or revise CHANGES the content (new artifact, or new pointer url/ref/subdir),
+    // re-run the same gates the initial submission does (§8): pointer resolves to a real SKILL.md,
+    // and the content doesn't duplicate another visible skill. Unchanged content (reviewer
+    // metadata edit) skips these — the artifact was already gated. Keep-current-files skips too
+    // (the reused artifact key differs from the previous revision's, but its bytes are already live).
     const np = body.newPayload;
     const artifactChanged = !reuse && !!np.artifactObjectKey && np.artifactObjectKey !== existingKey;
     const ptr = np.pointer;
     const prevPtr = prev?.payload.pointer;
     const pointerChanged = !!ptr && (!prevPtr || ptr.url !== prevPtr.url || ptr.ref !== prevPtr.ref || (ptr.subdir ?? null) !== (prevPtr.subdir ?? null));
-    if (body.action === "resubmit" && (artifactChanged || pointerChanged)) {
+    if ((body.action === "resubmit" || isRevise) && (artifactChanged || pointerChanged)) {
       if (pointerChanged && ptr) {
         const v = await verifyPointerSkill(ptr.url, ptr.ref, ptr.subdir);
         if (!v.ok) return Response.json({ error: v.error }, { status: 422 });
@@ -124,6 +144,11 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
       }
     }
   }
+  // Revision-pinned accept (§8): the client must pin the revision it inspected.
+  if (body.action === "accept" && body.revisionNo != null && !Number.isInteger(body.revisionNo)) {
+    return Response.json({ error: "revisionNo must be an integer" }, { status: 422 });
+  }
+
   const result = await performProposalAction(pool, {
     proposalId,
     action: body.action,
@@ -132,6 +157,7 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     note: body.note ?? null,
     newPayload: body.newPayload,
     newSemver: body.newSemver ?? null,
+    expectedRevisionNo: body.action === "accept" ? body.revisionNo ?? null : null,
     override: body.override,
     overrideReason: body.overrideReason ?? null,
   });
