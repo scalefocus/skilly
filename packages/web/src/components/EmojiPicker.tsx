@@ -10,7 +10,10 @@ const EMOJI = [
   "⚠️", "🐛", "🔒", "📦", "📝", "❤️", "💬", "👋",
 ];
 
-export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
+// `align` anchors the popup to the button's left or right edge (default "right"). Use "left" when the
+// button sits at the left of its row (e.g. the discussion composer) so the panel opens rightward and
+// stays on-screen on narrow/mobile viewports instead of overflowing past the left edge.
+export function EmojiPicker({ onPick, align = "right" }: { onPick: (emoji: string) => void; align?: "left" | "right" }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -32,7 +35,7 @@ export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
         🙂
       </button>
       {open && (
-        <div role="menu" style={{ position: "absolute", bottom: "calc(100% + 6px)", right: 0, zIndex: 30, background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow)", padding: 6, display: "grid", gridTemplateColumns: "repeat(8, 30px)", gap: 2, width: "max-content", maxWidth: "calc(100vw - 24px)", boxSizing: "border-box" }}>
+        <div role="menu" style={{ position: "absolute", bottom: "calc(100% + 6px)", ...(align === "left" ? { left: 0 } : { right: 0 }), zIndex: 30, background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow)", padding: 6, display: "grid", gridTemplateColumns: "repeat(8, 30px)", gap: 2, width: "max-content", maxWidth: "calc(100vw - 24px)", boxSizing: "border-box" }}>
           {EMOJI.map((e) => (
             <button
               key={e}
