@@ -212,7 +212,7 @@ export function SkillDiscussion({
                   style={{ width: "100%", boxSizing: "border-box", resize: "vertical", minHeight: 64, padding: "8px 11px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 13.5 }}
                 />
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  <EmojiPicker onPick={insertEmoji} />
+                  <EmojiPicker onPick={insertEmoji} align="left" />
                   {/* Version picker — which version this comment is about. */}
                   {activeVersions.length > 0 && (
                     <div ref={verRef} style={{ position: "relative", display: "inline-flex" }}>

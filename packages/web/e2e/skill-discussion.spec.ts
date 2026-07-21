@@ -49,4 +49,24 @@ test.describe("skill discussion (@global/pdf-tools)", () => {
     await expect(header).toBeVisible({ timeout: 20_000 });
     await expect(header).toHaveAttribute("aria-expanded", "true", { timeout: 10_000 });
   });
+
+  test("emoji picker stays on-screen on a mobile viewport", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await devSignIn(page);
+    await page.goto("/skills/global/pdf-tools#discussion");
+
+    const composer = page.locator("section#discussion");
+    const emojiBtn = composer.getByRole("button", { name: "Insert emoji" });
+    await expect(emojiBtn).toBeVisible({ timeout: 20_000 });
+    await emojiBtn.click();
+
+    // The picker panel (the only open role=menu in the card) must fit within the viewport —
+    // regression guard: it used to anchor right:0 and overflow past the left edge on mobile.
+    const panel = composer.getByRole("menu");
+    await expect(panel).toBeVisible();
+    const box = await panel.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+  });
 });
