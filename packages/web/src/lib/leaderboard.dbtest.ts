@@ -6,7 +6,7 @@
 // tie-breaker path.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getLeaderboard } from "./leaderboard";
+import { getLeaderboard, LEADERBOARD_LIMIT } from "./leaderboard";
 import { pool } from "./db";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
@@ -50,8 +50,9 @@ test("leaderboard: ranks by installs numerically (9 vs 12), not lexicographicall
     await credit(nine, 9);
     await credit(twelve, 12);
 
-    // limit ≠ 100 bypasses the module-level TTL cache — always a fresh query.
-    const board = await getLeaderboard("all", "installs", 200);
+    // bypassCache forces a fresh query past the module-level TTL cache (read our own writes).
+    const board = await getLeaderboard("all", "installs", { bypassCache: true });
+    assert.ok(board.length <= LEADERBOARD_LIMIT, "board never exceeds the top-100 cap (§21)");
     const mine = board.filter((e) => e.userId === nine || e.userId === twelve);
     assert.equal(mine.length, 2, "both seeded users on the board");
     assert.deepEqual(
@@ -66,7 +67,7 @@ test("leaderboard: ranks by installs numerically (9 vs 12), not lexicographicall
 
     // Tie-breaker path: both tie on skillCount (=1), so sort=skills must fall back to
     // installs desc — again 12 before 9.
-    const bySkills = await getLeaderboard("all", "skills", 200);
+    const bySkills = await getLeaderboard("all", "skills", { bypassCache: true });
     const tied = bySkills.filter((e) => e.userId === nine || e.userId === twelve);
     assert.deepEqual(tied.map((e) => e.userId), [twelve, nine], "skills tie broken by installs desc");
 

@@ -41,7 +41,7 @@ async function computeLeaderBadges(): Promise<Record<string, LeaderBadge[]>> {
   const map: Record<string, LeaderBadge[]> = {};
   for (const window of WINDOWS) {
     for (const m of METRICS) {
-      const rows = await getLeaderboard(window, m.sort, 100);
+      const rows = await getLeaderboard(window, m.sort);
       const top = rows.length ? m.value(rows[0]!) : 0;
       if (top <= 0) continue; // nobody has any — no leader for this metric+window
       for (const r of rows) {
