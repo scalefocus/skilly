@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { useApi, EmptyState, Pill, ScrollToTop, formatCount } from "../../components/ui";
+import { useSearchParams } from "next/navigation";
+import { useApi, useEnterKey, EmptyState, Pill, ScrollToTop, formatCount } from "../../components/ui";
 import { agentLabel } from "@skilly/shared/agents";
 import { readPref, writePref, PREF_PLATFORM_RANGE, PREF_SKILL_RANGE } from "../../lib/prefs";
 
@@ -90,7 +91,7 @@ function MetricStrip({ m }: { m: MetricWindows }) {
 }
 
 
-export default function UsagePage() {
+function Usage() {
   // The chosen windows are remembered across visits (SKILLY_SPEC.md §21). The platform-totals
   // window and a single shared per-skill window — the latter lifted here so the last pick is the
   // default for every skill row (this session and the next).
@@ -98,13 +99,12 @@ export default function UsagePage() {
   const pickPlatformRange = (r: Range) => { setRange(r); writePref(PREF_PLATFORM_RANGE, String(r)); };
   const [skillRange, setSkillRange] = useState<SkillRange>(() => toSkillRange(readPref(PREF_SKILL_RANGE, "30d")));
   const pickSkillRange = (r: SkillRange) => { setSkillRange(r); writePref(PREF_SKILL_RANGE, r); };
-  // Server-side search (spans the whole entitled list, not just the rows scrolled into view).
-  const [q, setQ] = useState("");
-  const [qSubmitted, setQSubmitted] = useState("");
-  useEffect(() => {
-    const t = setTimeout(() => setQSubmitted(q.trim()), 350);
-    return () => clearTimeout(t);
-  }, [q]);
+  // Search is driven by the global header box (§10): on /usage it writes ?q=, which we read here and
+  // feed to the dashboard fetch (server-side ILIKE over title/slug/namespace, spanning the whole
+  // entitled list — not just the rows scrolled into view). Enter anywhere focuses that header box.
+  const searchParams = useSearchParams();
+  const qSubmitted = (searchParams.get("q") ?? "").trim();
+  useEnterKey(() => window.dispatchEvent(new Event("skilly:focus-search")));
   // Client-side refinement chips (catalog-style) over the returned page.
   const [nsFilter, setNsFilter] = useState<string | null>(null);
   const [toolFilter, setToolFilter] = useState<string | null>(null);
@@ -197,25 +197,22 @@ export default function UsagePage() {
         </div>
       </div>
 
-      {/* Search + refinement chips (catalog-style). Search filters server-side; chips refine the page. */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-        <div className="search" style={{ maxWidth: 320 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search skills…" />
+      {/* Refinement chips (catalog-style) refine the returned page; the free-text search itself is the
+          global header box (§10 — placeholder "Search usage…", drives ?q=). Shown only when there's
+          more than one namespace/tool to filter by. */}
+      {(namespaces.length > 1 || tools.length > 1) && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+          {namespaces.length > 1 && namespaces.map((n) => (
+            <button key={n} type="button" className={`facet${nsFilter === n ? " facet-on" : ""}`} onClick={() => setNsFilter(nsFilter === n ? null : n)}>@{n}</button>
+          ))}
+          {tools.length > 1 && tools.map((t) => (
+            <button key={t} type="button" className={`facet${toolFilter === t ? " facet-on" : ""}`} onClick={() => setToolFilter(toolFilter === t ? null : t)}>{agentLabel(t)}</button>
+          ))}
+          {(nsFilter || toolFilter) && (
+            <button className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => { setNsFilter(null); setToolFilter(null); }}>✕ clear</button>
+          )}
         </div>
-        {namespaces.length > 1 && namespaces.map((n) => (
-          <button key={n} type="button" className={`facet${nsFilter === n ? " facet-on" : ""}`} onClick={() => setNsFilter(nsFilter === n ? null : n)}>@{n}</button>
-        ))}
-        {tools.length > 1 && tools.map((t) => (
-          <button key={t} type="button" className={`facet${toolFilter === t ? " facet-on" : ""}`} onClick={() => setToolFilter(toolFilter === t ? null : t)}>{agentLabel(t)}</button>
-        ))}
-        {(nsFilter || toolFilter) && (
-          <button className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => { setNsFilter(null); setToolFilter(null); }}>✕ clear</button>
-        )}
-      </div>
+      )}
 
       {shown.length === 0 ? (
         <EmptyState
@@ -237,6 +234,15 @@ export default function UsagePage() {
         </>
       )}
     </div>
+  );
+}
+
+// useSearchParams() must sit under a Suspense boundary (Next.js App Router), mirroring the catalog.
+export default function UsagePage() {
+  return (
+    <Suspense fallback={<div className="skeleton" style={{ height: 260, borderRadius: "var(--radius)" }} />}>
+      <Usage />
+    </Suspense>
   );
 }
 

@@ -75,19 +75,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Resolved from next-auth's public /api/auth/providers so the button always works.
   const [signInProvider, setSignInProvider] = useState("azure-ad");
 
-  // Two pages turn the search box into a live FILTER of an on-page list rather than the registry
-  // typeahead dropdown: the catalog grid (§10) and the installed-skills list (§23). In both, typing
-  // mirrors the query into ?q=, the box is seeded from ?q= on arrival, and the dropdown is
-  // suppressed. They differ only in the char floor (catalog queries the server at 2+ chars;
-  // installed filters an already-loaded list client-side, so it engages from the 1st char) and the
-  // placeholder. Everywhere else the box is the registry typeahead dropdown.
+  // Some pages turn the search box into a live FILTER of an on-page list rather than the registry
+  // typeahead dropdown: the catalog grid (§10), the installed-skills list (§23), and the usage
+  // dashboard (§21). In all of them, typing mirrors the query into ?q=, the box is seeded from ?q=
+  // on arrival, and the dropdown is suppressed. They differ only in the char floor (installed
+  // filters an already-loaded list client-side, so it engages from the 1st char; catalog and usage
+  // query the server at 2+ chars) and the placeholder. Everywhere else the box is the registry
+  // typeahead dropdown.
   const onCatalog = pathname === "/catalog";
   const onInstalled = pathname === "/installed";
-  const liveFilter = onCatalog || onInstalled;
+  const onUsage = pathname === "/usage";
+  const liveFilter = onCatalog || onInstalled || onUsage;
 
   // Debounced autocomplete (typeahead pages only): fire at 2+ chars (matches the server floor),
   // 200ms after the last keystroke, ignore stale responses. Reset cleanly below the threshold or on
-  // any live-filter page (catalog/installed), where the box filters an on-page list instead.
+  // any live-filter page (catalog/installed/usage), where the box filters an on-page list instead.
   useEffect(() => {
     const term = q.trim();
     if (status !== "authenticated" || liveFilter || term.length < 2) {
@@ -116,24 +118,24 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [q, status, liveFilter]);
 
-  // Reset the search box on every navigation: when ARRIVING on a live-filter page (catalog or
-  // installed), seed it from ?q= so it reflects the active filter (e.g. landing via the dropdown's
-  // "see all" or Enter from another page); otherwise CLEAR it — so a query typed on one page doesn't
-  // linger and pop the suggestions dropdown on the next. Keyed on pathname (not q), so it never
-  // fires while you type or while the live-filter rewrites ?q= (pathname is unchanged).
+  // Reset the search box on every navigation: when ARRIVING on a live-filter page (catalog,
+  // installed, or usage), seed it from ?q= so it reflects the active filter (e.g. landing via the
+  // dropdown's "see all" or Enter from another page); otherwise CLEAR it — so a query typed on one
+  // page doesn't linger and pop the suggestions dropdown on the next. Keyed on pathname (not q), so
+  // it never fires while you type or while the live-filter rewrites ?q= (pathname is unchanged).
   useEffect(() => {
     setAcOpen(false);
     setQ(liveFilter ? new URLSearchParams(window.location.search).get("q") ?? "" : "");
   }, [pathname, liveFilter]);
 
-  // Live-filter → URL: debounce the typed query into ?q=, merging with any other params so they
-  // aren't clobbered. router.replace keeps it out of history (like adjusting any other filter). The
-  // char floor differs by page: the catalog queries the server (2+ chars, matching the search
-  // predicate); the installed list filters client-side over an already-loaded set, so it engages
-  // from the 1st char (§23). Below the floor the q filter clears (full list).
+  // Live-filter → URL: debounce the typed query into ?q=, merging with any other params on the
+  // current path so they aren't clobbered (the catalog's category/tool/etc.). router.replace keeps
+  // it out of history (like adjusting any other filter) and targets the current pathname so it works
+  // on every live-filter page. The char floor differs by page: the installed list filters
+  // client-side over an already-loaded set, so it engages from the 1st char (§23); the catalog and
+  // usage query the server at 2+ chars. Below the floor the q filter clears (full list).
   useEffect(() => {
     if (!liveFilter) return;
-    const base = onInstalled ? "/installed" : "/catalog";
     const floor = onInstalled ? 1 : 2;
     const term = q.trim();
     const t = setTimeout(() => {
@@ -143,10 +145,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (next) sp.set("q", next);
       else sp.delete("q");
       const qs = sp.toString();
-      router.replace(qs ? `${base}?${qs}` : base);
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, liveFilter, onInstalled, router]);
+  }, [q, liveFilter, onInstalled, pathname, router]);
 
   // Ctrl/Cmd+K focuses the registry search (only while signed in, since the box only
   // exists then). The kbd hint next to the box advertises the shortcut.
@@ -529,7 +531,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="search"
               onSubmit={(e) => {
                 e.preventDefault();
-                // On a live-filter page (catalog/installed) the box already filters the list —
+                // On a live-filter page (catalog/installed/usage) the box already filters the list —
                 // Enter just dismisses focus (no jump to the catalog).
                 if (liveFilter) { searchRef.current?.blur(); return; }
                 // Enter on a highlighted suggestion jumps straight to that skill (the "see all"
@@ -568,8 +570,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   else if (e.key === "ArrowUp") { e.preventDefault(); setAcHi((i) => (i <= 0 ? count - 1 : i - 1)); }
                   else if (e.key === "Escape") { setAcOpen(false); setAcHi(-1); }
                 }}
-                placeholder={onInstalled ? "Search installed skills…" : "Search the registry…"}
-                aria-label={onInstalled ? "Search installed skills" : "Search skills"}
+                placeholder={onInstalled ? "Search installed skills…" : onUsage ? "Search usage…" : "Search the registry…"}
+                aria-label={onInstalled ? "Search installed skills" : onUsage ? "Search usage" : "Search skills"}
                 aria-autocomplete="list"
                 autoComplete="off"
               />
