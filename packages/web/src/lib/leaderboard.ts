@@ -45,13 +45,25 @@ export interface LeaderboardEntry {
 }
 
 // The board is viewer-independent and runs a heavy 3-CTE aggregate over proposals + access_log,
-// so cache the default-page result per (window, sort) for a short window. Custom limits bypass it.
+// so cache the result per (window, sort) for a short window. A bypassCache read forces a fresh query.
 const LB_TTL_MS = Number(process.env.LEADERBOARD_CACHE_TTL_MS ?? 60_000);
 const leaderboardCache = createTtlCache<LeaderboardEntry[]>(LB_TTL_MS);
 
-export async function getLeaderboard(window: LeaderboardWindow = "all", sort: LeaderboardSort = "installs", limit = 100): Promise<LeaderboardEntry[]> {
-  if (limit === 100) return leaderboardCache.get(`${window}:${sort}`, () => computeLeaderboard(window, sort, limit));
-  return computeLeaderboard(window, sort, limit);
+/** The board shows at most the top LEADERBOARD_LIMIT contributors for the selected metric+window
+ *  (§21). A fixed platform constant, NOT a caller-supplied value — neither the API nor the page can
+ *  raise or lower it; the deterministic ORDER BY (metric desc, other metrics desc, name asc) makes
+ *  the ≤100 rows that survive the cut stable across requests. */
+export const LEADERBOARD_LIMIT = 100;
+
+export async function getLeaderboard(
+  window: LeaderboardWindow = "all",
+  sort: LeaderboardSort = "installs",
+  opts: { bypassCache?: boolean } = {},
+): Promise<LeaderboardEntry[]> {
+  // Always the top LEADERBOARD_LIMIT rows; the only knob is whether to serve from the shared TTL
+  // cache (default) or force a fresh query — tests that seed credits want to read their own writes.
+  if (opts.bypassCache) return computeLeaderboard(window, sort);
+  return leaderboardCache.get(`${window}:${sort}`, () => computeLeaderboard(window, sort));
 }
 
 /** Drop the cached boards so a membership change (opt in/out) shows on the next request, for
@@ -60,7 +72,7 @@ export function invalidateLeaderboard(): void {
   leaderboardCache.clear();
 }
 
-async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSort, limit: number): Promise<LeaderboardEntry[]> {
+async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSort): Promise<LeaderboardEntry[]> {
   // 30d variant counts only activity in the trailing 30 days; "all" counts everything. Install
   // credit filters on the install's timestamp (access_log.created_at); requests-fulfilled on
   // fulfilled_at — both snapshots, so later user changes never move past credit.
@@ -121,7 +133,7 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
         and (c.user_id is not null or f.user_id is not null or w.user_id is not null)
       order by ${orderBy}
       limit $1`,
-    [Math.min(200, limit)],
+    [LEADERBOARD_LIMIT],
   );
   return rows.map((r) => ({
     userId: r.user_id,
