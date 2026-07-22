@@ -62,6 +62,8 @@ export interface SkillVersion {
   isPrerelease: boolean;
   status: VersionStatus;
   usageExamples: string | null;
+  /** Per-version "What changed" note (plain text; §8/§10). Null on first versions / promotions. */
+  whatChanged: string | null;
   artifactObjectKey: string | null;
   artifactSha256: string | null;
   externalRef: string | null;

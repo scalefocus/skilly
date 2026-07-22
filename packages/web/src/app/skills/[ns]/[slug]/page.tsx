@@ -31,7 +31,7 @@ const SERIES_RANGES: { key: SeriesRange; label: string }[] = [
 const toSeriesRange = (s: string): SeriesRange => (s === "7d" || s === "90d" || s === "all" ? s : "30d");
 interface SkillSeries { range: SeriesRange; bucket: "day" | "week" | "month"; points: { date: string; views: number; installs: number }[] }
 
-interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked"; createdAt: string; gitPublished: boolean; downloadExt: string }
+interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked"; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null }
 interface RatingView { avg: number; count: number; distribution: number[]; mine: number | null }
 interface MaintainerView { userId: string; displayName: string; email: string; avatar: string | null; source: "admin" | "explicit" }
 
@@ -74,6 +74,47 @@ function CollapsibleMarkdown({ source, collapsedHeight = 240 }: { source: string
     </div>
   );
 }
+/** One row in the Versions list. Shows the per-version "What changed" note (plain text, §8/§10)
+ *  as an expandable block — the note is NOT Markdown, so it's rendered escaped with newlines kept. */
+function VersionRow({ v, downloadHref, downloadTitle, canManage, busy, onYank, formattedDate, pointer }: {
+  v: VersionView; downloadHref: string; downloadTitle: string; canManage: boolean; busy: boolean; onYank: () => void; formattedDate: string; pointer: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div id={`version-${v.semver}`} style={{ scrollMarginTop: 80 }}>
+      <div className="row version-row">
+        <div className="version-head">
+          <span className="mono" style={{ fontWeight: 500 }}>v{v.semver}</span>
+          {v.channel === "beta" ? <Pill tone="warn">beta</Pill> : <Pill tone="ok">stable</Pill>}
+          {v.status === "yanked" && <Pill tone="danger">yanked</Pill>}
+          {v.whatChanged && (
+            <button type="button" className="btn-ghost mono" style={{ fontSize: 11, padding: "1px 6px" }} aria-expanded={open} onClick={() => setOpen((o) => !o)} title="What changed in this version">
+              {open ? "▾" : "▸"} what changed
+            </button>
+          )}
+        </div>
+        <span className="grow" />
+        <span className="muted mono version-date" style={{ fontSize: 12 }}>{formattedDate}</span>
+        <div className="version-actions">
+          {v.status === "active" && (
+            <a className="btn btn-sm" href={downloadHref} title={downloadTitle}>↓ .{v.downloadExt}</a>
+          )}
+          {canManage && (
+            <button className="btn btn-sm" disabled={busy} onClick={onYank} title={v.status === "yanked" ? "restore this version" : "yank this version"}>
+              {v.status === "yanked" ? "restore" : "yank"}
+            </button>
+          )}
+        </div>
+      </div>
+      {open && v.whatChanged && (
+        <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55, color: "var(--muted)", padding: "8px 12px", marginTop: 6, background: "var(--surface-2)", borderRadius: "var(--radius-sm)" }}>
+          {v.whatChanged}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface Detail {
   namespaceSlug: string; skillSlug: string; visibility: "org" | "namespace";
   versions: VersionView[]; latest: string | null; latestInstallable: string | null; publishing: boolean; watching: boolean; watchers: number; rating: RatingView;
@@ -528,6 +569,21 @@ export default function SkillDetail() {
         </div>
       )}
 
+      {/* Featured "What changed" for the latest stable version (§8/§10) — plain text, escaped with
+          newlines preserved (NOT Markdown, unlike Usage above). First versions carry no note. */}
+      {(() => {
+        const lv = data.latest ? data.versions.find((v) => v.semver === data.latest) : null;
+        return lv?.whatChanged ? (
+          <div className="card card-pad" style={{ marginTop: 20 }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+              <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20 }}>What&rsquo;s changed</h2>
+              <span className="muted mono" style={{ fontSize: 11 }}>v{lv.semver}</span>
+            </div>
+            <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.55 }}>{lv.whatChanged}</div>
+          </div>
+        ) : null;
+      })()}
+
       {readme && (
         <div className="card card-pad" style={{ marginTop: 20 }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
@@ -552,32 +608,17 @@ export default function SkillDetail() {
       ) : (
         <div className="rows">
           {data.versions.map((v) => (
-            <div className="row version-row" id={`version-${v.semver}`} key={v.semver} style={{ scrollMarginTop: 80 }}>
-              <div className="version-head">
-                <span className="mono" style={{ fontWeight: 500 }}>v{v.semver}</span>
-                {v.channel === "beta" ? <Pill tone="warn">beta</Pill> : <Pill tone="ok">stable</Pill>}
-                {v.status === "yanked" && <Pill tone="danger">yanked</Pill>}
-              </div>
-              <span className="grow" />
-              <span className="muted mono version-date" style={{ fontSize: 12 }}>{fmt.date(v.createdAt)}</span>
-              <div className="version-actions">
-                {v.status === "active" && (
-                  <a className="btn btn-sm" href={`${base}/download?semver=${encodeURIComponent(v.semver)}`} title={`Download v${v.semver} (.${v.downloadExt})${data.pointer ? " — pointer skills download as .tar.gz" : ""}`}>
-                    ↓ .{v.downloadExt}
-                  </a>
-                )}
-                {data.canManage && (
-                  <button
-                    className="btn btn-sm"
-                    disabled={busy}
-                    onClick={() => act("yank", { semver: v.semver, yanked: v.status !== "yanked" }, v.status === "yanked" ? "Version restored." : "Version yanked.")}
-                    title={v.status === "yanked" ? "restore this version" : "yank this version"}
-                  >
-                    {v.status === "yanked" ? "restore" : "yank"}
-                  </button>
-                )}
-              </div>
-            </div>
+            <VersionRow
+              key={v.semver}
+              v={v}
+              downloadHref={`${base}/download?semver=${encodeURIComponent(v.semver)}`}
+              downloadTitle={`Download v${v.semver} (.${v.downloadExt})${data.pointer ? " — pointer skills download as .tar.gz" : ""}`}
+              canManage={data.canManage}
+              busy={busy}
+              onYank={() => act("yank", { semver: v.semver, yanked: v.status !== "yanked" }, v.status === "yanked" ? "Version restored." : "Version yanked.")}
+              formattedDate={fmt.date(v.createdAt)}
+              pointer={!!data.pointer}
+            />
           ))}
         </div>
       )}

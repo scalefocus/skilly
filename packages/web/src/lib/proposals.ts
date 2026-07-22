@@ -24,6 +24,7 @@ import {
   validateSkillsHubRef,
   normalizeHarness,
   isAllowedToolHarness,
+  WHAT_CHANGED_MAX_LEN,
   TRANSITIONS,
   type EffectiveAccess,
   type ProposalAction,
@@ -45,6 +46,13 @@ export interface ProposalMetadata {
   toolHarness: string;
   tags?: string[];
   usageExamples?: string | null;
+  /**
+   * Per-version "What changed" note (plain text; §8). Required on a new VERSION (proposal / direct
+   * publish / reviewer edit of one) and omitted on a skill's FIRST version (new-skill proposals /
+   * promotion). Enforced + length-capped + normalized in verifySubmissionPayload; nulled for a
+   * first version in materializeVersion.
+   */
+  whatChanged?: string | null;
   visibility: "org" | "namespace";
 }
 
@@ -179,6 +187,24 @@ export async function verifySubmissionPayload(
         ? (await db.query(`select 1 from skills where id = $1 and tool_harness = $2`, [opts.targetSkillId, payload.metadata.toolHarness])).rowCount
         : 0;
       if (!unchangedLegacy) return "choose a tool/harness from the list";
+    }
+  }
+  // "What changed" note (§8): plain text, normalized (trim → null when empty), length-capped
+  // whenever present, and REQUIRED on a new VERSION — signalled by opts.targetSkillId (a
+  // new-version proposal, a direct publish over an existing skill, or a reviewer edit/resubmit of
+  // one). A skill's FIRST version (new-skill / promotion) carries no note (targetSkillId null) and
+  // materializeVersion nulls it regardless. Server-side backstop for the UI's own rules.
+  if (payload.metadata) {
+    const raw = payload.metadata.whatChanged;
+    if (raw != null) {
+      const trimmed = String(raw).trim();
+      payload.metadata.whatChanged = trimmed || null;
+      if (trimmed.length > WHAT_CHANGED_MAX_LEN) {
+        return `“What changed” is too long (${trimmed.length}/${WHAT_CHANGED_MAX_LEN} characters) — trim it`;
+      }
+    }
+    if (opts.targetSkillId && !payload.metadata.whatChanged) {
+      return "describe what changed in this version — the “What changed” note is required";
     }
   }
   if (payload.pointer) {
@@ -535,6 +561,10 @@ function payloadUnchanged(prev: RevisionPayload, next: RevisionPayload): boolean
     sameSet(normSet(a.categories, true), normSet(b.categories, true)) &&
     sameSet(normSet(a.tags), normSet(b.tags)) &&
     eqText(a.usageExamples, b.usageExamples) &&
+    // A note-only revise IS a real edit reviewers should see (the note is required and travels with
+    // the proposal) — so a changed "What changed" makes the revise non-noop. This is separate from
+    // the reuse no-op guard, where the note deliberately does NOT count (§8).
+    eqText(a.whatChanged, b.whatChanged) &&
     (prev.artifactObjectKey ?? null) === (next.artifactObjectKey ?? null) &&
     samePointer(prev.pointer, next.pointer) &&
     (prev.reuse?.fromVersionId ?? null) === (next.reuse?.fromVersionId ?? null)
@@ -876,6 +906,9 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
   const { payload } = input;
   const meta = payload.metadata;
   const isPointer = !!payload.pointer;
+  // "What changed" note (§8): persisted on a new VERSION of an existing skill; a skill's FIRST
+  // version (no targetSkillId — a new-skill proposal or a promotion) carries none.
+  const whatChanged = input.targetSkillId ? meta.whatChanged ?? null : null;
 
   let skillId = input.targetSkillId;
   if (!skillId) {
@@ -940,9 +973,9 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
   if (isPointer) {
     // Enqueue a mirror; the worker inserts the immutable version after cloning + scanning.
     await client.query(
-      `insert into pending_mirrors (skill_id, semver, external_url, external_ref, external_subdir, is_prerelease, usage_examples, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict (skill_id, semver) do nothing`,
-      [skillId, input.semver, payload.pointer!.url, payload.pointer!.ref, payload.pointer!.subdir?.trim() || null, isPrerelease, meta.usageExamples ?? null, input.submittedBy],
+      `insert into pending_mirrors (skill_id, semver, external_url, external_ref, external_subdir, is_prerelease, usage_examples, what_changed, created_by)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (skill_id, semver) do nothing`,
+      [skillId, input.semver, payload.pointer!.url, payload.pointer!.ref, payload.pointer!.subdir?.trim() || null, isPrerelease, meta.usageExamples ?? null, whatChanged, input.submittedBy],
     );
     return { skillId, pendingMirror: true };
   }
@@ -956,12 +989,12 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
   assertStrictlyIncreasing(input.semver, existing.map((r) => r.semver));
   const { rows: vrows } = await client.query<{ id: string }>(
     `insert into skill_versions
-       (skill_id, semver, is_prerelease, status, usage_examples, artifact_object_key, artifact_sha256, artifact_filename, content_sha256,
+       (skill_id, semver, is_prerelease, status, usage_examples, what_changed, artifact_object_key, artifact_sha256, artifact_filename, content_sha256,
         external_origin_url, external_ref, external_subdir, created_by, git_published)
-     values ($1,$2,$3,'active',$4,$5,$6,$7,$8,$9,$10,$11,$12,false)
+     values ($1,$2,$3,'active',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,false)
      returning id`,
     [
-      skillId, input.semver, isPrerelease, meta.usageExamples ?? null,
+      skillId, input.semver, isPrerelease, meta.usageExamples ?? null, whatChanged,
       payload.artifactObjectKey, payload.artifactSha256, payload.artifactFilename ?? null, payload.contentSha256 ?? null,
       ext?.url ?? null, ext?.ref ?? null, ext?.subdir?.trim() || null,
       input.submittedBy,

@@ -699,7 +699,9 @@ test("tool/harness carve-out: unchanged legacy value passes, changed must be clo
       [ns],
     )).rows[0]!.id;
 
-    const base = { skillSlug: "legacy-skill", title: "Legacy", description: "d", visibility: "org" as const };
+    // whatChanged is required on a new version (targetSkillId set), so include one — this test
+    // isolates the harness carve-out, not the note rule.
+    const base = { skillSlug: "legacy-skill", title: "Legacy", description: "d", visibility: "org" as const, whatChanged: "note" };
 
     // Unchanged legacy value + targetSkillId → passes (the §8 carve-out).
     const unchanged = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "claude-desktop" } }, { targetSkillId: skillId });
@@ -714,6 +716,51 @@ test("tool/harness carve-out: unchanged legacy value passes, changed must be clo
     assert.match(changed ?? "", /tool\/harness/, "changed non-list value rejected");
     const closed = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "cursor" } }, { targetSkillId: skillId });
     assert.equal(closed, null, "changed closed-list value passes");
+
+    await client.query("rollback");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+test("what changed note: null on a first version, persisted on a new version, excluded from the reuse no-op guard (§8)", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const { ns, user: submitter } = await seed(client, "wc");
+
+    // First version (new skill): the note is NULLED on the version row regardless of the payload.
+    const first = await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: null, semver: "1.0.0", submittedBy: submitter,
+      payload: {
+        metadata: { skillSlug: "wc-skill", title: "WC", description: "d", toolHarness: "claude-code", visibility: "org", usageExamples: "u", whatChanged: "dropped on a first version" },
+        artifactObjectKey: "uploads/x/wc1.bundle", artifactSha256: "w1",
+      },
+    });
+    const v1 = (await client.query<{ what_changed: string | null }>(`select what_changed from skill_versions where id = $1`, [first.versionId])).rows[0]!;
+    assert.equal(v1.what_changed, null, "a first version carries no note");
+
+    // New version of the existing skill: the note is persisted verbatim on the version row.
+    const second = await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: first.skillId, semver: "1.1.0", submittedBy: submitter,
+      payload: {
+        metadata: { skillSlug: "wc-skill", title: "WC", description: "d", toolHarness: "claude-code", visibility: "org", usageExamples: "u", whatChanged: "Added a --lang option" },
+        artifactObjectKey: "uploads/x/wc2.bundle", artifactSha256: "w2",
+      },
+    });
+    const v2 = (await client.query<{ what_changed: string | null }>(`select what_changed from skill_versions where id = $1`, [second.versionId])).rows[0]!;
+    assert.equal(v2.what_changed, "Added a --lang option", "a new version persists the note");
+
+    // Reuse no-op guard: changing ONLY the note (all skill metadata + usage identical to the
+    // latest stable) is still a no-op — the note is not a satisfying field (§8).
+    const noop = await resolveReuseSource(client, first.skillId, {
+      skillSlug: "wc-skill", title: "WC", description: "d", toolHarness: "claude-code",
+      visibility: "org", categories: [], tags: [], usageExamples: "u", whatChanged: "a brand new note, but nothing else changed",
+    });
+    assert.equal(noop.ok, false, "note-only change is still a reuse no-op");
 
     await client.query("rollback");
   } catch (e) {

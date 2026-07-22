@@ -9,6 +9,7 @@ export * from "./net.js";
 export * from "./tokens.js";
 export * from "./proposal.js";
 export * from "./validate.js";
+export * from "./linediff.js";
 export * from "./content-digest.js";
 export * from "./scan.js";
 export * from "./archive.js";
