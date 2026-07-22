@@ -8,6 +8,7 @@ import { TagInput } from "../../../components/TagInput";
 import { Markdown } from "../../../components/Markdown";
 import { MarkdownField } from "../../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../../components/ToolHarnessPicker";
+import { WHAT_CHANGED_MAX_LEN } from "@skilly/shared/proposal";
 import { useDateFmt } from "../../../components/DateFormat";
 import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
 import { UserBubble } from "../../../components/UserBubble";
@@ -26,6 +27,8 @@ interface Meta {
   categories?: string[];
   tags?: string[];
   usageExamples?: string | null;
+  /** Per-version "What changed" note (plain text, §8). Present on new-version proposals. */
+  whatChanged?: string | null;
 }
 interface Revision {
   revisionNo: number;
@@ -80,6 +83,8 @@ interface NewArtifact { artifactObjectKey: string; artifactSha256: string; conte
 interface EditDraft {
   title: string; description: string; toolHarness: string; visibility: "org" | "namespace";
   categories: string[]; tags: string[]; usageExamples: string;
+  /** Per-version "What changed" note (§8) — reviewer-editable on new-version proposals. */
+  whatChanged: string;
   /** proposer resubmit: revised proposed semver. */
   semver: string;
   /** proposer resubmit: replacement hosted bundle (null = keep current). */
@@ -110,143 +115,147 @@ function repoLinkFor(p: { url: string; ref: string; subdir?: string | null }): s
 }
 
 // ── Bundle file browser (review): tree of the uploaded bundle, view text / download binary. ──────
-interface BundleFileMeta { path: string; size: number; isText: boolean }
-interface TreeNode { name: string; path: string; dir: boolean; size: number; isText: boolean; children: TreeNode[] }
-
-function buildFileTree(files: BundleFileMeta[]): TreeNode[] {
-  const root: TreeNode = { name: "", path: "", dir: true, size: 0, isText: false, children: [] };
-  for (const f of files) {
-    const parts = f.path.split("/");
-    let node = root;
-    for (let i = 0; i < parts.length; i++) {
-      const isLeaf = i === parts.length - 1;
-      const name = parts[i]!;
-      let child = node.children.find((c) => c.name === name && c.dir === !isLeaf);
-      if (!child) {
-        child = { name, path: parts.slice(0, i + 1).join("/"), dir: !isLeaf, size: isLeaf ? f.size : 0, isText: isLeaf ? f.isText : false, children: [] };
-        node.children.push(child);
-      }
-      node = child;
-    }
-  }
-  const sortRec = (n: TreeNode) => {
-    n.children.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
-    n.children.forEach(sortRec);
-  };
-  sortRec(root);
-  return root.children;
-}
-
 function humanSize(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function TreeRows({ nodes, depth, selectedPath, onOpen, proposalId }: { nodes: TreeNode[]; depth: number; selectedPath: string | null; onOpen: (f: BundleFileMeta) => void; proposalId: string }) {
+// ── Reviewer file-change view (§8) ──────────────────────────────────────────────────────────
+// Classifies the proposal's files vs the skill's latest stable version (added / modified /
+// removed / unchanged) and shows an inline unified diff for changed text files. Fed by
+// GET /changes; an unchanged text file's raw contents + downloads still come from GET /files.
+type ChangeStatus = "added" | "modified" | "removed" | "unchanged";
+interface ChangeFile { path: string; status: ChangeStatus; isText: boolean; size: number }
+interface ChangesResp { available: boolean; kind?: string; reason?: string; baselineSemver?: string | null; added?: number; modified?: number; removed?: number; unchanged?: number; files?: ChangeFile[] }
+interface DiffLineJ { type: "context" | "add" | "del"; text: string; oldLine: number | null; newLine: number | null }
+interface DiffHunkJ { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLineJ[] }
+interface FileDiffResp { path: string; status: ChangeStatus; isText: boolean; diff?: { hunks: DiffHunkJ[]; added: number; removed: number }; tooLarge?: boolean; binary?: boolean }
+
+function StatusBadge({ status }: { status: ChangeStatus }) {
+  if (status === "added") return <Pill tone="ok">added</Pill>;
+  if (status === "modified") return <Pill tone="warn">modified</Pill>;
+  if (status === "removed") return <Pill tone="danger">removed</Pill>;
+  return <span className="muted mono" style={{ fontSize: 10.5 }}>unchanged</span>;
+}
+
+/** Unified line diff: hunk headers + colored +/- lines (React escapes the text). */
+function DiffView({ diff }: { diff: { hunks: DiffHunkJ[]; added: number; removed: number } }) {
+  if (!diff.hunks.length) return <p className="muted" style={{ fontSize: 13, margin: 0 }}>No line changes.</p>;
   return (
-    <>
-      {nodes.map((n) => (n.dir ? <FolderRow key={n.path} node={n} depth={depth} selectedPath={selectedPath} onOpen={onOpen} proposalId={proposalId} /> : (
-        <div
-          key={n.path}
-          onClick={() => n.isText && onOpen({ path: n.path, size: n.size, isText: n.isText })}
-          style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", paddingLeft: 8 + depth * 16, borderRadius: "var(--radius-sm)", cursor: n.isText ? "pointer" : "default", background: selectedPath === n.path ? "var(--surface-2)" : "transparent" }}
-        >
-          <span aria-hidden style={{ opacity: 0.6 }}>{n.isText ? "📄" : "📦"}</span>
-          <span className="mono" style={{ fontSize: 12.5, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name}</span>
-          <span className="muted mono" style={{ fontSize: 10.5 }}>{humanSize(n.size)}</span>
-          <a
-            href={`/api/proposals/${proposalId}/files?path=${encodeURIComponent(n.path)}&download=1`}
-            onClick={(e) => e.stopPropagation()}
-            className="btn-ghost mono"
-            style={{ fontSize: 10.5, padding: "1px 6px" }}
-            title="Download this file"
-          >↓</a>
+    <pre className="mono" style={{ fontSize: 12, lineHeight: 1.5, padding: 0, background: "var(--surface-2)", borderRadius: "var(--radius-sm)", overflow: "auto", maxHeight: 460, margin: 0 }}>
+      {diff.hunks.map((h, hi) => (
+        <div key={hi}>
+          <div style={{ color: "var(--faint)", padding: "2px 10px", background: "var(--surface)" }}>@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</div>
+          {h.lines.map((l, li) => (
+            <div key={li} style={{ background: l.type === "add" ? "rgba(46,160,67,0.16)" : l.type === "del" ? "rgba(248,81,73,0.18)" : "transparent", color: l.type === "context" ? "var(--muted)" : "var(--ink)", padding: "0 10px", whiteSpace: "pre" }}>
+              {l.type === "add" ? "+" : l.type === "del" ? "-" : " "}{l.text}
+            </div>
+          ))}
         </div>
-      )))}
-    </>
+      ))}
+    </pre>
   );
 }
 
-function FolderRow({ node, depth, selectedPath, onOpen, proposalId }: { node: TreeNode; depth: number; selectedPath: string | null; onOpen: (f: BundleFileMeta) => void; proposalId: string }) {
-  const [open, setOpen] = useState(true);
-  return (
-    <>
-      <div
-        onClick={() => setOpen((o) => !o)}
-        style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", paddingLeft: 8 + depth * 16, cursor: "pointer", borderRadius: "var(--radius-sm)" }}
-      >
-        <span aria-hidden style={{ fontSize: 10, width: 10, color: "var(--faint)" }}>{open ? "▾" : "▸"}</span>
-        <span aria-hidden style={{ opacity: 0.7 }}>📁</span>
-        <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>{node.name}</span>
-      </div>
-      {open && <TreeRows nodes={node.children} depth={depth + 1} selectedPath={selectedPath} onOpen={onOpen} proposalId={proposalId} />}
-    </>
-  );
-}
-
-function BundleFiles({ proposalId }: { proposalId: string }) {
-  const { data, loading, error } = useApi<{ available: boolean; kind?: string; error?: string; files?: BundleFileMeta[] }>(`/api/proposals/${proposalId}/files`);
-  const [selected, setSelected] = useState<BundleFileMeta | null>(null);
-  const [content, setContent] = useState<string | null>(null);
+function FileChangeBrowser({ proposalId, hasBundle }: { proposalId: string; hasBundle: boolean }) {
+  const { data, loading, error } = useApi<ChangesResp>(`/api/proposals/${proposalId}/changes`);
+  const [openPath, setOpenPath] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{ kind: "diff"; body: FileDiffResp } | { kind: "raw"; body: string } | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
   const [viewErr, setViewErr] = useState<string | null>(null);
 
-  const openFile = useCallback(async (f: BundleFileMeta) => {
-    setSelected(f);
-    setContent(null);
-    setViewErr(null);
-    setViewLoading(true);
+  const open = useCallback(async (f: ChangeFile) => {
+    if (openPath === f.path) { setOpenPath(null); setDetail(null); setViewErr(null); return; }
+    setOpenPath(f.path); setDetail(null); setViewErr(null); setViewLoading(true);
     try {
-      const r = await fetch(`/api/proposals/${proposalId}/files?path=${encodeURIComponent(f.path)}`);
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
-      setContent(await r.text());
+      if (f.status === "unchanged") {
+        if (!hasBundle) { setViewErr("Unchanged — contents aren’t stored for this source until accept."); return; }
+        const r = await fetch(`/api/proposals/${proposalId}/files?path=${encodeURIComponent(f.path)}`);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
+        setDetail({ kind: "raw", body: await r.text() });
+      } else {
+        const r = await fetch(`/api/proposals/${proposalId}/changes?path=${encodeURIComponent(f.path)}`);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
+        setDetail({ kind: "diff", body: (await r.json()) as FileDiffResp });
+      }
     } catch (e) {
       setViewErr(String((e as Error).message ?? e));
     } finally {
       setViewLoading(false);
     }
-  }, [proposalId]);
+  }, [proposalId, hasBundle, openPath]);
 
-  if (loading) return <p className="muted" style={{ fontSize: 13 }}>Loading files…</p>;
-  if (error) return <p className="muted" style={{ fontSize: 13 }}>Couldn’t load files: {error}</p>;
+  if (loading) return <p className="muted" style={{ fontSize: 13 }}>Loading changes…</p>;
+  if (error) return <p className="muted" style={{ fontSize: 13 }}>Couldn’t load changes: {error}</p>;
   if (!data?.available) {
     const note =
       data?.kind === "pointer"
-        ? "This is a pointer skill — its files are mirrored from the upstream repository on acceptance, so there’s no uploaded bundle to browse. Use “View repository” above to inspect the source."
+        ? `A file diff isn’t available for this source${data.reason ? ` (${data.reason})` : ""} — the files are verified and mirrored on accept. Use “View repository” above to inspect the source.`
         : data?.kind === "error"
-          ? `The uploaded bundle couldn’t be read: ${data.error}`
-          : "No uploaded bundle for this proposal.";
+          ? `Couldn’t compute the changes: ${data.reason}`
+          : "No files to compare for this proposal.";
     return <p className="muted" style={{ fontSize: 13.5 }}>{note}</p>;
   }
-  const files = data.files ?? [];
-  const tree = buildFileTree(files);
+
+  const rank = (s: ChangeStatus) => (s === "unchanged" ? 1 : 0);
+  const files = [...(data.files ?? [])].sort((a, b) => rank(a.status) - rank(b.status) || a.path.localeCompare(b.path));
+  const anyChange = (data.added ?? 0) + (data.modified ?? 0) + (data.removed ?? 0) > 0;
 
   return (
-    <div className="bundle-files">
-      <div style={{ border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", padding: 6, maxHeight: 460, overflow: "auto" }}>
-        <TreeRows nodes={tree} depth={0} selectedPath={selected?.path ?? null} onOpen={openFile} proposalId={proposalId} />
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12, fontSize: 13 }}>
+        <span style={{ color: "var(--ok)" }}>+{data.added ?? 0} added</span>
+        <span style={{ color: "var(--warn)" }}>~{data.modified ?? 0} modified</span>
+        <span style={{ color: "var(--danger)" }}>−{data.removed ?? 0} removed</span>
+        <span className="muted">· {data.unchanged ?? 0} unchanged</span>
+        <span style={{ flex: 1 }} />
+        <span className="muted mono" style={{ fontSize: 11.5 }}>{data.baselineSemver ? `vs v${data.baselineSemver}` : "new skill — all files new"}</span>
       </div>
-      <div style={{ minWidth: 0 }}>
-        {!selected ? (
-          <p className="muted" style={{ fontSize: 13.5, margin: 0 }}>Select a text file to view its contents. Use the ↓ on any file to download it.</p>
-        ) : (
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-              <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected.path}</span>
-              <span className="muted mono" style={{ fontSize: 10.5 }}>{humanSize(selected.size)}</span>
-              <span style={{ flex: 1 }} />
-              <a className="btn btn-sm" href={`/api/proposals/${proposalId}/files?path=${encodeURIComponent(selected.path)}&download=1`}>↓ Download</a>
+      {!anyChange && data.baselineSemver && (
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Files unchanged — this version reuses v{data.baselineSemver}’s files.</p>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", padding: 6 }}>
+        {files.map((f) => {
+          const isOpen = openPath === f.path;
+          return (
+            <div key={f.path}>
+              <div
+                onClick={() => f.isText && open(f)}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderRadius: "var(--radius-sm)", cursor: f.isText ? "pointer" : "default", background: isOpen ? "var(--surface-2)" : "transparent" }}
+              >
+                <StatusBadge status={f.status} />
+                <span className="mono" style={{ fontSize: 12.5, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: f.status === "removed" ? "line-through" : undefined, opacity: f.status === "removed" ? 0.75 : 1 }}>{f.path}</span>
+                {!f.isText && <span className="muted mono" style={{ fontSize: 10 }}>binary</span>}
+                <span className="muted mono" style={{ fontSize: 10.5 }}>{humanSize(f.size)}</span>
+                {hasBundle && f.status !== "removed" && (
+                  <a href={`/api/proposals/${proposalId}/files?path=${encodeURIComponent(f.path)}&download=1`} onClick={(e) => e.stopPropagation()} className="btn-ghost mono" style={{ fontSize: 10.5, padding: "1px 6px" }} title="Download this file">↓</a>
+                )}
+              </div>
+              {isOpen && (
+                <div style={{ padding: "6px 8px 10px" }}>
+                  {viewLoading ? (
+                    <p className="muted" style={{ fontSize: 13, margin: 0 }}>Loading…</p>
+                  ) : viewErr ? (
+                    <p className="muted" style={{ fontSize: 13, margin: 0 }}>{viewErr}</p>
+                  ) : detail?.kind === "raw" ? (
+                    <pre className="mono" style={{ fontSize: 12, lineHeight: 1.5, padding: "10px 12px", background: "var(--surface-2)", borderRadius: "var(--radius-sm)", overflow: "auto", maxHeight: 460, margin: 0, whiteSpace: "pre", color: "var(--ink)" }}>{detail.body}</pre>
+                  ) : detail?.kind === "diff" ? (
+                    detail.body.binary ? (
+                      <p className="muted" style={{ fontSize: 13, margin: 0 }}>Binary file — download to compare.</p>
+                    ) : detail.body.tooLarge ? (
+                      <p className="muted" style={{ fontSize: 13, margin: 0 }}>Too large to diff — download to compare.</p>
+                    ) : detail.body.diff ? (
+                      <DiffView diff={detail.body.diff} />
+                    ) : (
+                      <p className="muted" style={{ fontSize: 13, margin: 0 }}>No diff available.</p>
+                    )
+                  ) : null}
+                </div>
+              )}
             </div>
-            {viewLoading ? (
-              <p className="muted" style={{ fontSize: 13 }}>Loading…</p>
-            ) : viewErr ? (
-              <p className="muted" style={{ fontSize: 13 }}>Couldn’t load: {viewErr}</p>
-            ) : content != null ? (
-              <pre className="mono" style={{ fontSize: 12, lineHeight: 1.5, padding: "10px 12px", background: "var(--surface-2)", borderRadius: "var(--radius-sm)", overflow: "auto", maxHeight: 460, margin: 0, whiteSpace: "pre", color: "var(--ink)" }}>{content}</pre>
-            ) : null}
-          </div>
-        )}
+          );
+        })}
       </div>
     </div>
   );
@@ -319,6 +328,12 @@ function ChangesOnAccept({ meta, cur, payload }: { meta: Meta; cur: TargetSkillC
         <span className="muted" style={{ fontSize: 12.5 }}>vs the skill’s current state</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {meta.whatChanged?.trim() && (
+          <div className="detail-row detail-row-wide">
+            <span className="detail-row-label">What changed</span>
+            <span className="detail-row-value" style={{ whiteSpace: "pre-wrap" }}>{meta.whatChanged.trim()}</span>
+          </div>
+        )}
         {rows.length ? rows : <p className="muted" style={{ fontSize: 13.5, margin: 0 }}>No skill-level metadata changes — this version only ships new files.</p>}
         <div className="detail-row detail-row-wide">
           <span className="detail-row-label">Files</span>
@@ -412,6 +427,9 @@ function ProposalDetailInner() {
         categories: edit.categories,
         tags: edit.tags,
         usageExamples: edit.usageExamples.trim() || null,
+        // §8: reviewer/proposer edit of the per-version note. Server requires it non-empty on a
+        // new-version proposal; on a new-skill proposal it's absent (field hidden below).
+        whatChanged: edit.whatChanged.trim() || null,
       },
     };
     // Proposer replaced the hosted bundle: swap in the freshly-uploaded artifact (keeps the same
@@ -630,6 +648,7 @@ function ProposalDetailInner() {
                       categories: m.categories ?? [],
                       tags: m.tags ?? [],
                       usageExamples: m.usageExamples ?? "",
+                      whatChanged: m.whatChanged ?? "",
                       semver: data.proposedSemver,
                       newArtifact: null,
                       pointer: latest.payload.pointer
@@ -691,6 +710,21 @@ function ProposalDetailInner() {
                   <label style={labelStyle}>Usage <span style={{ textTransform: "none", letterSpacing: 0 }}>· Markdown</span></label>
                   <MarkdownField value={edit.usageExamples} onChange={(v) => setEdit({ ...edit, usageExamples: v })} rows={4} mono style={fieldStyle} />
                 </div>
+                {/* Per-version "What changed" note (§8) — new-version proposals only (a first
+                    version has no predecessor). Plain text, required; reviewer-editable. */}
+                {!isNewSkill && (
+                  <div>
+                    <label style={labelStyle}>What changed <span style={{ textTransform: "none", letterSpacing: 0 }}>· plain text, required</span></label>
+                    <textarea
+                      style={{ ...fieldStyle, resize: "vertical", fontFamily: "var(--font-mono)", fontSize: 13 }}
+                      rows={4}
+                      maxLength={WHAT_CHANGED_MAX_LEN}
+                      value={edit.whatChanged}
+                      onChange={(e) => setEdit({ ...edit, whatChanged: e.target.value })}
+                    />
+                    <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Per-version release note — no Markdown. <span className="mono">{edit.whatChanged.length}/{WHAT_CHANGED_MAX_LEN}</span></p>
+                  </div>
+                )}
 
                 {/* Proposer-only: revise the version + the files (delivery type is locked). */}
                 {isSubmitter && (
@@ -852,8 +886,9 @@ function ProposalDetailInner() {
         <ChangesOnAccept meta={latest.payload.metadata} cur={data.targetSkillCurrent} payload={latest.payload} />
       )}
 
-      {/* Bundle file browser — review the skill's files one by one before deciding. A
-          Keep-current-files proposal browses the REUSED artifact (hosted or pointer mirror). */}
+      {/* File-change view (§8): what changed vs the skill's latest stable version — added /
+          modified / removed / unchanged, with inline diffs for text files. A fresh pointer's files
+          are fetched on demand; a Keep-current-files reuse shows everything unchanged. */}
       <div className="card card-pad" style={{ marginTop: 26 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
           <h2 style={{ fontFamily: "var(--font-display)", fontSize: 19 }}>Files</h2>
@@ -863,7 +898,7 @@ function ProposalDetailInner() {
             </span>
           )}
         </div>
-        <BundleFiles proposalId={id} />
+        <FileChangeBrowser proposalId={id} hasBundle={!!latest?.payload.artifactObjectKey} />
       </div>
 
       {/* Scan report */}

@@ -545,12 +545,14 @@ export interface SkillVersionView {
   /** Extension the detail-page download serves for this version (original upload's ext, else a
    *  harness/type fallback) — drives the download button's label. §6/§10. */
   downloadExt: string;
+  /** Per-version "What changed" note (plain text; §8/§10). Null on first versions / promotions. */
+  whatChanged: string | null;
 }
 
 export async function listVersions(skillId: string): Promise<SkillVersionView[]> {
-  const { rows } = await pool.query<{ semver: string; is_prerelease: boolean; status: "active" | "yanked"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string }>(
+  const { rows } = await pool.query<{ semver: string; is_prerelease: boolean; status: "active" | "yanked"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string; what_changed: string | null }>(
     `select sv.semver, sv.is_prerelease, sv.status, sv.created_at, sv.git_published,
-            sv.artifact_filename, sv.external_ref, s.tool_harness
+            sv.artifact_filename, sv.external_ref, sv.what_changed, s.tool_harness
        from skill_versions sv join skills s on s.id = sv.skill_id
       where sv.skill_id = $1 order by sv.created_at desc`,
     [skillId],
@@ -562,6 +564,7 @@ export async function listVersions(skillId: string): Promise<SkillVersionView[]>
     createdAt: r.created_at,
     gitPublished: r.git_published,
     downloadExt: resolveDownloadExt({ artifactFilename: r.artifact_filename, isPointer: !!r.external_ref, toolHarness: r.tool_harness }),
+    whatChanged: r.what_changed,
   }));
 }
 

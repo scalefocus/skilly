@@ -224,6 +224,8 @@ export interface MirrorInput {
   subdir?: string | null;
   createdBy: string | null;
   isPrerelease: boolean;
+  /** Per-version "What changed" note carried from the proposal (§8); null for a first version. */
+  whatChanged?: string | null;
 }
 
 /**
@@ -266,10 +268,10 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
   const { rows } = await pool.query<{ id: string }>(
     `insert into skill_versions
        (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, content_sha256,
-        external_ref, external_origin_url, external_subdir, created_by, git_published)
-     values ($1,$2,$3,'active',$4,$5,$6,$7,$8,$9,$10,false)
+        external_ref, external_origin_url, external_subdir, what_changed, created_by, git_published)
+     values ($1,$2,$3,'active',$4,$5,$6,$7,$8,$9,$10,$11,false)
      returning id`,
-    [input.skillId, input.semver, input.isPrerelease, artifactKey, sha, contentSha, input.ref, input.externalUrl, input.subdir?.trim() || null, input.createdBy],
+    [input.skillId, input.semver, input.isPrerelease, artifactKey, sha, contentSha, input.ref, input.externalUrl, input.subdir?.trim() || null, input.whatChanged ?? null, input.createdBy],
   );
   return { versionId: rows[0]!.id, artifactKey };
 }

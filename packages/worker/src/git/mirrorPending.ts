@@ -18,6 +18,7 @@ interface PendingRow {
   external_ref: string;
   external_subdir: string | null;
   is_prerelease: boolean;
+  what_changed: string | null;
   created_by: string | null;
   skill_slug: string;
   attempts: number;
@@ -25,7 +26,7 @@ interface PendingRow {
 
 export async function mirrorPendingVersions(pool: Pool, deps: { store: ArtifactStore }): Promise<number> {
   const { rows } = await pool.query<PendingRow>(
-    `select pm.id, pm.skill_id, pm.semver, pm.external_url, pm.external_ref, pm.external_subdir, pm.is_prerelease, pm.created_by, pm.attempts, s.slug as skill_slug
+    `select pm.id, pm.skill_id, pm.semver, pm.external_url, pm.external_ref, pm.external_subdir, pm.is_prerelease, pm.what_changed, pm.created_by, pm.attempts, s.slug as skill_slug
        from pending_mirrors pm join skills s on s.id = pm.skill_id
       where pm.attempts < $1
       order by pm.created_at asc
@@ -51,6 +52,7 @@ export async function mirrorPendingVersions(pool: Pool, deps: { store: ArtifactS
         subdir: r.external_subdir,
         createdBy: r.created_by,
         isPrerelease: r.is_prerelease,
+        whatChanged: r.what_changed,
       });
       await pool.query(`delete from pending_mirrors where id = $1`, [r.id]);
       mirrored++;

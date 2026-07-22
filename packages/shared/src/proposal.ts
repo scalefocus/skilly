@@ -35,6 +35,12 @@ export const TRANSITIONS: Record<ProposalAction, Rule> = {
 
 export const TERMINAL_STATES: ProposalState[] = ["accepted", "rejected"];
 
+/**
+ * Max length of a per-version "What changed" note (§8) — plain text, client-counted and
+ * server-enforced. Kept here (governance core) so the propose form and the API share one bound.
+ */
+export const WHAT_CHANGED_MAX_LEN = 4000;
+
 export function isTerminal(state: ProposalState): boolean {
   return TERMINAL_STATES.includes(state);
 }

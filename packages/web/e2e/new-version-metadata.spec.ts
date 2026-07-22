@@ -54,9 +54,27 @@ test.describe("new-version proposal: editable metadata + keep current files (@gl
   });
 
   test("the no-op guard blocks an unchanged reuse submit (no proposal created)", async ({ page }) => {
+    // Clearing nothing else, keep the pre-filled note so the NO-OP guard is what blocks (not the
+    // note-required rule, which is exercised separately below).
     await page.getByRole("button", { name: "Submit for review →" }).click();
-    await expect(page.getByText(/nothing changed — edit at least one field/i)).toBeVisible();
+    await expect(page.getByText(/nothing changed — edit at least one field|describe what changed/i)).toBeVisible();
     // Still on the propose form — nothing was created.
+    await expect(page).toHaveURL(/\/propose/);
+  });
+
+  test("the What changed note is shown and pre-filled 'Updated metadata' for a metadata-only re-version (§8)", async ({ page }) => {
+    const note = page.getByPlaceholder(/new in this version/i);
+    await expect(note).toBeVisible();
+    await expect(note).toHaveValue("Updated metadata");
+  });
+
+  test("clearing the required What changed note blocks submit (no proposal created) (§8)", async ({ page }) => {
+    // Change the title so the no-op guard would pass, then clear the note: the required-note rule
+    // is what blocks the submit. Write-free — nothing is created.
+    await page.getByPlaceholder("PDF Tools").fill("PDF Tools Renamed");
+    await page.getByPlaceholder(/new in this version/i).fill("");
+    await page.getByRole("button", { name: "Submit for review →" }).click();
+    await expect(page.getByText(/describe what changed in this version/i)).toBeVisible();
     await expect(page).toHaveURL(/\/propose/);
   });
 });

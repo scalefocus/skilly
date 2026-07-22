@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { parseInstallCommand } from "@skilly/shared/external-tool";
 import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
+import { WHAT_CHANGED_MAX_LEN } from "@skilly/shared/proposal";
 import { Pill, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
@@ -116,6 +117,7 @@ function ProposeForm() {
     title: "",
     description: "",
     usageExamples: "",
+    whatChanged: "", // per-version "What changed" note; required + shown only in new-version mode (§8)
     toolHarness: "generic", // least-presumptuous default; proposers pick or type the real one
 
     semver: "1.0.0",
@@ -314,6 +316,9 @@ function ProposeForm() {
           title: j.meta?.title ?? "",
           description: j.meta?.description ?? "",
           usageExamples: j.usageExamples ?? "",
+          // Default the required note to "Updated metadata" when Keep-current-files will be on (a
+          // metadata-only re-version); a fresh source starts blank so the proposer describes it (§8).
+          whatChanged: !forcedNV && j.latest != null ? "Updated metadata" : "",
           toolHarness: j.meta?.toolHarness ?? prev.toolHarness,
           semver: bumpPatch(j.latest ?? null),
           externalUrl: j.pointer?.originUrl ?? "",
@@ -580,8 +585,15 @@ function ProposeForm() {
         toolHarness: f.toolHarness, // a slug from the closed picker; server validates membership (§8)
 
         usageExamples: f.usageExamples || null,
+        // Per-version note (§8): required in new-version mode; omitted for a skill's first version.
+        whatChanged: isNewVersion ? f.whatChanged.trim() || null : null,
         visibility,
       };
+
+      // The "What changed" note is required on a new version (server re-enforces with a 422).
+      if (isNewVersion && !f.whatChanged.trim()) {
+        throw new Error("Describe what changed in this version — the “What changed” note is required.");
+      }
 
       const reusing = isNewVersion && reuseFiles;
       let artifact: { artifactObjectKey?: string; artifactSha256?: string; contentSha256?: string; artifactFilename?: string | null } = {};
@@ -1088,6 +1100,24 @@ function ProposeForm() {
           <label style={label}>Usage <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· how it's triggered, options (Markdown)</span></label>
           <MarkdownField value={f.usageExamples} onChange={(v) => setF((prev) => ({ ...prev, usageExamples: v }))} rows={4} mono style={field} placeholder={"Shown as a quick-start above SKILL.md. e.g.\n\nTrigger by asking to \"summarize a PDF\".\n\nOptions:\n- `pages`: page range"} />
         </div>
+        {/* "What changed" note (§8): per-version release note. New-version mode only — a skill's
+            first version has no predecessor to describe. Plain text (no Markdown), required. */}
+        {lock && (
+          <div>
+            <label style={label}>What changed <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· plain-text note for this version (required)</span></label>
+            <textarea
+              style={{ ...field, resize: "vertical", fontFamily: "var(--font-mono)", fontSize: 13 }}
+              rows={4}
+              maxLength={WHAT_CHANGED_MAX_LEN}
+              value={f.whatChanged}
+              onChange={set("whatChanged")}
+              placeholder={"What’s new in this version? e.g.\n\n- Fixed PDF page-range parsing\n- Added a --lang option"}
+            />
+            <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
+              Shown per version on the skill page and to reviewers. Plain text — no Markdown. <span className="mono">{f.whatChanged.length}/{WHAT_CHANGED_MAX_LEN}</span>
+            </p>
+          </div>
+        )}
         <div>
           <label style={label}>Tool / harness <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· the coding agent this skill targets</span></label>
           {/* Editable in new-version mode too (§8) — synced to the skill on accept. tool_harness is
