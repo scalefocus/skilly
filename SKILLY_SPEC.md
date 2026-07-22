@@ -779,9 +779,12 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 ## 10. Search, discovery, taxonomy
 
 - **Free-text search is substring `ILIKE`** over title, slug, description, tags, **and the latest active version's usage examples** (the denormalized `skills.usage_search`, migration 0020) — the **same predicate** for the header dropdown and the catalog grid, so they match identically and respond to **partial words as you type** (a true type-ahead filter). The `search_tsv` `tsvector` (title=A/description=B/tags=C/usage=D) is still trigger-maintained but is **no longer the query path**: we deliberately trade full-text relevance ranking for consistent, responsive substring matching (a conscious choice — revisit if catalog scale makes ranking quality matter; the FTS machinery is retained so that's reversible). Maintainer names remain **not** matched (low value).
-- **Two search surfaces, one matcher:**
-  - **Header dropdown (every page *except* the catalog):** a typeahead showing the **top 5** matches (name-matches first), opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
+- **Search surfaces (one box, five behaviors):** the single top-bar box adapts to the page it's on. Its placeholder reads **"Search the registry…"** everywhere except the installed-skills page (**"Search installed skills…"**), the usage dashboard (**"Search usage…"**), and the Requested skills page (**"Search requests…"**).
+  - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches (name-matches first), opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
   - **Catalog page:** the dropdown is **suppressed**; the same top-bar box becomes a **live filter of the card/row grid** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (merged with the other filters, kept out of history) and the grid re-queries + re-ranks on each keystroke, exactly like choosing a category or tool. The box is **seeded from `?q=`** on arrival, and **clearing it restores the full catalog**.
+  - **Installed-skills page (`/installed`, §23):** the dropdown is **suppressed** and the box becomes a **client-side live filter of the caller's own installed list** (no refetch, no query param) — a case-insensitive substring match over each row's title, namespace slug, and skill slug, engaging from the **1st character** (the list is small and already loaded). The typed query is still mirrored to **`?q=`** (`router.replace`, seeded on arrival; clearing restores the full list). This is a **non-registry** mode: different data, matcher, and matched fields — see §23 (*Installed Skills page → Header search*).
+  - **Usage dashboard (`/usage`, §21):** the dropdown is **suppressed** the same way and the box becomes a **live filter of the usage list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history); the box is **seeded from `?q=`** on arrival and **clearing it restores the full list**. This box drives the **usage dashboard's own** entitlement-scoped query (`GET /api/usage?q=`), **not** the catalog matcher above — see §21 for its match fields and scope. The usage page therefore carries **no separate in-page search box**.
+  - **Requested skills page (`/requests`, §26):** the dropdown is **suppressed** and the box becomes a **live filter of the requests list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history) so `GET /api/requests?q=` re-queries on each keystroke; the box is **seeded from `?q=`** on arrival (shareable link, survives reload) and **clearing it restores the full list**. The match is the requests' **own** substring `ILIKE` over **title + description** (`applyLiveFilters`, §26) — a sibling of the registry matcher, over a different table, not the same predicate/dataset. The page carries **no separate in-page search box**; the page-local **category/tool facets, the "Mine" toggle, the admin state filter, and the cards/list toggle** stay on the page and compose (AND) with `?q=`.
 - **Strictly visibility-filtered, auth-required.** A restricted skill must **never** appear in search, autocomplete, or counts for users outside its namespace. **No anonymous browsing.**
 - **Facets (implemented):** category, tool/harness, hosted-vs-pointer. The hosted-vs-pointer facet is labelled **"Source"** in the catalog UI with options **"Hosted"** and **"External"** — "External" being the one user-facing name for pointer skills, matching the `external` pill on catalog cards and the "External source" panel on the detail page (never "Mirrored"; mirroring is the internal mechanism, not the user-facing name). (Namespace, channel/stable-vs-beta, and scan-status facets are **deferred** — not computed or surfaced in v1.)
 - **"My Skills" toggle** (`?mine=1`): narrows the catalog to skills the caller is an **explicit maintainer** of (`skill_maintainers`, §19) — the same definition as `maintainsSkills` in `/api/me`. Implicit (namespace-admin) maintainership is **not** included: "My Skills" means skills named to you, not every skill in a namespace you administer. Visibility-filtered like everything else.
@@ -1292,7 +1295,7 @@ A simple, owner-facing dashboard of **view** and **install** tendencies per skil
 - **Data shape:** no new endpoint or table — `GET /api/usage?days=<7|30|90|all>` grows a `series` field: per-bucket `{ date, views, installs }` on the aggregate plus a compact per-skill `daily` array for sparklines, computed by grouped `date_trunc(<bucket>)` queries over the same indexes (the bucket is a trusted literal), with the same server-side entitlement filtering as the rest of the dashboard.
 
 ### Listing & surface
-- Lists entitled skills, default sort **30d installs desc**, sortable, **capped at ~100** (pagination/search deferred). **Active skills only** in v1 (archived behind a future toggle).
+- Lists entitled skills, default sort **30d installs desc**, with a client-side **installs/views sort toggle** and **refinement chips** (namespace, tool/harness) that narrow the returned set, rendered via **client-side infinite scroll** (~100 rows per page over the full returned list). **Search** is driven by the **global header box** on `/usage` (§10) — there is **no separate in-page search box**: it writes `?q=` and the dashboard calls `GET /api/usage?q=`, a substring **`ILIKE`** over skill **title, slug, and namespace slug**, **entitlement-scoped** (only skills the caller owns/governs, per the ownership matrix above) and evaluated **server-side across the full entitled list** (not just the rows scrolled into view). The box is seeded from and synced to `?q=`; clearing it restores the full list. **Active skills only** in v1 (archived behind a future toggle).
 - New `/usage` page, nav-gated to entitled users; `GET /api/usage` (list + aggregate) and `GET /api/usage/:ns/:slug/breakdown?range=<7d|30d|90d|all>` (drill-down; the query param is `range`). Both resolve entitlement server-side.
 - **Skill-detail trend chart:** the skill detail page shows an **installs + views time-series chart** directly under the created/last-updated line, with a **7d / 30d / 90d / all-time** range toggle (default 30d). **Visible to anyone who can open the skill** — it follows the detail page's own access rules (an active skill needs only visibility per #3; an archived skill is owner-only per §7). This is **aggregate counts over time only** — install totals are already public on catalog cards, and per-day view totals carry no PII; the **named viewer/installer breakdown stays owner-only** on the `/usage` dashboard. Served by `GET /api/skills/:ns/:slug/usage-series?range=`. Unlike the dashboard's number-only all-time rule, this chart **does** offer all-time by stepping the bucket up as the span grows (**day ≤ ~3mo, week ≤ ~2y, month beyond**), keeping the point count bounded.
 
@@ -1609,6 +1612,23 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   handle a system install has, and every viewer here is a platform admin). Uninstall / Activate
   edge actions work identically for any platform admin. Served by `GET /api/installs?scope=system`
   (403 for non-admins).
+- **Header search — live filter of the installed list (`/installed` only):** the app-shell
+  top-bar search box takes a **third mode** here (alongside the registry typeahead and the catalog
+  live-filter, §10). On `/installed` its placeholder reads **"Search installed skills…"** (not
+  "Search the registry…"), the **registry typeahead dropdown is suppressed**, and **Enter merely
+  dismisses focus** — it does *not* jump to the catalog. Typing **live-filters the rows already on
+  the page, client-side** (no refetch, no new endpoint or query param) as a **case-insensitive
+  substring (`ILIKE`-style) match** over each row's **title, namespace slug, and skill slug** — and
+  **nothing else** (not the version, client label, IP, or dates). It engages from the **1st
+  character** (no 2-char floor — the list is small and already fully loaded). The typed query is
+  mirrored to **`?q=`** via `router.replace` (kept out of history), **seeded from `?q=` on
+  arrival**, and **clearing it restores the full list**. The filter applies within whichever
+  **scope** is active (**Mine**, or **System installs** for platform admins) and the query
+  **persists across the Mine/System toggle**; the placeholder is "Search installed skills" in
+  **both** scopes. The **alphabetical-by-title ordering is preserved** among the matches. **No-match
+  state:** when the box is non-empty and no install matches, the page shows a **distinct empty
+  state** (*"No installed skills match "…".*", with a hint to clear the search) — separate from the
+  "No installs yet" / "No system installs yet" empty states shown when the list is genuinely empty.
 
 ### System installations (platform-admin)
 An install token owned by the **platform, not a person** — for CI pipelines and other org tools
@@ -2001,13 +2021,15 @@ the requester is notified, and the fulfiller earns leaderboard credit.
 - New nav item **"Requested skills"**, directly **below "Propose a skill"** — lists **open**
   requests in the catalog's card/row visual language (cards ⇄ list toggle, same persisted view
   preference pattern): title, categories, tool chip, requester (name + avatar), and posted date.
-  Search + category/tool filtering mirror the
-  catalog's live-filter behavior. Auth-required; org-visible (no visibility filtering — requests
-  have no namespace). The nav item carries the same superscript **"new items" badge** and the
+  Category/tool filtering mirrors the catalog's live-filter behavior; **free-text search comes from
+  the top-bar box** — on this route it is repurposed as a live filter of the requests list
+  (placeholder **"Search requests…"**, `?q=`-synced, dropdown suppressed, substring `ILIKE` over
+  title + description; §10) — and there is **no page-local search input**. Auth-required;
+  org-visible (no visibility filtering — requests have no namespace). The nav item carries the same superscript **"new items" badge** and the
   cards/rows carry the same **"new" corner tag** as the Catalog (§10) — one request created since
   the user's last visit is enough to light both up.
-- **"Mine" toggle** beside the search bar: switches the list from the org-wide open list to **the
-  caller's own requests, in any state** (`open` or `fulfilled` — withdrawn/removed hard-delete the
+- **"Mine" toggle** (leftmost control in the filter row, below the top-bar search): switches the
+  list from the org-wide open list to **the caller's own requests, in any state** (`open` or `fulfilled` — withdrawn/removed hard-delete the
   row, so there is nothing left to show for those). Search/category/tool filters still apply within
   either mode. In "Mine" mode each card/row also shows a **state pill** (open / fulfilled) — the
   pill is hidden in the org-wide list, where every result is always `open`. No "new" badges in

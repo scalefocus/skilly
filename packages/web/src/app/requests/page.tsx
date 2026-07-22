@@ -1,6 +1,7 @@
 "use client";
 // Requested skills (§26): open skill requests, in the catalog's card/row language. Org-visible.
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useApi, useEnterKey, SkeletonGrid, EmptyState, ScrollToTop, Pill } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
@@ -107,13 +108,12 @@ function RequestRow({ r, showState }: { r: RequestEntry; showState: boolean }) {
 }
 
 function RequestsInner() {
+  // Search comes from the top-bar box — on /requests it live-filters this list via ?q= (§10), the
+  // same way the catalog works. There is no page-local search input; pressing Enter anywhere jumps
+  // focus to that box.
   useEnterKey(() => window.dispatchEvent(new Event("skilly:focus-search")));
-  const [q, setQ] = useState("");
-  const [qSubmitted, setQSubmitted] = useState("");
-  useEffect(() => {
-    const t = setTimeout(() => setQSubmitted(q.trim()), 300);
-    return () => clearTimeout(t);
-  }, [q]);
+  const params = useSearchParams();
+  const submitted = params.get("q") ?? "";
   const [category, setCategory] = useState<string | null>(null);
   const [tool, setTool] = useState<string | null>(null);
   const [view, setView] = useState<"cards" | "list">("cards");
@@ -125,7 +125,7 @@ function RequestsInner() {
   const [stateFilter, setStateFilter] = useState<"open" | "fulfilled" | "all">("open");
 
   const qs = new URLSearchParams();
-  if (qSubmitted) qs.set("q", qSubmitted);
+  if (submitted) qs.set("q", submitted);
   if (category) qs.set("category", category);
   if (tool) qs.set("tool", tool);
   if (mine) qs.set("mine", "1");
@@ -154,13 +154,6 @@ function RequestsInner() {
       </div>
 
       <div className="reveal" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
-        <div className="search" style={{ maxWidth: 320 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search requests…" />
-        </div>
         <button type="button" className={`facet${mine ? " facet-on" : ""}`} onClick={() => setMine((m) => !m)} title="Show only your own requests, in any state">
           👤 Mine
         </button>
@@ -204,7 +197,7 @@ function RequestsInner() {
       ) : requests.length === 0 ? (
         <EmptyState
           title={
-            qSubmitted || category || tool
+            submitted || category || tool
               ? "No requests match your filters"
               : mine
                 ? "You haven’t asked for anything yet"
@@ -215,7 +208,7 @@ function RequestsInner() {
                     : "No open requests"
           }
           hint={
-            qSubmitted || category || tool
+            submitted || category || tool
               ? "Try a different search or clear filters."
               : mine
                 ? "Propose a skill → “I want a skill” to post one."
