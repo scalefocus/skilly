@@ -76,16 +76,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [signInProvider, setSignInProvider] = useState("azure-ad");
 
   // Some pages turn the search box into a live FILTER of an on-page list rather than the registry
-  // typeahead dropdown: the catalog grid (§10), the installed-skills list (§23), and the usage
-  // dashboard (§21). In all of them, typing mirrors the query into ?q=, the box is seeded from ?q=
-  // on arrival, and the dropdown is suppressed. They differ only in the char floor (installed
-  // filters an already-loaded list client-side, so it engages from the 1st char; catalog and usage
-  // query the server at 2+ chars) and the placeholder. Everywhere else the box is the registry
-  // typeahead dropdown.
+  // typeahead dropdown: the catalog grid (§10), the installed-skills list (§23), the usage
+  // dashboard (§21), and the Requested skills list (§26). In all of them, typing mirrors the query
+  // into ?q=, the box is seeded from ?q= on arrival, and the dropdown is suppressed. They differ
+  // only in the char floor (installed filters an already-loaded list client-side, so it engages
+  // from the 1st char; catalog, usage, and requests query the server at 2+ chars) and the
+  // placeholder. Everywhere else the box is the registry typeahead dropdown.
   const onCatalog = pathname === "/catalog";
   const onInstalled = pathname === "/installed";
   const onUsage = pathname === "/usage";
-  const liveFilter = onCatalog || onInstalled || onUsage;
+  const onRequests = pathname === "/requests";
+  const liveFilter = onCatalog || onInstalled || onUsage || onRequests;
 
   // Debounced autocomplete (typeahead pages only): fire at 2+ chars (matches the server floor),
   // 200ms after the last keystroke, ignore stale responses. Reset cleanly below the threshold or on
@@ -119,10 +120,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [q, status, liveFilter]);
 
   // Reset the search box on every navigation: when ARRIVING on a live-filter page (catalog,
-  // installed, or usage), seed it from ?q= so it reflects the active filter (e.g. landing via the
-  // dropdown's "see all" or Enter from another page); otherwise CLEAR it — so a query typed on one
-  // page doesn't linger and pop the suggestions dropdown on the next. Keyed on pathname (not q), so
-  // it never fires while you type or while the live-filter rewrites ?q= (pathname is unchanged).
+  // installed, usage, or Requested skills), seed it from ?q= so it reflects the active filter (e.g.
+  // landing via the dropdown's "see all", Enter from another page, or a shared/bookmarked link);
+  // otherwise CLEAR it — so a query typed on one page doesn't linger and pop the suggestions
+  // dropdown on the next. Keyed on pathname (not q), so it never fires while you type or while the
+  // live-filter rewrites ?q= (pathname is unchanged).
   useEffect(() => {
     setAcOpen(false);
     setQ(liveFilter ? new URLSearchParams(window.location.search).get("q") ?? "" : "");
@@ -132,8 +134,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // current path so they aren't clobbered (the catalog's category/tool/etc.). router.replace keeps
   // it out of history (like adjusting any other filter) and targets the current pathname so it works
   // on every live-filter page. The char floor differs by page: the installed list filters
-  // client-side over an already-loaded set, so it engages from the 1st char (§23); the catalog and
-  // usage query the server at 2+ chars. Below the floor the q filter clears (full list).
+  // client-side over an already-loaded set, so it engages from the 1st char (§23); the catalog,
+  // usage, and Requested skills query the server at 2+ chars. Below the floor the q filter clears
+  // (full list).
   useEffect(() => {
     if (!liveFilter) return;
     const floor = onInstalled ? 1 : 2;
@@ -531,8 +534,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="search"
               onSubmit={(e) => {
                 e.preventDefault();
-                // On a live-filter page (catalog/installed/usage) the box already filters the list —
-                // Enter just dismisses focus (no jump to the catalog).
+                // On a live-filter page (catalog/installed/usage/requests) the box already filters
+                // the list — Enter just dismisses focus (no jump to the catalog).
                 if (liveFilter) { searchRef.current?.blur(); return; }
                 // Enter on a highlighted suggestion jumps straight to that skill (the "see all"
                 // footer sits at index === suggestions.length and falls through to the catalog).
@@ -570,8 +573,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   else if (e.key === "ArrowUp") { e.preventDefault(); setAcHi((i) => (i <= 0 ? count - 1 : i - 1)); }
                   else if (e.key === "Escape") { setAcOpen(false); setAcHi(-1); }
                 }}
-                placeholder={onInstalled ? "Search installed skills…" : onUsage ? "Search usage…" : "Search the registry…"}
-                aria-label={onInstalled ? "Search installed skills" : onUsage ? "Search usage" : "Search skills"}
+                placeholder={onInstalled ? "Search installed skills…" : onUsage ? "Search usage…" : onRequests ? "Search requests…" : "Search the registry…"}
+                aria-label={onInstalled ? "Search installed skills" : onUsage ? "Search usage" : onRequests ? "Search requests" : "Search skills"}
                 aria-autocomplete="list"
                 autoComplete="off"
               />
