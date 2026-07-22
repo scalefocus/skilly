@@ -1,11 +1,12 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
+import { filterInstalls } from "../../lib/installedFilter";
 
 interface Install {
   id: string;
@@ -36,6 +37,9 @@ function clientLabel(ua: string | null): string {
 function InstalledInner() {
   const fmt = useDateFmt();
   const router = useRouter();
+  // The app-shell header search mirrors its query into ?q= on /installed (§23). We read it here and
+  // filter the already-loaded list client-side — no refetch. Empty query → full list.
+  const q = (useSearchParams().get("q") ?? "").trim();
   // Admin-configured install-expiry horizon (calendar months) — bounds the reactivate picker. §23
   const { data: me } = useApi<{ installMaxTtlMonths?: number; isPlatformAdmin?: boolean }>("/api/me");
   // Platform admins can flip to the System installs view: platform-owned installs (CI/org tools),
@@ -45,6 +49,9 @@ function InstalledInner() {
     scope === "system" ? "/api/installs?scope=system" : "/api/installs",
   );
   const installs = data?.installs ?? [];
+  // §23: case-insensitive substring match over title + @ns/slug (see lib/installedFilter). Applies
+  // in both scopes; the query persists across the Mine/System toggle (it lives in the URL).
+  const filtered = filterInstalls(installs, q);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [activateIso, setActivateIso] = useState<string | null>(null);
@@ -111,9 +118,12 @@ function InstalledInner() {
         ) : (
           <EmptyState title="No installs yet" hint="Generate an install command from a skill’s page and run it — it’ll show up here." />
         )
+      ) : filtered.length === 0 ? (
+        // There ARE installs, but none match the header search — distinct from the empty states above. §23
+        <EmptyState title={`No installed skills match “${q}”`} hint={`Clear the search to see all ${scope === "system" ? "system installs" : "your installs"}.`} />
       ) : (
         <div className="rows reveal">
-          {installs.map((i) => (
+          {filtered.map((i) => (
             <div
               className="row installed-row"
               key={i.id}
@@ -170,7 +180,10 @@ function InstalledInner() {
 export default function InstalledPage() {
   return (
     <RequireAuth>
-      <InstalledInner />
+      {/* InstalledInner reads ?q= via useSearchParams — needs a Suspense boundary (like the catalog). */}
+      <Suspense fallback={<div className="rows">{Array.from({ length: 3 }).map((_, i) => <div className="row" key={i}><div className="skeleton" style={{ height: 16, width: "45%" }} /></div>)}</div>}>
+        <InstalledInner />
+      </Suspense>
     </RequireAuth>
   );
 }

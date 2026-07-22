@@ -120,4 +120,26 @@ BEGIN
   END IF;
 END $$;
 
+-- Installed skills for the dev user (SKILLY_SPEC.md §23): a few USED install tokens so the
+-- Installed Skills page — and its "Search installed skills" header filter — has rows to show in
+-- local dev and e2e. `used_at` set = they list on /installed; the hashed_token is a dev placeholder
+-- (these URLs are never actually cloned). Three distinct titles across two namespaces exercise the
+-- title/namespace/skill-slug substring match; secret-helper is intentionally expired (inactive) to
+-- prove the filter still matches inactive rows. Idempotent via a per-(user,skill) existence guard.
+INSERT INTO tokens (user_id, type, hashed_token, skill_id, pinned_semver, scope, expires_at, used_at, client_user_agent)
+  SELECT u.id, 'install', 'devhash-'||n.slug||'-'||s.slug, s.id, v.pinned,
+         jsonb_build_object('skillId', s.id, 'semver', v.pinned),
+         v.expires, now() - (v.age_days || ' days')::interval, 'git/2.43.0'
+    FROM users u,
+         skills s JOIN namespaces n ON n.id = s.namespace_id
+    JOIN (VALUES ('pdf-tools',     '1.1.0', NULL::timestamptz,          3),
+                 ('lint-fixer',    NULL,    NULL::timestamptz,         10),
+                 ('secret-helper', '0.9.0', now() - interval '1 day',  20)) AS v(slug, pinned, expires, age_days)
+      ON v.slug = s.slug
+   WHERE u.entra_object_id = 'dev-admin-oid'
+     AND NOT EXISTS (
+       SELECT 1 FROM tokens t
+        WHERE t.user_id = u.id AND t.skill_id = s.id AND t.type = 'install'
+     );
+
 COMMIT;
