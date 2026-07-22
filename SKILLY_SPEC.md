@@ -782,6 +782,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Two search surfaces, one matcher:**
   - **Header dropdown (every page *except* the catalog):** a typeahead showing the **top 5** matches (name-matches first), opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
   - **Catalog page:** the dropdown is **suppressed**; the same top-bar box becomes a **live filter of the card/row grid** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (merged with the other filters, kept out of history) and the grid re-queries + re-ranks on each keystroke, exactly like choosing a category or tool. The box is **seeded from `?q=`** on arrival, and **clearing it restores the full catalog**.
+- **The same top-bar box has a third, non-registry mode on `/installed`:** it filters the caller's own **installed-skills list** client-side rather than querying the registry — different data, matcher, and matched fields. See §23 (*Installed Skills page → Header search*).
 - **Strictly visibility-filtered, auth-required.** A restricted skill must **never** appear in search, autocomplete, or counts for users outside its namespace. **No anonymous browsing.**
 - **Facets (implemented):** category, tool/harness, hosted-vs-pointer. The hosted-vs-pointer facet is labelled **"Source"** in the catalog UI with options **"Hosted"** and **"External"** — "External" being the one user-facing name for pointer skills, matching the `external` pill on catalog cards and the "External source" panel on the detail page (never "Mirrored"; mirroring is the internal mechanism, not the user-facing name). (Namespace, channel/stable-vs-beta, and scan-status facets are **deferred** — not computed or surfaced in v1.)
 - **"My Skills" toggle** (`?mine=1`): narrows the catalog to skills the caller is an **explicit maintainer** of (`skill_maintainers`, §19) — the same definition as `maintainsSkills` in `/api/me`. Implicit (namespace-admin) maintainership is **not** included: "My Skills" means skills named to you, not every skill in a namespace you administer. Visibility-filtered like everything else.
@@ -1608,6 +1609,23 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   handle a system install has, and every viewer here is a platform admin). Uninstall / Activate
   edge actions work identically for any platform admin. Served by `GET /api/installs?scope=system`
   (403 for non-admins).
+- **Header search — live filter of the installed list (`/installed` only):** the app-shell
+  top-bar search box takes a **third mode** here (alongside the registry typeahead and the catalog
+  live-filter, §10). On `/installed` its placeholder reads **"Search installed skills…"** (not
+  "Search the registry…"), the **registry typeahead dropdown is suppressed**, and **Enter merely
+  dismisses focus** — it does *not* jump to the catalog. Typing **live-filters the rows already on
+  the page, client-side** (no refetch, no new endpoint or query param) as a **case-insensitive
+  substring (`ILIKE`-style) match** over each row's **title, namespace slug, and skill slug** — and
+  **nothing else** (not the version, client label, IP, or dates). It engages from the **1st
+  character** (no 2-char floor — the list is small and already fully loaded). The typed query is
+  mirrored to **`?q=`** via `router.replace` (kept out of history), **seeded from `?q=` on
+  arrival**, and **clearing it restores the full list**. The filter applies within whichever
+  **scope** is active (**Mine**, or **System installs** for platform admins) and the query
+  **persists across the Mine/System toggle**; the placeholder is "Search installed skills" in
+  **both** scopes. The **alphabetical-by-title ordering is preserved** among the matches. **No-match
+  state:** when the box is non-empty and no install matches, the page shows a **distinct empty
+  state** (*"No installed skills match "…".*", with a hint to clear the search) — separate from the
+  "No installs yet" / "No system installs yet" empty states shown when the list is genuinely empty.
 
 ### System installations (platform-admin)
 An install token owned by the **platform, not a person** — for CI pipelines and other org tools
