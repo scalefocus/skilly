@@ -365,6 +365,27 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [userMenuOpen]);
 
+  // Clear the header search in one action — the ✕ button and the Escape key both call this. Empties
+  // the box, closes any open typeahead dropdown (and drops the "Nothing found" bubble by emptying the
+  // query), and on a live-filter page (catalog/installed/usage/requests) drops ?q= IMMEDIATELY via
+  // router.replace — not waiting for the ~250ms live-filter debounce — so the full unfiltered list
+  // snaps back at once. Keeps keyboard focus in the box, ready to retype (never blurs or navigates).
+  const clearSearch = () => {
+    setQ("");
+    setSuggestions([]);
+    setAcOpen(false);
+    setAcHi(-1);
+    if (liveFilter) {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.has("q")) {
+        sp.delete("q");
+        const qs = sp.toString();
+        router.replace(qs ? `${pathname}?${qs}` : pathname);
+      }
+    }
+    searchRef.current?.focus();
+  };
+
   return (
     <div className="shell">
       {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden />}
@@ -566,19 +587,35 @@ export function AppShell({ children }: { children: ReactNode }) {
                 onChange={(e) => setQ(e.target.value)}
                 onFocus={() => { if (!liveFilter && (suggestions.length > 0 || (q.trim().length >= 2 && !acLoading))) setAcOpen(true); }}
                 onKeyDown={(e) => {
+                  // Escape always clears the box in one press, in every mode — this supersedes its
+                  // former job of merely closing the dropdown (clearSearch closes it anyway). No-op
+                  // (falls through to default) when there's nothing to clear or dismiss.
+                  if (e.key === "Escape") {
+                    if (q.length > 0 || acOpen) { e.preventDefault(); clearSearch(); }
+                    return;
+                  }
                   if (!acOpen || suggestions.length === 0) return;
                   // Navigable items = the suggestions plus the trailing "see all in catalog" footer.
                   const count = suggestions.length + 1;
                   if (e.key === "ArrowDown") { e.preventDefault(); setAcHi((i) => (i + 1) % count); }
                   else if (e.key === "ArrowUp") { e.preventDefault(); setAcHi((i) => (i <= 0 ? count - 1 : i - 1)); }
-                  else if (e.key === "Escape") { setAcOpen(false); setAcHi(-1); }
                 }}
                 placeholder={onInstalled ? "Search installed skills…" : onUsage ? "Search usage…" : onRequests ? "Search requests…" : "Search the registry…"}
                 aria-label={onInstalled ? "Search installed skills" : onUsage ? "Search usage" : onRequests ? "Search requests" : "Search skills"}
                 aria-autocomplete="list"
                 autoComplete="off"
               />
-              <kbd>CTRL+K</kbd>
+              {/* Right slot: the CTRL+K hint when the box is empty; the moment it holds any text the
+                  hint is replaced by a clear (✕) button — only ever one visible at a time. */}
+              {q.length > 0 ? (
+                <button type="button" className="search-clear" aria-label="Clear search" onClick={clearSearch}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              ) : (
+                <kbd>CTRL+K</kbd>
+              )}
               {acOpen && suggestions.length > 0 && (
                 <ul className="search-ac" role="listbox">
                   {suggestions.map((s, i) => (
