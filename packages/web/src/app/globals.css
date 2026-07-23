@@ -339,6 +339,15 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   font-family: var(--font-mono); font-size: 10px; color: var(--faint);
   border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; background: var(--paper);
 }
+/* Clear (✕) button — occupies the CTRL+K slot while the box has text. Thin-stroke glyph matching the
+   search magnifier and the rest of the topbar icon set; muted by default, inks up on hover/focus. */
+.search-clear {
+  display: inline-flex; align-items: center; justify-content: center; line-height: 0;
+  border: 0; background: transparent; color: var(--faint); cursor: pointer;
+  padding: 3px; border-radius: 6px; transition: color 0.15s, background-color 0.15s;
+}
+.search-clear:hover { color: var(--ink); background: var(--surface-2); }
+.search-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--ink); }
 .topbar-spacer { flex: 1; }
 .system-banner { display: inline-flex; min-width: 0; max-width: 280px; flex-shrink: 1; }
 /* The inner Pill is a flex child of the capped banner; without min-width:0 it refuses to shrink, so
