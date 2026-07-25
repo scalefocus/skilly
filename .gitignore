@@ -28,9 +28,13 @@ Thumbs.db
 # worker runtime serving repos (dev: GIT_REPO_ROOT=./data/git)
 packages/worker/data/
 
-# Playwright artifacts (e2e runs)
+# Playwright artifacts (e2e runs). The suite's config lives in packages/web/e2e, so Playwright
+# writes its report/trace/junit output under that dir.
 packages/web/test-results/
 packages/web/playwright-report/
+packages/web/e2e/test-results/
+packages/web/e2e/playwright-report/
+packages/web/e2e/results/
 
 # Office lock/owner files
 ~$*

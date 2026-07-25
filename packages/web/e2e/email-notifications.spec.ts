@@ -3,16 +3,7 @@
 // by default; status pill; wrapper editor enforcing the single [SYSTEM MESSAGE] placeholder
 // before Save enables). Runs against the dev stack (SKILLY_DEV_AUTH=1, dev user is a
 // platform admin); opt-in, not part of the default `pnpm -r test`.
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback — same handshake as e2e/shots.mjs.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", {
-    form: { csrfToken: csrf.csrfToken, json: "true" },
-  });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn } from "./fixtures";
 
 test.describe("profile email-notifications toggle (§12)", () => {
   test.beforeEach(async ({ page }) => {

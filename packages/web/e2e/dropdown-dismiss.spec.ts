@@ -5,17 +5,7 @@
 // heading) is the exact case the former onBlur handler missed. Runs against the dev stack
 // (SKILLY_DEV_AUTH=1) using the seeded `global/pdf-tools` (hosted) and `global/web-scraper`
 // (pointer) skills; opt-in, not part of the default `pnpm -r test`.
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as
-// e2e/shots.mjs. page.request shares the page's cookie jar, so the next navigation is authed.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", {
-    form: { csrfToken: csrf.csrfToken, json: "true" },
-  });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn, type Page } from "./fixtures";
 
 // A non-focusable element outside both dropdowns — clicking it must still dismiss an open menu.
 const outside = (page: Page) => page.getByRole("heading", { name: "Install", exact: true });

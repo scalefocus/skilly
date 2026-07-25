@@ -3,15 +3,7 @@
 // ✕ and the Escape key both clear the box in one action, keep focus, and — on a live-filter page —
 // drop ?q= immediately so the full list snaps back. Runs against the dev stack (SKILLY_DEV_AUTH=1)
 // using the seeded catalog; opt-in, not part of the default `pnpm -r test`. Read-only.
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as the other
-// dev-stack specs. page.request shares the page cookie jar, so the next navigation is authed.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true" } });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn, type Page } from "./fixtures";
 
 // The top-bar box (registry aria-label), the CTRL+K hint, and the clear button.
 const searchBox = (page: Page) => page.getByRole("textbox", { name: "Search skills" });

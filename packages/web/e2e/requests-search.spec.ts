@@ -5,17 +5,7 @@
 // stack (SKILLY_DEV_AUTH=1); opt-in, not part of the default `pnpm -r test`. No requests are
 // seeded, so the test creates its own via POST /api/requests, tagged with a unique run token so the
 // assertions are robust against any leftover rows from earlier runs.
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as the
-// other specs. page.request shares the page's cookie jar, so the next navigation is authed.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", {
-    form: { csrfToken: csrf.csrfToken, json: "true" },
-  });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn, type Page } from "./fixtures";
 
 // Post a request as the signed-in dev user (text-only multipart form, §26).
 async function createRequest(page: Page, title: string) {

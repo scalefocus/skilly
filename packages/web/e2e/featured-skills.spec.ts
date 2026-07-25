@@ -4,15 +4,7 @@
 // (SKILLY_DEV_AUTH=1, a platform-admin dev user) using the seeded, installable `global/pdf-tools`
 // skill; opt-in, not part of the default `pnpm -r test`. Self-cleaning: it always leaves the skill
 // un-spotlighted.
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as
-// e2e/shots.mjs / new-version-metadata.spec.ts. Shares the page cookie jar.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true" } });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn } from "./fixtures";
 
 test.describe("featured skills spotlight (@global/pdf-tools)", () => {
   test("spotlight a skill → it appears in Featured on the home page → un-spotlight removes it", async ({ page }) => {
