@@ -38,6 +38,7 @@ pipeline {
   parameters {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
+    booleanParam(name: 'RUN_E2E_TESTS', defaultValue: false, description: 'Run the gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser)')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'DEPLOY_HOST', defaultValue: '', description: 'SSH target, e.g. user@host. Blank = use the skilly-deploy-host credential; filled = override it for this build.')
     string(name: 'DEPLOY_PATH', defaultValue: '', description: 'Checkout path on the deploy host. Blank = use the skilly-deploy-path credential; filled = override it for this build.')
@@ -51,6 +52,14 @@ pipeline {
     CI_PG_PORT      = '55432'
     // DATABASE_URL used by the gated db-tests (points at the ephemeral CI Postgres).
     CI_DATABASE_URL = "postgres://skilly:test@127.0.0.1:55432/skilly"
+    // Gated e2e stack — its own ephemeral Postgres + MinIO on distinct ports so it never
+    // collides with the db-test Postgres above.
+    CI_E2E_PG_CONTAINER    = "skilly-ci-e2e-pg-${env.BUILD_TAG}"
+    CI_E2E_MINIO_CONTAINER = "skilly-ci-e2e-minio-${env.BUILD_TAG}"
+    CI_E2E_PG_PORT         = '55433'
+    CI_E2E_MINIO_PORT      = '59000'
+    CI_E2E_DATABASE_URL    = "postgres://skilly:test@127.0.0.1:55433/skilly"
+    CI_E2E_MINIO_PASSWORD  = 'e2e-minio-not-a-secret'
     // asdf — must set ASDF_DIR explicitly so asdf.sh can locate itself in a non-interactive shell.
     ASDF_DIR = "${env.HOME}/.asdf"
     PATH     = "${env.HOME}/.asdf/shims:${env.HOME}/.asdf/bin:${env.PATH}"
@@ -136,6 +145,68 @@ pipeline {
       post {
         always {
           sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
+        }
+      }
+    }
+
+    stage('E2E tests') {
+      // Opt-in like the db-tests: a full live stack (headless browser + web dev server + Postgres +
+      // MinIO) is required, so this never runs by default. Toggle with RUN_E2E_TESTS.
+      when { expression { return params.RUN_E2E_TESTS } }
+      steps {
+        sh '''
+          set -eu
+          . "${HOME}/.asdf/asdf.sh"
+
+          # Ephemeral Postgres + MinIO for the live e2e stack.
+          docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
+            -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
+            -p ${CI_E2E_PG_PORT}:5432 postgres:16-alpine
+          docker run -d --rm --name "${CI_E2E_MINIO_CONTAINER}" \
+            -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD="${CI_E2E_MINIO_PASSWORD}" \
+            -p ${CI_E2E_MINIO_PORT}:9000 minio/minio:latest server /data
+
+          # Wait for Postgres readiness.
+          for i in $(seq 1 30); do
+            if docker exec "${CI_E2E_PG_CONTAINER}" pg_isready -U skilly >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+          # Least-privilege app role, all migrations, then the DEV seed (dev-admin user + fixtures).
+          docker exec "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -c \
+            "DO \\$\\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='skilly_app') THEN CREATE ROLE skilly_app LOGIN PASSWORD 'test'; END IF; END \\$\\$;"
+          for f in db/migrations/*.sql; do
+            echo "applying $f"
+            docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < "$f"
+          done
+          docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < db/seed.dev.sql
+
+          # Wait for MinIO, then create the artifact bucket the web upload path writes to.
+          for i in $(seq 1 30); do
+            if docker exec "${CI_E2E_MINIO_CONTAINER}" mc alias set local http://localhost:9000 skilly "${CI_E2E_MINIO_PASSWORD}" >/dev/null 2>&1 \
+               && docker exec "${CI_E2E_MINIO_CONTAINER}" mc ready local >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker exec "${CI_E2E_MINIO_CONTAINER}" mc mb -p local/skilly-artifacts >/dev/null 2>&1 || true
+
+          # Fetch the Chromium browser (+ its OS deps).
+          pnpm --filter @skilly/web exec playwright install --with-deps chromium
+
+          # Run the suite. Playwright's webServer starts `next dev` (SKILLY_DEV_AUTH=1 is forbidden in
+          # a production build), inheriting the env below; CI=1 makes it start a fresh server.
+          SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
+          DATABASE_URL="${CI_E2E_DATABASE_URL}" \
+          NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL=http://localhost:3000 \
+          SKILLY_REGISTRY_URL=http://localhost:3000 \
+          S3_ENDPOINT="http://127.0.0.1:${CI_E2E_MINIO_PORT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
+          CI=1 \
+            pnpm --filter @skilly/web e2e
+        '''
+      }
+      post {
+        always {
+          junit testResults: 'packages/web/**/junit.xml', allowEmptyResults: true
+          sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_MINIO_CONTAINER}" >/dev/null 2>&1 || true'
         }
       }
     }
@@ -231,7 +302,7 @@ MINIO_SCRIPT
 
   post {
     always {
-      sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
+      sh 'docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" "${CI_E2E_MINIO_CONTAINER}" >/dev/null 2>&1 || true'
     }
     success { echo "skilly pipeline OK — ${env.GIT_COMMIT}" }
     failure { echo "skilly pipeline FAILED — ${env.GIT_COMMIT}" }

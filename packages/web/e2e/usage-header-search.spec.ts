@@ -4,15 +4,7 @@
 // title/slug/namespace) by writing ?q= — seeded from and synced to the URL like the catalog.
 // Runs against the dev stack (SKILLY_DEV_AUTH=1, a platform-admin dev user) using the seeded
 // `global/pdf-tools` skill; opt-in, not part of the default `pnpm -r test`.
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as
-// e2e/featured-skills.spec.ts. Shares the page cookie jar.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true" } });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn } from "./fixtures";
 
 test.describe("usage header search (@global/pdf-tools)", () => {
   test('header box reads "Search usage…" and live-filters the usage list via ?q=', async ({ page }) => {

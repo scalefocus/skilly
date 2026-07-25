@@ -10,19 +10,9 @@
 import { createHash } from "node:crypto";
 import { randomBytes } from "node:crypto";
 import AdmZip from "adm-zip";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, devSignIn } from "./fixtures";
 
 const MB = 1024 * 1024;
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as
-// e2e/shots.mjs. page.request shares the page's cookie jar, so later API calls are authed.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", {
-    form: { csrfToken: csrf.csrfToken, json: "true" },
-  });
-  expect(res.ok()).toBeTruthy();
-}
 
 /** A valid .skill (zip) bundle whose SKILL.md name matches `slug`, padded with incompressible
  *  bytes so the archive itself exceeds `minBytes` on the wire. */

@@ -10,17 +10,7 @@
 // stays clean — only orphan staged upload objects remain, like the chunked-upload e2e's.
 import { randomBytes } from "node:crypto";
 import AdmZip from "adm-zip";
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as
-// e2e/shots.mjs. page.request shares the page's cookie jar, so later API calls are authed.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", {
-    form: { csrfToken: csrf.csrfToken, json: "true" },
-  });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn, type Page } from "./fixtures";
 
 /** A tiny valid .skill (zip) bundle whose SKILL.md name matches `slug`. `salt` makes the
  *  content-set digest unique per build so duplicate detection never trips across runs. */

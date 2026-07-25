@@ -4,15 +4,7 @@
 // typeahead is suppressed and Enter just blurs. Runs against the dev stack (SKILLY_DEV_AUTH=1) using
 // the seeded dev-user installs (pdf-tools, lint-fixer, secret-helper — see db/seed.dev.sql). Opt-in,
 // not part of the default `pnpm -r test`. Read-only: it never uninstalls, so the seed is preserved.
-import { test, expect, type Page } from "@playwright/test";
-
-// Dev sign-in via the next-auth credentials callback (no form fields) — same handshake as the other
-// dev-stack specs. Shares the page cookie jar.
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true" } });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn } from "./fixtures";
 
 const PDF = 'a[href="/skills/global/pdf-tools"]';
 const LINT = 'a[href="/skills/global/lint-fixer"]';

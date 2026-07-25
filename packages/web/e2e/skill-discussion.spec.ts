@@ -3,13 +3,7 @@
 // as a moderator (the dev user is a platform admin). Runs against the dev stack (SKILLY_DEV_AUTH=1)
 // using the seeded, installable `global/pdf-tools` skill; opt-in, not part of the default
 // `pnpm -r test`. Self-cleaning: the comment it posts is removed at the end.
-import { test, expect, type Page } from "@playwright/test";
-
-async function devSignIn(page: Page) {
-  const csrf = await (await page.request.get("/api/auth/csrf")).json();
-  const res = await page.request.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true" } });
-  expect(res.ok()).toBeTruthy();
-}
+import { test, expect, devSignIn } from "./fixtures";
 
 test.describe("skill discussion (@global/pdf-tools)", () => {
   test("expand → post a comment with a version pill → moderator delete", async ({ page }) => {

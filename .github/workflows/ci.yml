@@ -12,6 +12,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Opt-in trigger for the e2e job: run it manually, or on a PR labeled `e2e` (see the job's `if:`).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -104,6 +106,87 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @skilly/shared build
       - run: pnpm --filter @skilly/web build
+
+  # Opt-in Playwright e2e suite. A full live stack (headless browser + web dev server + Postgres +
+  # MinIO) is needed, so it never runs on ordinary pushes/PRs — only on a manual `workflow_dispatch`
+  # or a PR carrying the `e2e` label. Mirrors the gated Jenkins `E2E tests` stage.
+  e2e:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: skilly
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: skilly
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skilly"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # The web dev server + Playwright both read these. Dev auth is what the suite signs in with;
+      # a production build forbids it (instrumentation.ts), so Playwright runs `next dev`.
+      DATABASE_URL: postgres://skilly:test@127.0.0.1:5432/skilly
+      PGPASSWORD: test
+      SKILLY_DEV_AUTH: "1"
+      SKILLY_DEV_OID: dev-admin-oid
+      NEXTAUTH_SECRET: ci-e2e-not-a-secret
+      NEXTAUTH_URL: http://localhost:3000
+      SKILLY_REGISTRY_URL: http://localhost:3000
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_ACCESS_KEY: skilly
+      S3_SECRET_KEY: e2e-minio-not-a-secret
+      S3_BUCKET: skilly-artifacts
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Ensure psql
+        run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client)
+      - name: Start MinIO (service containers can't override its `server /data` command)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD=e2e-minio-not-a-secret \
+            minio/minio:latest server /data
+      - name: Apply migrations + dev seed
+        run: |
+          for f in db/migrations/*.sql; do
+            echo "applying $f"
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U skilly -d skilly -f "$f"
+          done
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U skilly -d skilly -f db/seed.dev.sql
+      - name: Create the MinIO artifact bucket
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec minio mc alias set local http://localhost:9000 skilly e2e-minio-not-a-secret >/dev/null 2>&1 \
+               && docker exec minio mc ready local >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          docker exec minio mc mb -p local/skilly-artifacts || true
+      # shared must build so the web dev server can resolve @skilly/shared.
+      - run: pnpm --filter @skilly/shared build
+      - name: Install the Playwright browser
+        run: pnpm --filter @skilly/web exec playwright install --with-deps chromium
+      - name: Run the e2e suite
+        run: pnpm --filter @skilly/web e2e
+      - name: Upload the Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            packages/web/e2e/results/
+            packages/web/e2e/playwright-report/
+          if-no-files-found: ignore
 
   helm-lint:
     runs-on: ubuntu-latest
