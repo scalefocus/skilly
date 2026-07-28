@@ -11,6 +11,20 @@ export interface ScimUser {
   email: string;
   displayName: string;
   active: boolean;
+  /**
+   * Entra directory profile (SKILLY_SPEC.md §5, §28) — job title / office / department, for the
+   * hover card only. **Optional on purpose, and the distinction matters:**
+   *   - `undefined` (the SCIM router's payloads — SCIM carries none of these) → the columns are
+   *     left completely untouched, so a SCIM push never wipes what Graph wrote.
+   *   - present (Graph reconciliation) → written through **unconditionally**, `null` included, so
+   *     a promotion, a re-org, or a cleared attribute upstream all propagate. This is deliberately
+   *     unlike `avatar`, which is only ever filled when missing.
+   */
+  directory?: {
+    jobTitle: string | null;
+    officeLocation: string | null;
+    department: string | null;
+  };
 }
 
 export interface ScimGroup {
@@ -177,9 +191,12 @@ export function pgStore(pool: Pool): ScimStore {
 }
 
 export async function upsertUser(pool: Pool, u: ScimUser): Promise<{ id: string }> {
+  // $8 = "this caller carries a directory profile". Only then may the three directory columns be
+  // written (and then they are written unconditionally, NULLs included) — see ScimUser.directory.
+  const dir = u.directory;
   const { rows } = await pool.query<{ id: string }>(
-    `insert into users (entra_object_id, email, display_name, status)
-       values ($1, $2, $3, $4)
+    `insert into users (entra_object_id, email, display_name, status, job_title, office_location, department)
+       values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (entra_object_id) do update
        -- Don't clobber real values with blanks (e.g. a reconcile where Graph returned no
        -- email/displayName because of a missing directory-read permission); keep what we have
@@ -187,9 +204,23 @@ export async function upsertUser(pool: Pool, u: ScimUser): Promise<{ id: string 
        set email = coalesce(nullif(excluded.email, ''), users.email),
            display_name = coalesce(nullif(excluded.display_name, ''), users.display_name),
            status = excluded.status,
+           -- Directory profile (§5/§28): overwritten outright by a carrying writer, left alone
+           -- by one that isn't (SCIM) — never coalesced, or a cleared title would survive forever.
+           job_title = case when $8::boolean then excluded.job_title else users.job_title end,
+           office_location = case when $8::boolean then excluded.office_location else users.office_location end,
+           department = case when $8::boolean then excluded.department else users.department end,
            updated_at = now()
      returning id`,
-    [u.externalId, u.email, u.displayName, u.active ? "active" : "inactive"],
+    [
+      u.externalId,
+      u.email,
+      u.displayName,
+      u.active ? "active" : "inactive",
+      dir?.jobTitle ?? null,
+      dir?.officeLocation ?? null,
+      dir?.department ?? null,
+      dir !== undefined,
+    ],
   );
   return { id: rows[0]!.id };
 }
@@ -251,8 +282,11 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // Scrub + detach the row (tombstone). Display label retains the former email
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";
+    // The directory profile (§28) is personal data and is scrubbed exactly like the avatar;
+    // directory_hidden resets so a returning person's fresh account starts at the default.
     await client.query(
       `update users set display_name = $2, email = '', avatar = null,
+              job_title = null, office_location = null, department = null, directory_hidden = false,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [userId, deletedLabel],

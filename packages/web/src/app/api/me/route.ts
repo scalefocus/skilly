@@ -13,6 +13,7 @@ import {
   setUserDriftNotifications,
   setUserNewVersionNotifications,
   setUserDiscussionNotifications,
+  setUserDirectoryHidden,
 } from "../../../lib/settings";
 import { invalidateLeaderboard } from "../../../lib/leaderboard";
 
@@ -46,9 +47,10 @@ export async function GET() {
             drift_notifications: boolean;
             new_version_notifications: boolean;
             discussion_notifications: boolean;
+            directory_hidden: boolean;
             onboarded_at: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, onboarded_at
+            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, onboarded_at
                from users where id = $1`,
             [access.userId],
           )
@@ -84,6 +86,8 @@ export async function GET() {
     newVersionNotifications: prefs?.new_version_notifications ?? true,
     // §24 skill-discussion opt-out (gates watcher- AND maintainer-derived recipients).
     discussionNotifications: prefs?.discussion_notifications ?? true,
+    // §28 directory opt-out: hide job title / office / department from other people's hover cards.
+    directoryHidden: prefs?.directory_hidden ?? false,
     // Max uploaded hosted-bundle size (bytes) — surfaced on the propose form so the limit is
     // explicit and a too-large bundle is rejected client-side before upload. §6.
     maxBundleBytes: settings.maxBundleBytes,
@@ -119,6 +123,7 @@ export async function PATCH(req: Request) {
     driftNotifications?: boolean;
     newVersionNotifications?: boolean;
     discussionNotifications?: boolean;
+    directoryHidden?: boolean;
   };
   if ("dateFormat" in body) {
     const v = body.dateFormat;
@@ -144,6 +149,9 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.discussionNotifications === "boolean") {
     await setUserDiscussionNotifications(access.userId, body.discussionNotifications);
+  }
+  if (typeof body.directoryHidden === "boolean") {
+    await setUserDirectoryHidden(access.userId, body.directoryHidden);
   }
   return Response.json({ ok: true });
 }

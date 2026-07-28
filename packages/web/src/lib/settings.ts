@@ -217,6 +217,12 @@ export async function setUserNewVersionNotifications(userId: string, enabled: bo
   await pool.query(`update users set new_version_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
+/** §28 directory opt-out: hide job title / office / department from other people's hover cards.
+ *  Name, email and presence are unaffected. Self-service — no audit. */
+export async function setUserDirectoryHidden(userId: string, hidden: boolean): Promise<void> {
+  await pool.query(`update users set directory_hidden = $2, updated_at = now() where id = $1`, [userId, hidden]);
+}
+
 /** §24 skill-discussion opt-out. Row-level like the two above, but gates EVERY recipient route
  *  (watchers too) — the only way to keep watching a skill for versions while muting its chatter. */
 export async function setUserDiscussionNotifications(userId: string, enabled: boolean): Promise<void> {

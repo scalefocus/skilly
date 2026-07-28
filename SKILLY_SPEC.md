@@ -107,7 +107,8 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `erased_at` (GDPR tombstone marker, §4).
+- **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -296,10 +297,17 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   Backed by `GET /api/admin/users/active-series?range=7|30|90|all` → `{ range, bucket, points }`
   (403 for non-platform-admins); fetched on mount/range-change only (no poll — the data changes at
   most once a day).
+- **Presence is no longer admin-only (§28).** The directory hover card surfaces an **online dot** for
+  **any** user to **every authenticated viewer**, on the **fixed 5-minute default window** — never
+  the admin-selected one, which stays a per-admin view preference of the list above. This is a
+  deliberate widening of the presence signal: the *card* answers "is this person around right now",
+  while the admin **Currently online** section (the enumerable list, the selectable window, the
+  last-seen **page**, DAU/WAU/MAU and the trend chart) remains **platform-admin only**. The
+  last-seen page label is **never** exposed through the card.
 
 ### Delete user info (GDPR erasure)
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), between **Platform admins** and **Currently online**. Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
-- **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
+- **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
 - **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, `notifications`, `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
@@ -333,6 +341,32 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   - **Data & polling unchanged (answer 3c).** Collapsing only hides a card's body — it does **not** stop that card's data fetching or polling. Currently online keeps its 60s poll and trend-chart fetch, Maintenance keeps polling a running rebuild, and Namespaces keeps its loaded pages and active search/filter, all regardless of collapse state. Reopening a card shows current data with no reload flash.
   - **Expand all / Collapse all.** A small **Expand all / Collapse all** control sits at the top of the page (near the page header). It sets every card's open/closed state at once and writes each card's persisted preference, so the bulk choice sticks per browser like an individual toggle.
 - **Administration page framing.** The page is the platform-management console, not a namespaces-only screen. Its header reads — eyebrow **"Platform administration"**, title **"Run the platform."**, subtitle *"Every platform-wide control lives on this page. Expand a card to work with it."* The subtitle deliberately does **not** enumerate individual functions (they change often), so no per-feature list needs maintaining as cards are added.
+
+### Directory profile (job title, office, department)
+- `users.job_title`, `users.office_location`, `users.department` (§3) mirror the Entra `jobTitle`,
+  `officeLocation` and `department` attributes. They exist **solely to power the directory hover
+  card (§28)** — no role, gate, filter or notification reads them.
+- **Two writers, and both overwrite unconditionally** — deliberately *unlike* `avatar`, which is
+  only ever filled when missing (`setUserAvatarIfMissing`). A promotion, a re-org or an office move
+  must propagate; a stale title must never survive. A Graph value that is absent or empty writes
+  **NULL**, so clearing the attribute upstream clears it here too.
+  1. **Graph reconciliation** (worker, app-only client credentials). The periodic sweep adds
+     `jobTitle,officeLocation,department` to the `$select` it already issues for group members, so
+     every `upsertUser` refreshes them at **no extra Graph request** and **no new application
+     permission** (they are default properties of the user resource, already covered by the
+     reconciler's existing directory read). **Scope is unchanged**: reconciliation still reads only
+     the groups referenced by `role_mappings` (+ the bootstrap admin group), never the whole
+     directory.
+  2. **The user's own sign-in** (web, delegated `User.Read` — the same token that already fetches
+     the profile photo, §19). The OIDC callback refreshes the signing-in user's own three fields, so
+     a person always sees their own card current as of their last login.
+- **Accepted consequence:** a user who is in **no role-mapped group** *and* has **never signed in**
+  has no directory profile at all, and their card reads "No directory information" (§28). This is
+  exactly how avatars already behave, and it is why the card must degrade gracefully rather than
+  treat missing data as an error.
+- **SCIM stays unmapped.** The SCIM payload carries no title/office/department (`ScimUser` is
+  unchanged), so **no Entra provisioning attribute-mapping change is required in the tenant**. If a
+  future deployment does map them, the same unconditional-overwrite rule applies.
 
 ### Identity key — `entra_object_id` MUST be the Entra objectId
 - Users are keyed on `users.entra_object_id`, which **must equal the directory objectId GUID** — the value the OIDC `oid` claim carries at sign-in (login resolves the user via `entra_object_id = oid`).
@@ -1132,7 +1166,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
@@ -1351,8 +1385,13 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   crown. **Every badge a user currently holds renders** (no cap, wrapping if needed) — most users
   have zero; a dominant contributor may show several.
 - **Placement:** directly **below** the avatar bubble, never beside it — the bubble+badges stack is
-  one visual unit. Tooltip/aria-label on each badge: `"<Metric> leader — all time"` or
-  `"<Metric> leader — last 30 days"`.
+  one visual unit. The icons stay exactly where they are; the **directory hover card (§28)
+  additionally lists every badge the person holds, spelled out** (icon + `"Installs leader — all
+  time"`), so the at-a-glance signal and the explanation now live in two complementary places.
+- **Labels:** the `aria-label` on each badge stays (`"<Metric> leader — all time"` /
+  `"… — last 30 days"`), but the native **`title=` tooltip is removed** — with §28 shipped, a
+  browser tooltip would race and overlap the hover card on the very same element. Sighted users
+  read the spelled-out list in the card; screen readers keep the `aria-label`.
 - **Everywhere an avatar renders.** All user-avatar rendering across the app was consolidated onto
   the single shared `UserBubble` component (previously duplicated independently in chat message
   bubbles, the messages-menu peer avatar, the leaderboard's own rows, the proposal submitter card,
@@ -2277,3 +2316,123 @@ deletable, no-notification broadcast. It gets its own table and never touches th
   Admins have no authority here.
 - **See: every authenticated user, org-wide** — no visibility filtering by namespace (unlike skill
   visibility, invariant #7).
+
+---
+
+## 28. Directory hover card
+
+Hovering (or, on touch, long-pressing) **any user avatar bubble anywhere in the app** opens a small
+floating card with that person's Entra directory information. It is a **read-only, display-only**
+surface: no action it exposes changes state, and nothing it shows participates in authorization.
+
+The data behind it — `job_title`, `office_location`, `department` — is **new** (§3, §5); until this
+feature skilly stored only name, email, status and avatar for a user.
+
+### Where it appears
+- **Every `UserBubble`.** Avatar rendering was already consolidated onto that single component for
+  the leader badges (§21), so the card lands in all of them at once: the skill-detail **maintainers**
+  list, the **skill discussion** and **chat** message bubbles, the **messages menu** peer avatar, the
+  **proposal submitter** card, the **requests** list and detail, the **leaderboard** rows, the
+  **profile** page, the **topbar account menu** (your own avatar), and every **admin** surface that
+  renders a user — the user-search typeahead, **Delete User Info** pickers and **Currently online**
+  rows.
+- **Photo bubbles and initials bubbles alike** — the fallback initials circle behaves identically.
+- A bubble rendered **without** a `userId` (the rare payload that doesn't carry one) shows **no
+  card** and issues **no request**, exactly as it shows no badges today.
+
+### Card contents
+Top to bottom, in a fixed max-width (~260px) card:
+1. **Display name** (the same label the rest of the app uses, incl. the `<email> - Deleted`
+   tombstone form).
+2. **Presence** — a small dot plus a label: *Online* when `last_seen` is within the **fixed
+   5-minute** window, otherwise *Active &lt;relative&gt; ago*, and nothing at all when the user has
+   never been seen. The admin-selected window (§4) is **not** used here and the **last-seen page is
+   never shown**.
+3. **Email** — a real `mailto:` link (omitted for an erased tombstone, whose `email` is `''`).
+4. **Directory block** — **job title**, **department**, **office**, each line omitted when that
+   field is null/empty.
+5. **Leader badges** — every badge the person currently holds, spelled out with its icon and full
+   label (§21). Absent for the overwhelming majority of users, who hold none.
+
+- **"No directory information."** When **all three** directory fields are empty the block collapses
+  to that single muted line. Same for a user who has **opted out** (below), and for every
+  **non-person / unknown** bubble — an erased tombstone, or a bubble whose id resolves to nothing.
+  The card still renders with the name, presence and (where present) email; it never becomes an
+  error state.
+- **Long values wrap** onto additional lines rather than ellipsing — Entra job titles are routinely
+  long ("Senior Manager, Regional Delivery Excellence — EMEA") and a truncated title is useless.
+
+### Data & delivery
+- `GET /api/users/:id/card` → `{ userId, displayName, email, jobTitle, officeLocation, department,
+  lastSeen, online }`. **Any signed-in user** may call it for **any** user id (there is no per-user
+  visibility model — invariant #7 governs *skills*); **401** unauthenticated, **404** for an unknown
+  id. `online` is computed server-side against the fixed 5-minute window so the client never has to
+  know the rule.
+- **Badges are not in the response.** `UserBubble` already holds the whole `/api/leaders` map for the
+  page (§21) — the card reads the badges it already has, in memory, with no second request.
+- **Lazy, never on mount.** The fetch fires on the **same 300 ms hover-intent threshold that opens
+  the card** (so a pointer sweeping across a dense table triggers nothing), and never during initial
+  render: a leaderboard page with 100 bubbles issues **zero** card requests until someone actually
+  hovers.
+- **Deduped and cached client-side** per user id for the page session via the shared `cachedGet`
+  (`components/ui.tsx`) — two bubbles for the same person share one request, and re-hovering is
+  instant with no flicker.
+- **The card never blocks on the network.** It opens immediately with the name and presence-free
+  skeleton (the name is already a `UserBubble` prop), showing a muted placeholder where the
+  directory block will land; a slow, failed or 404 response resolves to "No directory information".
+- Server side this is a **single indexed primary-key lookup** — no aggregate, no new cache layer.
+
+### Interaction — pointer
+- **Open** after **300 ms** of continuous hover on the bubble; **close** ~150 ms after the pointer
+  leaves **both** the bubble and the card, so the pointer can travel from one to the other.
+- **The card is hoverable and interactive** — that grace period exists specifically so the `mailto:`
+  link is clickable.
+- **Animated**: fade in with a small (~4px) rise over ~120 ms ease-out, and the reverse on close.
+  `prefers-reduced-motion` → appear/disappear instantly, no transform, no fade.
+- Rendered in a **portal at the top of the stacking context** and repositioned to stay inside the
+  viewport (flipping side/above-below as needed), so it is never clipped by a scrolling table, a
+  dropdown, or the sidebar.
+- **One card at a time** — opening a second closes the first.
+
+### Interaction — touch
+- **Long-press (~500 ms)** on the bubble opens the same card.
+- **Native platform interference is suppressed on avatar bubbles app-wide** — `-webkit-touch-callout:
+  none`, `user-select: none`, `touch-action: manipulation`, and a `contextmenu` handler that prevents
+  default on the bubble element. **Accepted consequence:** avatars can **no longer** be long-pressed
+  to *Save/Copy image* on iOS or Android, and right-clicking an avatar on desktop no longer opens the
+  browser context menu. This applies to every avatar in the app, not only the ones under a pointer.
+- **A long-press must never fire the bubble's enclosing control.** Many bubbles sit inside a link,
+  row or button (leaderboard rows, messages-menu items, admin pickers); once the press threshold is
+  crossed, the click that would otherwise fire on release is **cancelled**.
+- **A press that moves more than ~10px aborts** without opening — scrolling a list of avatars must
+  never pop a card.
+- **Dismissal:** tap anywhere outside the card, scroll, or long-press again. No auto-timeout.
+- **Tapping** (short press) an avatar keeps whatever behavior it has today — the card is strictly a
+  long-press affordance on touch.
+
+### Keyboard & accessibility
+- Every card-bearing bubble becomes **focusable** (`tabindex="0"`, `role="button"`) so the card is
+  reachable without a pointer. **Accepted cost, explicitly:** this adds a tab stop per avatar — up to
+  **100 extra tab stops on the leaderboard** and several per chat thread.
+- **Focus opens** the card with **no delay** (hover-intent is a pointer concept); **blur closes** it;
+  **Escape** closes it and leaves focus on the bubble.
+- The card is a **non-modal `role="dialog"`** labelled with the person's name — not `role="tooltip"`,
+  because it contains an interactive `mailto:` link. Focus is **not trapped**: Tab from the bubble
+  moves into the card, then out of it and on through the page.
+
+### Privacy & governance
+- **Self-service opt-out.** A new **profile page** toggle — *"Hide my job title, office and
+  department"* — sits alongside the existing *Hide me from the leaderboard* switch and persists to
+  `users.directory_hidden` via `GET|PATCH /api/me` (same pattern as `leaderboardHidden`). While set,
+  `GET /api/users/:id/card` returns **null** for all three fields (they are never serialized to
+  another user's browser) and the card shows "No directory information". **Name, email and presence
+  are still shown** — those are already exposed across the app today.
+- **Presence widening is deliberate and specced in §4** — the dot is the one genuinely *new* audience
+  for an existing signal; everything else the card shows is either brand-new data (title/office/
+  department) or already visible elsewhere.
+- **GDPR erasure (§4)** scrubs `job_title`, `office_location` and `department` to NULL along with the
+  avatar, and resets `directory_hidden`. An erased tombstone therefore always reads "No directory
+  information".
+- **Not audited.** Opening a card is a read, and a cheap one; it writes no `audit_log` row —
+  consistent with every other read surface. (It does still stamp `last_seen` through the normal
+  `currentAccess()` choke point, like any authenticated request.)

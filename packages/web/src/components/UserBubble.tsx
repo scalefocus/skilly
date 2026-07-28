@@ -4,29 +4,28 @@
 // Maintainers list, admin user pickers/lists, requests, proposal submitter card, chat messages,
 // the messages menu, the leaderboard, the topbar account menu, and the profile page — so a badge
 // added here shows up everywhere at once (SKILLY_SPEC.md §4, §19, §21).
+// Hovering (or long-pressing on touch, or focusing) a bubble opens the directory hover card — the
+// person's Entra job title / department / office, plus name, email, presence and their badges
+// spelled out (§28).
 import { useApi } from "./ui";
+import { useDirectoryCard } from "./DirectoryCard";
+import { BADGE_META, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
 
-export type LeaderMetric = "installs" | "skills" | "requests" | "watched";
-export interface LeaderBadgeInfo { metric: LeaderMetric; window: "all" | "30d" }
+export type { LeaderMetric, LeaderBadgeInfo } from "./leaderBadges";
 
-const BADGE_META: Record<LeaderMetric, { icon: string; color: string; label: string }> = {
-  installs: { icon: "📥", color: "var(--accent)", label: "Installs leader" },
-  skills: { icon: "📝", color: "var(--accent-2)", label: "Adoption leader" },
-  requests: { icon: "🎁", color: "var(--ok)", label: "Fulfillment leader" },
-  watched: { icon: "👁", color: "var(--warn)", label: "Watch leader" },
-};
+const NO_BADGES: LeaderBadgeInfo[] = [];
 
 /** One leader badge — a small colored, icon-filled circle below the avatar. The all-time variant
  *  is the same icon with a tiny crown overlaid on top (30-day carries no crown). Scales down with
- *  the bubble it sits under, floored so the icon stays legible even on the smallest avatars. */
+ *  the bubble it sits under, floored so the icon stays legible even on the smallest avatars.
+ *  No `title` tooltip: the hover card (§28) spells the badge out, and a native tooltip on the same
+ *  element would race it. The aria-label stays for screen readers. */
 function LeaderBadgeIcon({ badge, bubbleSize }: { badge: LeaderBadgeInfo; bubbleSize: number }) {
   const meta = BADGE_META[badge.metric];
   const dim = Math.max(11, Math.round(bubbleSize * 0.42));
-  const windowLabel = badge.window === "all" ? "all time" : "last 30 days";
   return (
     <span
-      title={`${meta.label} — ${windowLabel}`}
-      aria-label={`${meta.label} — ${windowLabel}`}
+      aria-label={badgeLabel(badge)}
       style={{
         position: "relative",
         width: dim,
@@ -66,23 +65,36 @@ export function UserBubble({ name, avatar, size = 28, userId }: { name: string; 
   // Shared cached GET (components/ui.tsx) — every UserBubble instance on a page dedupes onto the
   // same one request, so badging is effectively free regardless of how many bubbles are on screen.
   const { data } = useApi<Record<string, LeaderBadgeInfo[]>>(userId ? "/api/leaders" : null);
-  const badges = userId ? data?.[userId] : undefined;
+  const badges = (userId ? data?.[userId] : undefined) ?? NO_BADGES;
+  // The card reuses those same badges from memory — it never refetches them (§28).
+  const { triggerProps, card } = useDirectoryCard(userId, name, badges);
 
   const bubble = avatar ? (
     // eslint-disable-next-line @next/next/no-img-element -- small data-URI avatar; next/image adds no value at this size
-    <img src={avatar} alt="" width={size} height={size} style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
+    <img {...triggerProps} src={avatar} alt="" width={size} height={size} style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
   ) : (
     <div
-      aria-hidden
+      {...triggerProps}
+      // Without a user id the bubble is inert and carries no label, so keep the initials out of
+      // the accessibility tree exactly as before; with one, the trigger's aria-label names it.
+      aria-hidden={userId ? undefined : true}
       style={{ width: size, height: size, borderRadius: "50%", background: "var(--accent-soft)", color: "var(--accent-2)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontSize: size * 0.375, fontWeight: 600, flexShrink: 0 }}
     >
-      {name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?"}
+      <span aria-hidden>{name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?"}</span>
     </div>
   );
 
   // No badges → render exactly as before (no wrapper, no layout change) for the overwhelming
-  // majority of avatars that aren't a current leader of anything.
-  if (!badges || badges.length === 0) return bubble;
+  // majority of avatars that aren't a current leader of anything. The card is portalled to
+  // <body>, so the fragment adds no layout of its own.
+  if (badges.length === 0) {
+    return (
+      <>
+        {bubble}
+        {card}
+      </>
+    );
+  }
 
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
@@ -92,6 +104,7 @@ export function UserBubble({ name, avatar, size = 28, userId }: { name: string; 
           <LeaderBadgeIcon key={`${b.metric}:${b.window}`} badge={b} bubbleSize={size} />
         ))}
       </span>
+      {card}
     </span>
   );
 }
