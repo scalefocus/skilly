@@ -9,6 +9,17 @@ INSERT INTO users (entra_object_id, email, display_name) VALUES
   ('bob-oid', 'bob@org', 'Bob Ng')
 ON CONFLICT (entra_object_id) DO UPDATE SET display_name = EXCLUDED.display_name;
 
+-- Directory profile for the hover card (SKILLY_SPEC.md §28). In a real deployment these arrive
+-- from Graph reconciliation / the user's own sign-in; seeded here so the card has something to
+-- show locally. Alice's deliberately long title exercises the card's wrapping.
+UPDATE users SET job_title = v.title, office_location = v.office, department = v.dept
+  FROM (VALUES
+    ('dev-admin-oid', 'Platform Engineer', 'Sofia', 'Engineering'),
+    ('alice-oid', 'Senior Delivery Manager, Regional Excellence — EMEA', 'Plovdiv', 'Delivery'),
+    ('bob-oid', 'QA Automation Lead', 'Varna', 'Quality')
+  ) AS v(oid, title, office, dept)
+ WHERE users.entra_object_id = v.oid;
+
 INSERT INTO groups (entra_object_id, display_name) VALUES
   ('g-platform', 'Platform Admins'),
   ('g-team-a', 'Team A Admins'),

@@ -15,6 +15,7 @@ interface Me {
   driftNotifications: boolean;
   newVersionNotifications: boolean;
   discussionNotifications: boolean;
+  directoryHidden: boolean;
 }
 
 const FORMAT_HINT: Record<"eu" | "us", string> = { eu: "dd/mm/yyyy · 24h", us: "mm/dd/yyyy · AM/PM" };
@@ -114,6 +115,61 @@ function LeaderboardPref() {
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
         {visible ? "You appear on the leaderboard." : "You won’t appear on the leaderboard."}
+      </p>
+    </section>
+  );
+}
+
+// §28 directory opt-out: hide the Entra job title / office / department from the hover card other
+// people see on your avatar. Your name, email and online dot are unaffected — they're already
+// visible across the app — so this hides the directory block only.
+function DirectoryPref() {
+  const { data, reload } = useApi<Me>("/api/me");
+  const [busy, setBusy] = useState(false);
+  if (!data) return <div className="skeleton" style={{ height: 70, borderRadius: "var(--radius)" }} />;
+
+  const choose = async (hidden: boolean) => {
+    if (hidden === data.directoryHidden) return;
+    setBusy(true);
+    try {
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ directoryHidden: hidden }) });
+      reload();
+    } finally { setBusy(false); }
+  };
+
+  const opts: { label: string; hint: string; hidden: boolean }[] = [
+    { label: "Shown", hint: "on your hover card", hidden: false },
+    { label: "Hidden", hint: "keep them private", hidden: true },
+  ];
+  return (
+    <section className="reveal" style={{ marginBottom: 30 }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Directory details</h2>
+      <p className="page-sub" style={{ marginBottom: 16 }}>
+        Hovering your avatar anywhere in skilly shows a small card with your job title, department and office, taken
+        from Entra ID. You can keep those three private.
+      </p>
+      <div className="sort-toggle" role="group" aria-label="Directory details visibility">
+        {opts.map((o) => {
+          const active = o.hidden === data.directoryHidden;
+          return (
+            <button
+              key={o.label}
+              type="button"
+              className={`sort-opt${active ? " sort-on" : ""}`}
+              aria-pressed={active}
+              disabled={busy}
+              title={o.hint}
+              onClick={() => choose(o.hidden)}
+            >
+              {o.label} <span className="muted mono" style={{ fontSize: 11 }}>{o.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        {data.directoryHidden
+          ? "Your card reads “No directory information”. Your name, email and online status still show."
+          : "Your job title, department and office show on your card."}
       </p>
     </section>
   );
@@ -254,6 +310,7 @@ function ProfileInner() {
       </section>
 
       <DateFormatPref />
+      <DirectoryPref />
       <LeaderboardPref />
       <EmailNotificationsPref />
       <MaintainerNotificationsPref />

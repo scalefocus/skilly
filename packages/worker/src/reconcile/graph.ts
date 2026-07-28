@@ -8,6 +8,12 @@ export interface GraphUser {
   email: string;
   displayName: string;
   active: boolean;
+  /** Entra directory profile for the hover card (SKILLY_SPEC.md §5, §28). Default properties of
+   *  the user resource — no new Graph permission, and they ride along on the membership page we
+   *  already fetch. Absent/empty upstream → null, which the store writes through as NULL. */
+  jobTitle: string | null;
+  officeLocation: string | null;
+  department: string | null;
 }
 
 export interface GraphPort {
@@ -27,7 +33,17 @@ interface GraphMemberRaw {
   userPrincipalName?: string | null;
   displayName?: string | null;
   accountEnabled?: boolean | null;
+  jobTitle?: string | null;
+  officeLocation?: string | null;
+  department?: string | null;
   "@odata.type"?: string;
+}
+
+/** Trim a Graph string property to a stored value: absent/blank → null (so clearing an attribute
+ *  upstream clears it here too — §5 "a Graph value that is absent or empty writes NULL"). */
+function dirValue(v: string | null | undefined): string | null {
+  const s = v?.trim();
+  return s ? s : null;
 }
 
 export function graphClient(): GraphPort {
@@ -93,7 +109,7 @@ export function graphClient(): GraphPort {
     },
     async getGroupMembers(oid) {
       const members: GraphUser[] = [];
-      let path: string | null = `/groups/${oid}/members/microsoft.graph.user?$select=id,mail,userPrincipalName,displayName,accountEnabled&$top=999`;
+      let path: string | null = `/groups/${oid}/members/microsoft.graph.user?$select=id,mail,userPrincipalName,displayName,accountEnabled,jobTitle,officeLocation,department&$top=999`;
       while (path) {
         const page: { value: GraphMemberRaw[]; "@odata.nextLink"?: string } = await graphGet(path);
         for (const m of page.value) {
@@ -104,6 +120,9 @@ export function graphClient(): GraphPort {
             // blank (upsertUser keeps any existing real name rather than clobbering it with "").
             displayName: m.displayName ?? m.userPrincipalName ?? m.mail ?? "",
             active: m.accountEnabled ?? true,
+            jobTitle: dirValue(m.jobTitle),
+            officeLocation: dirValue(m.officeLocation),
+            department: dirValue(m.department),
           });
         }
         const next = page["@odata.nextLink"];

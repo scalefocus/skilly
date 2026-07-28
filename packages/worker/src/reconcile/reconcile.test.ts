@@ -2,14 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reconcile, type ReconcilePort } from "./reconcile.js";
 import type { GraphPort, GraphUser } from "./graph.js";
+import type { ScimUser } from "../scim/store.js";
 
 // In-memory store implementing exactly the ReconcilePort surface.
-function memStore(initial: Record<string, string[]>): ReconcilePort & { members: Map<string, Set<string>>; users: Set<string> } {
+function memStore(initial: Record<string, string[]>): ReconcilePort & {
+  members: Map<string, Set<string>>;
+  users: Set<string>;
+  upserts: ScimUser[];
+} {
   const members = new Map<string, Set<string>>(Object.entries(initial).map(([g, m]) => [g, new Set(m)]));
   const users = new Set<string>();
+  const upserts: ScimUser[] = [];
   return {
     members,
     users,
+    upserts,
     async mappedGroupExternalIds() {
       return [...members.keys()];
     },
@@ -18,6 +25,7 @@ function memStore(initial: Record<string, string[]>): ReconcilePort & { members:
     },
     async upsertUser(u) {
       users.add(u.externalId);
+      upserts.push(u);
       return { id: u.externalId };
     },
     async upsertGroup(g) {
@@ -53,7 +61,16 @@ function fakeGraph(groups: Record<string, GraphUser[] | null>): GraphPort {
   };
 }
 
-const u = (oid: string): GraphUser => ({ oid, email: `${oid}@org`, displayName: oid, active: true });
+const u = (oid: string, dir?: Partial<Pick<GraphUser, "jobTitle" | "officeLocation" | "department">>): GraphUser => ({
+  oid,
+  email: `${oid}@org`,
+  displayName: oid,
+  active: true,
+  jobTitle: null,
+  officeLocation: null,
+  department: null,
+  ...dir,
+});
 
 test("adds missing and removes stale memberships to match Graph", async () => {
   // local: group A has [x, stale]; Graph says A has [x, y]
@@ -78,6 +95,26 @@ test("missing upstream group is skipped, not wiped", async () => {
   assert.equal(stats.groupsMissing, 1);
   assert.equal(stats.groups, 0);
   assert.deepEqual([...store.members.get("grp-gone")!], ["keep"]); // untouched
+});
+
+// SKILLY_SPEC.md §5/§28 — reconciliation is one of the two writers of the directory profile, and
+// it always CARRIES the key (so the store overwrites), even when Entra has nothing to say.
+test("carries the Entra directory profile through to the store", async () => {
+  const store = memStore({ "grp-a": [] });
+  const graph = fakeGraph({
+    "grp-a": [
+      u("titled", { jobTitle: "Delivery Lead", officeLocation: "Sofia", department: "Engineering" }),
+      u("bare"),
+    ],
+  });
+
+  await reconcile(graph, store);
+
+  const titled = store.upserts.find((x) => x.externalId === "titled");
+  assert.deepEqual(titled?.directory, { jobTitle: "Delivery Lead", officeLocation: "Sofia", department: "Engineering" });
+  // Empty upstream still carries the key with nulls — that's what clears a stale title.
+  const bare = store.upserts.find((x) => x.externalId === "bare");
+  assert.deepEqual(bare?.directory, { jobTitle: null, officeLocation: null, department: null });
 });
 
 test("idempotent when already in sync", async () => {

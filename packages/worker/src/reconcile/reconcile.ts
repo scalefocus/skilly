@@ -50,7 +50,16 @@ export async function reconcile(graph: GraphPort, store: ReconcilePort): Promise
 
     const members = await graph.getGroupMembers(oid);
     for (const m of members) {
-      await store.upsertUser({ externalId: m.oid, email: m.email, displayName: m.displayName, active: m.active });
+      // `directory` present ⇒ the three directory columns are overwritten outright, NULLs included
+      // (§5/§28) — reconciliation is authoritative for them, unlike SCIM, which omits the key and
+      // leaves them alone.
+      await store.upsertUser({
+        externalId: m.oid,
+        email: m.email,
+        displayName: m.displayName,
+        active: m.active,
+        directory: { jobTitle: m.jobTitle, officeLocation: m.officeLocation, department: m.department },
+      });
       seenMembers.add(m.oid);
       stats.usersUpserted++;
     }

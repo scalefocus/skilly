@@ -122,8 +122,12 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // deleted author stays identifiable in message/proposal threads (SKILLY_SPEC.md §4); the
     // structured email column is still cleared. Falls back to "Deleted User" if there was no email.
     const deletedLabel = u.email && u.email.trim() ? `${u.email.trim()} - Deleted` : "Deleted User";
+    // The directory profile (job title / office / department, §28) is personal data and is
+    // scrubbed exactly like the avatar, so a tombstone's hover card always reads "No directory
+    // information"; directory_hidden resets to the default for any future re-provisioned account.
     await client.query(
       `update users set display_name = $2, email = '', avatar = null,
+              job_title = null, office_location = null, department = null, directory_hidden = false,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [targetUserId, deletedLabel],

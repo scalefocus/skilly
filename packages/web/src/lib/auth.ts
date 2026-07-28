@@ -5,6 +5,7 @@ import type { NextAuthOptions } from "next-auth";
 import AzureAD from "next-auth/providers/azure-ad";
 import Credentials from "next-auth/providers/credentials";
 import { pool } from "./db";
+import { fetchEntraDirectoryProfile, saveDirectoryProfile } from "./directory";
 
 // DEV-ONLY: a credentials provider that signs in a fixed user. Gated by SKILLY_DEV_AUTH=1
 // so it is NEVER present in production builds/runtime. Used for local visual/dev passes
@@ -33,7 +34,8 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.ENTRA_CLIENT_SECRET ?? "",
       tenantId: process.env.ENTRA_TENANT_ID ?? "",
       // Request basic profile + User.Read (so the provider can fetch the user's
-      // Graph profile photo for the avatar). Group/role resolution still happens
+      // Graph profile photo for the avatar, and the jwt callback below can refresh their
+      // directory profile — §5/§28). Group/role resolution still happens
       // server-side via SCIM — NEVER from these claims (CLAUDE.md #1).
       authorization: { params: { scope: "openid profile email User.Read" } },
     }),
@@ -41,7 +43,7 @@ export const authOptions: NextAuthOptions = {
   ],
   session: { strategy: "jwt" },
   callbacks: {
-    async jwt({ token, profile, user }) {
+    async jwt({ token, profile, user, account }) {
       // Persist Entra object id so we can look up SCIM-synced access server-side.
       if (profile && "oid" in profile) token.oid = (profile as { oid?: string }).oid;
       // Dev credentials path: the fixed user's id IS the entra_object_id.
@@ -100,6 +102,17 @@ export const authOptions: NextAuthOptions = {
       if (img && token.oid && img.startsWith("data:image/") && img.length < 200_000) {
         void pool
           .query(`update users set avatar = $1 where entra_object_id = $2`, [img, token.oid])
+          .catch(() => {});
+      }
+      // Sign-in only: refresh the user's OWN directory profile (job title / office / department)
+      // from Graph with the delegated User.Read token we just received — the second of the two
+      // writers in §5, and the only one that reaches users outside a role-mapped group. Overwrites
+      // unconditionally (§28). Fire-and-forget: sign-in must never block on or fail with Graph.
+      const accessToken = (account as { access_token?: string } | null | undefined)?.access_token;
+      if (accessToken && token.oid) {
+        const oid = token.oid as string;
+        void fetchEntraDirectoryProfile(accessToken)
+          .then((p) => (p ? saveDirectoryProfile(oid, p) : undefined))
           .catch(() => {});
       }
       return token;
