@@ -10,6 +10,10 @@ export interface DauPoint { date: string; count: number }
  *  month → YYYY-MM (mirrors UsageTrendChart's convention). */
 export function ActiveUsersChart({ points, bucket, height = 180 }: { points: DauPoint[]; bucket: "day" | "week" | "month"; height?: number }) {
   const rows = points.map((p) => ({ ...p, label: bucket === "month" ? p.date.slice(0, 7) : p.date.slice(5) }));
+  // A one- or two-point series has no (or barely any) line to draw, so it would read as an empty
+  // chart with line-only rendering — show explicit markers below 3 points (§4). Longer series stay
+  // line-only, with a marker on hover.
+  const sparse = rows.length < 3;
   return (
     <div style={{ width: "100%", height }}>
       <ResponsiveContainer>
@@ -21,7 +25,15 @@ export function ActiveUsersChart({ points, bucket, height = 180 }: { points: Dau
             contentStyle={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 8, fontSize: 12 }}
             labelStyle={{ color: "var(--faint)", fontFamily: "var(--font-mono)", fontSize: 11 }}
           />
-          <Line type="monotone" dataKey="count" name="active users" stroke="var(--accent)" strokeWidth={2} dot={false} activeDot={{ r: 3 }} />
+          <Line
+            type="monotone"
+            dataKey="count"
+            name="active users"
+            stroke="var(--accent)"
+            strokeWidth={2}
+            dot={sparse ? { r: 3, fill: "var(--accent)", strokeWidth: 0 } : false}
+            activeDot={{ r: 3 }}
+          />
         </LineChart>
       </ResponsiveContainer>
     </div>

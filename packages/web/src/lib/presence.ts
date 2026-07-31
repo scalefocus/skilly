@@ -133,10 +133,25 @@ export type DauRange = 7 | 30 | 90 | "all";
 export interface DauPoint { date: string; count: number }
 export interface DauSeries { range: DauRange; bucket: "day" | "week" | "month"; points: DauPoint[] }
 
-// Fixed mapping (not span-adaptive like the per-skill usage chart) — there are only 4 range
-// choices here, so the bucket for each is decided up front: 7d/30d stay daily (readable as-is),
-// 90d rolls into weekly averages, "all" into monthly — SKILLY_SPEC.md §4.
-const DAU_BUCKET: Record<DauRange, "day" | "week" | "month"> = { 7: "day", 30: "day", 90: "week", all: "month" };
+/**
+ * Bucket granularity for the active-users trend chart (§4) — span-adaptive for EVERY range, on the
+ * same thresholds as the usage/skill-detail charts (§21): day ≤ ~92d, week ≤ ~730d, month beyond.
+ *
+ * `historySpanDays` is how many calendar days `daily_active_users` actually covers (null = empty
+ * table). The span that decides the bucket is clamped to it, so the bucket can never be coarser
+ * than the history justifies — the bug the old fixed mapping had was collapsing a young history
+ * into a single monthly bucket, which draws as one dot with no line.
+ *
+ * Consequence of the single rule: 7/30/90 always come out "day" (90 ≤ 92, matching the usage
+ * dashboard), and only "all" ever steps up — daily until ~3 months of history exist, then weekly,
+ * then monthly past ~2 years. The week/month branches stay live for "all" (and for any longer
+ * range added later).
+ */
+export function dauBucketFor(range: DauRange, historySpanDays: number | null): "day" | "week" | "month" {
+  if (historySpanDays == null) return "day"; // no history yet → a daily (empty) series
+  const span = range === "all" ? historySpanDays : Math.min(range, historySpanDays);
+  return span <= 92 ? "day" : span <= 730 ? "week" : "month";
+}
 
 /**
  * The daily_active_users trend chart's data (§4). Historical rows only — no zero-filling for
@@ -146,31 +161,21 @@ const DAU_BUCKET: Record<DauRange, "day" | "week" | "month"> = { 7: "day", 30: "
  * metric).
  */
 export async function getActiveUserSeries(range: DauRange): Promise<DauSeries> {
-  const bucket = DAU_BUCKET[range];
-  if (bucket === "day") {
-    const { rows } = await pool.query<{ day: string; n: string }>(
-      `select day::text as day, count::text as n
-         from daily_active_users
-        where day > current_date - make_interval(days => $1)
-        order by day asc`,
-      [range as number],
-    );
-    return { range, bucket, points: rows.map((r) => ({ date: r.day, count: Number(r.n) })) };
-  }
-  if (bucket === "week") {
-    const { rows } = await pool.query<{ day: string; n: string }>(
-      `select date_trunc('week', day)::date::text as day, avg(count)::int::text as n
-         from daily_active_users
-        where day > current_date - interval '90 days'
-        group by 1 order by 1 asc`,
-    );
-    return { range, bucket, points: rows.map((r) => ({ date: r.day, count: Number(r.n) })) };
-  }
-  // "all" — monthly average across the whole collected history.
-  const { rows } = await pool.query<{ day: string; n: string }>(
-    `select date_trunc('month', day)::date::text as day, avg(count)::int::text as n
-       from daily_active_users
-      group by 1 order by 1 asc`,
+  // The collected span picks the bucket (§4) — one extra PK-index scan, cheaper than serving a
+  // coarser chart than the data supports.
+  const { rows: spanRows } = await pool.query<{ span: number | null }>(
+    `select (current_date - min(day) + 1)::int as span from daily_active_users`,
   );
+  const bucket = dauBucketFor(range, spanRows[0]?.span ?? null);
+  // "all" spans the whole table; a numeric range is a trailing window. `bucket` below is a trusted
+  // literal off dauBucketFor (never user input) — same interpolation pattern as lib/usage.ts.
+  const where = range === "all" ? "" : `where day > current_date - make_interval(days => $1)`;
+  const params = range === "all" ? [] : [range];
+  const select =
+    bucket === "day"
+      ? `select day::text as day, count::text as n from daily_active_users ${where} order by day asc`
+      : `select date_trunc('${bucket}', day)::date::text as day, avg(count)::int::text as n
+           from daily_active_users ${where} group by 1 order by 1 asc`;
+  const { rows } = await pool.query<{ day: string; n: string }>(select, params);
   return { range, bucket, points: rows.map((r) => ({ date: r.day, count: Number(r.n) })) };
 }

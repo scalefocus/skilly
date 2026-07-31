@@ -288,15 +288,25 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   chart from a missed run is simply a gap, and a fresh deployment starts with an empty table that
   grows one point per day.
 - **Chart window**: the same **7d / 30d / 90d / All** vocabulary as the Usage page, remembered
-  across visits (`skilly.chart.dau-range`). Bucketing is a **fixed mapping** per range (not
-  span-adaptive): 7d/30d plot raw daily points; 90d rolls the daily counts into **weekly averages**
-  over the trailing 90 days; All rolls into **monthly averages** across the whole collected
-  history — an average, not a sum, since summing a "how many people" metric across days is
-  meaningless. Sparse history (e.g. the weeks right after this ships) simply renders however many
-  points have accumulated — no manufactured zero-filling, no "not enough history" placeholder.
-  Backed by `GET /api/admin/users/active-series?range=7|30|90|all` → `{ range, bucket, points }`
-  (403 for non-platform-admins); fetched on mount/range-change only (no poll — the data changes at
-  most once a day).
+  across visits (`skilly.chart.dau-range`). Bucketing is **span-adaptive for every range** — the
+  same rule and thresholds as the usage/skill-detail charts (§21): measure the span the range
+  actually covers, then bucket **day ≤ ~92 days, week ≤ ~730 days, month beyond**. The span is
+  `today − max(range start, earliest collected day)`, i.e. it is bounded by the history that
+  actually exists in `daily_active_users`, never by the range's nominal start. Consequences of the
+  single rule: 7d/30d/90d always plot **raw daily points** (90 ≤ 92 — matching the usage
+  dashboard); **All** plots daily until ~3 months of history has accumulated, then rolls into
+  **weekly averages**, and past ~2 years into **monthly averages**. Week/month buckets are an
+  **average**, not a sum, since summing a "how many people" metric across days is meaningless. This
+  replaces an earlier fixed per-range mapping (90d → always weekly, All → always monthly), which
+  collapsed a short history into one or two coarse buckets — a fresh deployment whose whole history
+  sat inside one calendar month rendered All as a **single point with no line**. Sparse history
+  simply renders however many points have accumulated — no manufactured zero-filling, no "not
+  enough history" placeholder — and a series of **fewer than 3 points** renders **visible point
+  markers** so a one- or two-point history is never invisible (longer series keep line-only
+  rendering with markers on hover). Backed by
+  `GET /api/admin/users/active-series?range=7|30|90|all` → `{ range, bucket, points }` (403 for
+  non-platform-admins), where `bucket` is now **derived from the span** rather than fixed per
+  range; fetched on mount/range-change only (no poll — the data changes at most once a day).
 - **Presence is no longer admin-only (§28).** The directory hover card surfaces an **online dot** for
   **any** user to **every authenticated viewer**, on the **fixed 5-minute default window** — never
   the admin-selected one, which stays a per-admin view preference of the list above. This is a
