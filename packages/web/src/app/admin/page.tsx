@@ -897,9 +897,10 @@ function OnlineUsers({ open, onToggle }: { open: boolean; onToggle: () => void }
       onToggle={onToggle}
     >
       {/* Active-users trend (§4): one point per day, snapshotted once daily by the worker — a
-          history, unlike the live rolling counts below. 90d/All roll the daily counts up into
-          weekly/monthly averages for readability; a fresh deployment simply shows a short,
-          growing line until enough days have accumulated (no back-filled/manufactured data). */}
+          history, unlike the live rolling counts below. Bucketing is span-adaptive (server-side,
+          §21 thresholds): 7d/30d/90d plot raw daily points, All steps up to weekly/monthly only
+          once the collected history is long enough to need it — so a fresh deployment shows a
+          short, growing daily line rather than one coarse bucket (no back-filled data either). */}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
         <span className="muted mono" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em" }}>Active users</span>
         <div className="sort-toggle" role="group" aria-label="Chart range">
