@@ -19,6 +19,10 @@
       "types": "./dist/harness.d.ts",
       "default": "./dist/harness.js"
     },
+    "./mentions": {
+      "types": "./dist/mentions.d.ts",
+      "default": "./dist/mentions.js"
+    },
     "./agents": {
       "types": "./dist/agents.d.ts",
       "default": "./dist/agents.js"

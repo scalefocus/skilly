@@ -18,3 +18,4 @@ export * from "./metrics.js";
 export * from "./email-template.js";
 export * from "./notifications.js";
 export * from "./featured.js";
+export * from "./mentions.js";

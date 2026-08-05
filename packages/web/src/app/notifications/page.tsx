@@ -134,8 +134,15 @@ export default function NotificationsPage() {
             // fall back to whatever the payload carried.
             const nsSlug = n.namespaceSlug ?? (typeof n.payload.namespaceSlug === "string" ? n.payload.namespaceSlug : null);
             const skSlug = n.skillSlug ?? (typeof n.payload.skillSlug === "string" ? n.payload.skillSlug : null);
-            // skill.discussion deep-links straight to the (auto-expanding) Discussion card. §24.
-            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" ? "#discussion" : ""}` : null;
+            // skill.discussion — and a skill-context mention — deep-link straight to the
+            // (auto-expanding) Discussion card. §24.
+            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : ""}` : null;
+            // A DIRECT-chat mention has no page of its own: deep-link to the topbar Messages
+            // panel via ?conversation=<id> (§24 Mentions), like the email CTA.
+            const conversationHref =
+              n.type === "message.mention" && !proposalId && !requestId && !skillHref && typeof n.payload.conversationId === "string"
+                ? `/?conversation=${n.payload.conversationId}`
+                : null;
             const skillName = n.skillTitle ?? skSlug;
             const semver = typeof n.payload.semver === "string" ? n.payload.semver : null;
             const isSystemLog = n.type === "system.error";
@@ -171,6 +178,11 @@ export default function NotificationsPage() {
                   {skillHref && (
                     <Link href={skillHref} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginLeft: proposalId || requestId ? 12 : 0 }}>
                       view skill →
+                    </Link>
+                  )}
+                  {conversationHref && (
+                    <Link href={conversationHref} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                      view message →
                     </Link>
                   )}
                   {isSystemLog && (

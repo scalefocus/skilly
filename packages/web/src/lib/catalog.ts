@@ -425,7 +425,7 @@ export async function pendingMirrorStatus(skillId: string): Promise<PendingMirro
   return { semver: r.semver, attempts: r.attempts, failed: r.attempts >= max, lastError: r.last_error };
 }
 
-export interface SkillSuggestion { namespaceSlug: string; skillSlug: string; title: string; official: boolean }
+export interface SkillSuggestion { id: string; namespaceSlug: string; skillSlug: string; title: string; official: boolean }
 
 /**
  * Lightweight autocomplete for the header search box. Visibility-filtered like the catalog
@@ -434,13 +434,19 @@ export interface SkillSuggestion { namespaceSlug: string; skillSlug: string; tit
  *  - substring ILIKE on title/slug only — NO ranking, NO joins, NO aggregates,
  *  - returns at most `limit` (≤10) minimal rows, active skills only.
  */
-export async function suggestSkills(access: EffectiveAccess, q: string, limit = 5, opts: { orgOnly?: boolean } = {}): Promise<SkillSuggestion[]> {
+export async function suggestSkills(access: EffectiveAccess, q: string, limit = 5, opts: { orgOnly?: boolean; namespaceSlug?: string } = {}): Promise<SkillSuggestion[]> {
   const params: unknown[] = [];
   const where: string[] = ["s.status = 'active'"];
-  if (opts.orgOnly) {
-    // Requested-skill "propose an existing skill" fulfilment (§26): the picked skill must be
-    // openable by everyone, including the requester, so it's restricted to org-visible skills
-    // regardless of the searching user's own namespace access.
+  if (opts.namespaceSlug) {
+    // Mention `ns/` prefix (§24 Mentions): the caller typed an explicit namespace they can see
+    // into — suggest within THAT namespace only (restricted skills included; the route verified
+    // the caller's access to the namespace before passing it here).
+    params.push(opts.namespaceSlug);
+    where.push(`n.slug = $${params.length}`);
+  } else if (opts.orgOnly) {
+    // Requested-skill "propose an existing skill" fulfilment (§26) and bare-name mention
+    // suggestions (§24): the result must be org-visible, regardless of the searching user's
+    // own namespace access.
     where.push(`s.visibility = 'org'`);
   } else if (!access.isPlatformAdmin) {
     params.push([...access.namespaceRoles.keys()]);
@@ -450,15 +456,15 @@ export async function suggestSkills(access: EffectiveAccess, q: string, limit = 
   // 5 results are a true prefix of what the catalog shows for the same query.
   const titleMatch = ilikeSearch(params, q, where);
   params.push(Math.min(10, Math.max(1, limit)));
-  const { rows } = await pool.query<{ namespace_slug: string; skill_slug: string; title: string; official: boolean }>(
-    `select n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official
+  const { rows } = await pool.query<{ id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean }>(
+    `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official
        from skills s join namespaces n on n.id = s.namespace_id
       where ${where.join(" and ")}
       order by case when ${titleMatch} then 0 else 1 end asc, s.install_count desc, s.title asc
       limit $${params.length}`,
     params,
   );
-  return rows.map((r) => ({ namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official }));
+  return rows.map((r) => ({ id: r.id, namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official }));
 }
 
 export interface Facets {

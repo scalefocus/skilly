@@ -1017,3 +1017,79 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   font-size: 9px; line-height: 1; color: #fff; flex-shrink: 0;
 }
 @media (prefers-reduced-motion: reduce) { .dircard { animation: none; } }
+
+/* ── Mentions (§24) — chips, the composer, the caret-anchored picker ─────── */
+/* Inline chips inside message bodies. Distinct tones per trigger: @people = neutral/ink,
+   #skills = the accent tone version pills use — both theme-aware via the shared variables. */
+.mention-chip {
+  display: inline;
+  padding: 0.5px 6px;
+  border-radius: 999px;
+  font-size: 0.94em;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+}
+a.mention-chip:hover { text-decoration: underline; }
+.mention-chip-user { color: var(--ink); background: var(--surface-2); }
+.mention-chip-skill { color: var(--accent-2); background: var(--accent-soft); border-color: transparent; }
+/* Redacted (§24): the reader can't see the mentioned skill — unnamed, non-clickable. */
+.mention-chip-redacted { color: var(--muted); background: var(--surface-2); font-style: italic; font-weight: 500; }
+/* The atomic chip inside the composer (contentEditable=false). */
+.mention-chip-input { user-select: none; -webkit-user-select: none; }
+
+/* The composer: a contentEditable that looks and behaves like the textarea it replaced. */
+.mention-composer {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+  max-height: 180px;
+  cursor: text;
+}
+.mention-composer:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mention-composer[contenteditable="false"] { opacity: 0.6; cursor: default; }
+.mention-composer[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: var(--faint);
+  pointer-events: none;
+}
+
+/* The caret-anchored suggestion picker — portalled to <body> (never clipped; flips above). */
+.mention-picker {
+  min-width: 220px;
+  max-width: 300px;
+  max-height: 264px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.mention-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px; /* tap-sized for the mobile sheet */
+  border: 0;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  cursor: pointer;
+}
+.mention-picker-row-sel { background: var(--surface-2); }

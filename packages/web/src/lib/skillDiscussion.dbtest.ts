@@ -105,12 +105,15 @@ test("skill discussion: post/validate/moderate/notify (§24)", { skip: !enabled 
     assert.equal(afterRow.rows[0]!.id, firstRow.rows[0]!.id, "updated in place");
     assert.ok(afterRow.rows[0]!.delivered_at, "delivered_at preserved → no re-email");
 
-    // ── Read model: expanding the thread clears the viewer's skill.discussion alert ──────────
+    // ── Read model (§24, viewport rule): FETCHING the thread is not the read action any more —
+    // the alert clears only via markSkillDiscussionRead (the card's viewport read endpoint).
     const thread = await m.getSkillDiscussion(access(watcher), skill, { offset: 0 });
     assert.equal(thread.count, 2);
     assert.equal(thread.messages.length, 2);
     assert.equal(thread.messages[0]!.body, "another", "newest-first");
-    assert.equal(await unread(watcher), "0", "reading (offset 0) cleared the coalesced alert");
+    assert.equal(await unread(watcher), "1", "a mere fetch (poll / expanded-by-default load) does NOT clear the alert");
+    await m.markSkillDiscussionRead(access(watcher), skill);
+    assert.equal(await unread(watcher), "0", "the viewport read action clears the coalesced alert");
 
     // ── Moderation: maintainer can delete; a plain commenter cannot ──────────────────────────
     const victimId = thread.messages[0]!.id;

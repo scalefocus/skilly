@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChatBox, type ChatMessage } from "./ChatBox";
+import type { MentionMap } from "./MentionChips";
 import { UserBubble } from "./UserBubble";
 import { useDateFmt } from "./DateFormat";
 import { useChatPollIntervals } from "./useChatPoll";
@@ -27,7 +28,7 @@ function relativeTime(iso: string | null, absolute: (iso: string | null) => stri
   if (days < 7) return `${days}d`;
   return absolute(iso);
 }
-interface ThreadView { id: string; title: string; href: string | null; canPost: boolean; closed: boolean; messages: ChatMessage[]; peerName: string | null; peerAvatar: string | null; peerUserId: string | null; closedHint: string | null }
+interface ThreadView { id: string; title: string; href: string | null; canPost: boolean; closed: boolean; messages: ChatMessage[]; peerName: string | null; peerAvatar: string | null; peerUserId: string | null; closedHint: string | null; mentions?: MentionMap; mentionContext?: string | null }
 
 export function MessagesMenu() {
   const fmt = useDateFmt();
@@ -293,7 +294,7 @@ export function MessagesMenu() {
                 <button type="button" className="msg-close" aria-label="Close messages" onClick={() => setOpen(false)}>✕</button>
               </div>
               <div className="msg-scroll" style={{ padding: "12px 14px" }}>
-                {loadingThread ? <p className="muted" style={{ fontSize: 13 }}>Loading…</p> : <ChatBox messages={active.messages} canPost={active.canPost} closed={active.closed} onSend={send} listHeight={300} closedHint={active.closedHint ?? undefined} />}
+                {loadingThread ? <p className="muted" style={{ fontSize: 13 }}>Loading…</p> : <ChatBox messages={active.messages} canPost={active.canPost} closed={active.closed} onSend={send} listHeight={300} closedHint={active.closedHint ?? undefined} mentions={active.mentions} mentionContext={active.mentionContext} />}
               </div>
             </>
           )}

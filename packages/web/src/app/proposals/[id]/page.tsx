@@ -11,6 +11,7 @@ import { ToolHarnessPicker } from "../../../components/ToolHarnessPicker";
 import { WHAT_CHANGED_MAX_LEN } from "@skilly/shared/proposal";
 import { useDateFmt } from "../../../components/DateFormat";
 import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
+import type { MentionMap } from "../../../components/MentionChips";
 import { UserBubble } from "../../../components/UserBubble";
 import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
@@ -1111,7 +1112,7 @@ function SubmitterCardView({ card, onMessage }: { card: SubmitterCard; onMessage
 
 /** Submitter card + the review chat thread (submitter ∪ reviewers ∪ maintainers). §24 */
 function ReviewDiscussion({ proposalId, card, initialConversationId }: { proposalId: string; card: SubmitterCard | null; initialConversationId: string | null }) {
-  const [thread, setThread] = useState<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: ChatMessage[] } | null>(null);
+  const [thread, setThread] = useState<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: ChatMessage[]; mentions?: MentionMap; mentionContext?: string | null } | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -1148,7 +1149,7 @@ function ReviewDiscussion({ proposalId, card, initialConversationId }: { proposa
       <div ref={threadRef} className="card card-pad" style={{ marginTop: 14 }}>
         <div className="nav-label" style={{ padding: 0, marginBottom: 10 }}>Review chat</div>
         {thread ? (
-          <ChatBox messages={thread.messages} canPost={thread.canPost} closed={thread.closed} onSend={send} emptyHint="No messages yet — start the discussion about this proposal." />
+          <ChatBox messages={thread.messages} canPost={thread.canPost} closed={thread.closed} onSend={send} emptyHint="No messages yet — start the discussion about this proposal." mentions={thread.mentions} mentionContext={thread.mentionContext} />
         ) : (
           <p className="muted" style={{ fontSize: 13 }}>Loading…</p>
         )}

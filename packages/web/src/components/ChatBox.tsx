@@ -1,11 +1,16 @@
 "use client";
-// Presentational chat: a scrollable message list + a composer (textarea + emoji picker). Used by
-// the review page and the topbar messages dropdown. Plain-text bodies (React escapes them) with
-// newlines preserved; native emoji render as-is. SKILLY_SPEC.md §24.
+// Presentational chat: a scrollable message list + a composer (mention-capable editable + emoji
+// picker). Used by the review page, the request page, and the topbar messages dropdown. Bodies
+// are plain text (React escapes them) with newlines preserved and native emoji — the ONE markup
+// exception is inline mention chips rendered from the per-reader `mentions` map (`#` skills /
+// `@` people, SKILLY_SPEC.md §24 Mentions). A muted reminder line under the composer points at
+// the `#`/`@` triggers.
 import { useEffect, useRef, useState } from "react";
 import { useDateFmt } from "./DateFormat";
 import { EmojiPicker } from "./EmojiPicker";
 import { UserBubble } from "./UserBubble";
+import { MentionComposer, type MentionComposerHandle } from "./MentionComposer";
+import { MentionHint, MentionText, type MentionMap } from "./MentionChips";
 
 export interface ChatMessage {
   id: string; authorId: string; authorName: string; authorAvatar: string | null; mine: boolean; body: string; createdAt: string;
@@ -16,6 +21,7 @@ export interface ChatMessage {
 export function ChatBox({
   messages, canPost, closed, onSend, listHeight = 280, emptyHint = "No messages yet — start the discussion.",
   closedHint = "This discussion is read-only — the proposal has been decided.",
+  mentions, mentionContext,
 }: {
   messages: ChatMessage[];
   canPost: boolean;
@@ -24,11 +30,15 @@ export function ChatBox({
   listHeight?: number;
   emptyHint?: string;
   closedHint?: string;
+  /** Per-reader mention resolution for the bodies above (§24) — token → chip data. */
+  mentions?: MentionMap;
+  /** `@` typeahead context for the composer; null/undefined = whole directory. */
+  mentionContext?: string | null;
 }) {
   const fmt = useDateFmt();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<MentionComposerHandle>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest message in view as the thread grows.
@@ -40,19 +50,11 @@ export function ChatBox({
     setSending(true);
     try {
       await onSend(body);
+      composerRef.current?.clear();
       setText("");
     } finally {
       setSending(false);
     }
-  };
-
-  const insertEmoji = (e: string) => {
-    const ta = taRef.current;
-    if (!ta) { setText((t) => t + e); return; }
-    const start = ta.selectionStart ?? text.length;
-    const end = ta.selectionEnd ?? text.length;
-    setText(text.slice(0, start) + e + text.slice(end));
-    requestAnimationFrame(() => { ta.focus(); const p = start + e.length; ta.setSelectionRange(p, p); });
   };
 
   return (
@@ -81,7 +83,7 @@ export function ChatBox({
                     color: "var(--ink)", border: "1px solid var(--line)",
                   }}
                 >
-                  {m.body}
+                  <MentionText body={m.body} mentions={mentions} />
                 </div>
               </div>
             </div>
@@ -93,20 +95,24 @@ export function ChatBox({
       {closed ? (
         <p className="muted" style={{ fontSize: 12.5, fontStyle: "italic", margin: 0 }}>{closedHint}</p>
       ) : canPost ? (
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-          <textarea
-            ref={taRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
-            placeholder="Write a message…  (Enter to send, Shift+Enter for a new line)"
-            rows={2}
-            style={{ flex: 1, resize: "vertical", minHeight: 38, padding: "8px 11px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 13.5 }}
-          />
-          <EmojiPicker onPick={insertEmoji} />
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => void send()} disabled={sending || !text.trim()}>
-            {sending ? "…" : "Send"}
-          </button>
+        <div>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <MentionComposer
+                ref={composerRef}
+                onChange={setText}
+                onSubmit={() => void send()}
+                placeholder="Write a message…  (Enter to send, Shift+Enter for a new line)"
+                mentionContext={mentionContext}
+                minHeight={38}
+              />
+            </div>
+            <EmojiPicker onPick={(e) => composerRef.current?.insertText(e)} />
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => void send()} disabled={sending || !text.trim()}>
+              {sending ? "…" : "Send"}
+            </button>
+          </div>
+          <MentionHint />
         </div>
       ) : null}
     </div>

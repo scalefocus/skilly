@@ -92,6 +92,36 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
+  // message.mention (§24 Mentions) — deliberately UN-coalesced (§12: one row per message per
+  // mentioned user, each emails). The CTA follows the context: proposal/request page, the skill
+  // Discussion card (#discussion fragment), or — for a direct chat — the ?conversation deep link.
+  if (n.type === "message.mention") {
+    const fromName = typeof p.fromName === "string" && p.fromName ? p.fromName : "Someone";
+    const proposalId = typeof p.proposalId === "string" ? p.proposalId : null;
+    const requestId = typeof p.requestId === "string" ? p.requestId : null;
+    const hasSkill = typeof p.namespaceSlug === "string" && typeof p.skillSlug === "string" && p.skillSlug;
+    const conversationId = typeof p.conversationId === "string" ? p.conversationId : null;
+    const s = subj(title);
+    let sentence: string;
+    let path: string;
+    if (proposalId || requestId) {
+      const ctxTitle = typeof p.title === "string" && p.title ? p.title : "a discussion";
+      sentence = `${fromName} mentioned you in "${ctxTitle}".`;
+      path = proposalId ? `/proposals/${proposalId}` : `/requests/${requestId}`;
+    } else if (hasSkill) {
+      sentence = `${fromName} mentioned you in the discussion on ${p.namespaceSlug}/${p.skillSlug}.`;
+      path = `/skills/${p.namespaceSlug}/${p.skillSlug}#discussion`;
+    } else {
+      sentence = `${fromName} mentioned you in a direct message.`;
+      path = `/?conversation=${conversationId ?? ""}`;
+    }
+    return {
+      subject: s,
+      text: `${sentence} ${cta("View the message", path)}`,
+      webhook: { event: n.type, title: s, conversationId, proposalId, requestId, from: fromName, url: abs(path) },
+    };
+  }
+
   // A new comment on a skill's Discussion card (§24). Coalesced like message.new (one row per
   // skill per recipient until read); deep-links to the card via the #discussion fragment.
   if (n.type === "skill.discussion" && typeof p.skillSlug === "string") {

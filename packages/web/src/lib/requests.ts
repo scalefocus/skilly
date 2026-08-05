@@ -293,7 +293,7 @@ export async function closeRequest(
     );
     if (doomedConvs.length) {
       await client.query(
-        `delete from notifications where type = 'message.new' and payload->>'conversationId' = any($1::text[])`,
+        `delete from notifications where type in ('message.new', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
         [doomedConvs.map((c) => c.id)],
       );
     }
