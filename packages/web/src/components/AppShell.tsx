@@ -88,13 +88,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   const onRequests = pathname === "/requests";
   const liveFilter = onCatalog || onInstalled || onUsage || onRequests;
 
-  // Debounced autocomplete (typeahead pages only): fire at 2+ chars (matches the server floor),
-  // 200ms after the last keystroke, ignore stale responses. Reset cleanly below the threshold or on
-  // any live-filter page (catalog/installed/usage), where the box filters an on-page list instead.
+  // People mode (§10): a query whose FIRST character is `@` turns the box into a people typeahead
+  // on EVERY page — it overrides the live-filter modes (nothing is mirrored to ?q= while active)
+  // and the skill dropdown alike. Picking a person opens their maintained-skills catalog view.
+  const peopleMode = q.trimStart().startsWith("@");
+  const peopleTerm = peopleMode ? q.trimStart().slice(1).trim() : "";
+  const [people, setPeople] = useState<{ id: string; name: string; email: string; avatar: string | null }[]>([]);
+
+  // Debounced autocomplete: fire at 2+ chars (matches the server floor), 200ms after the last
+  // keystroke, ignore stale responses. Skills on typeahead pages only (live-filter pages filter
+  // an on-page list instead); PEOPLE (leading `@`) on every page. Reset cleanly below the floor.
   useEffect(() => {
-    const term = q.trim();
-    if (status !== "authenticated" || liveFilter || term.length < 2) {
+    const term = peopleMode ? peopleTerm : q.trim();
+    if (status !== "authenticated" || (!peopleMode && liveFilter) || term.length < 2) {
       setSuggestions([]);
+      setPeople([]);
       setAcOpen(false);
       setAcLoading(false);
       return;
@@ -102,11 +110,20 @@ export function AppShell({ children }: { children: ReactNode }) {
     let live = true;
     setAcLoading(true);
     const t = setTimeout(() => {
-      fetch(`/api/skills/suggest?q=${encodeURIComponent(term)}`)
+      const url = peopleMode
+        ? `/api/users/suggest?q=${encodeURIComponent(term)}&limit=5`
+        : `/api/skills/suggest?q=${encodeURIComponent(term)}`;
+      fetch(url)
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => {
           if (!live) return;
-          setSuggestions(j?.suggestions ?? []);
+          if (peopleMode) {
+            setPeople(j?.users ?? []);
+            setSuggestions([]);
+          } else {
+            setSuggestions(j?.suggestions ?? []);
+            setPeople([]);
+          }
           setAcOpen(true); // open even when empty → the "Nothing found" bubble confirms the search ran
           setAcHi(-1);
           setAcLoading(false);
@@ -117,7 +134,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       live = false;
       clearTimeout(t);
     };
-  }, [q, status, liveFilter]);
+  }, [q, status, liveFilter, peopleMode, peopleTerm]);
 
   // Reset the search box on every navigation: when ARRIVING on a live-filter page (catalog,
   // installed, usage, or Requested skills), seed it from ?q= so it reflects the active filter (e.g.
@@ -139,6 +156,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   // (full list).
   useEffect(() => {
     if (!liveFilter) return;
+    if (peopleMode) return; // §10 people mode suspends the live filter — nothing written to ?q=
     const floor = onInstalled ? 1 : 2;
     const term = q.trim();
     const t = setTimeout(() => {
@@ -151,7 +169,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       router.replace(qs ? `${pathname}?${qs}` : pathname);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, liveFilter, onInstalled, pathname, router]);
+  }, [q, liveFilter, peopleMode, onInstalled, pathname, router]);
 
   // Ctrl/Cmd+K focuses the registry search (only while signed in, since the box only
   // exists then). The kbd hint next to the box advertises the shortcut.
@@ -555,6 +573,17 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="search"
               onSubmit={(e) => {
                 e.preventDefault();
+                // People mode (§10): Enter picks the highlighted (or only) person and opens their
+                // maintained-skills view; there is no catalog fallback for an `@` query.
+                if (peopleMode) {
+                  const p = acHi >= 0 ? people[acHi] : people.length === 1 ? people[0] : undefined;
+                  if (p) {
+                    setAcOpen(false);
+                    setQ("");
+                    router.push(`/catalog?maintainer=${p.id}&by=${encodeURIComponent(p.name)}`);
+                  }
+                  return;
+                }
                 // On a live-filter page (catalog/installed/usage/requests) the box already filters
                 // the list — Enter just dismisses focus (no jump to the catalog).
                 if (liveFilter) { searchRef.current?.blur(); return; }
@@ -585,7 +614,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 ref={searchRef}
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                onFocus={() => { if (!liveFilter && (suggestions.length > 0 || (q.trim().length >= 2 && !acLoading))) setAcOpen(true); }}
+                onFocus={() => { if ((peopleMode || !liveFilter) && (suggestions.length > 0 || people.length > 0 || (q.trim().length >= 2 && !acLoading))) setAcOpen(true); }}
                 onKeyDown={(e) => {
                   // Escape always clears the box in one press, in every mode — this supersedes its
                   // former job of merely closing the dropdown (clearSearch closes it anyway). No-op
@@ -594,9 +623,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                     if (q.length > 0 || acOpen) { e.preventDefault(); clearSearch(); }
                     return;
                   }
-                  if (!acOpen || suggestions.length === 0) return;
-                  // Navigable items = the suggestions plus the trailing "see all in catalog" footer.
-                  const count = suggestions.length + 1;
+                  const rows = peopleMode ? people.length : suggestions.length;
+                  if (!acOpen || rows === 0) return;
+                  // Navigable items = the rows plus (skills only) the "see all in catalog" footer.
+                  const count = peopleMode ? rows : rows + 1;
                   if (e.key === "ArrowDown") { e.preventDefault(); setAcHi((i) => (i + 1) % count); }
                   else if (e.key === "ArrowUp") { e.preventDefault(); setAcHi((i) => (i <= 0 ? count - 1 : i - 1)); }
                 }}
@@ -616,7 +646,29 @@ export function AppShell({ children }: { children: ReactNode }) {
               ) : (
                 <kbd>CTRL+K</kbd>
               )}
-              {acOpen && suggestions.length > 0 && (
+              {/* People mode (§10): a leading `@` lists people — avatar + name + email; picking
+                  one opens their maintained-skills catalog view. No catalog footer. */}
+              {acOpen && peopleMode && people.length > 0 && (
+                <ul className="search-ac" role="listbox">
+                  {people.map((p, i) => (
+                    <li key={p.id} role="option" aria-selected={i === acHi}>
+                      <button
+                        type="button"
+                        className={`search-ac-item${i === acHi ? " hi" : ""}`}
+                        onMouseEnter={() => setAcHi(i)}
+                        onClick={() => { setAcOpen(false); setQ(""); router.push(`/catalog?maintainer=${p.id}&by=${encodeURIComponent(p.name)}`); }}
+                      >
+                        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                          <UserBubble name={p.name} avatar={p.avatar} size={22} />
+                          <span className="search-ac-title" style={{ minWidth: 0 }}>{p.name}</span>
+                        </span>
+                        <span className="search-ac-sub mono">{p.email}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {acOpen && !peopleMode && suggestions.length > 0 && (
                 <ul className="search-ac" role="listbox">
                   {suggestions.map((s, i) => (
                     <li key={`${s.namespaceSlug}/${s.skillSlug}`} role="option" aria-selected={i === acHi}>
@@ -649,9 +701,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               )}
               {/* No matches: a bubble so it's clear the search actually ran (only after the
                   request returns empty — never while typing/loading). */}
-              {acOpen && !acLoading && suggestions.length === 0 && q.trim().length >= 2 && (
+              {acOpen && !acLoading && (peopleMode ? people.length === 0 && peopleTerm.length >= 2 : suggestions.length === 0 && q.trim().length >= 2) && (
                 <div className="search-ac search-ac-empty" role="status">
-                  Nothing found for <span className="mono">“{q.trim()}”</span>
+                  Nothing found for <span className="mono">“{(peopleMode ? peopleTerm : q.trim())}”</span>
                 </div>
               )}
             </form>

@@ -228,7 +228,8 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### Messaging tables (migration 0031, detailed in §24)
 - **`conversations`** — `id`, `subject_type`, `subject_id` (polymorphic; partial unique on `(subject_type, subject_id)`), `created_at`, `updated_at`.
 - **`conversation_participants`** — `conversation_id`, `user_id`, `last_read_at`, `created_at` (PK first two).
-- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `context_semver` (nullable TEXT, migration 0059 — **skill-discussion context only**: the skill version the comment is about, §24), `created_at`. Immutable — no edits for anyone; the **only** delete is the skill-discussion **moderator delete** (§24).
+- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `context_semver` (nullable TEXT, migration 0059 — **skill-discussion context only**: the skill version the comment is about, §24), `created_at`. Immutable — no edits for anyone; the **only** delete is the skill-discussion **moderator delete** (§24). The body may embed **mention tokens** (`<@uuid>` / `<#uuid>`, §24 *Mentions*).
+- **`message_mentions`** (migration 0062, detailed in §24 *Mentions*) — `message_id` (FK → `messages`, ON DELETE CASCADE), `kind` (`'user'` | `'skill'`), `target_id` (UUID — `users.id` or `skills.id`; **no FK**, polymorphic like `conversations.subject_id`), `label` (TEXT NULL — **skill mentions only**: the `ns/slug` handle captured at post time, used solely as the plain-text fallback after the skill is hard-deleted; user mentions store **no** label — they resolve live, and users are never hard-deleted). PK `(message_id, kind, target_id)`.
 
 ### `system_event` (migration 0032, detailed in §25)
 - Operational/system-log telemetry (NOT audit — mutable, no hash chain, cheap inserts/retention): `id`, `created_at`, `status`, `method`, `route` (template), `path` (concrete, no query string), `user_id`, `actor_name`/`actor_email` (point-in-time snapshot), `error_code`, `message` (one line, no stack), `request_id`, `duration_ms`, `source`. Trigram GIN index for substring search.
@@ -837,7 +838,8 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 ## 10. Search, discovery, taxonomy
 
 - **Free-text search is substring `ILIKE`** over title, slug, description, tags, **and the latest active version's usage examples** (the denormalized `skills.usage_search`, migration 0020) — the **same predicate** for the header dropdown and the catalog grid, so they match identically and respond to **partial words as you type** (a true type-ahead filter). The `search_tsv` `tsvector` (title=A/description=B/tags=C/usage=D) is still trigger-maintained but is **no longer the query path**: we deliberately trade full-text relevance ranking for consistent, responsive substring matching (a conscious choice — revisit if catalog scale makes ranking quality matter; the FTS machinery is retained so that's reversible). Maintainer names remain **not** matched (low value).
-- **Search surfaces (one box, five behaviors):** the single top-bar box adapts to the page it's on. Its placeholder reads **"Search the registry…"** everywhere except the installed-skills page (**"Search installed skills…"**), the usage dashboard (**"Search usage…"**), and the Requested skills page (**"Search requests…"**).
+- **Search surfaces (one box, five behaviors + a people mode):** the single top-bar box adapts to the page it's on. Its placeholder reads **"Search the registry…"** everywhere except the installed-skills page (**"Search installed skills…"**), the usage dashboard (**"Search usage…"**), and the Requested skills page (**"Search requests…"**).
+  - **People mode (`@`) — overrides all five behaviors.** A query whose **first character is `@`** switches the box to a **people typeahead**: the dropdown shows up to **5** matching users — `UserBubble` avatar + display name + email — matched by **substring over display name and email** (2+ chars after the `@`), **excluding erased tombstones and non-`active` users**. Picking one navigates to that person's **maintained-by catalog view** (`/catalog?maintainer=<id>&by=<name>`, §10 above). Backed by the new `GET /api/users/suggest?q=` (§15 — any signed-in user, rate-limited, same posture as `/api/skills/suggest`; people have no per-user visibility model, §28 precedent). People mode is available on **every** page, including the four live-filter pages — a leading `@` re-enables the dropdown there and **suspends the live filter** (nothing is written to `?q=` while in people mode; clearing or deleting the `@` restores the page's normal behavior). Keyboard/clear/Escape semantics are unchanged from the skill dropdown.
   - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches (name-matches first), opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
   - **Catalog page:** the dropdown is **suppressed**; the same top-bar box becomes a **live filter of the card/row grid** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (merged with the other filters, kept out of history) and the grid re-queries + re-ranks on each keystroke, exactly like choosing a category or tool. The box is **seeded from `?q=`** on arrival, and **clearing it restores the full catalog**.
   - **Installed-skills page (`/installed`, §23):** the dropdown is **suppressed** and the box becomes a **client-side live filter of the caller's own installed list** (no refetch, no query param) — a case-insensitive substring match over each row's title, namespace slug, and skill slug, engaging from the **1st character** (the list is small and already loaded). The typed query is still mirrored to **`?q=`** (`router.replace`, seeded on arrival; clearing restores the full list). This is a **non-registry** mode: different data, matcher, and matched fields — see §23 (*Installed Skills page → Header search*).
@@ -919,6 +921,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
+  - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
 - **Deferred:** —
@@ -956,6 +959,7 @@ current or future type can ever leak JSON to a user.
   |---|---|---|---|
   | `message.new` — direct | Direct message | You have a new direct message from {fromName}. | See the message → `/?conversation={conversationId}` |
   | `message.new` — proposal/request thread | New message | {fromName} posted a new message in "{title}". | View the discussion → `/proposals/{proposalId}` or `/requests/{requestId}` |
+  | `message.mention` | You were mentioned | {fromName} mentioned you in "{title}". *(skill discussion: … mentioned you in the discussion on {ns}/{slug}.; direct: … mentioned you in a direct message.)* | View the message → `/proposals/{id}` / `/requests/{id}` / `/skills/{ns}/{slug}#discussion` / `/?conversation={conversationId}` |
   | `skill.new_version` | New version published | {ns}/{slug} published version {semver}. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.discussion` | New discussion comment | {fromName} commented on {ns}/{slug}. | View the discussion → `/skills/{ns}/{slug}#discussion` |
   | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
@@ -985,9 +989,11 @@ current or future type can ever leak JSON to a user.
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
   `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
-  **"Discussion comments on skills I maintain or watch"** (`users.discussion_notifications`,
+  **"Discussion comments and @mentions"** (`users.discussion_notifications`,
   `BOOLEAN NOT NULL DEFAULT true`, migration 0059; gates `skill.discussion` — §24 *Skill
-  discussion*). `GET /api/me` returns them; `PATCH /api/me { driftNotifications,
+  discussion* — **and `message.mention` in every context**, §24 *Mentions*; relabeled from
+  "Discussion comments on skills I maintain or watch" when mentions shipped — same column, no
+  migration). `GET /api/me` returns them; `PATCH /api/me { driftNotifications,
   newVersionNotifications, discussionNotifications }` updates them.
   Toggling is **silent** (not audited), matching the other profile prefs.
 - **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
@@ -1007,7 +1013,9 @@ current or future type can ever leak JSON to a user.
     maintainer-derived **and** watcher-derived (deliberate contrast with `new_version`: it is the
     only way to keep watching a skill for versions while muting its chatter). Recipient set:
     (watchers ∪ effective maintainers) minus the author, minus opted-out users, visibility-filtered
-    at insert time (§24 *Skill discussion*).
+    at insert time (§24 *Skill discussion*). The **same toggle also gates `message.mention`** in
+    all four messaging contexts (§24 *Mentions*) — a deliberate single switch, no separate
+    mention toggle: opting out of discussion chatter opts out of being pinged by name too.
 - **No safety floor — deliberately.** Namespace admins can opt out like anyone, so a skill whose
   effective maintainers have all opted out drifts with **no one pinged**. Accepted: the toggle
   silences the *ping*, never the *record* — the `pointer.drift_detected` audit row, the
@@ -1158,6 +1166,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Messaging (§24)**
 - `GET /api/messages` (list + unread), `GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `POST /api/messages/direct {userId}`.
 - `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET paginated newest-first, 100/page; POST `{body, contextSemver}`) and `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator hard delete, audited `skill.discussion_message_deleted`) — the skill Discussion card, §24.
+- **Mentions (§24 *Mentions*):** `GET /api/users/suggest?q=&context=` — people typeahead for the composer `@` picker and the header-search people mode (§10); any signed-in user, rate-limited, 2-char floor, top 6 (5 in the header), name+email substring match, excludes erased/non-active users. The optional `context` (`proposal:<id>` | `skill:<ns>/<slug>`) narrows candidates to that thread's audience (server re-derives it; a caller who can't see the context 404s); no context = whole directory (request threads, direct chats, org-visible skill discussions, header search). Skill (`#`) suggestions reuse `GET /api/skills/suggest` with `scope=mention` — bare query matches **org-visible** skills only; a `<ns>/` prefix the author can see into unlocks that namespace's restricted skills. Every message GET returns a per-reader-resolved `mentions` map alongside the bodies; every message POST validates tokens (≤10 distinct, audience + visibility rules) and writes `message_mentions`.
 
 **Presence**
 - `POST /api/presence/page {label}` — any authenticated user (401 if not); stamps `users.last_seen_page` (+ `last_seen`) via the throttled `touchLastSeen`, §4.
@@ -1176,7 +1185,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
@@ -1815,7 +1824,8 @@ detail page's Discussion card, below) — follows the same pattern.
 ### Data model
 - **`conversations`** — `subject_type` + `subject_id` (polymorphic context: `'proposal'`→`proposals.id`; `'request'`→`skill_requests.id` (§26); `'skill'`→`skills.id` (the **skill discussion**, below); `'direct'` with `subject_id` NULL = a **1:1 direct conversation**, e.g. "Reach out" to a maintainer), `created_at`, `updated_at` (bumped per message, for list ordering). One conversation per concrete subject (partial unique index); direct conversations are deduped by their exact two-participant set.
 - **`conversation_participants`** — `(conversation_id, user_id, last_read_at)`. Created when a user first opens/posts; `last_read_at` is their personal read clock. **Skill discussions use no participant rows** — they are open forums, not participant-scoped threads (below).
-- **`messages`** — `author_id`, `body` (plain UTF-8 text → **native emoji**), `context_semver` (nullable, migration 0059 — skill-discussion only: the version the comment is about, stamped at post time), `created_at`. **Immutable** — no edits for anyone, and no deletes except the skill-discussion **moderator delete** (below). Bodies are escaped on render; newlines preserved; no markdown — **except** skill-discussion messages, which render **sanitized markdown** (the shared renderer used for descriptions/usage).
+- **`messages`** — `author_id`, `body` (plain UTF-8 text → **native emoji**), `context_semver` (nullable, migration 0059 — skill-discussion only: the version the comment is about, stamped at post time), `created_at`. **Immutable** — no edits for anyone, and no deletes except the skill-discussion **moderator delete** (below). Bodies are escaped on render; newlines preserved; no markdown — **except** skill-discussion messages, which render **sanitized markdown** (the shared renderer used for descriptions/usage) — plus, in **every** context, inline **mention chips** resolved from `<@uuid>`/`<#uuid>` tokens (the *Mentions* subsection below; the one markup exception in the plain-text contexts).
+- **`message_mentions`** (migration 0062) — `(message_id FK CASCADE, kind 'user'|'skill', target_id UUID, label TEXT NULL)`, PK on the first three; `label` is captured **only for skill mentions** (the `ns/slug` handle at post time — the plain-text fallback after skill deletion). Written atomically with the message; ≤10 distinct mentions per message. See *Mentions* below.
 
 ### Access
 - **Proposal context:** see/post = **submitter ∪ namespace reviewers (platform/ns admin) ∪ target-skill maintainers**, checked **dynamically** (so it tracks admin-group changes). A non-member 404s (no leak, like the proposal itself). Threads are created **lazily** on the first message, by either side.
@@ -1867,7 +1877,9 @@ the row's delivery bookkeeping** (an atomic update-in-place upsert against the m
 partial unique index — a delete+reinsert would reset `delivered_at` and re-email every new
 message, and a non-atomic path could race duplicates), so chat emails **at most once per
 conversation until read** (§12). Bodies capped (~4000 chars; **500 chars for skill-discussion
-messages**, below) and posting is rate-limited. Endpoints: `GET /api/messages` (list + unread),
+messages**, below) — with each **mention token counted as one character** (the cap measures what
+the reader sees, not the token's raw width; the server enforces the same token-collapsed length,
+plus a generous absolute raw-byte bound as a backstop) — and posting is rate-limited. Endpoints: `GET /api/messages` (list + unread),
 `GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `GET|POST /api/proposals/:id/messages`
 (lazy get-or-create), `GET|POST /api/requests/:id/messages` (lazy get-or-create, §26), and
 `GET|POST /api/skills/:ns/:slug/discussion` + `DELETE /api/skills/:ns/:slug/discussion/:messageId`
@@ -1878,9 +1890,14 @@ interval set — `chat_poll_intervals`, a platform setting holding an **ascendin
 integer seconds** (each `1..3600`, ≤20 entries). Default (and the fallback if the stored value is
 absent/invalid): **`[7, 11, 17, 19, 29, 41, 53]`** — primes, to minimise coincidence with other
 periodic requests. The smallest element `set[0]` (7s by default) is the **floor**:
-- **Open thread** (the messages-menu thread, the proposal review-discussion thread, a request's
-  Discussion card, *and* a skill's Discussion card **while expanded** — collapsed = no polling) polls
-  at a **fixed `set[0]`** while open — no backoff.
+- **Open thread** (the messages-menu thread, the proposal review-discussion thread, and a request's
+  Discussion card) polls at a **fixed `set[0]`** while open — no backoff. The **skill Discussion
+  card is the exception**: because it is expanded by default on every skill-page visit (below), a
+  fixed floor would make every detail-page view a permanent 7-second poller — so while expanded it
+  instead **walks the backoff set** like the conversation list (start at `set[0]`, advance one step
+  per poll that returns nothing new, clamp and hold at the last value), **resetting to `set[0]`**
+  only when a poll returns **new messages** or when the **viewer posts**. Collapsed = no polling;
+  the hidden-tab freeze/resume rule below applies the same way.
 - **Conversation list + unread badge** uses a **backoff that walks the set**: it starts at `set[0]`,
   and each poll that sees **no new activity** advances one step up the set, clamping at the last value
   (53s) and **holding there indefinitely** until something resets it. It **resets to `set[0]`** when
@@ -1894,6 +1911,112 @@ keep the set they loaded with; new page loads pick up an admin's change, so all 
 tabs reload. Edited in the Administration settings card as a comma-separated field (parsed, deduped,
 sorted ascending, bounds-checked on save); platform-admin only; audited like the other settings.
 
+### Mentions (`#` skills, `@` people)
+
+Every messaging composer — the **skill Discussion card**, the **proposal review discussion**, a
+**request's Discussion card**, and the **topbar messages dropdown** (proposal/request threads *and*
+direct 1:1 chats) — supports inline mentions: **`#` mentions a skill, `@` mentions a person**.
+Mentions exist **only in messages** — not in skill descriptions/usage, review notes, request
+bodies, or any other free text.
+
+**Token syntax & storage.**
+- A mention is stored in the immutable `body` as a **`<@uuid>`** (user) or **`<#uuid>`** (skill)
+  token — a grammar deliberately **distinct from markdown** so the skill-discussion markdown
+  renderer and the mention resolver never collide (a `[text](href)` form would be eaten by the
+  link rule). Tokens inside **code fences or inline backticks** are *not* resolved — they render
+  literally (and the composer's pickers don't trigger there either).
+- Alongside the message, one **`message_mentions`** row per distinct mention (data model above):
+  `kind` + `target_id`, plus — for **skill** mentions only — the `ns/slug` **label** captured at
+  post time. User mentions store no label: they always resolve **live** against the `users` row
+  (which is never hard-deleted — GDPR erasure leaves a tombstone), so a rename is picked up
+  automatically and an erased user renders as the app's standard tombstone label
+  (`<email> - Deleted`, or "Deleted User" — §4) with nothing extra to scrub.
+- **Post-time validation** (server, atomic with the insert): ≤ **10 distinct** mentions per
+  message (422 above); every `<#>` target must be a skill that **exists and is visible to the
+  author**; every `<@>` target must be a **non-erased, `active`** user inside the thread's
+  mentionable set (below) — except in **direct** chats, where any user may be referenced. There is
+  **no `@everyone`/`@here`/group mention**.
+- **Length accounting:** each token counts as **one character** against the body cap (500 /
+  ~4000 — *Delivery & limits* above).
+
+**Who the pickers offer (and what a post accepts).**
+- **`@` people** — scoped to the **thread's audience** (its see/post set):
+  - *Proposal thread:* submitter ∪ namespace reviewers ∪ target-skill maintainers. Mentioning
+    anyone else is **rejected on post** (422) — a proposal thread's membership must not leak.
+  - *Skill discussion:* everyone who can **see the skill** (an org skill → the whole directory;
+    a restricted skill → its namespace's members/admins + platform admins). Non-viewers are
+    rejected on post, same as proposals.
+  - *Request thread:* every authenticated user.
+  - *Direct chat:* the **whole directory** — you may reference a third party by name; they are
+    rendered but **never notified** (they can't open the thread).
+  - Matching is a **substring over display name and email**; erased tombstones and non-`active`
+    users are never offered and never accepted. `directory_hidden` / `leaderboard_hidden` do
+    **not** make anyone unmentionable — they hide fields, not existence.
+- **`#` skills** — the **same rule in every context**: a **bare** query (`#payrol…`) matches
+  **org-visible** skills only; a query with a **namespace prefix** (`#finance/…`) where the author
+  can see into that namespace also matches that namespace's **restricted** skills (which then
+  render redacted for readers without access, below). Suggestions come from
+  `GET /api/skills/suggest?scope=mention`; the 2-char floor applies to the whole query after `#`.
+
+**Composer UX.**
+- **Trigger:** `#`/`@` typed at a **word boundary** (start of text or after whitespace) opens the
+  picker — `user@example.com` and `C#` mid-word never do. Suggestions appear from **2 characters**
+  after the trigger, debounced ~**180 ms**, max **6** rows — `@` rows show the `UserBubble`
+  avatar + name + email; `#` rows show the skill's display title + `ns/slug`.
+- **Keyboard:** ↑/↓ navigate, **Enter/Tab select, Escape dismisses** — while the picker is open,
+  **Enter selects and never sends** (the composers' Enter-to-send resumes once it closes). On
+  **mobile** (including the full-screen messages sheet) rows are tap-targets sized accordingly.
+- **Placement:** the picker renders in a **portal** above the app (like the §28 hover card),
+  positioned at the caret and **flipping above the composer** when there's no room below — never
+  clipped by the topbar dropdown, the mobile sheet, or the Discussion card's overflow handling.
+- **Atomic chips:** an inserted mention is a single unit in the composer — **Backspace removes the
+  whole mention**, the caret never lands inside it, and its text can't be partially edited
+  (re-type it to change it).
+- **Hint line (all four composers):** a persistent muted line under the composer —
+  **"# to mention a skill · @ to mention someone"** (the skill discussion prefixes its existing
+  "markdown supported" note to the same line). The hint replaces the parenthetical overflow in the
+  placeholders: placeholders slim down to the action + Enter/Shift+Enter key hint.
+
+**Rendering — per-reader, server-resolved.**
+Message GET endpoints return, alongside each page of messages, a **`mentions` resolution map**
+computed **for the requesting reader** — the client never resolves uuids itself, and a name a
+reader isn't entitled to is **never serialized to their browser** (invariant #3):
+- **`@user`** → an inline **chip** with the user's **live display name**. Hover/focus opens the
+  **§28 directory hover card**; **click navigates to their maintained-skills view**
+  (`/catalog?maintainer=<id>&by=<name>` — the same surface the leaderboard uses; it shows their
+  skills, visibility-filtered, or an empty catalog if none). An **erased** user renders as plain
+  muted text carrying the app's standard tombstone label (`<email> - Deleted` / "Deleted User",
+  §4) — no chip, no card, no link.
+- **`#skill`** → a chip showing the skill's **display title**, **prefixed with the namespace slug
+  when the skill is namespace-restricted** (`finance / Payroll Audit`; org-visible skills show the
+  bare title). Click → the skill's detail page.
+  - Reader **can't see** the skill (restricted to a namespace they're not in, or archived and
+    they're not an owner) → an unnamed, non-clickable **"a restricted skill"** redaction chip.
+  - Skill **hard-deleted** → the stored `label` as plain muted text (`finance/payroll-audit`), no
+    chip, no link.
+- **Tones:** `@` and `#` chips take **distinct tones**, both drawn from the existing pill palette
+  and correct in light + dark themes (`#` = the accent tone already used for version pills; `@` =
+  a neutral/ink tone) — visually inline with the message text, not block pills.
+- In the **plain-text contexts** (`ChatBox` surfaces) mention chips are the **only** markup —
+  everything else stays escaped text. In the **skill discussion** they render inside the sanitized
+  markdown (tokens are resolved outside/before the markdown inline pass).
+
+**Notifications (`message.mention`, §12).**
+- Mentioning a user notifies them — **un-coalesced** (one row per message per mentioned user) and
+  **each row emails** (channel-level `email_notifications` still applies). Recipients = mentioned
+  users ∩ **thread audience**, minus the author, minus `discussion_notifications` opt-outs (the
+  **same toggle** gates mentions everywhere — no separate switch). Direct-chat third parties are
+  silently skipped; `#skill` mentions notify no one (no maintainer/watcher ping in v1).
+- For the mentioned recipient the message produces **only** the mention row — their coalesced
+  `message.new`/`skill.discussion` row is not also created/refreshed by it (§12).
+- A mention does **not** make anyone a participant: it never creates a `conversation_participants`
+  row, and future non-mention messages don't notify them.
+- **Read:** opening the thread clears that conversation's mention rows exactly like `message.new`;
+  for skill discussions the read action is the card's **viewport rule** (below). The standard
+  inbox-open read (§12) clears them too.
+- Posting a mention is **not audited** (like all message posting); the mention rows cascade with
+  the message on moderator delete and with the conversation on subject deletion.
+
 ### Skill discussion (the skill detail page's Discussion card)
 
 An open, per-skill comment thread on the skill detail page — the third messaging context
@@ -1904,14 +2027,21 @@ card and the skill-specific message semantics.
 **The card.**
 - **Placement:** on the skill detail page, **directly below the Maintainers card** (above the
   `<hr>`/Versions divider).
-- **Collapsed by default** on every page load (state is not persisted). The collapsed header reads
-  **"Discussion (N)"** — N = the live comment count, returned by the detail API
-  (`GET /api/skills/:ns/:slug` gains a `discussionCount` field) so the count shows without expanding.
-  Expanding fetches the thread (`GET /api/skills/:ns/:slug/discussion`); the collapse/expand
+- **Expanded by default** — with a **single global, client-side collapse preference**
+  *(supersedes the original "collapsed by default, not persisted" rule)*: collapsing any skill's
+  Discussion card writes one localStorage key (`skilly.discussionCollapsed = "1"`), expanding any
+  card clears it, and **every** skill's card follows that one preference on load — it is a "how I
+  like discussion cards" setting, not per-skill memory. When localStorage is unavailable (private
+  mode, storage errors) the card falls back to **expanded**. Applies on mobile the same as desktop.
+  The header reads **"Discussion (N)"** — N = the live comment count, returned by the detail API
+  (`GET /api/skills/:ns/:slug` gains a `discussionCount` field) so the count shows even while
+  collapsed. The thread is fetched when the card renders expanded (on mount when the stored
+  preference — or the fallback — is expanded; on expand otherwise); the collapse/expand
   interaction reuses the existing collapsible-card pattern (chevron, `aria-expanded`, animated
   grid-rows transition).
-- **Deep link:** loading the page with a **`#discussion`** fragment auto-expands the card and scrolls
-  to it (used by the notification CTA below).
+- **Deep link:** loading the page with a **`#discussion`** fragment auto-expands the card **for
+  that view** and scrolls to it (used by the notification CTA below) — it does **not** overwrite
+  the stored collapse preference.
 
 **Messages.**
 - **Each comment renders:** the author's **`UserBubble`** avatar (Entra photo / initials — the shared
@@ -1925,7 +2055,9 @@ card and the skill-specific message semantics.
   descriptions/usage) — the one messaging context that renders markdown. Posting is rate-limited like
   other message posting. Hidden (thread read-only) while the skill is archived.
 - **Live updates:** while the card is **expanded**, the thread polls via the shared smart-polling
-  hook at the fixed open-thread cadence (`set[0]`, §24 above); collapsed = no polling.
+  hook using the **backoff walk** (§24 *Smart polling* — the expanded-by-default carve-out): it
+  starts at `set[0]`, steps up the interval set on every empty poll, holds at the top, and resets
+  to the floor only when a poll returns new messages or the viewer posts. Collapsed = no polling.
 
 **The version pill (`context_semver`).**
 - The composer includes a **version picker** listing the skill's **active versions** (stable *and*
@@ -1961,9 +2093,13 @@ card and the skill-specific message semantics.
   invariant #3).
 - **Coalesced like `message.new`:** one `skill.discussion` row per skill per recipient, refreshed
   until read (same atomic update-in-place upsert, preserving delivery bookkeeping) — so email fires
-  **at most once per skill's discussion until read**. Expanding the Discussion card clears the
-  viewer's `skill.discussion` row for that skill (the read action), in addition to the standard
-  inbox read semantics.
+  **at most once per skill's discussion until read**. **The read action is viewport visibility,
+  not page load** *(changed with the expanded-by-default card — merely landing on the page must
+  not silently mark the discussion read)*: the viewer's `skill.discussion` row — and their
+  `message.mention` rows for this discussion (§24 *Mentions*) — clear when the **expanded card's
+  thread actually enters the viewport** (IntersectionObserver on the thread body; an explicit
+  expand typically brings it into view and so counts naturally). The standard inbox read semantics
+  apply on top.
 - **Per-user opt-out:** a third Profile toggle, **"Discussion comments on skills I maintain or
   watch"** (`users.discussion_notifications`, BOOLEAN NOT NULL DEFAULT true — migration 0059),
   grouped with the drift/new-version toggles (§12) and filtered the same way — **row-level, at

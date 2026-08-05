@@ -243,7 +243,7 @@ export async function deleteSkill(
       const convIds = doomedConvs.map((c) => c.id);
       if (convIds.length) {
         await client.query(
-          `delete from notifications where type = 'message.new' and payload->>'conversationId' = any($1::text[])`,
+          `delete from notifications where type in ('message.new', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
           [convIds],
         );
       }
@@ -256,7 +256,7 @@ export async function deleteSkill(
     );
     if (skillConvs.length) {
       await client.query(
-        `delete from notifications where type = 'skill.discussion' and payload->>'conversationId' = any($1::text[])`,
+        `delete from notifications where type in ('skill.discussion', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
         [skillConvs.map((c) => c.id)],
       );
     }

@@ -248,7 +248,7 @@ function MaintainerNotificationsPref() {
   const rows: { field: "driftNotifications" | "newVersionNotifications" | "discussionNotifications"; label: string; offHint: string; value: boolean }[] = [
     { field: "driftNotifications", label: "Upstream drift", offHint: "You won't be alerted when an external skill's pinned source changes.", value: data.driftNotifications },
     { field: "newVersionNotifications", label: "New versions", offHint: "You won't be alerted when a skill you maintain publishes a version. Skills you watch still notify you.", value: data.newVersionNotifications },
-    { field: "discussionNotifications", label: "Discussion comments", offHint: "You won't be alerted about new comments on skills you maintain or watch.", value: data.discussionNotifications },
+    { field: "discussionNotifications", label: "Discussion comments and @mentions", offHint: "You won't be alerted about new comments on skills you maintain or watch, or when someone @mentions you.", value: data.discussionNotifications },
   ];
   return (
     <section className="reveal" style={{ marginBottom: 30 }}>

@@ -13,12 +13,28 @@ import { resolveUserAccess } from "./access";
 import { appendAudit } from "./audit";
 import { nameSql, userLabel as label } from "./userLabel";
 import type { RequestState } from "./requests";
-import { canReviewNamespace, isSkillVisible, type EffectiveAccess } from "@skilly/shared";
+import {
+  clearMentionNotifications,
+  fanOutMentions,
+  insertMentionRows,
+  resolveMentions,
+  validateMentions,
+  type MentionAudience,
+  type MentionMap,
+  type PreparedMention,
+} from "./mentions";
+import { canReviewNamespace, isSkillVisible, maxRawMentionLength, mentionCollapsedLength, type EffectiveAccess } from "@skilly/shared";
 
 export const MAX_MESSAGE_LEN = 4000;
 /** Skill-discussion comments are capped tighter than the general message body (§24). */
 export const MAX_SKILL_DISCUSSION_LEN = 500;
 type Access = EffectiveAccess & { userId: string | null };
+
+/** §24 length rule: each mention token counts as ONE character against the cap (the cap measures
+ *  what the reader sees); an absolute raw backstop bounds storage regardless. */
+function bodyTooLong(body: string, cap: number): boolean {
+  return mentionCollapsedLength(body) > cap || body.length > maxRawMentionLength(cap);
+}
 
 export interface MessageView {
   id: string; authorId: string; authorName: string; authorAvatar: string | null; mine: boolean; body: string; createdAt: string;
@@ -30,6 +46,10 @@ export interface ThreadView {
   /** UI copy for the locked state, when it differs from the generic default (proposal/direct keep
    *  ChatBox's built-in wording; only set here for contexts that need their own, e.g. a request). */
   closedHint: string | null;
+  /** Per-reader mention resolution for the messages above, keyed by literal token (§24 Mentions). */
+  mentions: MentionMap;
+  /** The composer's `@` typeahead context (`/api/users/suggest?context=`); null = whole directory. */
+  mentionContext: string | null;
 }
 export interface ConversationSummary { id: string; title: string; href: string | null; unread: number; lastBody: string | null; lastFromName: string | null; lastAt: string | null; peerName: string | null; peerAvatar: string | null; peerUserId: string | null }
 export interface SubmitterCard { userId: string; displayName: string; email: string; avatar: string | null; role: string; priorSubmissions: number }
@@ -131,6 +151,14 @@ function ownerIdOfCtx(ctx: ConvCtx): string {
   return ctx.kind === "proposal" ? ctx.submitterId : ctx.requesterId;
 }
 
+/** The `@` typeahead's audience for a proposal thread (`/api/users/suggest?context=proposal:…`):
+ *  null when the caller can't see the thread (404, no leak) — §24 Mentions. */
+export async function proposalMentionAudience(access: Access, proposalId: string): Promise<MentionAudience | null> {
+  const c = await loadProposalCtx(proposalId);
+  if (!c || !(await canAccessProposal(access, c))) return null;
+  return { kind: "proposal", submitterId: c.submitterId, namespaceId: c.namespaceId, skillId: c.skillId };
+}
+
 // ── Conversation get/create ─────────────────────────────────────────────────
 export async function findConversation(subjectType: string, subjectId: string): Promise<string | null> {
   const { rows } = await pool.query<{ id: string }>(`select id from conversations where subject_type = $1 and subject_id = $2`, [subjectType, subjectId]);
@@ -208,11 +236,15 @@ export async function postProposalMessage(access: Access, proposalId: string, ra
   if (TERMINAL.has(c.state)) return { ok: false, status: 409, error: "this proposal is closed — the discussion is read-only" };
   const body = rawBody.trim();
   if (!body) return { ok: false, status: 422, error: "message is empty" };
-  if (body.length > MAX_MESSAGE_LEN) return { ok: false, status: 422, error: `message too long (max ${MAX_MESSAGE_LEN})` };
+  if (bodyTooLong(body, MAX_MESSAGE_LEN)) return { ok: false, status: 422, error: `message too long (max ${MAX_MESSAGE_LEN})` };
+  // Mentions (§24): the audience is the review thread's access set — anyone else is rejected.
+  const mentions = await validateMentions(access, body, { kind: "proposal", submitterId: c.submitterId, namespaceId: c.namespaceId, skillId: c.skillId });
+  if (!mentions.ok) return mentions;
 
   const conversationId = await getOrCreateConversation("proposal", proposalId);
-  const message = await insertMessage(conversationId, access.userId, body);
-  await fanOut(conversationId, access.userId, c);
+  const message = await insertMessage(conversationId, access.userId, body, { mentions: mentions.mentions });
+  const mentioned = await notifyMentions(mentions.mentions, access.userId, conversationId, message.id, c);
+  await fanOut(conversationId, access.userId, c, mentioned);
   return { ok: true, conversationId, message };
 }
 
@@ -227,11 +259,15 @@ export async function postRequestMessage(access: Access, requestId: string, rawB
   if (isClosedCtx(c)) return { ok: false, status: 409, error: closedMessageOf(c) };
   const body = rawBody.trim();
   if (!body) return { ok: false, status: 422, error: "message is empty" };
-  if (body.length > MAX_MESSAGE_LEN) return { ok: false, status: 422, error: `message too long (max ${MAX_MESSAGE_LEN})` };
+  if (bodyTooLong(body, MAX_MESSAGE_LEN)) return { ok: false, status: 422, error: `message too long (max ${MAX_MESSAGE_LEN})` };
+  // Mentions (§24): a request's thread is org-open, so the whole directory is mentionable.
+  const mentions = await validateMentions(access, body, { kind: "request" });
+  if (!mentions.ok) return mentions;
 
   const conversationId = await getOrCreateConversation("request", requestId);
-  const message = await insertMessage(conversationId, access.userId, body);
-  await fanOut(conversationId, access.userId, c);
+  const message = await insertMessage(conversationId, access.userId, body, { mentions: mentions.mentions });
+  const mentioned = await notifyMentions(mentions.mentions, access.userId, conversationId, message.id, c);
+  await fanOut(conversationId, access.userId, c, mentioned);
   return { ok: true, conversationId, message };
 }
 
@@ -249,17 +285,56 @@ export async function postToConversation(access: Access, conversationId: string,
   }
   const body = rawBody.trim();
   if (!body) return { ok: false, status: 422, error: "message is empty" };
-  if (body.length > MAX_MESSAGE_LEN) return { ok: false, status: 422, error: `message too long (max ${MAX_MESSAGE_LEN})` };
-  const message = await insertMessage(conversationId, access.userId, body);
-  await fanOut(conversationId, access.userId, conv.ctx);
+  if (bodyTooLong(body, MAX_MESSAGE_LEN)) return { ok: false, status: 422, error: `message too long (max ${MAX_MESSAGE_LEN})` };
+  // Mentions (§24): proposal/request threads carry their own audience; a DIRECT chat may
+  // reference anyone in the directory (the non-participant is rendered but never notified).
+  const audience: MentionAudience =
+    conv.ctx?.kind === "proposal"
+      ? { kind: "proposal", submitterId: conv.ctx.submitterId, namespaceId: conv.ctx.namespaceId, skillId: conv.ctx.skillId }
+      : conv.ctx?.kind === "request"
+        ? { kind: "request" }
+        : { kind: "direct" };
+  const mentions = await validateMentions(access, body, audience);
+  if (!mentions.ok) return mentions;
+  const message = await insertMessage(conversationId, access.userId, body, { mentions: mentions.mentions });
+  const mentioned = await notifyMentions(mentions.mentions, access.userId, conversationId, message.id, conv.ctx);
+  await fanOut(conversationId, access.userId, conv.ctx, mentioned);
   return { ok: true, message };
+}
+
+/** Fan out `message.mention` rows for a proposal/request/direct message (§12/§24) and return the
+ *  mentioned user ids so the coalesced fan-out can skip them (the mention supersedes it). */
+async function notifyMentions(
+  mentions: PreparedMention[],
+  authorId: string,
+  conversationId: string,
+  messageId: string,
+  ctx: ConvCtx | null,
+): Promise<string[]> {
+  const userIds = mentions.filter((m) => m.kind === "user").map((m) => m.id);
+  if (!userIds.length) return [];
+  const fromName = (await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [authorId])).rows[0]?.display_name ?? "Someone";
+  return fanOutMentions(
+    userIds,
+    authorId,
+    {
+      conversationId,
+      messageId,
+      fromName,
+      proposalId: ctx?.kind === "proposal" ? ctx.proposalId : null,
+      requestId: ctx?.kind === "request" ? ctx.requestId : null,
+      title: ctx ? titleOfCtx(ctx) : null,
+    },
+    // Direct chats: only actual participants are pinged (§24).
+    { participantsOnly: ctx === null },
+  );
 }
 
 async function insertMessage(
   conversationId: string,
   authorId: string,
   body: string,
-  opts: { contextSemver?: string | null; trackParticipant?: boolean } = {},
+  opts: { contextSemver?: string | null; trackParticipant?: boolean; mentions?: PreparedMention[] } = {},
 ): Promise<MessageView & { contextSemver: string | null }> {
   const contextSemver = opts.contextSemver ?? null;
   const trackParticipant = opts.trackParticipant ?? true;
@@ -270,6 +345,8 @@ async function insertMessage(
      select m.id, m.created_at, u.display_name, u.avatar from m join users u on u.id = m.author_id`,
     [conversationId, authorId, body, contextSemver],
   );
+  // One message_mentions row per distinct validated mention (§24) — cascades with the message.
+  if (opts.mentions?.length) await insertMentionRows(rows[0]!.id, opts.mentions);
   await pool.query(`update conversations set updated_at = now() where id = $1`, [conversationId]);
   // The author has implicitly read up to their own message. Skill discussions are open forums
   // with NO participant rows (§24) — skip the upsert so a skill thread never surfaces in the
@@ -285,13 +362,16 @@ async function insertMessage(
   return { id: r.id, authorId, authorName: r.display_name, authorAvatar: r.avatar, mine: true, body, createdAt: r.created_at, contextSemver };
 }
 
-/** Coalesced fan-out: one unread `message.new` notification per recipient per conversation. */
-async function fanOut(conversationId: string, authorId: string, ctx: ConvCtx | null): Promise<void> {
+/** Coalesced fan-out: one unread `message.new` notification per recipient per conversation.
+ *  `mentionedUserIds` are skipped — for a mentioned recipient this message produces ONLY the
+ *  un-coalesced `message.mention` row (the mention supersedes the coalesced ping, §12). */
+async function fanOut(conversationId: string, authorId: string, ctx: ConvCtx | null, mentionedUserIds: string[] = []): Promise<void> {
   const audience = new Set<string>();
   const parts = await pool.query<{ user_id: string }>(`select user_id from conversation_participants where conversation_id = $1`, [conversationId]);
   for (const p of parts.rows) audience.add(p.user_id);
   if (ctx) audience.add(ownerIdOfCtx(ctx)); // submitter/requester is always a party, even before they engage
   audience.delete(authorId);
+  for (const uid of mentionedUserIds) audience.delete(uid);
   if (audience.size === 0) return;
   const fromName = (await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [authorId])).rows[0]?.display_name ?? "Someone";
   const title = ctx ? titleOfCtx(ctx) : "Direct message";
@@ -370,6 +450,8 @@ export async function markConversationRead(access: Access, conversationId: strin
     [conversationId, access.userId],
   );
   await pool.query(`update notifications set read_at = now() where user_id = $1 and type = 'message.new' and read_at is null and payload->>'conversationId' = $2`, [access.userId, conversationId]);
+  // Mention pings for this thread are read the same way (§24 Mentions).
+  await clearMentionNotifications(access.userId, conversationId);
   return true;
 }
 
@@ -401,6 +483,10 @@ export async function getThread(access: Access, conversationId: string): Promise
     peerName: peer?.name ?? null,
     peerAvatar: peer?.avatar ?? null,
     peerUserId: peer?.userId ?? null,
+    mentions: await resolveMentions(access, rows.map((m) => m.id)),
+    // Proposal threads narrow the `@` typeahead to their audience; request + direct threads are
+    // whole-directory (§24), signalled by null.
+    mentionContext: conv.ctx?.kind === "proposal" ? `proposal:${conv.ctx.proposalId}` : null,
     messages: rows.map((m) => ({
       id: m.id, authorId: m.author_id, authorName: m.display_name, authorAvatar: m.avatar, mine: m.author_id === access.userId, body: m.body, createdAt: m.created_at,
       // "Original Requester" tag (§26) — only meaningful in a request's thread, only on the requester's own messages.
@@ -410,29 +496,30 @@ export async function getThread(access: Access, conversationId: string): Promise
 }
 
 /** Thread for a proposal (lazy: returns conversationId null + empty when none exists yet). */
-export async function getProposalThread(access: Access, proposalId: string): Promise<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: MessageView[] } | null> {
+export async function getProposalThread(access: Access, proposalId: string): Promise<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: MessageView[]; mentions: MentionMap; mentionContext: string } | null> {
   if (!access.userId) return null;
   const c = await loadProposalCtx(proposalId);
   if (!c) return null;
   if (!(await canAccessProposal(access, c))) return null;
   const closed = TERMINAL.has(c.state);
+  const mentionContext = `proposal:${proposalId}`;
   const conversationId = await findConversation("proposal", proposalId);
-  if (!conversationId) return { conversationId: null, canPost: !closed, closed, messages: [] };
+  if (!conversationId) return { conversationId: null, canPost: !closed, closed, messages: [], mentions: {}, mentionContext };
   const t = await getThread(access, conversationId);
-  return { conversationId, canPost: !closed, closed, messages: t?.messages ?? [] };
+  return { conversationId, canPost: !closed, closed, messages: t?.messages ?? [], mentions: t?.mentions ?? {}, mentionContext };
 }
 
 /** Thread for a skill request (§26) — same lazy shape as getProposalThread. Any authenticated user
  *  may read/post (the request is org-visible); separate from the proposal path above. */
-export async function getRequestThread(access: Access, requestId: string): Promise<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: MessageView[] } | null> {
+export async function getRequestThread(access: Access, requestId: string): Promise<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: MessageView[]; mentions: MentionMap } | null> {
   if (!access.userId) return null;
   const c = await loadRequestCtx(requestId);
   if (!c) return null;
   const closed = isClosedCtx(c);
   const conversationId = await findConversation("request", requestId);
-  if (!conversationId) return { conversationId: null, canPost: !closed, closed, messages: [] };
+  if (!conversationId) return { conversationId: null, canPost: !closed, closed, messages: [], mentions: {} };
   const t = await getThread(access, conversationId);
-  return { conversationId, canPost: !closed, closed, messages: t?.messages ?? [] };
+  return { conversationId, canPost: !closed, closed, messages: t?.messages ?? [], mentions: t?.mentions ?? {} };
 }
 
 // ── Skill discussion (§24 "Skill discussion") ───────────────────────────────
@@ -463,6 +550,10 @@ export interface SkillDiscussionThread {
   canModerate: boolean;
   messages: SkillDiscussionMessage[];
   hasMore: boolean;
+  /** Per-reader mention resolution for the page above, keyed by literal token (§24 Mentions). */
+  mentions: MentionMap;
+  /** The composer's `@` typeahead context; null = whole directory (an org-visible skill). */
+  mentionContext: string | null;
 }
 
 /** True if the caller may see the skill's discussion — mirrors the detail route's gate exactly. */
@@ -492,8 +583,15 @@ export async function skillDiscussionCount(skillId: string): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-/** Fetch a page of a skill's discussion (newest-first). `offset === 0` is the read action: it
- *  clears the caller's coalesced `skill.discussion` alert for this skill (§24). */
+/** The `@` typeahead context string for a skill's discussion: a restricted skill narrows the
+ *  candidate pool to its namespace; an org skill is whole-directory (null). §24 Mentions. */
+function skillMentionContext(skill: SkillDiscussionSkill): string | null {
+  return skill.visibility === "namespace" ? `skill:${skill.namespaceSlug}/${skill.skillSlug}` : null;
+}
+
+/** Fetch a page of a skill's discussion (newest-first). NOT the read action — that is the card's
+ *  viewport rule (markSkillDiscussionRead below), so merely fetching (or polling, or landing on
+ *  the page with the card expanded by default) never silently marks the discussion read (§24). */
 export async function getSkillDiscussion(
   access: Access,
   skill: SkillDiscussionSkill,
@@ -504,7 +602,8 @@ export async function getSkillDiscussion(
   const canModerate = await canModerateSkillDiscussion(access, skill);
   const conversationId = await findConversation("skill", skill.id);
   const canPost = !skill.archived;
-  if (!conversationId) return { conversationId: null, count: 0, archived: skill.archived, canPost, canModerate, messages: [], hasMore: false };
+  const mentionContext = skillMentionContext(skill);
+  if (!conversationId) return { conversationId: null, count: 0, archived: skill.archived, canPost, canModerate, messages: [], hasMore: false, mentions: {}, mentionContext };
 
   const [{ rows }, count] = await Promise.all([
     pool.query<{ id: string; author_id: string; display_name: string; avatar: string | null; body: string; context_semver: string | null; created_at: string }>(
@@ -518,14 +617,6 @@ export async function getSkillDiscussion(
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
 
-  // The read action: clear this user's coalesced skill.discussion bell for the thread.
-  if (offset === 0 && access.userId) {
-    await pool.query(
-      `update notifications set read_at = now() where user_id = $1 and type = 'skill.discussion' and read_at is null and payload->>'conversationId' = $2`,
-      [access.userId, conversationId],
-    );
-  }
-
   return {
     conversationId,
     count,
@@ -533,11 +624,27 @@ export async function getSkillDiscussion(
     canPost,
     canModerate,
     hasMore,
+    mentions: await resolveMentions(access, page.map((m) => m.id)),
+    mentionContext,
     messages: page.map((m) => ({
       id: m.id, authorId: m.author_id, authorName: m.display_name, authorAvatar: m.avatar,
       mine: m.author_id === access.userId, body: m.body, createdAt: m.created_at, contextSemver: m.context_semver,
     })),
   };
+}
+
+/** The Discussion card's read action (§24): fired by the client when the EXPANDED card's thread
+ *  actually enters the viewport — never on page load or poll. Clears the viewer's coalesced
+ *  `skill.discussion` row AND their `message.mention` rows for this discussion. */
+export async function markSkillDiscussionRead(access: Access, skill: SkillDiscussionSkill): Promise<void> {
+  if (!access.userId) return;
+  const conversationId = await findConversation("skill", skill.id);
+  if (!conversationId) return;
+  await pool.query(
+    `update notifications set read_at = now() where user_id = $1 and type = 'skill.discussion' and read_at is null and payload->>'conversationId' = $2`,
+    [access.userId, conversationId],
+  );
+  await clearMentionNotifications(access.userId, conversationId);
 }
 
 /** Post a comment on a skill's discussion (get-or-creating the thread). Validates the body (≤500)
@@ -554,7 +661,11 @@ export async function postSkillDiscussionMessage(
   if (skill.archived) return { ok: false, status: 409, error: "this skill is archived — the discussion is read-only" };
   const body = rawBody.trim();
   if (!body) return { ok: false, status: 422, error: "message is empty" };
-  if (body.length > MAX_SKILL_DISCUSSION_LEN) return { ok: false, status: 422, error: `message too long (max ${MAX_SKILL_DISCUSSION_LEN})` };
+  if (bodyTooLong(body, MAX_SKILL_DISCUSSION_LEN)) return { ok: false, status: 422, error: `message too long (max ${MAX_SKILL_DISCUSSION_LEN})` };
+  // Mentions (§24): the mentionable set follows the skill's visibility; tokens inside markdown
+  // code fences/backticks stay literal (this is the one markdown-rendering context).
+  const mentions = await validateMentions(access, body, { kind: "skill", namespaceId: skill.namespaceId, visibility: skill.visibility }, { markdown: true });
+  if (!mentions.ok) return mentions;
 
   // Resolve the version pill. A non-null semver must be an active (non-yanked) version of this
   // skill; anything else is rejected (a stale/forged pick can't be stamped). Null is allowed
@@ -570,8 +681,15 @@ export async function postSkillDiscussionMessage(
   }
 
   const conversationId = await getOrCreateConversation("skill", skill.id);
-  const message = await insertMessage(conversationId, access.userId, body, { contextSemver: semver, trackParticipant: false });
-  await fanOutSkillDiscussion(conversationId, skill, access.userId);
+  const message = await insertMessage(conversationId, access.userId, body, { contextSemver: semver, trackParticipant: false, mentions: mentions.mentions });
+  // Mention pings first (un-coalesced, §12); the coalesced fan-out then skips those users.
+  const mentionedUserIds = mentions.mentions.filter((m) => m.kind === "user").map((m) => m.id);
+  const fromName = (await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [access.userId])).rows[0]?.display_name ?? "Someone";
+  const mentioned = await fanOutMentions(mentionedUserIds, access.userId, {
+    conversationId, messageId: message.id, fromName,
+    namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug,
+  });
+  await fanOutSkillDiscussion(conversationId, skill, access.userId, mentioned);
   return { ok: true, conversationId, message };
 }
 
@@ -610,7 +728,7 @@ export async function deleteSkillDiscussionMessage(
  *  bookkeeping — §12). Recipients = watchers ∪ effective maintainers (explicit ∪ ns admins),
  *  minus the author, minus discussion_notifications=false users, visibility-filtered so a watcher
  *  who lost access to a now-restricted skill is skipped (invariant #3). */
-async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscussionSkill, authorId: string): Promise<void> {
+async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscussionSkill, authorId: string, mentionedUserIds: string[] = []): Promise<void> {
   const fromName = (await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [authorId])).rows[0]?.display_name ?? "Someone";
   const payload = JSON.stringify({ conversationId, namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug, fromName });
   await pool.query(
@@ -628,6 +746,7 @@ async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscuss
        ) r
        join users u on u.id = r.uid and u.status = 'active' and u.discussion_notifications
       where r.uid <> $4
+        and r.uid <> all($6::uuid[]) -- mentioned users get the un-coalesced mention ping instead (§12)
         and (
           $5 = 'org'
           or exists (
@@ -638,7 +757,7 @@ async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscuss
         )
      on conflict (user_id, (payload->>'conversationId')) where type = 'skill.discussion' and read_at is null
      do update set payload = excluded.payload, created_at = now()`,
-    [skill.id, payload, skill.namespaceId, authorId, skill.visibility],
+    [skill.id, payload, skill.namespaceId, authorId, skill.visibility, mentionedUserIds],
   );
 }
 

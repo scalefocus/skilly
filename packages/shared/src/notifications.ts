@@ -30,6 +30,7 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "skill.drift": { title: "Upstream drift detected", tone: "danger" },
   "skill.discussion": { title: "New discussion comment", tone: "warn" },
   "message.new": { title: "New message", tone: "warn" },
+  "message.mention": { title: "You were mentioned", tone: "warn" },
   "system.error": { title: "System log events", tone: "danger" },
   "request.fulfilled": { title: "Skill request fulfilled", tone: "ok" },
 };

@@ -11,6 +11,7 @@ import { UserBubble } from "../../../components/UserBubble";
 import { useDateFmt } from "../../../components/DateFormat";
 import { Markdown } from "../../../components/Markdown";
 import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
+import type { MentionMap } from "../../../components/MentionChips";
 import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { agentLabel } from "@skilly/shared/agents";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
@@ -271,7 +272,7 @@ function ExistingSkillPicker({
  *  discussion (topbar Messages window, bell notifications) — separate code path; the proposal
  *  review flow itself is untouched. */
 function RequestDiscussion({ requestId }: { requestId: string }) {
-  const [thread, setThread] = useState<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: ChatMessage[] } | null>(null);
+  const [thread, setThread] = useState<{ conversationId: string | null; canPost: boolean; closed: boolean; messages: ChatMessage[]; mentions?: MentionMap } | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/requests/${requestId}/messages`);
@@ -310,6 +311,7 @@ function RequestDiscussion({ requestId }: { requestId: string }) {
         canPost={thread.canPost}
         closed={thread.closed}
         onSend={send}
+        mentions={thread.mentions}
         emptyHint="No messages yet — ask a question or offer to build this."
         closedHint="This discussion is read-only — the request has been fulfilled."
       />

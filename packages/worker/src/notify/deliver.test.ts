@@ -55,6 +55,31 @@ test("renderNotification: a message on a proposal thread links to the proposal",
   assert.match(r.text, /\/proposals\/p9/);
 });
 
+test("renderNotification: message.mention follows its context — proposal / skill discussion / direct (§24)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const prop = renderNotification({
+    type: "message.mention",
+    payload: { conversationId: "c3", messageId: "m1", proposalId: "p9", requestId: null, namespaceSlug: null, skillSlug: null, title: "pdf 1.2.0", fromName: "Ada" },
+  });
+  assert.equal(prop.subject, "Skilly - You were mentioned");
+  assert.match(prop.text, /Ada mentioned you in "pdf 1\.2\.0"\./);
+  assert.match(prop.text, /\[View the message\]\(https:\/\/skilly\.test\/proposals\/p9\)/);
+
+  const disc = renderNotification({
+    type: "message.mention",
+    payload: { conversationId: "c4", messageId: "m2", proposalId: null, requestId: null, namespaceSlug: "team-a", skillSlug: "pdf", title: null, fromName: "Ada" },
+  });
+  assert.match(disc.text, /Ada mentioned you in the discussion on team-a\/pdf\./);
+  assert.match(disc.text, /\/skills\/team-a\/pdf#discussion/);
+
+  const dm = renderNotification({
+    type: "message.mention",
+    payload: { conversationId: "c5", messageId: "m3", proposalId: null, requestId: null, namespaceSlug: null, skillSlug: null, title: null, fromName: "Ada" },
+  });
+  assert.match(dm.text, /Ada mentioned you in a direct message\./);
+  assert.match(dm.text, /\/\?conversation=c5/);
+});
+
 test("renderNotification: skill.new_version renders slug + version + skill link", () => {
   process.env.PUBLIC_BASE_URL = BASE;
   const r = renderNotification({ type: "skill.new_version", payload: { namespaceSlug: "team-a", skillSlug: "pdf", semver: "1.2.0" } });
