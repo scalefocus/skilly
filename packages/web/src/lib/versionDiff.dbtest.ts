@@ -17,6 +17,27 @@ after(async () => {
   if (enabled) await pool.end();
 });
 
+/** Drop a skill's versions under the migration-0022 delete carve-out — the immutability guard
+ *  (invariant #2) refuses a skill_versions DELETE unless `skilly.allow_version_delete` is set, so
+ *  drive it in a transaction exactly like deleteSkill does. `set local` is connection-scoped, hence
+ *  a dedicated client rather than a pooled query. (This test can't use the transaction-and-rollback
+ *  isolation its siblings use: resolveVersionPairKeys reads through the shared pool, so its
+ *  fixtures have to be committed — which means cleaning up after itself.) */
+async function deleteVersionRows(skillId: string): Promise<void> {
+  const c = await pool.connect();
+  try {
+    await c.query("begin");
+    await c.query("set local skilly.allow_version_delete = 'on'");
+    await c.query(`delete from skill_versions where skill_id = $1`, [skillId]);
+    await c.query("commit");
+  } catch (e) {
+    await c.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 test("version diff baseline = the immediate predecessor, any channel or status", { skip: !enabled }, async () => {
   const ns = (await pool.query<{ id: string }>(
     `insert into namespaces (slug, display_name, require_review) values ('vdiff-ns','VDiff NS', true)
@@ -30,8 +51,9 @@ test("version diff baseline = the immediate predecessor, any channel or status",
     `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, status)
      values ($1,'vdiff-skill','VDiff','d','claude','hosted','org','active')
      on conflict (namespace_id, slug) do update set title = excluded.title returning id`,
+    [ns],
   )).rows[0]!.id;
-  await pool.query(`delete from skill_versions where skill_id = $1`, [skill]);
+  await deleteVersionRows(skill); // a rerun reuses the upserted skill — start from an empty chain
 
   const mkVersion = (semver: string, opts: { prerelease?: boolean; yanked?: boolean; key?: string | null } = {}) =>
     pool.query(
@@ -68,5 +90,5 @@ test("version diff baseline = the immediate predecessor, any channel or status",
   await mkVersion("1.3.0");
   assert.deepEqual(await resolveVersionPairKeys(skill, "1.3.0"), { reason: "pending" }, "an unmirrored BASELINE also blocks");
 
-  await pool.query(`delete from skill_versions where skill_id = $1`, [skill]);
+  await deleteVersionRows(skill);
 });
