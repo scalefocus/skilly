@@ -1129,6 +1129,22 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
     it extension-less, e.g. `/opengraph-image?<hash>` / `/twitter-image?<hash>`) needs no auth and
     carries no per-skill data; whatever CSP the §22 middleware applies to it is inert for an image
     response.
+  - **Narrow-viewport containment (no horizontal spill).** At every supported width — the 375px
+    phone viewport included — **no surface may paint outside its card, and no page may scroll
+    horizontally.** Content that cannot shrink (long URLs, mention chips, `ns/slug` tokens, group
+    names) **wraps or breaks inside the card**; only deliberately scrollable boxes (code blocks,
+    wide tables) scroll, and they scroll **within their own bounds**.
+    - **Collapsible card bodies clamp to the card.** The collapsible card body (§5 admin cards, the
+      §26 request cards, and the Discussion card below) animates open as a **grid** whose row track
+      goes `0fr → 1fr`, and **releases its overflow clip once open** so in-card dropdowns aren't cut
+      off. A grid item's automatic minimum size is its **min-content width**, so the moment the clip
+      is released an item holding unbreakable content **grows past the card** and every child sized
+      `100%` — composer, button row, message rows — is laid out at that larger width and spills to
+      the right of the card. The animated body wrapper therefore **pins its minimum size to the card
+      width** (`min-width: 0`) so the released clip changes what is *visible*, never what is *wide*.
+      This is a shared rule for **all** collapsible cards, not a per-card patch.
+    - **Rendered markdown breaks long words.** Message and description bodies (`.md`) break an
+      over-long unbroken run (a bare URL, a long identifier) rather than overflowing their column.
   - **Deliberately NOT per-skill / dynamic (invariant #3).** Auth gating is **client-side** (§2), so
     the server returns **200 HTML for every route** and an unauthenticated unfurl crawler receives
     whatever `<head>` metadata is generated. A per-skill/dynamic card (`generateMetadata` on
@@ -2008,6 +2024,13 @@ reader isn't entitled to is **never serialized to their browser** (invariant #3)
 - **Tones:** `@` and `#` chips take **distinct tones**, both drawn from the existing pill palette
   and correct in light + dark themes (`#` = the accent tone already used for version pills; `@` =
   a neutral/ink tone) — visually inline with the message text, not block pills.
+- **Chips wrap; they never widen their container.** A chip is inline text, so a long one (a
+  namespace-prefixed title like `finance / Q4 Revenue Recognition Playbook`) **breaks across lines
+  like ordinary text** — including **mid-word when a single word can't fit** — and the pill
+  background/padding is **redrawn on every line fragment**, so each fragment still reads as a chip.
+  Chips are explicitly **not** unbreakable: an unbreakable chip contributes its full width to its
+  container's minimum size and blows the whole card out on narrow viewports (see §14 *Narrow-viewport
+  containment*). The same rule applies to the atomic chips inside a composer.
 - In the **plain-text contexts** (`ChatBox` surfaces) mention chips are the **only** markup —
   everything else stays escaped text. In the **skill discussion** they render inside the sanitized
   markdown (tokens are resolved outside/before the markdown inline pass).

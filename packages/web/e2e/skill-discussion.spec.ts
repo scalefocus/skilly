@@ -3,7 +3,8 @@
 // version pill, sees it render newest-first, then deletes it as a moderator (the dev user is a
 // platform admin). Runs against the dev stack (SKILLY_DEV_AUTH=1) using the seeded, installable
 // `global/pdf-tools` skill; opt-in, not part of the default `pnpm -r test`. Self-cleaning: the
-// comment it posts is removed at the end.
+// comment it posts is removed at the end. Two mobile-viewport guards ride along: the card never
+// paints outside itself at 375px (§14) and the composer's emoji picker stays on-screen.
 import { test, expect, devSignIn } from "./fixtures";
 
 test.describe("skill discussion (@global/pdf-tools)", () => {
@@ -71,6 +72,50 @@ test.describe("skill discussion (@global/pdf-tools)", () => {
     // …for this view only: the stored preference is untouched (§24).
     expect(await page.evaluate(() => localStorage.getItem("skilly.discussionCollapsed"))).toBe("1");
     await page.evaluate(() => localStorage.removeItem("skilly.discussionCollapsed"));
+  });
+
+  test("nothing spills past the card on a mobile viewport, even with unbreakable content", async ({ page }) => {
+    // Regression: the expanded card's body wrapper is a grid item, and once data-settled released
+    // the overflow clip its automatic minimum size grew to the MIN-CONTENT width of whatever was
+    // inside (a long mention chip, a bare URL). At 375px the wrapper measured ~514px inside a
+    // ~343px card, so the composer, the Post button, the message rows and the delete pill were all
+    // laid out at that width and painted to the right of the card (§14 Narrow-viewport containment).
+    await page.setViewportSize({ width: 375, height: 812 });
+    await devSignIn(page);
+    await page.goto("/skills/global/pdf-tools#discussion");
+
+    const card = page.locator("section#discussion");
+    const body = card.locator(".admin-card-body");
+    const composer = page.getByRole("textbox", { name: "Add to the discussion" });
+    await expect(composer).toBeVisible({ timeout: 20_000 });
+
+    // A comment carrying a run that CANNOT be broken at a space — the min-content driver.
+    const probe = `e2e overflow probe ${Date.now()} https://example.com/${"segment/".repeat(20)}end`;
+    await composer.fill(probe);
+    await card.getByRole("button", { name: /^Post/ }).click();
+    await expect(card.getByText("e2e overflow probe", { exact: false })).toBeVisible({ timeout: 10_000 });
+
+    // The blowout only appeared AFTER the open animation released the clip — assert the settled state.
+    await expect(body).toHaveAttribute("data-settled", "true", { timeout: 10_000 });
+
+    // 1. The page itself never scrolls horizontally (1px slack for sub-pixel rounding).
+    const doc = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, view: window.innerWidth }));
+    expect(doc.scroll).toBeLessThanOrEqual(doc.view + 1);
+
+    // 2. The animated body wrapper is clamped to the card — not to its content's min-content width.
+    const cardBox = (await card.boundingBox())!;
+    const innerBox = (await card.locator(".admin-card-body-inner").boundingBox())!;
+    expect(innerBox.width).toBeLessThanOrEqual(cardBox.width + 1);
+
+    // 3. …so the widgets sized off it stay inside the card's right edge.
+    for (const el of [composer, card.getByRole("button", { name: /^Post/ })]) {
+      const box = (await el.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1);
+    }
+
+    page.once("dialog", (d) => d.accept());
+    await card.getByRole("button", { name: "delete" }).first().click();
+    await expect(card.getByText("e2e overflow probe", { exact: false })).toHaveCount(0, { timeout: 10_000 });
   });
 
   test("emoji picker stays on-screen on a mobile viewport", async ({ page }) => {
