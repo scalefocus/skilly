@@ -79,6 +79,21 @@ export function assertStrictlyIncreasing(proposed: string, existing: readonly st
   }
 }
 
+/** The version immediately BELOW `target` among `all` — the predecessor a published version's
+ *  file changes are diffed against (§10). Deliberately channel- and status-blind: prereleases and
+ *  yanked versions count, because the version list is a chain and each entry answers "what changed
+ *  when THIS version landed". Null when `target` is the lowest (a skill's first version).
+ *  Unparseable entries are ignored; `target` itself (and any duplicate of it) never matches. */
+export function resolvePredecessor(target: string, all: readonly string[]): string | null {
+  if (!isValidSemver(target)) return null;
+  let best: string | null = null;
+  for (const v of all) {
+    if (!isValidSemver(v) || compareSemver(v, target) >= 0) continue;
+    if (best === null || compareSemver(v, best) > 0) best = v;
+  }
+  return best;
+}
+
 /** latest = highest STABLE among active versions; null if none stable. */
 export function resolveLatest(activeVersions: readonly string[]): string | null {
   const stable = activeVersions.filter((v) => channelOf(v) === "stable");

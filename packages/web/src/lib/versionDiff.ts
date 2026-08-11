@@ -12,12 +12,18 @@
 // The loaded entry pair is cached per (proposal, revision) so the summary call and each lazy
 // per-file diff call don't re-extract / re-clone. Text detection + the object-store extractor are
 // the SAME ones the bundle file browser uses (bundleBrowse.ts).
+//
+// The SAME engine serves the PUBLISHED per-version view on the skill detail page (§10) — see
+// `getVersionChangeSummary` / `getVersionFileDiff` at the bottom: identical classification and
+// diffs, but baselined on the version's own immediate predecessor (any channel, any status) and
+// gated by skill visibility instead of reviewer access. Both sides are stored artifacts there, so
+// that path never touches upstream.
 import { createHash } from "node:crypto";
 import { pool } from "./db";
 import { loadBundleEntries, isTextFile } from "./bundleBrowse";
 import { fetchPointerReviewEntries } from "./pointerFetch";
 import { createTtlCache } from "./ttlCache";
-import { diffLines, resolveLatest, type BundleEntry, type LineDiff } from "@skilly/shared";
+import { diffLines, resolveLatest, resolvePredecessor, type BundleEntry, type LineDiff } from "@skilly/shared";
 import type { RevisionPayload } from "./proposals";
 
 export type FileStatus = "added" | "modified" | "removed" | "unchanged";
@@ -108,7 +114,23 @@ async function loadPair(cacheKey: string, targetSkillId: string | null, payload:
 
 /** Full added/modified/removed/unchanged classification for the review page. */
 export async function getChangeSummary(cacheKey: string, targetSkillId: string | null, payload: RevisionPayload): Promise<ChangeSummary> {
-  const pair = await loadPair(cacheKey, targetSkillId, payload);
+  return classifyPair(await loadPair(cacheKey, targetSkillId, payload));
+}
+
+/** Pure classification of two loaded file sets — the engine both views share, exported so it can
+ *  be exercised without a DB or an object store. */
+export function classifyEntries(baselineSemver: string | null, base: BundleEntry[], proposed: BundleEntry[]): ChangeSummary {
+  return classifyPair({ baselineSemver, base: byPath(base), proposed: byPath(proposed) });
+}
+
+/** Pure per-file diff over two loaded file sets (see `classifyEntries`). */
+export function diffEntriesPath(base: BundleEntry[], proposed: BundleEntry[], path: string): FileDiffResult | null {
+  return diffPath({ baselineSemver: null, base: byPath(base), proposed: byPath(proposed) }, path);
+}
+
+/** Classify one loaded old/new entry pair — the shared core behind the reviewer (§8) and the
+ *  published per-version (§10) views. */
+function classifyPair(pair: EntryPair): ChangeSummary {
   if (pair.unavailable) {
     return { baselineSemver: pair.baselineSemver, added: 0, modified: 0, removed: 0, unchanged: 0, files: [], unavailable: pair.unavailable };
   }
@@ -135,7 +157,11 @@ export async function getChangeSummary(cacheKey: string, targetSkillId: string |
 
 /** Lazy per-file diff: a unified line diff for a diffable text file, else a binary/too-large marker. */
 export async function getFileDiff(cacheKey: string, targetSkillId: string | null, payload: RevisionPayload, path: string): Promise<FileDiffResult | null> {
-  const pair = await loadPair(cacheKey, targetSkillId, payload);
+  return diffPath(await loadPair(cacheKey, targetSkillId, payload), path);
+}
+
+/** Diff one path across a loaded entry pair — shared by the reviewer and published views. */
+function diffPath(pair: EntryPair, path: string): FileDiffResult | null {
   if (pair.unavailable) return null;
   const oldE = pair.base.get(path);
   const newE = pair.proposed.get(path);
@@ -155,4 +181,62 @@ export async function getFileDiff(cacheKey: string, targetSkillId: string | null
   const d = diffLines(oldText, newText);
   if (!d.ok) return { status, isText: true, tooLarge: true };
   return { status, isText: true, diff: d.diff };
+}
+
+// ── Published per-version file changes (SKILLY_SPEC.md §10) ─────────────────────────────────────
+// A published version vs its IMMEDIATE PREDECESSOR — the highest version strictly below it among
+// ALL of the skill's versions (any channel, any status: prereleases and yanked ones count), so
+// each Versions-list row answers "what changed when THIS version landed". Both sides are stored
+// artifacts (a pointer's mirror is a skilly-stored tarball), so this never contacts upstream.
+// Published versions are IMMUTABLE (invariant #2), so the (skill, semver) cache can't go stale —
+// the TTL is only a memory bound.
+
+/** Why a published version has no file-change view: it's the skill's first, or bytes are missing. */
+export type VersionChangesUnavailable = "first" | "pending";
+
+export type VersionPairKeys =
+  | { baselineSemver: string; baseKey: string; selfKey: string }
+  | { reason: VersionChangesUnavailable };
+
+const VERSION_PAIR_TTL_MS = Number(process.env.VERSION_DIFF_CACHE_TTL_MS ?? 900_000);
+const versionPairCache = createTtlCache<EntryPair | { reason: VersionChangesUnavailable }>(VERSION_PAIR_TTL_MS);
+
+/** DB half: which two stored artifacts a published version's diff compares (no bytes touched). */
+export async function resolveVersionPairKeys(skillId: string, semver: string): Promise<VersionPairKeys> {
+  const { rows } = await pool.query<{ semver: string; artifact_object_key: string | null }>(
+    `select semver, artifact_object_key from skill_versions where skill_id = $1`,
+    [skillId],
+  );
+  const self = rows.find((r) => r.semver === semver);
+  if (!self) return { reason: "first" }; // caller already 404s an unknown semver
+  const prev = resolvePredecessor(semver, rows.map((r) => r.semver));
+  if (!prev) return { reason: "first" };
+  const prevKey = rows.find((r) => r.semver === prev)?.artifact_object_key;
+  // Either side unmirrored (a pointer version still in `pending_mirrors`, §6) → nothing to compare.
+  if (!prevKey || !self.artifact_object_key) return { reason: "pending" };
+  return { baselineSemver: prev, baseKey: prevKey, selfKey: self.artifact_object_key };
+}
+
+/** Load (and cache) the predecessor→version entry pair for a published version. */
+async function loadVersionPair(skillId: string, semver: string): Promise<EntryPair | { reason: VersionChangesUnavailable }> {
+  return versionPairCache.get(`${skillId}:${semver}`, async () => {
+    const keys = await resolveVersionPairKeys(skillId, semver);
+    if ("reason" in keys) return keys;
+    const [base, proposed] = await Promise.all([loadBundleEntries(keys.baseKey), loadBundleEntries(keys.selfKey)]);
+    return { baselineSemver: keys.baselineSemver, base: byPath(base), proposed: byPath(proposed) };
+  });
+}
+
+/** Added/modified/removed/unchanged for a published version vs its predecessor, or why not. */
+export async function getVersionChangeSummary(skillId: string, semver: string): Promise<ChangeSummary | { unavailableReason: VersionChangesUnavailable }> {
+  const pair = await loadVersionPair(skillId, semver);
+  if ("reason" in pair) return { unavailableReason: pair.reason };
+  return classifyPair(pair);
+}
+
+/** Lazy per-file diff for a published version vs its predecessor (null = not in the change set). */
+export async function getVersionFileDiff(skillId: string, semver: string, path: string): Promise<FileDiffResult | null> {
+  const pair = await loadVersionPair(skillId, semver);
+  if ("reason" in pair) return null;
+  return diffPath(pair, path);
 }

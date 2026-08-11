@@ -45,4 +45,23 @@ test.describe("skill detail surfaces (@global/pdf-tools)", () => {
     // ── Maintainers panel is available to the admin (add control present; no mutation). ──
     await expect(page.getByPlaceholder(/Add a maintainer/i)).toBeVisible();
   });
+
+  // §10: every version row expands to the auto-computed file changes vs its IMMEDIATE predecessor —
+  // the mechanical counterpart to the proposer's "What changed" note. Read-only; nothing is created.
+  test("a version row expands to its file changes vs the previous version", async ({ page }) => {
+    await devSignIn(page);
+    await page.goto(SKILL);
+    await expect(page.getByRole("heading", { name: "PDF Tools" }).first()).toBeVisible({ timeout: 20_000 });
+
+    // The seeded skill has 1.0.0 / 1.1.0 / 1.2.0-beta.1 — v1.1.0's baseline is v1.0.0.
+    const row = page.locator("#version-1\\.1\\.0");
+    await expect(row).toBeVisible();
+    await row.getByRole("button", { name: /what changed/i }).click();
+
+    // Summary + baseline caption + the per-file list (the dev seed's bundles hold a SKILL.md).
+    await expect(row.getByText(/added/).first()).toBeVisible({ timeout: 20_000 });
+    await expect(row.getByText(/modified/).first()).toBeVisible();
+    await expect(row.getByText("vs v1.0.0")).toBeVisible();
+    await expect(row.getByText("SKILL.md").first()).toBeVisible();
+  });
 });

@@ -8,7 +8,8 @@ import { TagInput } from "../../../components/TagInput";
 import { Markdown } from "../../../components/Markdown";
 import { MarkdownField } from "../../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../../components/ToolHarnessPicker";
-import { WHAT_CHANGED_MAX_LEN } from "@skilly/shared/proposal";
+import { FileChangeList } from "../../../components/FileChanges";
+import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
 import { useDateFmt } from "../../../components/DateFormat";
 import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
 import type { MentionMap } from "../../../components/MentionChips";
@@ -115,150 +116,28 @@ function repoLinkFor(p: { url: string; ref: string; subdir?: string | null }): s
   return p.url.replace(/\.git$/i, "");
 }
 
-// ── Bundle file browser (review): tree of the uploaded bundle, view text / download binary. ──────
-function humanSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
 // ── Reviewer file-change view (§8) ──────────────────────────────────────────────────────────
 // Classifies the proposal's files vs the skill's latest stable version (added / modified /
 // removed / unchanged) and shows an inline unified diff for changed text files. Fed by
 // GET /changes; an unchanged text file's raw contents + downloads still come from GET /files.
-type ChangeStatus = "added" | "modified" | "removed" | "unchanged";
-interface ChangeFile { path: string; status: ChangeStatus; isText: boolean; size: number }
-interface ChangesResp { available: boolean; kind?: string; reason?: string; baselineSemver?: string | null; added?: number; modified?: number; removed?: number; unchanged?: number; files?: ChangeFile[] }
-interface DiffLineJ { type: "context" | "add" | "del"; text: string; oldLine: number | null; newLine: number | null }
-interface DiffHunkJ { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLineJ[] }
-interface FileDiffResp { path: string; status: ChangeStatus; isText: boolean; diff?: { hunks: DiffHunkJ[]; added: number; removed: number }; tooLarge?: boolean; binary?: boolean }
-
-function StatusBadge({ status }: { status: ChangeStatus }) {
-  if (status === "added") return <Pill tone="ok">added</Pill>;
-  if (status === "modified") return <Pill tone="warn">modified</Pill>;
-  if (status === "removed") return <Pill tone="danger">removed</Pill>;
-  return <span className="muted mono" style={{ fontSize: 10.5 }}>unchanged</span>;
-}
-
-/** Unified line diff: hunk headers + colored +/- lines (React escapes the text). */
-function DiffView({ diff }: { diff: { hunks: DiffHunkJ[]; added: number; removed: number } }) {
-  if (!diff.hunks.length) return <p className="muted" style={{ fontSize: 13, margin: 0 }}>No line changes.</p>;
-  return (
-    <pre className="mono" style={{ fontSize: 12, lineHeight: 1.5, padding: 0, background: "var(--surface-2)", borderRadius: "var(--radius-sm)", overflow: "auto", maxHeight: 460, margin: 0 }}>
-      {diff.hunks.map((h, hi) => (
-        <div key={hi}>
-          <div style={{ color: "var(--faint)", padding: "2px 10px", background: "var(--surface)" }}>@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</div>
-          {h.lines.map((l, li) => (
-            <div key={li} style={{ background: l.type === "add" ? "rgba(46,160,67,0.16)" : l.type === "del" ? "rgba(248,81,73,0.18)" : "transparent", color: l.type === "context" ? "var(--muted)" : "var(--ink)", padding: "0 10px", whiteSpace: "pre" }}>
-              {l.type === "add" ? "+" : l.type === "del" ? "-" : " "}{l.text}
-            </div>
-          ))}
-        </div>
-      ))}
-    </pre>
-  );
-}
-
+// The list + diff rendering is the shared FileChangeList — the same component the published
+// per-version view on the skill detail page uses (§10).
 function FileChangeBrowser({ proposalId, hasBundle }: { proposalId: string; hasBundle: boolean }) {
-  const { data, loading, error } = useApi<ChangesResp>(`/api/proposals/${proposalId}/changes`);
-  const [openPath, setOpenPath] = useState<string | null>(null);
-  const [detail, setDetail] = useState<{ kind: "diff"; body: FileDiffResp } | { kind: "raw"; body: string } | null>(null);
-  const [viewLoading, setViewLoading] = useState(false);
-  const [viewErr, setViewErr] = useState<string | null>(null);
-
-  const open = useCallback(async (f: ChangeFile) => {
-    if (openPath === f.path) { setOpenPath(null); setDetail(null); setViewErr(null); return; }
-    setOpenPath(f.path); setDetail(null); setViewErr(null); setViewLoading(true);
-    try {
-      if (f.status === "unchanged") {
-        if (!hasBundle) { setViewErr("Unchanged — contents aren’t stored for this source until accept."); return; }
-        const r = await fetch(`/api/proposals/${proposalId}/files?path=${encodeURIComponent(f.path)}`);
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
-        setDetail({ kind: "raw", body: await r.text() });
-      } else {
-        const r = await fetch(`/api/proposals/${proposalId}/changes?path=${encodeURIComponent(f.path)}`);
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
-        setDetail({ kind: "diff", body: (await r.json()) as FileDiffResp });
-      }
-    } catch (e) {
-      setViewErr(String((e as Error).message ?? e));
-    } finally {
-      setViewLoading(false);
-    }
-  }, [proposalId, hasBundle, openPath]);
-
-  if (loading) return <p className="muted" style={{ fontSize: 13 }}>Loading changes…</p>;
-  if (error) return <p className="muted" style={{ fontSize: 13 }}>Couldn’t load changes: {error}</p>;
-  if (!data?.available) {
-    const note =
-      data?.kind === "pointer"
-        ? `A file diff isn’t available for this source${data.reason ? ` (${data.reason})` : ""} — the files are verified and mirrored on accept. Use “View repository” above to inspect the source.`
-        : data?.kind === "error"
-          ? `Couldn’t compute the changes: ${data.reason}`
-          : "No files to compare for this proposal.";
-    return <p className="muted" style={{ fontSize: 13.5 }}>{note}</p>;
-  }
-
-  const rank = (s: ChangeStatus) => (s === "unchanged" ? 1 : 0);
-  const files = [...(data.files ?? [])].sort((a, b) => rank(a.status) - rank(b.status) || a.path.localeCompare(b.path));
-  const anyChange = (data.added ?? 0) + (data.modified ?? 0) + (data.removed ?? 0) > 0;
-
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12, fontSize: 13 }}>
-        <span style={{ color: "var(--ok)" }}>+{data.added ?? 0} added</span>
-        <span style={{ color: "var(--warn)" }}>~{data.modified ?? 0} modified</span>
-        <span style={{ color: "var(--danger)" }}>−{data.removed ?? 0} removed</span>
-        <span className="muted">· {data.unchanged ?? 0} unchanged</span>
-        <span style={{ flex: 1 }} />
-        <span className="muted mono" style={{ fontSize: 11.5 }}>{data.baselineSemver ? `vs v${data.baselineSemver}` : "new skill — all files new"}</span>
-      </div>
-      {!anyChange && data.baselineSemver && (
-        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Files unchanged — this version reuses v{data.baselineSemver}’s files.</p>
-      )}
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", padding: 6 }}>
-        {files.map((f) => {
-          const isOpen = openPath === f.path;
-          return (
-            <div key={f.path}>
-              <div
-                onClick={() => f.isText && open(f)}
-                style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderRadius: "var(--radius-sm)", cursor: f.isText ? "pointer" : "default", background: isOpen ? "var(--surface-2)" : "transparent" }}
-              >
-                <StatusBadge status={f.status} />
-                <span className="mono" style={{ fontSize: 12.5, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: f.status === "removed" ? "line-through" : undefined, opacity: f.status === "removed" ? 0.75 : 1 }}>{f.path}</span>
-                {!f.isText && <span className="muted mono" style={{ fontSize: 10 }}>binary</span>}
-                <span className="muted mono" style={{ fontSize: 10.5 }}>{humanSize(f.size)}</span>
-                {hasBundle && f.status !== "removed" && (
-                  <a href={`/api/proposals/${proposalId}/files?path=${encodeURIComponent(f.path)}&download=1`} onClick={(e) => e.stopPropagation()} className="btn-ghost mono" style={{ fontSize: 10.5, padding: "1px 6px" }} title="Download this file">↓</a>
-                )}
-              </div>
-              {isOpen && (
-                <div style={{ padding: "6px 8px 10px" }}>
-                  {viewLoading ? (
-                    <p className="muted" style={{ fontSize: 13, margin: 0 }}>Loading…</p>
-                  ) : viewErr ? (
-                    <p className="muted" style={{ fontSize: 13, margin: 0 }}>{viewErr}</p>
-                  ) : detail?.kind === "raw" ? (
-                    <pre className="mono" style={{ fontSize: 12, lineHeight: 1.5, padding: "10px 12px", background: "var(--surface-2)", borderRadius: "var(--radius-sm)", overflow: "auto", maxHeight: 460, margin: 0, whiteSpace: "pre", color: "var(--ink)" }}>{detail.body}</pre>
-                  ) : detail?.kind === "diff" ? (
-                    detail.body.binary ? (
-                      <p className="muted" style={{ fontSize: 13, margin: 0 }}>Binary file — download to compare.</p>
-                    ) : detail.body.tooLarge ? (
-                      <p className="muted" style={{ fontSize: 13, margin: 0 }}>Too large to diff — download to compare.</p>
-                    ) : detail.body.diff ? (
-                      <DiffView diff={detail.body.diff} />
-                    ) : (
-                      <p className="muted" style={{ fontSize: 13, margin: 0 }}>No diff available.</p>
-                    )
-                  ) : null}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <FileChangeList
+      changesUrl={`/api/proposals/${proposalId}/changes`}
+      rawUrl={hasBundle ? (p) => `/api/proposals/${proposalId}/files?path=${encodeURIComponent(p)}` : undefined}
+      downloadUrl={hasBundle ? (p) => `/api/proposals/${proposalId}/files?path=${encodeURIComponent(p)}&download=1` : undefined}
+      unchangedNote="Unchanged — contents aren’t stored for this source until accept."
+      baselineLabel={(b) => (b ? `vs v${b}` : "new skill — all files new")}
+      unavailableNote={(data) =>
+        data?.kind === "pointer"
+          ? `A file diff isn’t available for this source${data.reason ? ` (${data.reason})` : ""} — the files are verified and mirrored on accept. Use “View repository” above to inspect the source.`
+          : data?.kind === "error"
+            ? `Couldn’t compute the changes: ${data.reason}`
+            : "No files to compare for this proposal."
+      }
+    />
   );
 }
 
@@ -463,7 +342,8 @@ function ProposalDetailInner() {
       // Server error string if present; a body-less 413 (a reverse proxy rejected the request
       // before skilly saw it, §6) gets friendly too-large copy quoting the attempted size.
       if (!r.ok) throw new Error(bundleUploadError(r.status, j.error, file.size));
-      setEdit((e) => (e ? { ...e, newArtifact: { artifactObjectKey: j.artifactObjectKey, artifactSha256: j.artifactSha256, contentSha256: j.contentSha256, artifactFilename: j.artifactFilename ?? file.name } } : e));
+      // Staging a bundle is supplying a real source — drop an untouched metadata-only note (§8).
+      setEdit((e) => (e ? { ...e, whatChanged: e.whatChanged === METADATA_ONLY_NOTE ? "" : e.whatChanged, newArtifact: { artifactObjectKey: j.artifactObjectKey, artifactSha256: j.artifactSha256, contentSha256: j.contentSha256, artifactFilename: j.artifactFilename ?? file.name } } : e));
     } catch (e) {
       setMsg({ kind: "err", text: String((e as Error).message) });
     } finally {
@@ -762,7 +642,7 @@ function ProposalDetailInner() {
                             aria-pressed={edit.reuseFiles}
                             disabled={!data.targetSkillCurrent?.latestStable}
                             title={data.targetSkillCurrent?.latestStable ? undefined : "This skill has no published stable version to reuse"}
-                            onClick={() => setEdit({ ...edit, reuseFiles: true })}
+                            onClick={() => setEdit({ ...edit, reuseFiles: true, whatChanged: edit.whatChanged.trim() ? edit.whatChanged : METADATA_ONLY_NOTE })}
                           >
                             Keep current files{data.targetSkillCurrent?.latestStable ? ` (v${data.targetSkillCurrent.latestStable})` : ""}
                           </button>
@@ -770,7 +650,10 @@ function ProposalDetailInner() {
                             type="button"
                             className={`sort-opt${!edit.reuseFiles ? " sort-on" : ""}`}
                             aria-pressed={!edit.reuseFiles}
-                            onClick={() => setEdit({ ...edit, reuseFiles: false })}
+                            // Switching to a fresh source drops the metadata-only default note (§8)
+                            // so files that actually change aren't published as "Updated metadata";
+                            // a note the proposer wrote is left alone.
+                            onClick={() => setEdit({ ...edit, reuseFiles: false, whatChanged: edit.whatChanged === METADATA_ONLY_NOTE ? "" : edit.whatChanged })}
                           >
                             {edit.pointer ? "Point at a new ref" : "Upload a new bundle"}
                           </button>

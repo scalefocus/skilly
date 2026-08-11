@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { parseInstallCommand } from "@skilly/shared/external-tool";
 import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
-import { WHAT_CHANGED_MAX_LEN } from "@skilly/shared/proposal";
+import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
 import { Pill, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
@@ -261,9 +261,31 @@ function ProposeForm() {
   // metadata/usage change. Explicitly supplying a source (upload / pointer / paste) switches it off.
   const [reuseFiles, setReuseFiles] = useState(false);
   const [nvLatest, setNvLatest] = useState<string | null>(null);
+  // True while the "What changed" note still holds the untouched METADATA_ONLY_NOTE default (§8).
+  // Supplying a real source clears it; any keystroke in the field makes the note the proposer's,
+  // and it is then never rewritten in either direction.
+  const noteIsDefault = useRef(false);
   // Snapshot of the skill's current metadata at pre-fill, for the client-side §8 no-op guard
   // (with reused files, at least one field must differ; the server re-enforces with a 422).
   const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; tags: string[]; categories: string[]; usageExamples: string } | null>(null);
+
+  // The "Updated metadata" default describes a metadata-only re-version, so it lives and dies with
+  // Keep-current-files (§8): supplying a real source drops it (a version that ships files is never
+  // published as "Updated metadata"), switching back re-applies it only into an empty field. A note
+  // the proposer typed is never touched either way.
+  function dropDefaultNote() {
+    if (!noteIsDefault.current) return;
+    noteIsDefault.current = false;
+    setF((prev) => (prev.whatChanged === METADATA_ONLY_NOTE ? { ...prev, whatChanged: "" } : prev));
+  }
+  function restoreDefaultNote() {
+    if (!isNewVersion || nvLatest == null) return;
+    setF((prev) => {
+      if (prev.whatChanged.trim()) return prev;
+      noteIsDefault.current = true;
+      return { ...prev, whatChanged: METADATA_ONLY_NOTE };
+    });
+  }
 
   // Carry-over: turn the current draft into a NEW-VERSION proposal of the matched skill, keeping
   // the source the proposer already provided (staged bundle / pointer fields). Pre-fill + lock are
@@ -318,7 +340,7 @@ function ProposeForm() {
           usageExamples: j.usageExamples ?? "",
           // Default the required note to "Updated metadata" when Keep-current-files will be on (a
           // metadata-only re-version); a fresh source starts blank so the proposer describes it (§8).
-          whatChanged: !forcedNV && j.latest != null ? "Updated metadata" : "",
+          whatChanged: !forcedNV && j.latest != null ? METADATA_ONLY_NOTE : "",
           toolHarness: j.meta?.toolHarness ?? prev.toolHarness,
           semver: bumpPatch(j.latest ?? null),
           externalUrl: j.pointer?.originUrl ?? "",
@@ -341,6 +363,7 @@ function ProposeForm() {
         // Default to "Keep current files" when there's a stable version to reuse — EXCEPT on a
         // duplicate carry-over (`forcedNV`), where the proposer already provided a fresh source.
         setReuseFiles(!forcedNV && j.latest != null);
+        noteIsDefault.current = !forcedNV && j.latest != null;
       } catch (e) {
         if (!cancelled) setErr(String((e as Error).message));
       } finally {
@@ -416,6 +439,7 @@ function ProposeForm() {
     setPasteErr(null);
     if (!lock) setSourceType("pointer"); // in new-version mode the source type is fixed
     setReuseFiles(false); // pasting a source = explicitly supplying one → not "Keep current files" (§8)
+    dropDefaultNote();
     // Slug suggestion: the upstream folder's last segment (git), or the registry slug (skills-hub).
     const derived = !lock ? (p.provider === "skills-hub" ? p.hubSlug ?? "" : p.subdir ? p.subdir.split("/").filter(Boolean).pop() ?? "" : "") : "";
     // Title suggestion from the derived slug: dashes → spaces, words capitalized
@@ -502,6 +526,7 @@ function ProposeForm() {
     setDropErr(null);
     setDup(null); // a new bundle invalidates any prior content-duplicate verdict (re-checked on submit)
     setReuseFiles(false); // attaching a bundle = explicitly supplying a source (§8)
+    dropDefaultNote();
     setFile(picked);
     // Convenience pre-fill (new-skill mode only; never overwrites what's already typed): an empty
     // slug is taken from the filename (extension dropped, slugified), and an empty title from the
@@ -807,7 +832,7 @@ function ProposeForm() {
                   aria-pressed={reuseFiles}
                   disabled={!nvLatest}
                   title={nvLatest ? undefined : "This skill has no published stable version to reuse"}
-                  onClick={() => setReuseFiles(true)}
+                  onClick={() => { setReuseFiles(true); restoreDefaultNote(); }}
                 >
                   Keep current files{nvLatest ? ` (v${nvLatest})` : ""}
                 </button>
@@ -815,7 +840,7 @@ function ProposeForm() {
                   type="button"
                   className={`sort-opt${!reuseFiles ? " sort-on" : ""}`}
                   aria-pressed={!reuseFiles}
-                  onClick={() => setReuseFiles(false)}
+                  onClick={() => { setReuseFiles(false); dropDefaultNote(); }}
                 >
                   {sourceType === "hosted" ? "Upload a new bundle" : "Point at a new ref"}
                 </button>
@@ -1110,7 +1135,9 @@ function ProposeForm() {
               rows={4}
               maxLength={WHAT_CHANGED_MAX_LEN}
               value={f.whatChanged}
-              onChange={set("whatChanged")}
+              // Any keystroke makes the note the proposer's — the default is never re-applied
+              // or cleared from under them afterwards (§8).
+              onChange={(e) => { noteIsDefault.current = false; setF((prev) => ({ ...prev, whatChanged: e.target.value })); }}
               placeholder={"What’s new in this version? e.g.\n\n- Fixed PDF page-range parsing\n- Added a --lang option"}
             />
             <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
