@@ -30,6 +30,7 @@ test("version diff baseline = the immediate predecessor, any channel or status",
     `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, status)
      values ($1,'vdiff-skill','VDiff','d','claude','hosted','org','active')
      on conflict (namespace_id, slug) do update set title = excluded.title returning id`,
+    [ns],
   )).rows[0]!.id;
   await pool.query(`delete from skill_versions where skill_id = $1`, [skill]);
 
