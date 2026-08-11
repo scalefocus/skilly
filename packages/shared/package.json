@@ -31,6 +31,10 @@
       "types": "./dist/skills-hub.d.ts",
       "default": "./dist/skills-hub.js"
     },
+    "./semver": {
+      "types": "./dist/semver.d.ts",
+      "default": "./dist/semver.js"
+    },
     "./proposal": {
       "types": "./dist/proposal.d.ts",
       "default": "./dist/proposal.js"

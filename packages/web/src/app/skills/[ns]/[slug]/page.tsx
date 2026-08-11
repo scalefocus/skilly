@@ -9,6 +9,8 @@ import { useDateFmt } from "../../../../components/DateFormat";
 import { Markdown } from "../../../../components/Markdown";
 import { UserBubble } from "../../../../components/UserBubble";
 import { OfficialBadge, SkillCard, type CatalogEntry } from "../../../../components/SkillCard";
+import { FileChangeList } from "../../../../components/FileChanges";
+import { resolvePredecessor } from "@skilly/shared/semver";
 import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
@@ -74,12 +76,16 @@ function CollapsibleMarkdown({ source, collapsedHeight = 240 }: { source: string
     </div>
   );
 }
-/** One row in the Versions list. Shows the per-version "What changed" note (plain text, §8/§10)
- *  as an expandable block — the note is NOT Markdown, so it's rendered escaped with newlines kept. */
-function VersionRow({ v, downloadHref, downloadTitle, canManage, busy, onYank, formattedDate, pointer }: {
-  v: VersionView; downloadHref: string; downloadTitle: string; canManage: boolean; busy: boolean; onYank: () => void; formattedDate: string; pointer: boolean;
+/** One row in the Versions list. The expander carries the per-version "What changed" note (plain
+ *  text, §8/§10 — NOT Markdown, so it's rendered escaped with newlines kept) and, below it, the
+ *  auto-computed file changes vs this version's immediate PREDECESSOR (§10): the note is the
+ *  author's claim, the file list is the mechanical truth. The changes are fetched only once the
+ *  row is expanded (the component mounts then), so the page load pays nothing for them. */
+function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canManage, busy, onYank, formattedDate, pointer }: {
+  v: VersionView; base: string; predecessor: string | null; downloadHref: string; downloadTitle: string; canManage: boolean; busy: boolean; onYank: () => void; formattedDate: string; pointer: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const expandable = !!v.whatChanged || !!predecessor;
   return (
     <div id={`version-${v.semver}`} style={{ scrollMarginTop: 80 }}>
       <div className="row version-row">
@@ -87,7 +93,7 @@ function VersionRow({ v, downloadHref, downloadTitle, canManage, busy, onYank, f
           <span className="mono" style={{ fontWeight: 500 }}>v{v.semver}</span>
           {v.channel === "beta" ? <Pill tone="warn">beta</Pill> : <Pill tone="ok">stable</Pill>}
           {v.status === "yanked" && <Pill tone="danger">yanked</Pill>}
-          {v.whatChanged && (
+          {expandable && (
             <button type="button" className="btn-ghost mono" style={{ fontSize: 11, padding: "1px 6px" }} aria-expanded={open} onClick={() => setOpen((o) => !o)} title="What changed in this version">
               {open ? "▾" : "▸"} what changed
             </button>
@@ -106,9 +112,29 @@ function VersionRow({ v, downloadHref, downloadTitle, canManage, busy, onYank, f
           )}
         </div>
       </div>
-      {open && v.whatChanged && (
-        <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55, color: "var(--muted)", padding: "8px 12px", marginTop: 6, background: "var(--surface-2)", borderRadius: "var(--radius-sm)" }}>
-          {v.whatChanged}
+      {open && (
+        <div style={{ padding: "8px 12px 12px", marginTop: 6, background: "var(--surface-2)", borderRadius: "var(--radius-sm)" }}>
+          {v.whatChanged && (
+            <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55, color: "var(--muted)" }}>{v.whatChanged}</div>
+          )}
+          {predecessor && (
+            <div style={{ marginTop: v.whatChanged ? 12 : 0 }}>
+              <div className="muted mono" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 8 }}>Files</div>
+              <FileChangeList
+                changesUrl={`${base}/versions/${encodeURIComponent(v.semver)}/changes`}
+                unchangedNote={`Unchanged since v${predecessor}.`}
+                baselineLabel={(b) => `vs v${b ?? predecessor}`}
+                allUnchangedNote={(b) => `Files unchanged — identical to v${b}.`}
+                unavailableNote={(d) =>
+                  d?.reason === "pending"
+                    ? "File changes aren’t available yet — this version’s files are still being mirrored."
+                    : d?.reason === "error"
+                      ? `Couldn’t compute the file changes${d.detail ? `: ${d.detail}` : ""}.`
+                      : "No earlier version to compare against."
+                }
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -611,6 +637,10 @@ export default function SkillDetail() {
             <VersionRow
               key={v.semver}
               v={v}
+              base={base}
+              // Baseline = the immediate predecessor among ALL versions — any channel, any status
+              // (§10). The list is ordered by publish date, so semver order is resolved here.
+              predecessor={resolvePredecessor(v.semver, data.versions.map((x) => x.semver))}
               downloadHref={`${base}/download?semver=${encodeURIComponent(v.semver)}`}
               downloadTitle={`Download v${v.semver} (.${v.downloadExt})${data.pointer ? " — pointer skills download as .tar.gz" : ""}`}
               canManage={data.canManage}

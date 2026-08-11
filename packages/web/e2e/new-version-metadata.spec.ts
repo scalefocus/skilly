@@ -58,6 +58,27 @@ test.describe("new-version proposal: editable metadata + keep current files (@gl
     await expect(note).toHaveValue("Updated metadata");
   });
 
+  test("switching to a fresh source clears the 'Updated metadata' default; switching back restores it (§8)", async ({ page }) => {
+    // The default describes a metadata-only re-version, so supplying a real source drops it —
+    // a version that actually ships files is never published as "Updated metadata".
+    const note = page.getByPlaceholder(/new in this version/i);
+    await expect(note).toHaveValue("Updated metadata");
+    await page.getByRole("button", { name: /upload a new bundle|point at a new ref/i }).click();
+    await expect(note).toHaveValue("");
+    await page.getByRole("button", { name: /keep current files \(v/i }).click();
+    await expect(note).toHaveValue("Updated metadata");
+  });
+
+  test("a note the proposer wrote survives switching the source (§8)", async ({ page }) => {
+    const note = page.getByPlaceholder(/new in this version/i);
+    await note.fill("Rewrote the page-range parser");
+    await page.getByRole("button", { name: /upload a new bundle|point at a new ref/i }).click();
+    await expect(note).toHaveValue("Rewrote the page-range parser");
+    // And switching back doesn't overwrite it with the default either.
+    await page.getByRole("button", { name: /keep current files \(v/i }).click();
+    await expect(note).toHaveValue("Rewrote the page-range parser");
+  });
+
   test("clearing the required What changed note blocks submit (no proposal created) (§8)", async ({ page }) => {
     // Change the title so the no-op guard would pass, then clear the note: the required-note rule
     // is what blocks the submit. Write-free — nothing is created.

@@ -41,6 +41,16 @@ export const TERMINAL_STATES: ProposalState[] = ["accepted", "rejected"];
  */
 export const WHAT_CHANGED_MAX_LEN = 4000;
 
+/**
+ * The note the propose form pre-fills for a metadata-only re-version (§8) — the *Keep current
+ * files* case, where there are no file changes to describe. It is a FORM DEFAULT ONLY: the server
+ * blacklists no string, and the form clears an untouched default the moment the proposer supplies
+ * a real source, so a version that actually ships new files is never described as "Updated
+ * metadata". Shared so the propose form, the proposal page's revise/resubmit editor, and the tests
+ * agree on one string.
+ */
+export const METADATA_ONLY_NOTE = "Updated metadata";
+
 export function isTerminal(state: ProposalState): boolean {
   return TERMINAL_STATES.includes(state);
 }
