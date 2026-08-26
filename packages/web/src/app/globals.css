@@ -33,6 +33,12 @@
   --radius: 14px;
   --radius-sm: 9px;
   --radius-lg: 22px;
+  /* §14 Fixed-height catalog cards — the one knob for every card grid's row height.
+     MEASURED at the 290px column floor, not derived: 330px fits only a ONE-line top meta, and
+     `@platform-engineering-emea` + `v12.144.1` already needs two. 366px is the smallest value that
+     leaves a card whose top meta sits at its 60px cap fully unclipped (360px shaved 4px off its
+     bottom padding); `.desc { flex: 1 }` absorbs the slack on every lighter card. */
+  --skill-card-h: 366px;
   --grid: rgba(8, 39, 115, 0.035);
   --font-display: "Montserrat Variable", "Montserrat", Arial, sans-serif;
   --font-body: "Open Sans Variable", "Open Sans", Arial, sans-serif;
@@ -437,6 +443,9 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   border-top-right-radius: var(--radius); border-bottom-right-radius: var(--radius);
 }
 .ns { font-family: var(--font-mono); color: var(--accent-2); font-size: 0.92em; }
+/* On a card the namespace is the widest item in the top meta and the main reason that row
+   wraps; capping it recovers a full line at the 290px column floor (§14). Full value on hover. */
+.skill-card .ns { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Install split-button version dropdown options. */
 .ver-opt { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; background: none; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); cursor: pointer; }
@@ -485,11 +494,49 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 }
 .card-pad { padding: 20px 22px; }
 
-.skill-card { display: flex; flex-direction: column; gap: 13px; padding: 20px 22px; height: 100%; position: relative; }
+/* §14 Fixed-height catalog cards (no ragged grids). Every card in a `.card-grid` is exactly as tall
+   as every other, so one long description can never inflate its row and leave its siblings with a
+   dead gap. The height is spent as: 2-line-capped top meta → 2-line title → 4-line reserved
+   description → 1-line clipped categories → stats row. `.desc` keeps `flex: 1`, so a card whose
+   top meta fits on one line hands the spare space to the description box instead of changing the
+   card's height. Every zone below the top meta is bounded, so the card's footer (rating + install
+   count) can never be clipped away — measured: an UNBOUNDED top meta costs ~30px per wrapped line
+   and a 3-line row would eat the whole stats row, a far worse loss than the trailing pill that
+   .skill-card-top drops instead. Shared by the catalog, the homepage grids, related-skills, and
+   the §26 request cards, which reuse this class. */
+.skill-card { display: flex; flex-direction: column; gap: 13px; padding: 20px 22px; height: var(--skill-card-h); overflow: hidden; position: relative; }
 .skill-card:hover { transform: translateY(-3px); box-shadow: var(--shadow); border-color: var(--line-strong); }
-.skill-card h3 { font-family: var(--font-display); font-size: 20px; font-weight: 500; line-height: 1.15; }
-.skill-card .desc { color: var(--muted); font-size: 13.5px; line-height: 1.5; flex: 1; }
+.skill-card h3 { font-family: var(--font-display); font-size: 20px; font-weight: 500; line-height: 1.15;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere; min-height: calc(20px * 1.15 * 2); }
+.skill-card .desc { color: var(--muted); font-size: 13.5px; line-height: 1.5; flex: 1;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4;
+  overflow: hidden; overflow-wrap: anywhere; min-height: calc(13.5px * 1.5 * 4); }
 .skill-card .meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Top meta: at most TWO rows. Governance pills (restricted / archived / external / Official) are
+   the priority here, so this row gets first claim on the height budget and is capped only after
+   two rows — beyond that the trailing pill is dropped, which is a far smaller loss than the
+   clipped-away footer an unbounded row causes.
+   MEASURED row boundaries at the 290px floor: row 2 ends at 56.6px, row 3 starts at 65px, so the
+   cap must land between them — 60px hides a third row WHOLE while showing the second one intact.
+   `flex-shrink: 0` is the load-bearing half: without it the over-full card compresses this row to
+   ~53.8px and shaves 3px off every second-row pill, which reads as a broken render rather than as
+   truncation. Because a third row is never partially shown, this needs no fade mask. */
+.skill-card .skill-card-top { flex-shrink: 0; max-height: 60px; overflow: hidden; }
+/* Categories: ONE line, hard clip. Deliberately no "+N" affordance — hiding a chip behind a counter
+   needs per-card JS measurement CSS cannot express, and this row is a preview, not the taxonomy of
+   record. The right-edge mask makes the cut read as deliberate instead of as a chip guillotined
+   mid-border; a mask is colour-agnostic, so it needs no light/dark token. */
+.skill-card .skill-card-cats { flex-wrap: nowrap; overflow: hidden; min-height: 30px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+/* Stats row must never wrap — a second line would be clipped by the card's fixed height. `nowrap` on
+   the ROW alone is not enough: its badges are themselves flex boxes, so a squeezed "1.2K installs"
+   breaks internally and silently doubles the row's height — hence nothing in here wraps at all. The
+   watch badge is optional, so it is the one element allowed to shrink/ellipsis; the rating and the
+   install count stay whole at either end. */
+.skill-card .skill-card-stats, .skill-card .skill-card-stats * { flex-wrap: nowrap; white-space: nowrap; }
+.skill-card .skill-card-stats .watch-badge { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 18px; }
 
 /* ── Page header ───────────────────────────────────────────────────────── */

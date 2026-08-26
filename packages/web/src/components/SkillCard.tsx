@@ -3,22 +3,7 @@ import Link from "next/link";
 import { agentLabel } from "@skilly/shared/agents";
 import { Pill, formatCount } from "./ui";
 import { useDateFmt } from "./DateFormat";
-
-// Descriptions support Markdown; the catalog preview is a clamped one/two-liner, so render a
-// stripped plain-text version here (full Markdown is rendered on the detail/review screens).
-function plainText(md: string): string {
-  return md
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/^\s*[-*]\s+/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import { plainText, descTooltip } from "../lib/cardText";
 
 export interface CatalogEntry {
   namespaceSlug: string;
@@ -90,7 +75,7 @@ function RatingBadge({ s, withCount = false }: { s: CatalogEntry; withCount?: bo
 function WatchBadge({ s }: { s: CatalogEntry }) {
   if (!s.watcherCount) return null;
   return (
-    <span className="muted mono" style={{ fontSize: 11 }} title={`${s.watcherCount} ${s.watcherCount === 1 ? "person is" : "people are"} watching this skill`}>
+    <span className="muted mono watch-badge" style={{ fontSize: 11 }} title={`${s.watcherCount} ${s.watcherCount === 1 ? "person is" : "people are"} watching this skill`}>
       <span aria-hidden>👁</span> {formatCount(s.watcherCount)} watching
     </span>
   );
@@ -101,22 +86,27 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
     <Link href={`/skills/${s.namespaceSlug}/${s.skillSlug}`} className="card skill-card reveal" style={{ animationDelay: `${Math.min(index, 11) * 45}ms` }}>
       {/* Absolutely pinned to the card's top-right corner (see .skill-card > .chip-new). */}
       <NewBadge s={s} />
-      <div className="meta">
-        <span className="ns">@{s.namespaceSlug}</span>
+      {/* Capped at two rows (see .skill-card-top): governance pills get first claim on the height
+          budget, and only a trailing pill is ever dropped — never the card's footer. */}
+      <div className="meta skill-card-top">
+        <span className="ns" title={`@${s.namespaceSlug}`}>@{s.namespaceSlug}</span>
         <OfficialBadge official={s.official} />
         {s.latest && <span className="chip chip-accent">v{s.latest}</span>}
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
         {s.visibility === "namespace" && <Pill tone="warn">restricted</Pill>}
         {s.status === "archived" && <Pill tone="danger">archived</Pill>}
       </div>
-      <h3>{s.title}</h3>
-      <p className="desc">{plainText(s.description)}</p>
-      <div className="meta" style={{ marginTop: "auto", paddingTop: 6, flexWrap: "wrap" }}>
+      <h3 title={s.title}>{s.title}</h3>
+      <p className="desc" title={descTooltip(s.description)}>{plainText(s.description)}</p>
+      {/* One line, hard-clipped behind a fade (see .skill-card-cats) — no inline flexWrap, or it
+          would override the nowrap. */}
+      <div className="meta skill-card-cats" style={{ marginTop: "auto", paddingTop: 6 }}>
         <span className="chip">{agentLabel(s.toolHarness)}</span>
         {s.categories.map((c) => <span key={c} className="chip">{c}</span>)}
       </div>
-      {/* Ratings + installs live on their own row at the bottom, divided from the chips above. */}
-      <div className="meta" style={{ paddingTop: 10, borderTop: "1px solid var(--line)", flexWrap: "wrap" }}>
+      {/* Ratings + installs live on their own row at the bottom, divided from the chips above. It
+          must not wrap — a second line would fall outside the card's fixed height (§14). */}
+      <div className="meta skill-card-stats" style={{ paddingTop: 10, borderTop: "1px solid var(--line)" }}>
         <RatingBadge s={s} withCount />
         <span style={{ marginLeft: "auto", display: "inline-flex", gap: 10, alignItems: "center" }}>
           <WatchBadge s={s} />
