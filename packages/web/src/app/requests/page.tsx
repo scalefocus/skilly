@@ -8,6 +8,7 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
 import { useDateFmt } from "../../components/DateFormat";
 import { agentLabel } from "@skilly/shared/agents";
+import { plainText, descTooltip } from "../../lib/cardText";
 
 export interface RequestEntry {
   id: string;
@@ -43,37 +44,25 @@ function NewBadge({ r }: { r: RequestEntry }) {
   return <span className="chip chip-new" title={`New — asked ${fmt.dateTime(r.createdAt)}`}>new</span>;
 }
 
-/** Markdown → clamped plain-text preview (same treatment as catalog cards). */
-function plainText(md: string): string {
-  return md
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/^\s*[-*]\s+/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function RequestCard({ r, index, showState }: { r: RequestEntry; index: number; showState: boolean }) {
   const fmt = useDateFmt();
   return (
     <Link href={`/requests/${r.id}`} className="card skill-card reveal" style={{ animationDelay: `${Math.min(index, 11) * 45}ms` }}>
       {/* Absolutely pinned to the card's top-right corner (see .skill-card > .chip-new). */}
       <NewBadge r={r} />
-      <div className="meta">
+      {/* Same two-row cap as the catalog card's top meta (§14). */}
+      <div className="meta skill-card-top">
         <span className="chip">{agentLabel(r.toolHarness)}</span>
         {showState && <StatePill state={r.state} />}
       </div>
-      <h3>{r.title}</h3>
-      <p className="desc">{plainText(r.description)}</p>
-      <div className="meta" style={{ marginTop: "auto", paddingTop: 6, flexWrap: "wrap" }}>
+      <h3 title={r.title}>{r.title}</h3>
+      <p className="desc" title={descTooltip(r.description)}>{plainText(r.description)}</p>
+      {/* Reuses .skill-card, so §14's fixed height applies here too: categories clip to one line
+          and the footer must not wrap. No inline flexWrap, or it overrides the nowrap. */}
+      <div className="meta skill-card-cats" style={{ marginTop: "auto", paddingTop: 6 }}>
         {r.categories.map((c) => <span key={c} className="chip">{c}</span>)}
       </div>
-      <div className="meta" style={{ paddingTop: 10, borderTop: "1px solid var(--line)", flexWrap: "wrap" }}>
+      <div className="meta skill-card-stats" style={{ paddingTop: 10, borderTop: "1px solid var(--line)" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5 }}>
           <UserBubble name={r.requesterName} avatar={r.requesterAvatar} userId={r.requesterUserId} size={20} />
           {r.requesterName}

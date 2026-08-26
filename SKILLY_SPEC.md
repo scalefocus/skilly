@@ -851,7 +851,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Facets (implemented):** category, tool/harness, hosted-vs-pointer. The hosted-vs-pointer facet is labelled **"Source"** in the catalog UI with options **"Hosted"** and **"External"** — "External" being the one user-facing name for pointer skills, matching the `external` pill on catalog cards and the "External source" panel on the detail page (never "Mirrored"; mirroring is the internal mechanism, not the user-facing name). (Namespace, channel/stable-vs-beta, and scan-status facets are **deferred** — not computed or surfaced in v1.)
 - **"My Skills" toggle** (`?mine=1`): narrows the catalog to skills the caller is an **explicit maintainer** of (`skill_maintainers`, §19) — the same definition as `maintainsSkills` in `/api/me`. Implicit (namespace-admin) maintainership is **not** included: "My Skills" means skills named to you, not every skill in a namespace you administer. Visibility-filtered like everything else.
 - **Maintained-by view** (`?maintainer=<userId>&by=<name>`): the same explicit-maintainer filter for an **arbitrary** person (used by the leaderboard's per-row "Skills" action, §21). The catalog shows a **dismissible "Skills maintained by &lt;name&gt;" banner** (the name is carried in the URL, no extra lookup) and, on arrival, **ignores the viewer's other saved filters** (category/tool/type/My-Skills) to show everything by that maintainer the viewer can see. Both surfaces share one server filter (`searchSkills.maintainerUserId`); the `maintainer` value is validated as a UUID and the result is **still viewer-visibility-scoped** (invariant #3), so it never reveals a restricted skill to someone who couldn't already see it.
-- **Presentation:** the catalog offers a **cards / list toggle** (card grid vs a compact one-line list; same data + visibility filtering, pure view preference persisted client-side). The skill detail page shows **created** (skill row) and **last updated** (newest version — versions are immutable, so the latest version's timestamp IS the last content update) dates.
+- **Presentation:** the catalog offers a **cards / list toggle** (card grid vs a compact one-line list; same data + visibility filtering, pure view preference persisted client-side). The skill detail page shows **created** (skill row) and **last updated** (newest version — versions are immutable, so the latest version's timestamp IS the last content update) dates. The **card view is fixed-height** — every card in the grid is exactly as tall as every other, with the description clamped and reserved at four lines, the title at two, the categories row clipped to one, and the top meta row capped at two; see §14 *Fixed-height catalog cards* for the zone budget and its accepted losses.
 - **"What changed" per version (detail page).** The detail page's **Versions** list shows each version's proposer-authored **"What changed"** note (§8): the **latest stable version's** note is **featured** near the top, and each other version's note is **expandable from its row**. Rendered as **escaped plain text with newlines preserved** — **no Markdown** (unlike the *Usage* block, §20). **First versions** and any **pre-feature** versions carry no note and render nothing. Visible to **anyone who can see the skill** (visibility-filtered like all catalog content).
 - **Per-version file changes (detail page).** The note is the author's *claim* about a version; the **file changes** are the mechanical truth, and the detail page now shows both. Each version row's expander carries — under the note — an **auto-computed file-change view** of that version against its predecessor, so a re-version that actually replaced files can never read as "Updated metadata". It is the **same engine and the same renderer** as the reviewer file-change view (§8), re-baselined for a published version:
   - **Baseline = the immediate predecessor.** The highest version **strictly below** this one by semver among **all** of that skill's versions — **any channel, any status**: prereleases and **yanked** versions count. The Versions list is a chain, and each row answers *"what changed when **this** version landed"*, so the baseline must be whatever preceded it in fact. (This deliberately differs from the reviewer view, which diffs a *pending* proposal against the current **latest stable** — the bytes it would replace.)
@@ -1145,6 +1145,76 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       This is a shared rule for **all** collapsible cards, not a per-card patch.
     - **Rendered markdown breaks long words.** Message and description bodies (`.md`) break an
       over-long unbroken run (a bare URL, a long identifier) rather than overflowing their column.
+  - **Fixed-height catalog cards (no ragged grids).** Every `.skill-card` in a card grid renders at
+    **one constant height** — a single `--skill-card-h` custom property (**366px**, *measured* in the
+    browser, not derived from arithmetic) — so a long description can never inflate its grid row and
+    leave its siblings with a dead gap. Cards in the *same* row were already equalised by
+    `height: 100%`; this rule makes the height constant **row-to-row and grid-to-grid**. It is one
+    shared rule on `.skill-card`, so it governs the **catalog card view**, the homepage **Featured**
+    and **Recently published** grids, the detail page's **"Skills you might like"** grid, and the §26
+    **Requested skills** cards (which reuse the same class) alike — a request card's zones differ
+    (no version chip, an avatar/date footer) so it carries different slack at the same height, which
+    is what matters: uniform within its own grid. The **list view is unaffected** — its
+    `.skill-row-desc` is already a single-line ellipsis. This is **presentation only**: descriptions
+    are stored and served whole (no length cap, no API field, no validation change) and the detail
+    page still renders the full Markdown.
+    - **Zone budget.** The constant height is spent as: a **two-row-capped** top meta row → a
+      **2-line-clamped** title → a **4-line-clamped, 4-line-reserved** description → a
+      **one-line-clipped** categories row → the ratings/installs row. The description keeps its
+      `flex: 1`, so a card whose top meta fits on one row hands the spare space to the description
+      box rather than changing the card's height. **Every zone is bounded**, which is what makes the
+      height constant — see the next bullet for why the top meta had to be bounded too.
+    - **The top meta row is capped at two rows — measured, not assumed.** `@namespace` + Official +
+      version + `external` / `restricted` / `archived` are **governance signals** (invariant #7
+      visibility, §7 archival/endorsement), so this row gets **first claim** on the height budget and
+      is capped only after two rows. It cannot be left *unbounded*: at the 290px column floor each
+      wrapped row costs ~30px, and a 3-row row pushes the **ratings/installs footer entirely out of
+      the card** — losing the whole footer (and then the categories row) is a far worse outcome than
+      dropping a trailing pill, which is what the cap does instead. Two supporting rules make the cap
+      behave:
+      - **The namespace is width-capped** (`max-width`, ellipsis, full value on `title` hover). It is
+        the widest item in the row and the main reason the row wraps; capping it **recovers a whole
+        row** at the 290px floor — `@platform-engineering-emea` + `v12.144.1` drops from two rows to
+        one — and with it capped, a card carrying *all six* pills still fits inside two rows.
+      - **The row is exempt from flex-shrink.** Without that exemption an over-full card compresses
+        the row and **shaves ~3px off every second-row pill**, which reads as a broken render rather
+        than as truncation. The cap sits between the measured second-row bottom and third-row top, so
+        a third row is hidden **whole** and no pill is ever partially painted — which is also why
+        this row needs no fade mask, unlike the categories row.
+    - **Description: clamp 4 lines, reserve 4 lines.** Clamped by **line count** (`line-clamp`), never
+      by character count — the grid is `auto-fill minmax(290px, 1fr)`, so a character budget would be
+      wrong at every width. The reserve means a one-line description occupies the same box as a
+      clamped one. A `title` tooltip carries the plain-text description **capped at ~300 characters**
+      (a native tooltip holding a whole Markdown body is unreadable and renders differently per OS)
+      and is set **unconditionally** — no truncation detection, no per-card measurement, no resize
+      observer on a grid that can hold hundreds of cards.
+    - **Title: clamp 2 lines, full title on hover.** The `h3` clamps and reserves two lines, with a
+      `title` tooltip carrying the untruncated title. The heading and description tooltips sit on
+      **different elements**, so the nearer one wins on hover and they never compete.
+    - **Categories row: one line, hard clip, faded edge.** The row is `nowrap` + `overflow: hidden` at
+      one chip height. There is deliberately **no `+N` overflow affordance** — hiding a chip behind a
+      counter requires per-card JS measurement that CSS cannot express, and this row is a preview,
+      not the skill's taxonomy of record. A right-edge `mask-image` fade makes the cut read as
+      deliberate rather than as a chip guillotined mid-border; the mask is colour-agnostic, so it
+      needs no light/dark token. **Accepted loss:** a skill with more chips than fit shows only the
+      leading ones, and the rest are visible only on its detail page.
+    - **Reserves are kept at every viewport, phones included.** No breakpoint relaxes them. A
+      single-column phone card with a short description therefore shows its unused reserve as
+      whitespace — accepted, in exchange for one rule with no width-dependent behaviour. Verified at
+      375px: heights stay locked together and the page does **not** scroll horizontally (§14
+      *Narrow-viewport containment*).
+    - **Unbreakable content still cannot spill.** The title and description set
+      `overflow-wrap: anywhere`, so a bare URL or long identifier breaks inside the card rather than
+      widening it — the same posture as *Rendered markdown breaks long words* above.
+    - **Held by an e2e geometry assertion.** A spec seeds a deliberately long-description /
+      long-title / many-category skill beside a minimal one and asserts that **every `.skill-card` in
+      a `.card-grid` reports the same `offsetHeight`** — the regression that actually matters.
+      Per-zone line-height arithmetic is deliberately **not** asserted: it breaks whenever a font or
+      type scale changes, without any user-visible regression having occurred. The assertion runs at
+      **both** desktop and 375px, and also asserts the catalog does not scroll horizontally. The
+      tooltip cap is covered separately by **unit tests** over the shared card-text helpers
+      (`lib/cardText.ts`, which the catalog cards and the §26 request cards both import — there is
+      no second copy of the Markdown-stripping or capping rule).
   - **Deliberately NOT per-skill / dynamic (invariant #3).** Auth gating is **client-side** (§2), so
     the server returns **200 HTML for every route** and an unauthenticated unfurl crawler receives
     whatever `<head>` metadata is generated. A per-skill/dynamic card (`generateMetadata` on
@@ -2256,6 +2326,11 @@ the requester is notified, and the fulfiller earns leaderboard credit.
 - New nav item **"Requested skills"**, directly **below "Propose a skill"** — lists **open**
   requests in the catalog's card/row visual language (cards ⇄ list toggle, same persisted view
   preference pattern): title, categories, tool chip, requester (name + avatar), and posted date.
+  Because the request card reuses the catalog card's own class, it inherits §14 *Fixed-height
+  catalog cards* wholesale — same constant height, same 2-line title / 4-line description clamps,
+  same one-line clipped categories row, same two-row top meta cap. Its zones differ (no version
+  chip, a requester/date footer) so it carries different slack at the same height, which is what
+  matters: uniform within its own grid.
   Category/tool filtering mirrors the catalog's live-filter behavior; **free-text search comes from
   the top-bar box** — on this route it is repurposed as a live filter of the requests list
   (placeholder **"Search requests…"**, `?q=`-synced, dropdown suppressed, substring `ILIKE` over

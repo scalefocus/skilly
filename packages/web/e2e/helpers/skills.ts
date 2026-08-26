@@ -48,6 +48,9 @@ export async function createHostedProposal(
     semver?: string;
     title?: string;
     visibility?: "org" | "namespace";
+    /** Overridable so a caller can seed a deliberately long description (§14 card geometry). */
+    description?: string;
+    categories?: string[];
   },
 ): Promise<string> {
   const upload = await uploadBundle(page, opts.skillSlug);
@@ -58,10 +61,10 @@ export async function createHostedProposal(
       metadata: {
         skillSlug: opts.skillSlug,
         title: opts.title ?? opts.skillSlug,
-        description: "e2e fixture proposal (safe to delete)",
+        description: opts.description ?? "e2e fixture proposal (safe to delete)",
         toolHarness: "generic",
         visibility: opts.visibility ?? "org",
-        categories: [],
+        categories: opts.categories ?? [],
         tags: [],
       },
       ...upload,
