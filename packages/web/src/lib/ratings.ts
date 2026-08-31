@@ -8,6 +8,8 @@ export interface RatingSummary {
   count: number;
   distribution: number[]; // length 5; distribution[i] = number of (i+1)-star ratings
   mine: number | null; // the caller's own stars, or null if they haven't rated
+  /** §29: set when the caller's own rating was submitted through MCP by an agent. */
+  mineViaMcpClient?: string | null;
 }
 
 /** Aggregate + distribution for a skill, plus the caller's own rating. */
@@ -18,8 +20,11 @@ export async function getRating(skillId: string, userId: string | null): Promise
       [skillId],
     ),
     userId
-      ? pool.query<{ stars: number }>(`select stars from skill_ratings where skill_id = $1 and user_id = $2`, [skillId, userId])
-      : Promise.resolve({ rows: [] as { stars: number }[] }),
+      ? pool.query<{ stars: number; via_mcp_client: string | null }>(
+          `select stars, via_mcp_client from skill_ratings where skill_id = $1 and user_id = $2`,
+          [skillId, userId],
+        )
+      : Promise.resolve({ rows: [] as { stars: number; via_mcp_client: string | null }[] }),
   ]);
 
   const distribution = [0, 0, 0, 0, 0];
@@ -36,16 +41,18 @@ export async function getRating(skillId: string, userId: string | null): Promise
     count,
     distribution,
     mine: mineRes.rows[0]?.stars ?? null,
+    mineViaMcpClient: mineRes.rows[0]?.via_mcp_client ?? null,
   };
 }
 
 /** Upsert the caller's rating (1-5). Stamps the version they were on (provenance). */
 export async function setRating(userId: string, skillId: string, stars: number, ratedSemver: string | null): Promise<void> {
   await pool.query(
-    `insert into skill_ratings (user_id, skill_id, stars, rated_semver)
-       values ($1, $2, $3, $4)
+    `insert into skill_ratings (user_id, skill_id, stars, rated_semver, via_mcp_client)
+       values ($1, $2, $3, $4, null)
      on conflict (user_id, skill_id)
-       do update set stars = excluded.stars, rated_semver = excluded.rated_semver, updated_at = now()`,
+       do update set stars = excluded.stars, rated_semver = excluded.rated_semver,
+                     via_mcp_client = null, updated_at = now()`,
     [userId, skillId, stars, ratedSemver],
   );
 }

@@ -43,7 +43,7 @@ Every decision below was explicitly confirmed.
 ### Non-goals (v1)
 *(Several original v1 non-goals were intentionally delivered later as "Tier 4 — strategic/infra"; those are annotated **✅ SHIPPED** below — see §16.)*
 - Not a public marketplace. *(still true)*
-- No custom CLI shipped by skilly (rely on the external `npx skills add` tool). *(still true)*
+- No custom CLI shipped by skilly (rely on the external `npx skills add` tool). *(still true — the §29 **MCP server** is a server-side surface skilly hosts, not a client binary it ships; it hands agents the same `npx skills add` command.)*
 - No SAML (OIDC only). *(still true)*
 - No per-individual "private" skills; no per-version visibility. *(still true — pinned invariant #7)*
 - ~~No Kubernetes/Helm in v1 (docker compose only).~~ **✅ SHIPPED** — Helm chart at `deploy/helm/skilly` (§16 #19).
@@ -180,7 +180,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `tokens`
 - `id`, `user_id` (**NULL for system installations**, §23), `type` (`install`; `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), `created_at`.
-- **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23.
+- **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23. **The §29 MCP/OAuth credentials are a separate regime in separate tables** (`oauth_*` below) — header-borne, short-lived and rotating; they never share a row or an enum with `tokens`.
 
 ### `categories`
 - Controlled vocabulary, admin-managed: `id`, `name`, `description`.
@@ -205,7 +205,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -233,6 +233,12 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `system_event` (migration 0032, detailed in §25)
 - Operational/system-log telemetry (NOT audit — mutable, no hash chain, cheap inserts/retention): `id`, `created_at`, `status`, `method`, `route` (template), `path` (concrete, no query string), `user_id`, `actor_name`/`actor_email` (point-in-time snapshot), `error_code`, `message` (one line, no stack), `request_id`, `duration_ms`, `source`. Trigram GIN index for substring search.
+
+### `oauth_clients` / `oauth_grants` / `oauth_tokens` (migration 0063; `audit_source` gains `mcp` in 0064, detailed in §29)
+- The **§29 MCP server**'s OAuth 2.1 authorization-server state. Deliberately **separate from `tokens`** (now install-only): different lifetime, different presentation (`Authorization` header, never a URL), different revocation model.
+- **`oauth_clients`** — `id`, `client_id` (unique), `client_name`, `client_uri`, `logo_uri`, `redirect_uris` (text[]), `token_endpoint_auth_method` (`none` — public clients only in v1), `software_id`, `software_version`, `registered_ip`, `created_at`, `last_used_at`, `blocked_at` (admin block). Written by open **Dynamic Client Registration**; unused registrations are pruned after 7 days.
+- **`oauth_grants`** — `id`, `user_id` (FK → `users`, CASCADE), `client_id` (FK → `oauth_clients`, CASCADE), `scope`, `created_at`, `last_used_at`, `revoked_at`, `revoked_by_user_id` (FK, SET NULL). **Partial unique on `(user_id, client_id)` where `revoked_at IS NULL`** — one live grant per user×client. This row **is** the "connection" listed and revoked on `/mcp`.
+- **`oauth_tokens`** — `id`, `grant_id` (FK → `oauth_grants`, CASCADE), `kind` (`code` | `access` | `refresh`), `hashed_token`, `expires_at`, `used_at`, `rotated_from_id` (self-FK — the rotation lineage behind refresh-reuse detection), `code_challenge`, `redirect_uri`, `resource` (last three are `kind='code'` only), `created_at`. One table, three kinds; swept by the worker's housekeeping sweep.
 
 ---
 
@@ -833,6 +839,15 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   by the external tool (`.agents/skills/` canonical, symlinked into `.claude/skills/` etc.).
 - **Coupling risk to `vercel-labs/skills` is accepted** and isolated in
   `packages/shared/src/external-tool.ts` (the only place that knows the wire format).
+- **A second consumption surface: the integrated MCP server (§29).** An agent connected over MCP can
+  (a) call a tool that mints a personal install token and returns **this same `npx skills add` command**
+  — the git gateway is still the only clone path, and the result is an ordinary §23 installation —
+  and (b) read a skill's `SKILL.md` and bundled files **live as MCP resources**, with nothing installed.
+  (b) is an explicit, governed **carve-out from invariant #4** (bytes without a clone) of the same kind
+  as the `readme`/`download` routes: authenticated, RBAC-resolved, visibility-filtered, archived/
+  yanked-aware, mirror-only for pointers, capped, rate-limited and `access_log`-recorded — and a first
+  `SKILL.md` read **counts as adoption** so consumption stays measurable (§21/§29). The wire format in
+  `external-tool.ts` is **unchanged**: MCP is a new caller of `buildInstallCommand`, not a new contract.
 
 ---
 
@@ -878,6 +893,13 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Proposals page default filters:** the **To review** tab opens with the three open states selected (Proposed + Under review + Changes requested) — everything still in flight; **My submissions** opens with **no filter selected** (all your submissions, every state).
 - **Requested skills mirrors the Catalog's "new to you" mechanic exactly (§26):** each user has a `requests_seen_at` marker; the **Requested skills** nav item shows the same superscript **1–9 / 9+** count of **open** requests posted since they last opened the page, and the same predicate flags individual request cards/rows with the **"new" edge badge**. Keyed strictly on `created_at` — editing an already-seen request never re-flags it (matching the Catalog's "a new version isn't a new skill" rule, not the Review queue's `updated_at` re-arm rule). **No visibility filter** (requests have no namespace) and **no distinction by who posted a request** — a requester sees their own just-posted request flagged "new" too, same as anyone else. The marker advances **on leaving** `/requests` (including its detail pages, which share the surface — opening one request and navigating away marks every currently-open request seen, the same blast radius the Review queue already has for `/proposals/:id`), not on entry.
 - **Download** (`GET /api/skills/:ns/:slug/download?semver=&format=`): the detail page can download a skill version as a file — a **primary button** for the latest stable version and a **per-row** button on each active version. A **governed, visibility-checked** path (same posture as the SKILL.md `readme` route; rate-limited) — NOT a consumer install (the git gateway is that, per invariant #4). The stored artifact is served **verbatim with its original extension** (`.skill`/`.zip`/`.tar.gz`; §6), named `<slug>-<semver>.<ext>`. The optional **`format=skill|tar.gz`** param (§6 *Pointer download format choice*) lets Pointer downloads re-pack the mirrored tarball as a `.skill` zip; the detail page renders the Pointer primary Download as a **split-button dropdown** (`.skill` default, `.tar.gz` alternative). Only **active (non-yanked)** versions are downloadable; **archived** skills only by owners.
+- **Discovery over MCP (§29):** the `search_skills` tool runs the **same substring predicate, facets,
+  sorts and visibility filter** as this section — an agent sees exactly what its user would see in the
+  catalog, no more. The MCP server deliberately exposes **resource *templates* only** and never
+  enumerates the catalog through `resources/list` (clients pull listed resources straight into context,
+  which would flood the agent and turn every list call into a filtered catalog scan), so **search is the
+  only discovery path** there. The visibility predicate itself is extracted into `@skilly/shared` and
+  shared by both processes — invariant #3 has exactly one implementation (§29).
 - **Taxonomy:** `category` = controlled vocabulary (admin-managed) + optional free-form `tags`; `tool/harness` = controlled enum.
 - **Ranking:** with a query active, **name matches first** — a skill whose **title or slug** contains the term sorts ahead of one matched only in its description/tags/usage — then popularity (`install_count`), then the **Bayesian-smoothed rating (§18)** as the final tiebreaker. This is the **"Relevance"** sort (the default); with no query, popularity leads. A dedicated **"Top rated"** sort orders by the smoothed rating directly, **"Latest"** by most-recent version. A star value is never a match term.
 - **"Skills you might like" (related skills):** the skill **detail page** ends with a *"Skills you might like"* section — up to **3** other skills **most often installed together** with this one (pure **co-install** signal, no content similarity). Computed **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the per-`(user, skill)` adoption ledger `skill_installs` (§21): two skills are related when the same users adopted both; `shared_count` = number of shared adopters. Stored in **`related_skills`** (migration 0046) as a wider top-N candidate list per skill so the read path (`relatedSkills` → `GET /api/skills/:ns/:slug/related`) can **visibility-filter per viewer** (invariant #3 — restricted skills never surface to outsiders) and still fill the **top 3 the viewer can see** **and hasn't adopted yet**, ranked by shared adopters then `install_count`. Active skills only. **Already-installed exclusion:** a neighbour the viewer has adopted (a `skill_installs` row — git install **or** first download, uninstall-agnostic) is dropped. **Empty-state:** if there were visible neighbours but the viewer has installed **all** of them, the section shows *"You have all related skills."*; if there were **no** visible neighbours to begin with (a new/low-adoption skill, or all its neighbours restricted-invisible), the section is **hidden** entirely. (`relatedSkills` returns `{ related, allInstalled }` to tell those two empty cases apart; the nightly rebuild means a brand-new skill won't appear as a neighbour until the next run.)
@@ -893,7 +915,8 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Scan overrides** (`proposal.scan_override`).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
-- **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable.
+- **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
+- **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
 - **Retention:** configurable, **default indefinite**. **SIEM export via syslog/stdout** (structured JSON).
 - **Hash-chaining deferred.**
@@ -1093,10 +1116,12 @@ current or future type can ever leak JSON to a user.
 - Postgres URL; object-store endpoint+creds; OIDC (tenant, client id/secret); SCIM bearer token; SMTP; registry base URL; scan config; retention policy; `SKILLY_BOOTSTRAP_ADMIN_GROUP`; **`EMAIL_TOKEN_ENC_KEY`** (32-byte base64 — encrypts the §12 email service-account tokens; shared by web + worker; required only for the Graph email transport). *(The **install-token max TTL** is no longer an env var — it's the global-admin `install_max_ttl_months` platform setting, §23. The legacy `ONE_TIME_TOKEN_TTL_SECONDS` still ships in `.env.example`/compose but is vestigial — install tokens don't use it.)*
 - **Entra app prerequisites for the §12 Graph email transport** (documented deployment step): the existing skilly app registration needs delegated **`Mail.Send`** + **`offline_access`** admin-consented and the extra redirect URI **`/api/admin/email/callback`** registered. Env-SMTP remains the consent-free fallback.
 - **`CSP_MODE`** (`enforce` default | `report-only` | `off`) selects the Content-Security-Policy posture the web middleware emits (§22 *Content-Security-Policy*): ships **enforcing**; `report-only` is a no-block shakedown; `off` reverts to the legacy `unsafe-inline` policy. Production-only — development always uses the lenient dev policy.
+- **§29 MCP server — no new secret.** OAuth codes/access/refresh tokens are **opaque random values stored as sha256 hashes** (like `tokens.hashed_token`), so there is nothing to encrypt and no signing key to manage; the AS/protected-resource metadata is derived from the existing **registry base URL**, and client-IP attribution reuses **`TRUST_PROXY`** (§23). All tuning is platform settings, not env (`mcp_enabled`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`).
 - Ship a documented `.env.example`.
 
 ### Deployment — docker compose (v1)
 Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO**, **ClamAV**, **DB migrations** (run on startup) — plus, in `deploy/docker-compose.yml`, a one-shot **`git-perms`** init job (chowns the git volume) and a dev-only **`proxy`** (Caddy sample), for **eight** compose services total. TLS terminated at the **org reverse proxy** (the bundled `proxy` is for dev). **Helm/K8s** are now **shipped** (chart at `deploy/helm/skilly`, §16 Tier 4), not deferred.
+- **§29 routing (new, and it splits across both processes):** `/mcp`, `/oauth/token`, `/oauth/revoke` and both `/.well-known/oauth-*` paths route to the **worker** (beside `/scim` and `*.git`); `/oauth/authorize` and `/oauth/register` route to **web** (the authorize leg needs the Auth.js/Entra session, which only web has). The dev Caddy sample and the Helm Ingress rules (§16 #19) both gain this split. No new service and no new port — MCP rides the worker's existing Express app and is **not** gated on its leader lock.
 
 ### Assumption to revisit
 - **Outbound network assumed available** (Pointer proxying + ClamAV signature updates). **Air-gapped operation would change both** — revisit if required.
@@ -1269,6 +1294,12 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Installs (§23)**
 - `GET /api/installs` (+ `?scope=system` — all system installations, **platform-admin only**), `DELETE /api/installs/:id` (uninstall), `PATCH /api/installs/:id {expiresAt}` (reactivate) — owner-checked for personal rows; on **system** rows the DELETE/PATCH check is **platform admin** instead (any admin). *(Replaces the old `POST /api/tokens` PAT path.)*
 
+**MCP server & OAuth (§29)**
+- **On the worker:** `POST /mcp` (Streamable HTTP — the MCP endpoint; 24 curated tools + resource templates), `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server` (RFC 8414), `GET /.well-known/oauth-protected-resource` (RFC 9728).
+- **On web:** `GET /oauth/authorize` + the consent screen (session-authenticated — the only leg needing Entra sign-in), `POST /oauth/register` (open Dynamic Client Registration, RFC 7591).
+- **Management:** `GET /api/mcp/connections` (the caller's own live grants — the `/mcp` page's Connections list), `DELETE /api/mcp/connections/:grantId` (revoke; audited `mcp.grant_revoked`). Admin: `GET /api/admin/mcp` (enabled flag, live-grant count, registered clients), `POST /api/admin/mcp/clients/:id/block` + `.../unblock` (platform-admin, audited). The on/off toggle itself is `PATCH /api/admin/settings { mcp_enabled }`.
+- **No REST twin for the tools.** They are implemented directly on the worker against Postgres — there is deliberately **no** generic `/api` proxy, no "act as user" service credential, and no escape-hatch tool.
+
 **Messaging (§24)**
 - `GET /api/messages` (list + unread), `GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `POST /api/messages/direct {userId}`.
 - `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET paginated newest-first, 100/page; POST `{body, contextSemver}`) and `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator hard delete, audited `skill.discussion_message_deleted`) — the skill Discussion card, §24.
@@ -1345,6 +1376,9 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Phase 6 — Maintainer notification preferences**
 24. **Per-type notification opt-outs + drift-onset dedup (§12):** two per-user Profile toggles (`users.drift_notifications`, `users.new_version_notifications`, both default ON — migration 0057) that filter the **implicit-maintainer** recipients at insert time in the worker (row-level: no in-app row, no email — unlike the channel-level `email_notifications`); an explicit `skill_watches` row always outranks the new-version opt-out; **no safety floor** (namespace admins may opt out too — audit rows, scan reports, and the skill page keep recording drift regardless); and the pointer-refresh job notifying `skill.drift` **only at drift onset** (most recent non-`unreachable` `pointer_ref` report not already `drift`) instead of on every ~daily pass. *(Spec'd 2026-07-17; not yet built.)*
+
+**Phase 7 — Integrated MCP server**
+25. **MCP server + skilly as an OAuth 2.1 AS (§29):** a first-party Model Context Protocol server on the worker (Streamable HTTP, not leader-gated) exposing **24 curated tools** (core read / install / propose / social) and **resource templates only**; skilly becomes its own **authorization server** (open DCR, authorization-code + mandatory PKCE, resource indicators, rotating refresh tokens with reuse detection, opaque sha256-hashed tokens in the `Authorization` header) delegating login to the existing Entra session via `/oauth/authorize` in web; a `/mcp` user page (connect snippets + revocable Connections) and an Administration card with an **on/off toggle, default on, dormant-not-revoking**; “via MCP” attribution surfaced wherever a human reads agent-created content; first-`SKILL.md`-read counted as adoption through the shared `skill_installs` ledger; migrations 0063 (`oauth_clients` / `oauth_grants` / `oauth_tokens`, the `via_mcp_client` attribution columns, `record_mcp_read()`) + 0064 (the `mcp` audit source). **Prerequisite refactor (done):** the **visibility predicate**, **role resolution** and the **`git ls-remote` ref discovery** now live in `@skilly/shared` so invariants #1/#3 and the SSRF guards have one implementation across web and worker. **DONE.**
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -1442,7 +1476,7 @@ Per-skill **ownership + notification** layer. Designed to name accountable owner
 A simple, owner-facing dashboard of **view** and **install** tendencies per skill, plus a platform-wide aggregate for global admins.
 
 ### Data sources
-- **Installs** = the git **clone**, recorded in `access_log` (`source='git'`, `skill_id`, `created_at`, `actor_user_id` — null for tokenless org clones). Every clone is logged (raw activity), but the **adoption** metric is de-duplicated: **`skills.install_count` counts each `(user, skill)` at most once — a user's FIRST install only, forever, version-agnostic** (so the popularity number can't be inflated by re-cloning; §21 "unique installs"). A user's first **download** counts the same way and shares the same ledger (`skill_installs`), so download-then-install counts once. Tokenless (null-`actor_user_id`, `is_system=false`) clones are activity-only — they never touch `install_count`. **System-installation clones** (§23; null actor + `is_system=true`) count in trends/`install_counters` like any clone, and each system installation increments `install_count` **once, at first clone** (`used_at` stamping — the per-token analogue of the per-user first-install rule); they never touch the per-user `skill_installs` ledger (no related-skills co-install signal) and **never write `install_credits`**. Time-series **trends** still come from the full `access_log` (every clone), and the monthly `install_counters` stays a per-clone activity total.
+- **Installs** = the git **clone**, recorded in `access_log` (`source='git'`, `skill_id`, `created_at`, `actor_user_id` — null for tokenless org clones). Every clone is logged (raw activity), but the **adoption** metric is de-duplicated: **`skills.install_count` counts each `(user, skill)` at most once — a user's FIRST install only, forever, version-agnostic** (so the popularity number can't be inflated by re-cloning; §21 "unique installs"). A user's first **download** counts the same way and shares the same ledger (`skill_installs`), so download-then-install counts once. **A user's first `SKILL.md` read over MCP (§29) counts identically** — `record_mcp_read()` is gated by the same `skill_installs` ledger, writes `access_log` with `source='mcp_resource'`, and credits maintainers via `install_credits` under the rules below; so **clone / download / MCP read are three doors to one adoption**, counted once per `(user, skill)`, and standings cannot be farmed by switching channels. MCP resource reads are **never** listed as installations on `/installed` (§23) — those come only from used `install` tokens. Tokenless (null-`actor_user_id`, `is_system=false`) clones are activity-only — they never touch `install_count`. **System-installation clones** (§23; null actor + `is_system=true`) count in trends/`install_counters` like any clone, and each system installation increments `install_count` **once, at first clone** (`used_at` stamping — the per-token analogue of the per-user first-install rule); they never touch the per-user `skill_installs` ledger (no related-skills co-install signal) and **never write `install_credits`**. Time-series **trends** still come from the full `access_log` (every clone), and the monthly `install_counters` stays a per-clone activity total.
 - **Views** = an authenticated load of `GET /api/skills/:ns/:slug`, newly logged into append-only `usage_events` **fire-and-forget after the visibility check** (never blocks/breaks the page; never logs a view of an unseen skill, so the table can't itself leak). Raw rows, no write-time dedupe; `actor_user_id` retained for the drill-down and future unique-counts.
 
 ### Metrics & periods
@@ -1667,6 +1701,48 @@ substantive tightening over the June-2026 audit CSP; the other directives are un
 - **Trade-off (accepted):** the middleware runs on every matched request and pages that read the nonce
   render dynamically (no full static optimization) — negligible here, since the catalog is auth-gated
   and already renders dynamically per-user.
+
+### MCP server & OAuth authorization server (§29)
+Hosting an authorization server and a machine-facing API is the largest new attack surface skilly has
+added since the git gateway. The posture, in one place:
+- **Consent phishing is the primary new threat.** Mitigations: **exact-match** registered redirect URIs
+  (loopback `http://127.0.0.1` port-agnostic for CLI/desktop clients, `https` or a native app scheme
+  otherwise, **never** wildcards), **mandatory PKCE `S256`**, **resource indicators (RFC 8707)**
+  validated so a skilly token is useless elsewhere, and a consent screen naming the client, its origin
+  and the access in plain language. **Open DCR is safe precisely because consent is the gate** — a
+  registered `client_id` grants nothing until a human signs in with Entra and approves.
+- **Credentials never touch a URL.** Bearer tokens travel in the `Authorization` header and are stored
+  **sha256-hashed**; auth codes, access tokens, refresh tokens and `code_verifier` values are **never**
+  written to any log, audit payload or `system_event` message (invariant #6). This is strictly better
+  than the §23 token-in-URL install command, which does leak into shell history and committed config.
+- **Blast radius of a stolen access token** is one user's read+propose authority for at most
+  `mcp_access_token_ttl_minutes` (default 60) — far tighter than a leaked install URL, which is
+  reusable until revoked. **Refresh tokens rotate single-use with reuse detection**: replaying a
+  rotated token **revokes the entire grant** and records `mcp_refresh_reuse_detected` (§25).
+- **Privilege is never carried in the token.** Roles are re-resolved from SCIM-synced group membership
+  on **every** call (invariant #1); the token carries only `user_id` / `client_id` / `grant_id`. A user
+  losing a role loses it on their next MCP call, not at token expiry.
+- **No standing machine credential.** No client-credentials grant, no service account, and no “act as
+  user” internal secret — the last of these was explicitly rejected when the parity proxy was declined
+  (§29). Headless automation keeps using a §23 system installation.
+- **Leavers are cut off harder than for install tokens:** a non-`active` or **GDPR-erased** user has
+  **every grant and token revoked**, not merely refused. An install token is a durable artifact a
+  reinstated user may want back; a live delegation to a third-party client is not.
+- **Ingest has no MCP carve-out.** A base64 hosted proposal runs the **identical** validate → ClamAV →
+  store path as `POST /api/uploads`, under a hard `mcp_max_inline_upload_bytes` cap (default 2 MiB
+  decoded). Over-cap fails loudly; it is never silently truncated or silently unscanned.
+- **The excluded surface is enforced server-side, not by omission from a description** — review
+  decisions (closing the author-and-self-approve hole), irreversible destruction, all of
+  `/api/admin/*`, catalog governance, audit/system-log reads, direct messaging and the `system`
+  install flag have **no tool** and no reachable code path (§29 *Excluded surface*).
+- **Abuse bounds:** per-user and per-`(user, client)` rate limits with **writes held to the same limits
+  the web routes enforce** (an agent gets no more proposal throughput than a person), per-IP DCR
+  limiting, a 7-day prune of never-used client registrations, an admin **block** per client, and the
+  platform **on/off toggle**. Limiting is per-instance like the rest of skilly's (§16 #20).
+- **Accepted residual risk:** the **resources** primitive delivers bytes without a git clone — a
+  deliberate carve-out from invariant #4, governed exactly like `readme`/`download` and compensated by
+  adoption counting plus an `access_log` row per read, so agent consumption stays measurable rather
+  than invisible.
 
 ---
 
@@ -1908,6 +1984,15 @@ explicit Never)** + **reusable** + **not deleted on use/expiry**. Revocation is 
 residual `one_time`/`pat` rows. Rationale: a clone is read-only and skill-scoped, every install is
 attributable + listed + one-click revocable, so the consumer-grade reusable handle is the right
 trade for usability while keeping the blast radius (one skill, one user, read-only) tight.
+
+**§29's MCP/OAuth credentials are NOT a further carve-out — they are stricter.** Bearer tokens live in
+the `Authorization` header (never a URL), are short-lived (`mcp_access_token_ttl_minutes`, default 60),
+rotate single-use with reuse detection, are revocable per connection by the user and per client by an
+admin, and are **fully revoked** when their owner goes inactive or is erased. They live in their own
+`oauth_*` tables (§3) and never mix with `tokens`. An install token minted **through** MCP, however, is
+an ordinary personal install token governed entirely by this section — it is listed on `/installed`, it
+**survives the MCP server being switched off**, and **uninstall is the only way to revoke it**; the
+`system` flag is refused over MCP (platform-admin only, and administration is outside the MCP surface).
 
 **System installations relax the carve-out further** (two more terms): no owning user ("one
 user" in the blast radius becomes "the platform" — managed collectively by platform admins,
@@ -2244,7 +2329,12 @@ has **no** tamper-evident hash chain and **no** append-only trigger (cheap inser
   **`install_token_owner_inactive`** (a clone refused because the install token's owning user is
   not `status='active'`, §23 Gateway) as a `source='worker'`, `status=401` event. It is the only
   401 in the log and the first worker-sourced event; an ex-employee's token still being tried is a
-  signal worth surfacing, not polling noise.
+  signal worth surfacing, not polling noise. **§29 extends the same carve-out to the MCP server**
+  (also `source='worker'`): `mcp_disabled` (503), `mcp_token_invalid`, `mcp_token_expired`,
+  `mcp_refresh_reuse_detected`, `mcp_grant_revoked`, `mcp_client_blocked`, `mcp_rate_limited`,
+  `mcp_owner_inactive` and `mcp_upload_too_large`. As at the git gateway, the **client-facing response
+  never distinguishes why a credential failed** — the reason exists only in the system log — and
+  credentials are never included in the message.
 - **Capture path (primary):** a `withSystemLog(routeTemplate, handler)` wrapper records, **in the
   route's own context**, both the error **responses** a handler returns *and* errors it **throws**
   (logging the stack to stdout, recording a 500, and answering with a JSON 500). This is the reliable
@@ -2733,3 +2823,415 @@ Top to bottom, in a fixed max-width (~260px) card:
 - **Not audited.** Opening a card is a read, and a cheap one; it writes no `audit_log` row —
   consistent with every other read surface. (It does still stamp `last_seen` through the normal
   `currentAccess()` choke point, like any authenticated request.)
+
+---
+
+## 29. Integrated MCP server
+
+skilly exposes a **first-party Model Context Protocol server** so a coding agent can **connect,
+explore, and consume** the registry directly — without a human copying commands out of a browser.
+It does **two** jobs, deliberately both:
+
+1. **Hand over the install command.** A tool mints a real §23 install token and returns the
+   `npx skills add …` string; the agent runs it with its own shell. The git gateway stays the only
+   *clone* path (invariant #4) and the installation is an ordinary installation.
+2. **Serve skill content live.** Skills are exposed as **MCP resources**, so an agent can read a
+   skill's `SKILL.md` and bundled files on demand, always at the latest stable version, with nothing
+   installed anywhere.
+
+It is **not** a CLI (§1 non-goal holds — nothing is shipped to a user's machine), **not** a parity
+gateway onto `/api` (there is no generic escape hatch and no "act as user" service credential), and
+**not** an administration channel (§29 *Excluded surface*).
+
+### Shape & placement (a two-package feature, unavoidably)
+
+skilly becomes its own **OAuth 2.1 Authorization Server**, and the browser login leg needs the
+Auth.js/Entra session that only `packages/web` has. So the feature straddles both processes:
+
+| Endpoint | Process | Why there |
+|---|---|---|
+| `GET /oauth/authorize` + the consent screen | **web** | Needs the existing Entra session — a signed-in user consents in one click instead of re-authenticating |
+| `POST /oauth/register` (DCR) | **web** | Sits with the rest of the AS surface; no session needed |
+| `POST /oauth/token`, `POST /oauth/revoke` | **worker** | Called by the client machine, never a browser; belongs beside the credential validation the worker already owns |
+| `GET /.well-known/oauth-authorization-server` | **worker** | Advertised from the resource host |
+| `GET /.well-known/oauth-protected-resource` | **worker** | RFC 9728 — must be served by the resource itself |
+| `POST /mcp` (Streamable HTTP) | **worker** | Beside the git smart server and SCIM, on the same Express app |
+
+- **Transport is Streamable HTTP only.** The deprecated HTTP+SSE transport is **not** implemented.
+  Sessions are **stateless request/response** (no server-held session state beyond the OAuth token),
+  so the worker can be replicated without sticky routing.
+- **MCP serving is NOT gated on the worker's leader lock.** The lock guards batch jobs (§2); MCP is
+  request-serving, like the git server.
+- **Reverse proxy / Ingress** must route `/mcp`, `/oauth/token`, `/oauth/revoke` and both
+  `/.well-known/oauth-*` paths to the **worker**, and `/oauth/authorize` + `/oauth/register` to
+  **web** (§13; the Helm Ingress rules of §16 #19 gain the same split).
+
+### Authorization — skilly as the Authorization Server, Entra as the login
+
+- **Grant type: authorization code with PKCE (`S256` mandatory).** No implicit, no password grant.
+  **Resource indicators (RFC 8707)** are required and validated — a token minted for skilly is
+  rejected anywhere else and vice versa.
+- **Dynamic Client Registration (RFC 7591) is open.** Any MCP client self-registers and gets a
+  `client_id`; nothing works until a **human completes the Entra login and consent leg**, which is
+  the actual gate. Registration is rate-limited per IP, and a client with **no grant after 7 days**
+  is pruned by the worker's housekeeping sweep.
+- **Redirect URIs are exact-match**, registered up front. Loopback (`http://127.0.0.1:<any-port>`)
+  is permitted with **port-agnostic** matching, as MCP desktop/CLI clients require; every other
+  scheme must be `https` (custom app schemes allowed for native clients). No wildcards, ever.
+- **Consent screen** (in web, after sign-in) names the **client**, the **user**, what access is being
+  granted in plain language ("read the catalog you can already see; create proposals, ratings and
+  comments as you; mint install commands for skills you can access"), and that the grant is
+  revocable from the `/mcp` page. Approving writes an `oauth_grants` row.
+- **Scope is a single opaque `mcp` scope**, bound to the caller's own RBAC. There are deliberately
+  **no capability scopes** in v1: the boundary is the user's role, re-resolved per call, not a string
+  in a token. *(Granular scopes are a future spec change, not an implementation detail.)*
+- **Roles are re-resolved from SCIM-synced group membership on EVERY call** (invariant #1). The token
+  carries only `user_id`, `client_id`, `grant_id` — never roles, never namespace lists.
+- **Tokens are opaque random strings, stored as sha256 hashes**, presented in the
+  `Authorization: Bearer` header — **never in a URL**. This is *stricter* than the §23 install-token
+  regime, not another carve-out from invariant #6.
+  - **Access token TTL** = platform setting `mcp_access_token_ttl_minutes` (**5–1440, default 60**).
+  - **Refresh tokens rotate on every use**, single-use, with **reuse detection**: presenting a
+    already-rotated refresh token **revokes the whole grant** and records a `system_event`.
+  - **Refresh token idle lifetime** = platform setting `mcp_refresh_token_ttl_days` (**1–365,
+    default 90**), sliding on each rotation. Governed independently of
+    `install_max_ttl_months` (§23), which continues to govern install tokens only.
+- **Failure responses:** `401` with a `WWW-Authenticate: Bearer resource_metadata="…"` header
+  pointing at the protected-resource metadata (so a client can discover how to authorize),
+  `403` for an authenticated call the caller's role doesn't permit.
+- **Leaver handling:** a user going non-`active` or being **GDPR-erased** (§4/§5) **revokes every
+  grant and token** they hold — unlike §23 install tokens, which merely start being refused. The
+  distinction is deliberate: an install token is a durable artifact a user may want back on
+  reinstatement; an OAuth grant is a live delegation to a third-party client.
+- **No client-credentials / machine path in v1.** A headless agent with no browser uses a
+  **system installation** (§23) and the git gateway, as today. *(Accepted gap: CI cannot use the MCP
+  surface. Revisit only with an explicit spec change — a machine credential with catalog-wide read
+  and no visibility subject is the single riskiest thing this feature could grow.)*
+
+### Data model (migration 0063)
+
+#### `oauth_clients`
+- `id` (uuid PK), `client_id` (opaque, unique), `client_name`, `client_uri`, `logo_uri`,
+  `redirect_uris` (text[]), `token_endpoint_auth_method` (`none` for public clients — the
+  MCP norm), `software_id`, `software_version`, `registered_ip`, `created_at`, `last_used_at`,
+  `blocked_at` (nullable — an admin block, §29 *Platform toggle*).
+- **Public clients only in v1** (`none`): MCP desktop/CLI clients cannot keep a secret. PKCE is the
+  compensating control.
+
+#### `oauth_grants`
+- `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `client_id` (FK → `oauth_clients`,
+  `ON DELETE CASCADE`), `scope`, `created_at`, `last_used_at`, `revoked_at` (nullable),
+  `revoked_by_user_id` (nullable FK, `ON DELETE SET NULL`).
+- **One live grant per `(user_id, client_id)`** (partial unique index where `revoked_at IS NULL`) —
+  re-consenting refreshes the existing grant rather than piling rows up. This row **is** the
+  connection the user sees and revokes on the `/mcp` page.
+
+#### `oauth_tokens`
+- `id` (uuid PK), `grant_id` (FK → `oauth_grants`, `ON DELETE CASCADE`), `kind`
+  (`code` | `access` | `refresh`), `hashed_token`, `expires_at`, `used_at` (auth codes and rotated
+  refresh tokens), `rotated_from_id` (nullable self-FK — the rotation lineage that makes reuse
+  detection possible), `code_challenge`, `redirect_uri`, `resource` (the two PKCE/RFC-8707 fields
+  are `kind='code'` only), `created_at`.
+- **One table, three kinds** — an auth code is a 60-second single-use token with the same lifecycle
+  needs as the others, so it does not earn its own table. Expired/used rows are swept by the
+  worker's housekeeping sweep (rotation lineage retained for `mcp_refresh_token_ttl_days`, then
+  pruned).
+- Separate from **`tokens`** (§3), whose semantics are now install-only. No enum is widened, no
+  column is reused; the two regimes never share a row.
+
+#### `audit_source` (migration 0064)
+- The enum gains **`mcp`**, so a governance row written from the MCP surface is queryable as such in
+  the audit viewer. It ships as its OWN migration because `ALTER TYPE … ADD VALUE` cannot run inside
+  a transaction that also uses the new value — the same shape as 0007, which added `worker`.
+
+#### `platform_settings` keys (§3)
+- `mcp_enabled` (boolean, **default `true`**), `mcp_access_token_ttl_minutes` (default 60),
+  `mcp_refresh_token_ttl_days` (default 90), `mcp_max_inline_upload_bytes` (default **2 MiB
+  decoded**), `mcp_max_resource_bytes` (default **1 MiB** per file read).
+
+### The shared-code decision (and the duplication we accepted)
+
+The MCP tools are implemented **directly on the worker against Postgres** — we explicitly declined
+both a `@skilly/shared` migration of the whole query layer and an internal "acting as user" proxy
+onto web's `/api`. The consequence is real: **catalog read queries exist a second time.**
+
+To bound the risk, exactly two things **MUST** be extracted into `@skilly/shared` and consumed by
+both processes — they are the ones where a divergence is a security incident, not a bug:
+
+1. **The visibility predicate** (invariant #3) — one implementation (`skillVisibilityWhere` in
+   `@skilly/shared/visibility`), one test suite, used by web's catalog queries and by every MCP tool
+   and resource read. Inlining `visibility = 'org' or namespace_id = …` anywhere again is exactly
+   the regression this extraction exists to prevent.
+2. **Role resolution** from `role_mappings` × SCIM group membership (invariant #1) — the queries and
+   the assembly (`accessFromRows`, including the bootstrap-admin escape hatch) are shared, so a rule
+   can't be honored in one tier and forgotten in the other.
+3. **`git ls-remote` ref discovery** (`@skilly/shared/remote-refs`) — an SSRF-sensitive sink whose URL
+   validator, DNS private-IP re-check, transport allowlist, no-redirect and timeout guards must exist
+   exactly once now that `list_upstream_refs` reaches it too.
+
+Everything else (shaping, sorting, facets, pagination) may be written twice. **Accepted trade-off:**
+result *shapes* may drift between `/api` and the MCP tools; the *access decisions* cannot.
+
+### Tool surface — 24 curated tools, no escape hatch
+
+Every tool: authenticated via the bearer token, **RBAC re-resolved**, **visibility-filtered**,
+rate-limited, and — for writes — audited with the MCP marker (§29 *Attribution*). Tools are named
+`skilly_*` on the wire; the short names below are the spec's shorthand.
+
+**Core read (6)**
+| Tool | Behavior |
+|---|---|
+| `search_skills` | The §10 catalog search: same substring predicate, same facets (`category`, `tool`, `source`), same sorts, same visibility filter. Paginated. |
+| `get_skill` | §15 detail: metadata, versions, rating aggregate, maintainers, `latestInstallable`, `publishing`, external-source panel data. |
+| `get_skill_content` | Raw `SKILL.md` for a version (default: latest stable). The tool twin of the resource read, with identical counting (§29 *Adoption*). |
+| `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
+| `get_skill_file` | One file from a version's bundle. Text inline; binary as a base64 blob; over `mcp_max_resource_bytes` → a clear error naming the `download` route. |
+| `get_registry_metadata` | Categories, tool/harness enum, the namespaces the caller can see, and the platform limits an agent needs before proposing (max bundle bytes, inline upload cap, `require_review` per namespace). |
+
+**Install (4)**
+| Tool | Behavior |
+|---|---|
+| `install_skill` | Mints a **personal** §23 install token (`semver?`, `expiresAt?` honoring `install_max_ttl_months`) and returns the `npx skills add …` command. **`system: true` is refused** — system installations are platform-admin-only and administration is out of surface. **409** for a not-yet-`git_published` version, exactly as `POST /api/skills/:ns/:slug/install`. |
+| `list_installed_skills` | The caller's own installations with their derived state (§23). `?scope=system` has no MCP equivalent. |
+| `uninstall_skill` | Hard-deletes one of the caller's own install tokens. *(This is not "irreversible destruction" in the §29 exclusion sense — it destroys a credential the caller owns, not catalog content or history; install counts are preserved per §23.)* |
+| `reactivate_install` | Sets a new `expires_at` on the caller's inactive install (§23). |
+
+**Propose (9)**
+| Tool | Behavior |
+|---|---|
+| `check_duplicate` | The §8 duplicate-check, same canonicalizers (`normalizeOriginUrl` / `normalizeSubdir`). |
+| `list_upstream_refs` | `GET /api/pointer/refs` — upstream ref autocomplete for a pointer proposal. |
+| `propose_pointer_skill` | A pointer proposal: origin URL + **pinned ref** + subdir + metadata. Mirroring, scanning and validation are the existing ingest path, unchanged. |
+| `propose_hosted_skill` | A hosted proposal with the bundle **base64-encoded in the tool arguments**, capped at `mcp_max_inline_upload_bytes` (see below). |
+| `list_my_proposals` | The caller's own submissions and their states. |
+| `get_proposal` | One proposal the caller may see, incl. scan report and review conversation. |
+| `revise_proposal` | The §8 proposer mid-review edit (no state change). |
+| `resubmit_proposal` | `changes_requested → under_review`. |
+| `post_proposal_message` | A message in the proposal's review conversation (§24), so an agent can answer a reviewer. Mention tokens are validated identically to the web composer. |
+
+**Both propose tools always create a PROPOSAL** — never a direct publish, even for a member of a
+`require_review = false` namespace who could publish straight from the browser (§8). An agent
+authors; a human decides. The tool descriptions say so, so the boundary isn't a surprise.
+
+**Social (5)**
+| Tool | Behavior |
+|---|---|
+| `rate_skill` | Set (1–5) or clear (`null`) the caller's own rating (§18). |
+| `get_skill_discussion` | Paginated skill discussion (§24). |
+| `post_skill_comment` | Post to a skill discussion, optionally with `contextSemver` (§24). |
+| `list_skill_requests` | The §26 Requested-skills list, with its own filters. |
+| `request_skill` | File a skill request (§26). |
+
+#### Excluded surface (explicit, and enforced server-side — these tools do not exist)
+- **Review decisions** — `accept` / `reject` / `request-changes` are unreachable via MCP. This closes
+  the self-approval hole where one identity authors a proposal and approves it agent-speed. A
+  namespace admin who wants to accept a proposal opens the browser.
+- **Irreversible destruction** — permanent skill delete, proposal delete, GDPR erase, audit trim.
+- **All of `/api/admin/*`** — settings, namespaces, role mappings, the email channel, user search,
+  presence.
+- **Catalog governance** — yank, archive, promote, feature/un-feature, mark-Official.
+- **Audit and system-log reads** (§11/§25), and **direct person-to-person messaging** (§24 chats).
+- **The `system` install flag** (§23).
+
+**Accepted trade-off — tool count.** 24 tool definitions is more than the ~10–15 a client comfortably
+carries alongside its other servers, and tool-selection accuracy degrades with surface size. This is
+the price of the four capability groups; **24 is the ceiling** — a 25th tool requires a spec change,
+and the first response to pressure for more surface is to fold, not add.
+
+### Resources — templates only, never an enumeration
+
+- `resources/list` advertises **resource templates and nothing else**. It never enumerates the
+  catalog: many clients pull listed resources straight into context, and a few-hundred-skill registry
+  would either flood the agent or turn every list call into a filtered catalog scan.
+- **Templates:**
+  - `skilly://skill/{namespace}/{slug}` → the **latest stable** version's `SKILL.md`
+    (`text/markdown`).
+  - `skilly://skill/{namespace}/{slug}@{semver}` → that version's `SKILL.md`.
+  - `skilly://skill/{namespace}/{slug}@{semver}/{path}` → one file from that version's bundle
+    (`{semver}` may be the literal `latest`).
+- **Discovery is `search_skills`**, not the resource list. The tool returns the resource URI for each
+  hit so the agent can go straight to a read.
+- **Every read is gated exactly like the detail page** (invariant #3): visibility-filtered, **archived
+  skills owner-only** (§7), **yanked versions readable only by exact pin** — with the response
+  carrying the same warn-and-proceed notice the git path uses (§9) — and `latest` never resolving to
+  a yanked version.
+- **Pointer skills read from the skilly-stored mirror**, never upstream (§6/§10) — a resource read
+  makes no outbound request, ever.
+- **Caps:** a file over `mcp_max_resource_bytes` returns a clear error naming the `download` route
+  rather than a truncated body. Binary files come back as base64 blobs per the MCP spec.
+- **Cached on immutability:** a pinned `(skill, semver, path)` read is cacheable indefinitely
+  (invariant #2); `latest` reads resolve the version first, then hit the same cache.
+
+**Prompts are not exposed in v1.** MCP prompts surface in clients as user-invoked commands, which
+would duplicate `/quick-start` (§23) with a second thing to keep in sync for no capability the tools
+don't already provide. *(Deferred, not rejected.)*
+
+### Hosted proposals — bytes through a JSON tool call
+
+- `propose_hosted_skill` takes the bundle **base64-encoded inline**, capped at
+  `mcp_max_inline_upload_bytes` (**default 2 MiB decoded**, deliberately far below `max_bundle_bytes`
+  — base64 inflates ~33% and no MCP client will carry a large bundle in a tool argument).
+- **Over the cap fails loudly**, naming the browser upload path (§6 single-shot or chunked). There is
+  **no chunked MCP upload** in v1: a stateful begin/part/complete protocol driven by a model is a
+  reliable source of orphaned sessions for a case the browser already handles.
+- **The ingest path is byte-identical to `POST /api/uploads`** — same `validate` (blocking), same
+  **ClamAV scan**, same `scan_reports`, same object-store write, same `max_bundle_bytes` check. There
+  is **no scan carve-out for MCP**, and there never will be.
+
+### Attribution — "via MCP" is visible, not just audited
+
+A proposal, review message, discussion comment, rating or skill request created through MCP is
+**marked as agent-originated wherever a human reads it**, because §8's review load and §24's threads
+depend on knowing:
+
+- The write records the **MCP path and the registered client name** (e.g. "Claude Code") alongside
+  the acting user.
+- **Surfaces:** a small **"via MCP · &lt;client&gt;"** tag on the proposal detail header and in the
+  review queue row, on discussion/review message bubbles, on a §26 request card, and on the caller's
+  own rating in the skill detail page's rating control.
+- **The acting user is still the human.** MCP creates no synthetic identity: the name, avatar and
+  authority are the user's, and the marker says how the act arrived, not who is responsible.
+- **Audit** rows for MCP writes carry it too (§11).
+
+### Adoption, analytics & counting
+
+- **A first `SKILL.md` read counts as adoption**, on the same rule as a first download (§10/§21).
+  A new `record_mcp_read()` DB function mirrors `record_skill_download()` exactly: it is gated by the
+  **shared per-`(user, skill)` adoption ledger `skill_installs`** (§21) and, **only on a fresh
+  adoption**, bumps `skills.install_count` + the month's `install_counters`, writes an `access_log`
+  row with **`source='mcp_resource'`**, and writes **`install_credits`** for the skill's explicit
+  maintainers under the §21 attribution rules (self-credit excluded). Because the gate is the shared
+  ledger, **clone / download / MCP read are three doors to one fact** — a user who downloads a skill
+  and later reads it via MCP is counted **once**, and the leaderboard cannot be farmed by switching
+  channels. Repeat reads are no-ops for counting; every read is still an `access_log` row (raw
+  activity), exactly like every clone.
+- **Bundle-file reads do not count** — only the `SKILL.md` read does. Reading six files is one
+  adoption, not six.
+- **Resource reads are never listed as installations** on `/installed` (§23) — installations come
+  only from used `install` tokens.
+- **Co-install / related-skills (§10) and the leaderboard (§21) inherit this for free**, since both
+  read the same adoption signal.
+- **Prometheus** (§16 #15) gains counters for MCP tool calls (by tool + outcome), resource reads,
+  token mints/rotations, and DCR registrations.
+
+### Rate limiting
+
+- Per-**user** and per-**(user, client)** buckets in the worker's `rateLimit.ts`, so one misbehaving
+  agent cannot consume a user's whole allowance.
+- **Classes:** reads (search / detail / resource) generous; **writes** (propose, comment, rate,
+  request) at the **same limits the web routes already enforce** — an agent gets no more proposal
+  throughput than a person; `install_skill` at the existing install-mint limit; **DCR** per-IP.
+- **A per-IP flood guard in front of both mounts** (default 600 req/min). The MCP and OAuth routes
+  sit *before* the worker's app-wide limiter — 100 req/15 min per IP is sized for git + SCIM and
+  would throttle a working agent in seconds — but an UNAUTHENTICATED caller never reaches the
+  per-user buckets, so the 401 and token-exchange paths need their own ceiling.
+- **Per-instance, like the rest of skilly's limiting** (§16 #20) — a shared store remains the
+  documented next upgrade.
+
+### Audit & telemetry
+
+- **Writes → `audit_log`** (§11), with the actor snapshot carrying the **MCP marker and client name**.
+  The action names are the existing ones (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is
+  a proposal, not a new species of governance object.
+- **Reads are not audited** — consistent with every other read surface. They land in
+  **`access_log`** (content reads, `source='mcp_resource'`) and **`system_event`** (§25) for failures.
+- **`system_event` error codes** (new, `source='worker'`): `mcp_disabled`, `mcp_token_invalid`,
+  `mcp_token_expired`, `mcp_refresh_reuse_detected`, `mcp_grant_revoked`, `mcp_client_blocked`,
+  `mcp_rate_limited`, `mcp_owner_inactive`, `mcp_upload_too_large`. As with the §23 gateway's
+  `install_token_owner_inactive`, these are a deliberate carve-out from §25's "401 is excluded" rule,
+  and the client-facing response **never** distinguishes *why* a credential failed.
+- **Audited OAuth events** (governance, `audit_log`): `mcp.grant_created`,
+  `mcp.grant_revoked` (by the user or an admin), `mcp.client_blocked` / `mcp.client_unblocked`,
+  and `settings.updated` for the toggle. **Token mints and rotations are NOT audited** — they are
+  high-volume machine traffic and belong to telemetry, exactly as personal install-token use does
+  (§11).
+- **Never logged:** bearer tokens, refresh tokens, auth codes, `code_verifier`, or any
+  `Authorization` header value — in any log, audit payload, or `system_event` message.
+
+### Platform toggle (Administration card)
+
+- A **platform-admin card** — *Administration → MCP server* — with a single **on/off toggle**,
+  **`mcp_enabled` default `true`** (the feature ships on). The card also shows the server URL, the
+  count of live grants, the count of registered clients, and a **registered-clients list** with a
+  per-client **block/unblock** control. The four numeric settings are editable there too (access-
+  and refresh-token lifetimes, the inline-upload cap and the single-read cap) — every MCP setting is
+  reachable from the UI, so none of them is DB-only. Each save is validated server-side against the
+  shared bounds and **audited** as `settings.updated`.
+- **Off means dormant, not revoked.** Grants, refresh tokens and registered clients all survive
+  untouched; every `/mcp`, `/oauth/*` and `/.well-known/oauth-*` request returns a clear
+  **"MCP is disabled on this registry"** error (`503`, plus the `mcp_disabled` `system_event`), and
+  everything resumes on re-enable with no re-authorization. A mistaken flip costs nobody their
+  consent. **Both flips are audited** (`settings.updated`).
+- **There is no "revoke all" button.** Per-client **block** and per-user **revoke** (on `/mcp`) cover
+  the incident case at the right granularity; a one-click org-wide purge is a footgun whose only
+  outcome is re-onboarding everybody. *(Deferred deliberately — revisit if an incident proves the
+  need.)*
+- **Turning MCP off cannot revoke an install token minted through MCP.** Those are ordinary §23
+  install tokens and keep cloning through the git gateway; the toggle governs the MCP surface, not
+  skills already installed through it. Uninstall (§23) is the control for those.
+- While off, the **`/mcp` page** stays reachable and renders a disabled state explaining that a
+  platform admin has turned the server off — it does not 404, and it still lists the user's existing
+  connections so they can revoke them.
+
+### The `/mcp` page (user surface)
+
+Reachable from the **account menu**, above *Installed skills* (§23) — **any authenticated user**,
+since consumption is universal.
+
+- **Connect** — the server URL, and copy-paste configuration for **Claude Code**
+  (`claude mcp add --transport http skilly <url>`), **Claude Desktop** (JSON snippet) and
+  **VS Code**. No credential appears in any snippet: the client registers itself and the user
+  completes the browser consent leg. *(A genuine improvement on §23's token-in-URL install command,
+  which does leak into shell history and committed config.)*
+- **Connections** — the §23 `/installed` pattern applied to `oauth_grants`: one row per live grant
+  with the client name, when it was authorized, **last used**, and a **Revoke** button (immediate;
+  kills the grant and every token under it, audited `mcp.grant_revoked`). Revoking does **not**
+  touch install tokens the client minted — those are listed on `/installed`, where they belong.
+- **What agents can do** — a short, honest summary of the tool surface and the exclusions, so a user
+  consenting knows what they are handing over.
+
+### Security posture (see also §22)
+
+- **The resources primitive is a carve-out from invariant #4**, stated plainly: bytes reach a consumer
+  without a git clone. It is a *governed* path — authenticated, RBAC-resolved, visibility-filtered,
+  archived/yanked-aware, mirror-only for pointers, capped, rate-limited and access-logged — and it is
+  the same category of path as `/api/.../readme` and `/api/.../download`, which already serve bytes.
+  What is new is the **volume and the consumer**: an agent reading a working set, not a person
+  clicking a button. The compensating control is that a read counts as adoption and lands in
+  `access_log`, so consumption stays measurable.
+- **Consent phishing** is the main new attack: exact-match redirect URIs, mandatory PKCE, a consent
+  screen naming the client and its origin, and open DCR being harmless *because* consent is the gate.
+- **Blast radius of a stolen bearer token** is one user's read+propose authority for at most
+  `mcp_access_token_ttl_minutes` — bounded far more tightly than a leaked install URL, which is
+  reusable until revoked.
+- **DCR abuse** is bounded by per-IP rate limiting, the 7-day unused-client prune, and the admin
+  block list.
+
+### Non-functional & testing
+
+- **Tests ship with the code** (CLAUDE.md step 4): unit tests for the extracted visibility predicate
+  and role resolution (both processes exercising one implementation), PKCE/rotation/reuse-detection
+  and TTL logic; integration tests for the full authorization-code flow, every tool's RBAC and
+  visibility behavior (**including negative cases: a restricted skill must be invisible to
+  `search_skills`, `get_skill`, and every resource template for an outsider**), the base64 upload cap
+  and scan parity, and the toggle's dormant semantics; **MCP protocol conformance** against a real
+  client; e2e for connect → search → install → propose.
+- `APP_VERSION` **minor** bump (new endpoints, new pages, a migration) and a matching `changelog.ts`
+  entry, per CLAUDE.md.
+
+### Accepted trade-offs (consolidated)
+
+1. **skilly now operates an OAuth AS** — client registry, PKCE, consent, token store, rotation,
+   revocation, metadata. This is the largest single piece of the feature, larger than the MCP server
+   itself.
+2. **A two-package feature** (`/oauth/authorize` in web, everything else on the worker) with a proxy
+   split to match — accepted because the alternative is a second login implementation.
+3. **Catalog read queries exist twice** (web and worker). Bounded by extracting the visibility
+   predicate and role resolution into `@skilly/shared`; result shapes may still drift.
+4. **24 tools** is above the comfortable client budget, and is a hard ceiling.
+5. **Agent ratings enter §18's Bayesian aggregate** — marked "via MCP", not excluded or weighted.
+6. **Agent-paced writes meet human-paced review** (§8) and human-read threads (§24); web-equal rate
+   limits and visible attribution are the only mitigations.
+7. **No headless/CI path** to the MCP surface in v1 — system installations (§23) remain the machine
+   story.
+8. **No chunked MCP upload** — hosted bundles above 2 MiB decoded must go through the browser.

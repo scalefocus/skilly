@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useApi, Pill, EmptyState, ScrollToTop } from "../../../components/ui";
+import { useApi, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../../components/ui";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { TagInput } from "../../../components/TagInput";
 import { Markdown } from "../../../components/Markdown";
@@ -58,6 +58,8 @@ interface Detail {
   decisionReason: string | null; materializedVersionId: string | null; createdAt: string;
   revisions: Revision[]; scanReport: { severity: string | null; status: string; findings: Finding[]; createdAt: string } | null;
   caps: { isReviewer: boolean; isSubmitter: boolean }; allowedActions: string[];
+  /** §29: the MCP client that submitted this, or null for a browser submission. */
+  viaMcpClient?: string | null;
   submitterCard: SubmitterCard | null;
   conversationId: string | null;
   duplicate: { namespaceSlug: string; skillSlug: string; title: string } | null;
@@ -442,6 +444,8 @@ function ProposalDetailInner() {
         <span className="chip chip-accent">v{data.proposedSemver}</span>
         <Pill tone={STATE_TONE[data.state] ?? "muted"}>{data.state.replace("_", " ")}</Pill>
         <span className="chip">{data.targetSkillId ? "new version" : "new skill"}</span>
+        {/* §29 attribution — the reviewer sees, on the proposal itself, that an agent submitted it. */}
+        <ViaMcp client={data.viaMcpClient} />
       </div>
       <h1 className="page-title" style={{ fontSize: "clamp(28px,4vw,40px)" }}>{latest?.payload.metadata.title ?? "Proposal"}</h1>
 

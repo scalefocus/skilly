@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useApi, useEnterKey, SkeletonGrid, EmptyState, ScrollToTop, Pill } from "../../components/ui";
+import { useApi, useEnterKey, SkeletonGrid, EmptyState, ScrollToTop, Pill, ViaMcp } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
 import { useDateFmt } from "../../components/DateFormat";
@@ -28,6 +28,7 @@ export interface RequestEntry {
   categories: string[];
   requesterUserId: string;
   requesterName: string;
+  viaMcpClient?: string | null;
   requesterAvatar: string | null;
   createdAt: string;
   /** Present on every row; only "open" or "fulfilled" ever show up here — withdrawn/removed hard-
@@ -76,6 +77,8 @@ function RequestCard({ r, index, showState }: { r: RequestEntry; index: number; 
           <UserBubble name={r.requesterName} avatar={r.requesterAvatar} userId={r.requesterUserId} size={20} />
           {r.requesterName}
         </span>
+        {/* §29 attribution: a request an agent filed on someone's behalf says so. */}
+        <ViaMcp client={r.viaMcpClient} />
         <span className="muted mono" style={{ marginLeft: "auto", fontSize: 11 }}>asked {fmt.date(r.createdAt)}</span>
       </div>
     </Link>

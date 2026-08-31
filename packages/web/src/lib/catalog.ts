@@ -1,6 +1,6 @@
 // Catalog read helpers (web). SKILLY_SPEC.md §6, §7, §10.
 import { pool } from "./db";
-import { resolveLatest, resolveDownloadExt, type EffectiveAccess } from "@skilly/shared";
+import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, type EffectiveAccess } from "@skilly/shared";
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
 
@@ -172,10 +172,12 @@ export async function searchSkills(
     where.push("s.status = 'active'");
   }
 
-  if (!access.isPlatformAdmin) {
-    const nsIds = [...access.namespaceRoles.keys()];
-    params.push(nsIds);
-    where.push(`(s.visibility = 'org' or s.namespace_id = any($${params.length}::uuid[]))`);
+  {
+    // Invariant #3 via the ONE shared predicate (@skilly/shared skillVisibilityWhere) — the same
+    // implementation the worker's MCP tools use, so the two tiers can never disagree about who can
+    // see what (§29). Never inline this predicate again.
+    const vis = skillVisibilityWhere(access, params);
+    if (vis) where.push(vis);
   }
   // Free-text search is substring ILIKE (NOT full-text), so the catalog grid and the header
   // dropdown match IDENTICALLY and respond to partial words as you type (§10). Trade-off: no
@@ -338,9 +340,12 @@ export interface RelatedSkillsResult {
 export async function relatedSkills(access: EffectiveAccess, skillId: string, viewerUserId: string | null, show = 3): Promise<RelatedSkillsResult> {
   const params: unknown[] = [skillId];
   const where: string[] = ["rs.skill_id = $1", "s.status = 'active'"];
-  if (!access.isPlatformAdmin) {
-    params.push([...access.namespaceRoles.keys()]);
-    where.push(`(s.visibility = 'org' or s.namespace_id = any($${params.length}::uuid[]))`);
+  {
+    // Invariant #3 via the ONE shared predicate (@skilly/shared skillVisibilityWhere) — the same
+    // implementation the worker's MCP tools use, so the two tiers can never disagree about who
+    // can see what (§29). Never inline this predicate again.
+    const vis = skillVisibilityWhere(access, params);
+    if (vis) where.push(vis);
   }
   params.push(viewerUserId);
   const viewerIdx = params.length;
@@ -448,9 +453,10 @@ export async function suggestSkills(access: EffectiveAccess, q: string, limit = 
     // suggestions (§24): the result must be org-visible, regardless of the searching user's
     // own namespace access.
     where.push(`s.visibility = 'org'`);
-  } else if (!access.isPlatformAdmin) {
-    params.push([...access.namespaceRoles.keys()]);
-    where.push(`(s.visibility = 'org' or s.namespace_id = any($${params.length}::uuid[]))`);
+  } else {
+    // Invariant #3 via the shared predicate (see the note in searchSkills).
+    const vis = skillVisibilityWhere(access, params);
+    if (vis) where.push(vis);
   }
   // Same substring predicate + name-match expression as the catalog grid (§10) so the dropdown's
   // 5 results are a true prefix of what the catalog shows for the same query.
@@ -491,9 +497,12 @@ export async function listFacets(access: EffectiveAccess): Promise<Facets> {
 async function computeFacets(access: EffectiveAccess): Promise<Facets> {
   const params: unknown[] = [];
   const where: string[] = ["s.status = 'active'"];
-  if (!access.isPlatformAdmin) {
-    params.push([...access.namespaceRoles.keys()]);
-    where.push(`(s.visibility = 'org' or s.namespace_id = any($${params.length}::uuid[]))`);
+  {
+    // Invariant #3 via the ONE shared predicate (@skilly/shared skillVisibilityWhere) — the same
+    // implementation the worker's MCP tools use, so the two tiers can never disagree about who
+    // can see what (§29). Never inline this predicate again.
+    const vis = skillVisibilityWhere(access, params);
+    if (vis) where.push(vis);
   }
   const clause = where.join(" and ");
 

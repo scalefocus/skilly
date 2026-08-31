@@ -40,6 +40,10 @@ export interface MessageView {
   id: string; authorId: string; authorName: string; authorAvatar: string | null; mine: boolean; body: string; createdAt: string;
   /** "Original Requester" tag (§26) — set only on a skill request's own messages. */
   authorBadge?: string;
+  /** §29: the MCP client that posted this on the author's behalf, or null/absent when a person
+   *  typed it in the browser. Rendered as a small "via MCP · <client>" tag on the bubble — a
+   *  reader of a review thread needs to know whether they're talking to a person or an agent. */
+  viaMcpClient?: string | null;
 }
 export interface ThreadView {
   id: string; title: string; href: string | null; canPost: boolean; closed: boolean; messages: MessageView[]; peerName: string | null; peerAvatar: string | null; peerUserId: string | null;
@@ -467,8 +471,8 @@ export async function getThread(access: Access, conversationId: string): Promise
   // Direct: the other party; for a self-thread (no other party) fall back to your own identity.
   const peer = conv.ctx ? null : ((await otherParticipant(conversationId, access.userId)) ?? (await userIdentity(access.userId)));
   const title = conv.ctx ? titleOfCtx(conv.ctx) : peer?.name ?? "Direct message";
-  const { rows } = await pool.query<{ id: string; author_id: string; display_name: string; avatar: string | null; body: string; created_at: string }>(
-    `select m.id, m.author_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar, m.body, m.created_at
+  const { rows } = await pool.query<{ id: string; author_id: string; display_name: string; avatar: string | null; body: string; created_at: string; via_mcp_client: string | null }>(
+    `select m.id, m.author_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar, m.body, m.created_at, m.via_mcp_client
        from messages m join users u on u.id = m.author_id
       where m.conversation_id = $1 order by m.created_at asc`,
     [conversationId],
@@ -489,6 +493,7 @@ export async function getThread(access: Access, conversationId: string): Promise
     mentionContext: conv.ctx?.kind === "proposal" ? `proposal:${conv.ctx.proposalId}` : null,
     messages: rows.map((m) => ({
       id: m.id, authorId: m.author_id, authorName: m.display_name, authorAvatar: m.avatar, mine: m.author_id === access.userId, body: m.body, createdAt: m.created_at,
+      viaMcpClient: m.via_mcp_client,
       // "Original Requester" tag (§26) — only meaningful in a request's thread, only on the requester's own messages.
       ...(conv.ctx?.kind === "request" && m.author_id === conv.ctx.requesterId ? { authorBadge: "Original Requester" } : {}),
     })),
@@ -606,8 +611,8 @@ export async function getSkillDiscussion(
   if (!conversationId) return { conversationId: null, count: 0, archived: skill.archived, canPost, canModerate, messages: [], hasMore: false, mentions: {}, mentionContext };
 
   const [{ rows }, count] = await Promise.all([
-    pool.query<{ id: string; author_id: string; display_name: string; avatar: string | null; body: string; context_semver: string | null; created_at: string }>(
-      `select m.id, m.author_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar, m.body, m.context_semver, m.created_at
+    pool.query<{ id: string; author_id: string; display_name: string; avatar: string | null; body: string; context_semver: string | null; created_at: string; via_mcp_client: string | null }>(
+      `select m.id, m.author_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar, m.body, m.context_semver, m.created_at, m.via_mcp_client
          from messages m join users u on u.id = m.author_id
         where m.conversation_id = $1 order by m.created_at desc, m.id desc limit $2 offset $3`,
       [conversationId, limit + 1, offset],
@@ -629,6 +634,7 @@ export async function getSkillDiscussion(
     messages: page.map((m) => ({
       id: m.id, authorId: m.author_id, authorName: m.display_name, authorAvatar: m.avatar,
       mine: m.author_id === access.userId, body: m.body, createdAt: m.created_at, contextSemver: m.context_semver,
+      viaMcpClient: m.via_mcp_client,
     })),
   };
 }

@@ -14,7 +14,7 @@
 // admins can hard-delete any comment. A `#discussion` fragment auto-expands the card for that
 // view (without touching the stored preference) and scrolls it into view.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pill } from "../../../../components/ui";
+import { Pill, ViaMcp } from "../../../../components/ui";
 import { UserBubble } from "../../../../components/UserBubble";
 import { Markdown } from "../../../../components/Markdown";
 import { EmojiPicker } from "../../../../components/EmojiPicker";
@@ -42,6 +42,8 @@ interface DiscussionMessage {
   body: string;
   createdAt: string;
   contextSemver: string | null;
+  /** §29: the MCP client that posted this on the author's behalf, or null when a person did. */
+  viaMcpClient?: string | null;
 }
 interface Thread {
   conversationId: string | null;
@@ -343,6 +345,7 @@ export function SkillDiscussion({
                         <span style={{ fontSize: 13, fontWeight: 600 }}>{m.mine ? "You" : m.authorName}</span>
                         {m.contextSemver && <VersionPill semver={m.contextSemver} yanked={yankedSet.has(m.contextSemver)} />}
                         <span className="muted mono" style={{ fontSize: 11 }}>{fmt.dateTime(m.createdAt)}</span>
+                        <ViaMcp client={m.viaMcpClient} />
                         {thread.canModerate && (
                           <button type="button" className="btn-ghost mono" style={{ fontSize: 11, marginLeft: "auto" }} onClick={() => void remove(m)}>
                             delete

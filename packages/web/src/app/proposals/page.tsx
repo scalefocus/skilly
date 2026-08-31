@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useApi, useEnterKey, Pill, EmptyState, ScrollToTop } from "../../components/ui";
+import { useApi, useEnterKey, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 
@@ -19,6 +19,7 @@ interface ProposalRow {
   title: string | null;
   createdAt: string;
   submittedBy: string;
+  viaMcpClient: string | null;
 }
 // Initial GET: the caller's own submissions (whole) + whether the review tab is shown.
 interface MetaResponse { mine: ProposalRow[]; canReview: boolean }
@@ -260,6 +261,9 @@ function ProposalsInner() {
                   </div>
                   <div className="sub" style={{ fontSize: 11.5, color: "var(--faint)" }}>
                     {tab === "mine" ? "submitted" : `proposed by ${p.submittedBy}`} · <span className="mono">{fmt.dateTime(p.createdAt)}</span>
+                    {/* §29: an agent-submitted proposal is flagged here, so a reviewer can weigh it
+                        knowing it was authored through MCP rather than typed by a person. */}
+                    {p.viaMcpClient && <> · <ViaMcp client={p.viaMcpClient} /></>}
                   </div>
                 </div>
                 <Pill tone={STATE_TONE[p.state]}>{p.state.replace("_", " ")}</Pill>

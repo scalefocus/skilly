@@ -25,6 +25,8 @@ export interface SkillRequestView {
   updatedAt: string;
   /** Set on fulfilled requests: where the built skill lives + who built it. */
   fulfilled: { namespaceSlug: string; skillSlug: string; byName: string | null } | null;
+  /** §29: the MCP client that filed this on the requester's behalf, or null when a person did. */
+  viaMcpClient: string | null;
   /** List only (listOpenRequests): this request is new to the caller — posted since they last
    *  opened Requested skills. Keyed on created_at only (like the catalog's "new" tag) — editing an
    *  already-seen request never re-flags it. No distinction by who posted it (§26). Undefined from
@@ -35,7 +37,7 @@ export interface SkillRequestView {
 const VIEW_SELECT = `
   select r.id, r.title, r.description, r.usage_examples, r.tool_harness, r.state,
          r.requester_user_id, u.display_name as requester_name, u.avatar as requester_avatar,
-         r.created_at, r.updated_at,
+         r.created_at, r.updated_at, r.via_mcp_client,
          fs.slug as fulfilled_slug, fn.slug as fulfilled_ns, fu.display_name as fulfilled_by_name,
          coalesce((select array_agg(c.name order by c.name)
                      from skill_request_categories rc join categories c on c.id = rc.category_id
@@ -49,7 +51,7 @@ const VIEW_SELECT = `
 interface Row {
   id: string; title: string; description: string; usage_examples: string | null; tool_harness: string;
   state: RequestState; requester_user_id: string; requester_name: string; requester_avatar: string | null;
-  created_at: string; updated_at: string; categories: string[] | null;
+  created_at: string; updated_at: string; categories: string[] | null; via_mcp_client: string | null;
   fulfilled_slug: string | null; fulfilled_ns: string | null; fulfilled_by_name: string | null;
 }
 
@@ -70,6 +72,7 @@ function toView(r: Row): SkillRequestView {
     fulfilled: r.fulfilled_slug && r.fulfilled_ns
       ? { namespaceSlug: r.fulfilled_ns, skillSlug: r.fulfilled_slug, byName: r.fulfilled_by_name }
       : null,
+    viaMcpClient: r.via_mcp_client,
   };
 }
 
