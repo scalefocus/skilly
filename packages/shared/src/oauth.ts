@@ -14,6 +14,21 @@
 import { createHash } from "node:crypto";
 import { generateToken } from "./tokens.js";
 
+/**
+ * Strip trailing `/` without a regex.
+ *
+ * A trailing-slash strip written as an end-anchored `+` quantifier over the slash character is
+ * polynomial-time on adversarial input (CodeQL js/polynomial-redos): it re-tries from every
+ * position in a long run of slashes. These values come off the wire — a `resource` parameter, a
+ * configured base URL — so the scan is not theoretical. Same treatment as `stripWrappingQuotes`
+ * in external-tool.ts.
+ */
+export function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* / */) end--;
+  return s.slice(0, end);
+}
+
 /** The single opaque scope. §29: the boundary is the caller's own RBAC, not a string in a token. */
 export const MCP_SCOPE = "mcp";
 
@@ -202,8 +217,8 @@ export function resourceMatches(canonical: string, requested: string | null | un
     return false;
   }
   if (want.origin.toLowerCase() !== mine.origin.toLowerCase()) return false;
-  const wp = want.pathname.replace(/\/+$/, "");
-  const mp = mine.pathname.replace(/\/+$/, "");
+  const wp = stripTrailingSlashes(want.pathname);
+  const mp = stripTrailingSlashes(mine.pathname);
   return wp === "" || wp === mp || mp.startsWith(`${wp}/`);
 }
 
@@ -331,7 +346,7 @@ export function validateDcr(body: DcrRequest): { ok: true; client: DcrClient } |
 
 /** RFC 8414 authorization-server metadata for a given public base URL. */
 export function authorizationServerMetadata(baseUrl: string): Record<string, unknown> {
-  const base = baseUrl.replace(/\/+$/, "");
+  const base = stripTrailingSlashes(baseUrl);
   return {
     issuer: base,
     authorization_endpoint: `${base}/oauth/authorize`,
@@ -351,7 +366,7 @@ export function authorizationServerMetadata(baseUrl: string): Record<string, unk
 
 /** RFC 9728 protected-resource metadata — served BY the resource (the worker). */
 export function protectedResourceMetadata(baseUrl: string): Record<string, unknown> {
-  const base = baseUrl.replace(/\/+$/, "");
+  const base = stripTrailingSlashes(baseUrl);
   return {
     resource: `${base}/mcp`,
     authorization_servers: [base],
@@ -363,6 +378,6 @@ export function protectedResourceMetadata(baseUrl: string): Record<string, unkno
 
 /** The `WWW-Authenticate` value a 401 carries, so a client can discover how to authorize. */
 export function wwwAuthenticate(baseUrl: string, error = "invalid_token"): string {
-  const base = baseUrl.replace(/\/+$/, "");
+  const base = stripTrailingSlashes(baseUrl);
   return `Bearer error="${error}", resource_metadata="${base}/.well-known/oauth-protected-resource"`;
 }

@@ -82,6 +82,13 @@ async function listSkillsHubVersions(rawUrl: string): Promise<PointerRefsResult>
   // the caller's raw string — so the request target can't be steered by trailing path/query noise
   // even though isSkillsHubUrl already pins the host. skillsHubApiUrl(hubSlug) is identical to a
   // canonical origin URL. Defends the js/request-forgery sink CodeQL flags here.
+  // Re-validate the slug against a strict literal pattern IMMEDIATELY before the URL is built.
+  // parseSkillsHubApiUrl already constrains it, so this is defence in depth — and it is also the
+  // barrier a taint analyser can see, which matters because this fetch is a js/request-forgery
+  // sink whose flagged flow is exactly rawUrl → hubSlug → apiUrl.
+  if (!/^[a-z0-9][a-z0-9-]{0,119}$/.test(hubSlug)) {
+    return { ok: false, error: "skills-hub slug must be lowercase kebab (letters, digits, -)" };
+  }
   const apiUrl = skillsHubApiUrl(hubSlug);
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), HUB_FETCH_TIMEOUT_MS);

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.143.1",
+    date: "2026-08-31",
+    summary:
+      "Hardening for the new MCP server: three pieces of text handling that parsed values straight off the network — the Authorization header an agent sends, and the registry URL used to build the OAuth discovery documents — were rewritten so a deliberately awkward input (a header padded with thousands of spaces, a URL ending in thousands of slashes) can no longer make them slow. Nothing behaves differently; the same inputs are accepted and rejected as before, just always quickly.",
+  },
+  {
     version: "1.143.0",
     date: "2026-08-31",
     summary:

@@ -12,6 +12,7 @@ import { fakePool, authRows, type FakePool } from "./testPool.js";
 import { invalidateMcpSettingsCache } from "./settings.js";
 import { invalidateMcpRoleCache } from "./auth.js";
 import { resetMcpRateLimits } from "./rateLimit.js";
+import { bearerFromHeader } from "./auth.js";
 
 const USER = "11111111-1111-1111-1111-111111111111";
 const NS_MINE = "22222222-2222-2222-2222-222222222222";
@@ -265,6 +266,28 @@ test("a successful call touches last_used_at with single-statement queries", asy
     assert.equal(t.sql.includes(";"), false, `multi-statement parameterized query: ${t.sql}`);
     assert.equal(t.params.length, 1);
   }
+});
+
+test("bearerFromHeader parses the RFC 6750 scheme, and does it linearly", () => {
+  assert.equal(bearerFromHeader("Bearer abc"), "abc");
+  assert.equal(bearerFromHeader("bearer abc"), "abc");
+  assert.equal(bearerFromHeader("BEARER	abc"), "abc");
+  assert.equal(bearerFromHeader("  Bearer   abc  "), "abc");
+  // Not a bearer credential.
+  assert.equal(bearerFromHeader(undefined), null);
+  assert.equal(bearerFromHeader(""), null);
+  assert.equal(bearerFromHeader("Bearer"), null);
+  assert.equal(bearerFromHeader("Bearer   "), null);
+  assert.equal(bearerFromHeader("bearertoken"), null, "the keyword must be followed by whitespace");
+  assert.equal(bearerFromHeader("Basic abc"), null);
+
+  // The reason it is not a regex (CodeQL js/polynomial-redos): `/^Bearer\s+(.+)$/i` backtracks on
+  // a header of many spaces, and this is the most attacker-controlled string the server reads.
+  const adversarial = `Bearer ${" ".repeat(200_000)}`;
+  const started = process.hrtime.bigint();
+  assert.equal(bearerFromHeader(adversarial), null);
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(ms < 250, `bearer parse took ${ms}ms on adversarial input`);
 });
 
 test("batches are bounded", async () => {

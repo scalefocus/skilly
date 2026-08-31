@@ -1,11 +1,13 @@
 // The one place the MCP server decides what its public identity is. Both the OAuth metadata
 // documents and the RFC 8707 resource check depend on it, and they must agree.
+import { stripTrailingSlashes } from "@skilly/shared";
+
 const DEFAULT_BASE = "http://localhost:3000";
 
 /** The registry's public base URL (no trailing slash). Mirrors the web tier's resolution order. */
 export function publicBaseUrl(): string {
   const raw = process.env.PUBLIC_BASE_URL ?? process.env.SKILLY_REGISTRY_URL ?? process.env.NEXTAUTH_URL ?? DEFAULT_BASE;
-  return raw.replace(/\/+$/, "");
+  return stripTrailingSlashes(raw);
 }
 
 /** The canonical resource identifier tokens are bound to (RFC 8707). */

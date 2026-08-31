@@ -38,11 +38,26 @@ export type AuthFailure =
 
 export type AuthResult = { ok: true; caller: McpCaller } | { ok: false; reason: AuthFailure };
 
-/** Extract a bearer token from the Authorization header. Header only — never a query string. */
+/**
+ * Extract a bearer token from the Authorization header. Header only — never a query string.
+ *
+ * Parsed by hand rather than with `/^Bearer\s+(.+)$/i`: that pattern is polynomial-time on
+ * attacker-controlled input (CodeQL js/polynomial-redos — `\s+` followed by `.+` backtracks on a
+ * header carrying many spaces), and this is the most attacker-controlled string the server reads.
+ * The scan below is linear and accepts exactly what RFC 6750 allows: the `Bearer` keyword,
+ * case-insensitive, one or more spaces/tabs, then the credential.
+ */
 export function bearerFromHeader(header: string | undefined): string | null {
   if (!header) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(header.trim());
-  const raw = m?.[1]?.trim();
+  const h = header.trim();
+  if (h.length <= 6) return null;
+  if (h.slice(0, 6).toLowerCase() !== "bearer") return null;
+  // The keyword must be followed by whitespace — "bearertoken" is not a bearer credential.
+  const isSpace = (c: number) => c === 32 || c === 9;
+  if (!isSpace(h.charCodeAt(6))) return null;
+  let i = 6;
+  while (i < h.length && isSpace(h.charCodeAt(i))) i++;
+  const raw = h.slice(i).trim();
   return raw ? raw : null;
 }
 

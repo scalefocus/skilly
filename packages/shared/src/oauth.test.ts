@@ -23,6 +23,7 @@ import {
   accessTokenExpiry,
   refreshTokenExpiry,
   authCodeExpiry,
+  stripTrailingSlashes,
 } from "./oauth.js";
 
 const VERIFIER = "a".repeat(43);
@@ -166,4 +167,28 @@ test("expiries are computed from the given clock", () => {
   assert.equal(accessTokenExpiry(60, now).toISOString(), "2026-01-01T01:00:00.000Z");
   assert.equal(refreshTokenExpiry(2, now).toISOString(), "2026-01-03T00:00:00.000Z");
   assert.equal(authCodeExpiry(now).toISOString(), "2026-01-01T00:01:00.000Z");
+});
+
+test("stripTrailingSlashes is linear and behaves like the regex it replaced", () => {
+  assert.equal(stripTrailingSlashes("https://a.example.com/"), "https://a.example.com");
+  assert.equal(stripTrailingSlashes("https://a.example.com///"), "https://a.example.com");
+  assert.equal(stripTrailingSlashes("https://a.example.com"), "https://a.example.com");
+  assert.equal(stripTrailingSlashes("/"), "");
+  assert.equal(stripTrailingSlashes(""), "");
+  assert.equal(stripTrailingSlashes("/a//b/"), "/a//b"); // only TRAILING slashes go
+
+  // The reason it isn't a regex (CodeQL js/polynomial-redos): an end-anchored `+` over the slash
+  // character re-tries from every position in a long run. This must stay fast.
+  const adversarial = `https://a.example.com${"/".repeat(100_000)}x`;
+  const started = process.hrtime.bigint();
+  assert.equal(stripTrailingSlashes(adversarial), adversarial); // trailing char isn't a slash
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(ms < 250, `strip took ${ms}ms on adversarial input`);
+});
+
+test("metadata + resource checks survive a base URL with trailing slashes", () => {
+  const md = authorizationServerMetadata("https://skilly.example.com///");
+  assert.equal(md.issuer, "https://skilly.example.com");
+  assert.equal(md.token_endpoint, "https://skilly.example.com/oauth/token");
+  assert.equal(resourceMatches("https://skilly.example.com/mcp", "https://skilly.example.com/mcp/"), true);
 });

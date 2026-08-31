@@ -19,6 +19,7 @@ import {
   newOpaqueToken,
   redirectUriAllowed,
   resourceMatches,
+  stripTrailingSlashes,
   validateDcr,
   type DcrClient,
   type DcrRequest,
@@ -28,7 +29,7 @@ import {
 export function publicBaseUrl(): string {
   const raw =
     process.env.PUBLIC_BASE_URL ?? process.env.SKILLY_REGISTRY_URL ?? process.env.NEXTAUTH_URL ?? "http://localhost:3000";
-  return raw.replace(/\/+$/, "");
+  return stripTrailingSlashes(raw);
 }
 
 export function canonicalResource(): string {
