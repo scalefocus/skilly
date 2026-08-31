@@ -19,3 +19,8 @@ export * from "./email-template.js";
 export * from "./notifications.js";
 export * from "./featured.js";
 export * from "./mentions.js";
+export * from "./visibility.js";
+export * from "./installs.js";
+export * from "./remote-refs.js";
+export * from "./oauth.js";
+export * from "./mcp.js";

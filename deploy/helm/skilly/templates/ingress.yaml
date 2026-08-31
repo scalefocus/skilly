@@ -35,6 +35,40 @@ spec:
                 name: {{ $fullName }}-worker
                 port:
                   number: 4000
+          # §29 MCP server → worker (Streamable HTTP JSON-RPC).
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-worker
+                port:
+                  number: 4000
+          # §29 OAuth token + revocation endpoints → worker. NOTE the split: /oauth/authorize and
+          # /oauth/register stay on WEB (the catch-all below), because the authorize leg needs the
+          # Auth.js/Entra session. Keep in sync with deploy/Caddyfile.
+          - path: /oauth/token
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-worker
+                port:
+                  number: 4000
+          - path: /oauth/revoke
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-worker
+                port:
+                  number: 4000
+          # AS + protected-resource metadata (RFC 8414 / RFC 9728) → worker: RFC 9728 requires the
+          # resource itself to serve its metadata.
+          - path: /.well-known/oauth-
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}-worker
+                port:
+                  number: 4000
           # Git smart-HTTP (clone/fetch of skill repos) → worker. Tightened to the actual
           # smart-HTTP endpoints so arbitrary URLs merely containing ".git" don't route here
           # (audit L-4); matches the worker's parseGitPath + the Caddyfile.

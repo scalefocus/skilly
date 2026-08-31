@@ -30,3 +30,26 @@ export function workerRateLimiter(opts: { windowMs?: number; max?: number } = {}
     legacyHeaders: false, // drop the deprecated X-RateLimit-* headers
   });
 }
+
+/** Per-IP window + cap for the §29 MCP and OAuth surfaces. */
+export const MCP_IP_RATE_WINDOW_MS = 60 * 1000;
+export const MCP_IP_RATE_MAX = Number(process.env.MCP_IP_RATE_MAX ?? 600);
+
+/**
+ * Per-IP limiter for the MCP + OAuth mounts.
+ *
+ * Those mounts sit BEFORE the app-wide limiter on purpose — 100 requests / 15 min per IP is sized
+ * for git + SCIM and would throttle a working agent within seconds. But "before the app-wide
+ * limiter" must not mean "unbounded": an UNAUTHENTICATED caller never reaches the per-user buckets
+ * in mcp/rateLimit.ts (those key on the resolved user), so without this a flood of 401s or token
+ * exchanges from one host would be uncapped. The ceiling here is deliberately generous — it is a
+ * flood guard, not the real quota; the per-user and per-(user, client) buckets are the quota.
+ */
+export function mcpIpRateLimiter(opts: { windowMs?: number; max?: number } = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? MCP_IP_RATE_WINDOW_MS,
+    limit: opts.max ?? MCP_IP_RATE_MAX,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+}

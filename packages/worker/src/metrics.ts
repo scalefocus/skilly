@@ -13,4 +13,14 @@ export const M = {
   reconcile: metrics.counter("skilly_reconcile_runs_total", "Entra reconciliation sweeps"),
   pointerRefreshChecked: metrics.counter("skilly_pointer_refresh_checked_total", "Pointer refs re-verified"),
   pointerDrift: metrics.counter("skilly_pointer_drift_total", "Pointer refs whose upstream content drifted"),
+  // §29 MCP server.
+  mcpToolCalls: metrics.counter("skilly_mcp_tool_calls_total", "MCP tool calls, by tool and outcome"),
+  mcpResourceReads: metrics.counter("skilly_mcp_resource_reads_total", "Skill content reads served over MCP"),
+  mcpAdoptions: metrics.counter("skilly_mcp_adoptions_total", "First-read adoptions recorded from MCP"),
+  mcpTokensIssued: metrics.counter("skilly_mcp_tokens_issued_total", "OAuth access+refresh pairs issued"),
+  mcpRefreshReuse: metrics.counter("skilly_mcp_refresh_reuse_total", "Rotated refresh tokens replayed (grant revoked)"),
+  mcpRateLimited: metrics.counter("skilly_mcp_rate_limited_total", "MCP calls refused by the rate limiter"),
+  mcpAuthFailures: metrics.counter("skilly_mcp_auth_failures_total", "MCP requests refused at authentication"),
+  mcpInstallsMinted: metrics.counter("skilly_mcp_installs_minted_total", "Install commands minted through MCP"),
+  mcpWrites: metrics.counter("skilly_mcp_writes_total", "Content created through MCP, by kind"),
 };

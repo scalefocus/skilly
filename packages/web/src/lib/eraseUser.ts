@@ -113,7 +113,10 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // with no transfer target): the user's leaderboard attribution is erased (credits-only
     // — the shared access_log clone events / install_count / co-maintainers' credit are untouched;
     // the install still counts for everyone else). SKILLY_SPEC.md §21/§4.
-    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens"]) {
+    // `oauth_grants` (§29) goes with the rest: unlike a §23 install token — a durable artifact a
+    // reinstated user might want back — a live delegation to a third-party MCP client must never
+    // survive the person leaving. oauth_tokens cascade with the grant.
+    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens", "oauth_grants"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [targetUserId]);
     }
 

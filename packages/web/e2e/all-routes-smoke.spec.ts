@@ -10,6 +10,7 @@ const ROUTES = [
   "/",
   "/catalog",
   "/installed",
+  "/mcp",
   "/leaderboard",
   "/usage",
   "/requests",

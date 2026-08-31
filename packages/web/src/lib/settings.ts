@@ -1,7 +1,23 @@
 // Platform-wide settings (key/value in platform_settings). Currently just the contribution
 // policy. SKILLY_SPEC.md §4.
 import type { Pool } from "pg";
-import { coerceMaxFeatured, assertMaxFeatured } from "@skilly/shared";
+import {
+  coerceMaxFeatured,
+  assertMaxFeatured,
+  coerceInstallTtlMonths,
+  INSTALL_TTL_MONTHS_DEFAULT,
+  INSTALL_TTL_MONTHS_MIN,
+  INSTALL_TTL_MONTHS_MAX,
+  coerceMcpEnabled,
+  coerceMcpAccessTtlMinutes,
+  coerceMcpRefreshTtlDays,
+  coerceMcpInlineUploadBytes,
+  coerceMcpResourceBytes,
+  assertMcpAccessTtlMinutes,
+  assertMcpRefreshTtlDays,
+  assertMcpInlineUploadBytes,
+  assertMcpResourceBytes,
+} from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 
@@ -85,33 +101,11 @@ function coerceChatPollIntervals(value: unknown): number[] {
 }
 
 /** How far ahead (calendar months) a user may set an install URL's expiry (§23). Global-admin
- *  setting; a positive integer in [MIN, MAX], default 12. "Never" is unbounded and separate. */
-export const INSTALL_TTL_MONTHS_DEFAULT = 12;
-export const INSTALL_TTL_MONTHS_MIN = 1;
-export const INSTALL_TTL_MONTHS_MAX = 120;
-
-/** Add `n` calendar months to `d`, clamping a day that overflows a shorter month (Jan 31 +1mo →
- *  Feb 28/29). Used by the install-expiry ceiling (server) — the picker mirrors it client-side. */
-export function addMonths(d: Date, n: number): Date {
-  const r = new Date(d.getTime());
-  const day = r.getDate();
-  r.setMonth(r.getMonth() + n);
-  if (r.getDate() < day) r.setDate(0); // rolled into the next month → back up to the intended month's last day
-  return r;
-}
-
-/** Latest allowable install-expiry instant: `now + months` calendar months, plus a 2-day grace so
- *  an end-of-day-in-user-tz pick exactly at the horizon isn't rejected. */
-export function installExpiryCeiling(months: number, from: Date = new Date()): Date {
-  return new Date(addMonths(from, months).getTime() + 2 * 86_400_000);
-}
-
-/** Coerce a stored value into a valid month count, falling back to the default on anything malformed. */
-function coerceInstallTtlMonths(value: unknown): number {
-  return Number.isInteger(value) && (value as number) >= INSTALL_TTL_MONTHS_MIN && (value as number) <= INSTALL_TTL_MONTHS_MAX
-    ? (value as number)
-    : INSTALL_TTL_MONTHS_DEFAULT;
-}
+ *  setting; a positive integer in [MIN, MAX], default 12. "Never" is unbounded and separate.
+ *  The bounds + arithmetic live in @skilly/shared so the API, the browser picker and the §29
+ *  `install_skill` MCP tool can't disagree about the horizon; re-exported here for existing
+ *  callers. */
+export { INSTALL_TTL_MONTHS_DEFAULT, INSTALL_TTL_MONTHS_MIN, INSTALL_TTL_MONTHS_MAX, addMonths, installExpiryCeiling } from "@skilly/shared";
 
 export interface PlatformSettings {
   /** true = any authenticated user may propose; false = only namespace members/admins (+ platform admins). */
@@ -130,9 +124,19 @@ export interface PlatformSettings {
   installMaxTtlMonths: number;
   /** max number of skills that may be Featured (homepage spotlight) at once (§7). */
   maxFeaturedSkills: number;
+  /** §29 MCP server master switch. Ships ON; OFF is dormant (grants survive), not a purge. */
+  mcpEnabled: boolean;
+  /** §29 access-token lifetime (minutes, 5–1440). */
+  mcpAccessTtlMinutes: number;
+  /** §29 refresh-token idle lifetime (days, 1–365), sliding on each rotation. */
+  mcpRefreshTtlDays: number;
+  /** §29 cap on a base64 hosted bundle sent inline in an MCP tool call (decoded bytes). */
+  mcpMaxInlineUploadBytes: number;
+  /** §29 cap on a single skill-file/SKILL.md read over MCP (bytes). */
+  mcpMaxResourceBytes: number;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined) };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -150,7 +154,17 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     chatPollIntervals: coerceChatPollIntervals(map.get("chat_poll_intervals")),
     installMaxTtlMonths: coerceInstallTtlMonths(map.get("install_max_ttl_months")),
     maxFeaturedSkills: coerceMaxFeatured(map.get("max_featured_skills")),
+    mcpEnabled: coerceMcpEnabled(map.get("mcp_enabled")),
+    mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(map.get("mcp_access_token_ttl_minutes")),
+    mcpRefreshTtlDays: coerceMcpRefreshTtlDays(map.get("mcp_refresh_token_ttl_days")),
+    mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(map.get("mcp_max_inline_upload_bytes")),
+    mcpMaxResourceBytes: coerceMcpResourceBytes(map.get("mcp_max_resource_bytes")),
   };
+}
+
+/** Is the §29 MCP server enabled? Read on every /oauth and /api/mcp request. */
+export async function getMcpEnabled(db: Pool = pool): Promise<boolean> {
+  return (await getPlatformSettings(db)).mcpEnabled;
 }
 
 export async function getMaxFeaturedSkills(db: Pool = pool): Promise<number> {
@@ -522,4 +536,102 @@ export async function setProposalsOpen(open: boolean, actorUserId: string): Prom
     targetId: "proposals_open",
     after: { proposalsOpen: open },
   });
+}
+
+/**
+ * §29 MCP server on/off. OFF is a KILL-SWITCH, not a purge: grants, refresh tokens and registered
+ * clients all survive untouched, every MCP/OAuth request answers "MCP is disabled on this
+ * registry", and re-enabling resumes everything with no re-authorization. Both flips are audited,
+ * because "who turned the agent surface off, and when" is a governance question.
+ */
+export async function setMcpEnabled(enabled: boolean, actorUserId: string): Promise<void> {
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('mcp_enabled', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(enabled), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "mcp_enabled",
+    after: { mcpEnabled: enabled },
+  });
+}
+
+/** §29 access-token lifetime (minutes). Throws a showable message on an out-of-range value. */
+export async function setMcpAccessTtlMinutes(minutes: unknown, actorUserId: string): Promise<number> {
+  const v = assertMcpAccessTtlMinutes(minutes);
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('mcp_access_token_ttl_minutes', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(v), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "mcp_access_token_ttl_minutes",
+    after: { mcpAccessTtlMinutes: v },
+  });
+  return v;
+}
+
+/** §29 refresh-token idle lifetime (days). */
+export async function setMcpRefreshTtlDays(days: unknown, actorUserId: string): Promise<number> {
+  const v = assertMcpRefreshTtlDays(days);
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('mcp_refresh_token_ttl_days', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(v), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "mcp_refresh_token_ttl_days",
+    after: { mcpRefreshTtlDays: v },
+  });
+  return v;
+}
+
+/** §29 cap on a base64 hosted bundle sent inline in an MCP tool call (decoded bytes). */
+export async function setMcpMaxInlineUploadBytes(bytes: unknown, actorUserId: string): Promise<number> {
+  const v = assertMcpInlineUploadBytes(bytes);
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('mcp_max_inline_upload_bytes', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(v), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "mcp_max_inline_upload_bytes",
+    after: { mcpMaxInlineUploadBytes: v },
+  });
+  return v;
+}
+
+/** §29 cap on a single SKILL.md / bundle-file read over MCP (bytes). */
+export async function setMcpMaxResourceBytes(bytes: unknown, actorUserId: string): Promise<number> {
+  const v = assertMcpResourceBytes(bytes);
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('mcp_max_resource_bytes', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(v), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "mcp_max_resource_bytes",
+    after: { mcpMaxResourceBytes: v },
+  });
+  return v;
 }

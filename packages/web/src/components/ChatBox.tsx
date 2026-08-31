@@ -11,11 +11,14 @@ import { EmojiPicker } from "./EmojiPicker";
 import { UserBubble } from "./UserBubble";
 import { MentionComposer, type MentionComposerHandle } from "./MentionComposer";
 import { MentionHint, MentionText, type MentionMap } from "./MentionChips";
+import { ViaMcp } from "./ui";
 
 export interface ChatMessage {
   id: string; authorId: string; authorName: string; authorAvatar: string | null; mine: boolean; body: string; createdAt: string;
   /** Optional small label shown under the author's name (e.g. "Original Requester"). */
   authorBadge?: string;
+  /** §29: the MCP client that posted this on the author's behalf, or null when a person typed it. */
+  viaMcpClient?: string | null;
 }
 
 export function ChatBox({
@@ -70,6 +73,7 @@ export function ChatBox({
                 <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexDirection: m.mine ? "row-reverse" : "row" }}>
                   <span style={{ fontSize: 12.5, fontWeight: 600 }}>{m.mine ? "You" : m.authorName}</span>
                   <span className="muted mono" style={{ fontSize: 10.5 }}>{fmt.dateTime(m.createdAt)}</span>
+                  <ViaMcp client={m.viaMcpClient} align={m.mine ? "right" : "left"} />
                 </div>
                 {m.authorBadge && (
                   <div className="muted" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, marginTop: 1, textAlign: m.mine ? "right" : "left" }}>

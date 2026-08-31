@@ -1136,6 +1136,10 @@ export interface ReviewQueueItem {
   /** When the proposal was submitted (UTC ISO) + who submitted it. */
   createdAt: string;
   submittedBy: string;
+  /** §29: the MCP client that submitted this on the user's behalf, or null for a browser
+   *  submission. Reviewers see it as a "via MCP · <client>" tag — governance depends on knowing
+   *  whether a proposal was written by a person or an agent. */
+  viaMcpClient: string | null;
 }
 
 interface QueueRow {
@@ -1150,6 +1154,7 @@ interface QueueRow {
   /** Full-microsecond UTC rendering of created_at, for the keyset cursor (review queue only). */
   created_at_us: string;
   submitted_by_name: string;
+  via_mcp_client: string | null;
 }
 
 // Resolve a display name even for not-yet-materialized skills by reading the latest revision.
@@ -1160,7 +1165,8 @@ const QUEUE_BASE_SELECT = `
            to_char(p.created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at_us,
            coalesce(s.slug,  lr.payload->'metadata'->>'skillSlug') as skill_slug,
            coalesce(s.title, lr.payload->'metadata'->>'title')     as title,
-           su.display_name as submitted_by_name
+           su.display_name as submitted_by_name,
+           p.via_mcp_client
       from proposals p
       join namespaces n on n.id = p.target_namespace_id
       join users su on su.id = p.submitted_by
@@ -1180,6 +1186,7 @@ function toQueueItem(r: QueueRow): ReviewQueueItem {
     title: r.title,
     createdAt: r.created_at,
     submittedBy: r.submitted_by_name,
+    viaMcpClient: r.via_mcp_client,
   };
 }
 
@@ -1308,6 +1315,8 @@ export interface ProposalDetail {
   materializedVersionId: string | null;
   createdAt: string;
   updatedAt: string;
+  /** §29: the MCP client that submitted this, or null for a browser submission. */
+  viaMcpClient: string | null;
   revisions: ProposalRevisionView[];
   scanReport: { severity: string | null; status: string; findings: unknown; createdAt: string } | null;
   caps: { isReviewer: boolean; isSubmitter: boolean };
@@ -1363,10 +1372,11 @@ export async function getProposalDetail(
     materialized_version_id: string | null;
     created_at: string;
     updated_at: string;
+    via_mcp_client: string | null;
   }>(
     `select p.id, p.state, p.target_namespace_id, n.slug as namespace_slug, p.target_skill_id,
             p.proposed_semver, p.submitted_by, p.decision_reason, p.materialized_version_id,
-            p.created_at, p.updated_at
+            p.created_at, p.updated_at, p.via_mcp_client
        from proposals p join namespaces n on n.id = p.target_namespace_id
       where p.id = $1`,
     [id],
@@ -1494,6 +1504,7 @@ export async function getProposalDetail(
     materializedVersionId: p.materialized_version_id,
     createdAt: p.created_at,
     updatedAt: p.updated_at,
+    viaMcpClient: p.via_mcp_client,
     revisions,
     scanReport,
     caps,

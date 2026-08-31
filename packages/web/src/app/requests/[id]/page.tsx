@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useApi, Pill, EmptyState, ScrollToTop } from "../../../components/ui";
+import { useApi, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../../components/ui";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { UserBubble } from "../../../components/UserBubble";
 import { useDateFmt } from "../../../components/DateFormat";
@@ -26,6 +26,7 @@ interface RequestView {
   state: "open" | "fulfilled" | "withdrawn" | "removed";
   requesterUserId: string;
   requesterName: string;
+  viaMcpClient?: string | null;
   requesterAvatar: string | null;
   createdAt: string;
   updatedAt: string;
@@ -100,6 +101,7 @@ function RequestDetailInner() {
           <UserBubble name={r.requesterName} avatar={r.requesterAvatar} userId={r.requesterUserId} size={24} />
           <span>{r.requesterName}</span>
           <span className="muted mono" style={{ fontSize: 11.5 }}>· asked {fmt.date(r.createdAt)}</span>
+          <ViaMcp client={r.viaMcpClient} />
         </div>
       </div>
 

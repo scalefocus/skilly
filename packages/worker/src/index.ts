@@ -9,7 +9,7 @@ import { Pool, type PoolClient } from "pg";
 import { scimRouter } from "./scim/router.js";
 import { pgStore } from "./scim/store.js";
 import { gitServer } from "./git/server.js";
-import { workerRateLimiter } from "./rateLimit.js";
+import { workerRateLimiter, mcpIpRateLimiter } from "./rateLimit.js";
 import { pgGitDeps } from "./git/pgDeps.js";
 import { publishPendingVersions, reprovisionMissingRepos } from "./git/publish.js";
 import { withdrawYankedVersions } from "./git/withdraw.js";
@@ -28,6 +28,8 @@ import { recomputeRelatedSkills } from "./related.js";
 import { recordDailyActiveUsers } from "./dau.js";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
+import { mcpRouter } from "./mcp/server.js";
+import { mcpOAuthRouter, mcpHousekeeping } from "./mcp/oauthRouter.js";
 import { metrics, METRICS_CONTENT_TYPE, constantTimeEqual } from "@skilly/shared";
 import { M } from "./metrics.js";
 
@@ -268,6 +270,23 @@ async function leaderLoops(): Promise<void> {
   await backfill();
   setInterval(backfill, Number(process.env.CONTENT_BACKFILL_INTERVAL_MS ?? 3_600_000)); // 1h
 
+  // §29 MCP housekeeping: drop expired auth codes / dead tokens and prune client registrations
+  // that never produced a grant (the bound on open Dynamic Client Registration, §22). Cheap and
+  // idempotent; hourly is plenty since nothing here is user-visible.
+  const mcpSweep = async () => {
+    if (!isLeader) return;
+    try {
+      const { tokens, clients } = await mcpHousekeeping(pool);
+      if (tokens || clients) {
+        console.log(JSON.stringify({ level: "info", msg: "mcp housekeeping", tokens, clients }));
+      }
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "mcp housekeeping failed", err: String(err) }));
+    }
+  };
+  await mcpSweep();
+  setInterval(mcpSweep, Number(process.env.MCP_HOUSEKEEPING_INTERVAL_MS ?? 3_600_000)); // 1h
+
   // "Skills you might like" (§10): nightly rebuild of per-skill co-install neighbours from
   // skill_installs. Derived/advisory, rebuilt wholesale each run; long (daily) interval.
   const relatedSweep = async () => {
@@ -357,6 +376,18 @@ function buildServer() {
   // DB-touching handler runs. Mounted here (after the security headers, before the git handler and
   // any body parser) because it only reads req.ip/headers and never touches the raw request stream
   // the git backend consumes.
+  // §29 MCP server + the worker's half of the OAuth AS. Mounted BEFORE the app-wide IP limiter
+  // on purpose: that limiter (100 requests / 15 min per IP) is sized for git + SCIM and would
+  // throttle a working agent within seconds. MCP is limited instead by its OWN per-user and
+  // per-(user, client) buckets, applied after authentication so one misbehaving client can't
+  // consume a user's whole allowance (§29 Rate limiting). These routers mount their own body
+  // parsers, so they never touch the raw stream the git backend reads below.
+  // A generous per-IP flood guard still applies: an unauthenticated caller never reaches the
+  // per-user buckets, so without this the 401 path would be uncapped.
+  app.use(["/mcp", "/oauth", "/.well-known"], mcpIpRateLimiter());
+  app.use(mcpOAuthRouter(pool));
+  app.use(mcpRouter(pool));
+
   app.use(workerRateLimiter());
 
   // Git smart-HTTP must read the RAW request stream — mount before any body parser.

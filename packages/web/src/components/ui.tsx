@@ -370,6 +370,25 @@ export function SkeletonGrid({ count = 6 }: { count?: number }) {
   );
 }
 
+/**
+ * §29 attribution: content an AGENT created on a user's behalf is marked wherever a human reads
+ * it — a proposal header and review-queue row, a message bubble, a request card, a rating. The
+ * acting user is still the person; this says how the act ARRIVED, not who is responsible.
+ * Renders nothing when `client` is null/absent, so callers can drop it in unconditionally.
+ */
+export function ViaMcp({ client, align = "left" }: { client?: string | null; align?: "left" | "right" }) {
+  if (!client) return null;
+  return (
+    <span
+      className="muted mono"
+      title={`Submitted through the MCP server by ${client}, acting for this user`}
+      style={{ fontSize: 10, letterSpacing: 0.3, whiteSpace: "nowrap", textAlign: align }}
+    >
+      via MCP · {client}
+    </span>
+  );
+}
+
 export function EmptyState({ icon = "✦", title, hint }: { icon?: string; title: string; hint?: string }) {
   return (
     <div className="empty">

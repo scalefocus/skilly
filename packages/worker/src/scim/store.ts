@@ -239,6 +239,19 @@ export async function deprovisionUser(pool: Pool, externalId: string): Promise<v
     const userId = rows[0]?.id;
     if (userId) {
       await client.query(`delete from tokens where user_id = $1`, [userId]);
+      // §29: revoke every live MCP connection too, and expire its credentials immediately. An
+      // install token is a durable artifact a reinstated user may want back; a live delegation to
+      // a third-party client is not — coming back means consenting again.
+      await client.query(
+        `update oauth_tokens set expires_at = now()
+          where expires_at > now()
+            and grant_id in (select id from oauth_grants where user_id = $1 and revoked_at is null)`,
+        [userId],
+      );
+      await client.query(
+        `update oauth_grants set revoked_at = now() where user_id = $1 and revoked_at is null`,
+        [userId],
+      );
     }
     await client.query("commit");
   } catch (e) {

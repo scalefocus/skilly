@@ -21,6 +21,42 @@
 			header_up X-Real-IP         {remote_host}
 		}
 	}
+	# §29 MCP server + the worker's half of the OAuth AS -> worker.
+	#   /mcp                             the Streamable HTTP MCP endpoint
+	#   /oauth/token, /oauth/revoke      the token endpoints (called by the client machine)
+	#   /.well-known/oauth-*             AS + protected-resource metadata (RFC 8414 / RFC 9728)
+	# NOTE the deliberate split: /oauth/authorize and /oauth/register stay on WEB (the fall-through
+	# below), because the authorize leg needs the Auth.js/Entra session that only web has. Getting
+	# this wrong breaks the consent screen, not the token exchange, so it fails late — keep the two
+	# lists in sync with the Helm ingress.
+	handle /mcp* {
+		reverse_proxy worker:4000 {
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+	handle /oauth/token* {
+		reverse_proxy worker:4000 {
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+	handle /oauth/revoke* {
+		reverse_proxy worker:4000 {
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+	handle /.well-known/oauth-* {
+		reverse_proxy worker:4000 {
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
 	# Git smart-HTTP (npx skills add https://.../<ns>/<skill>.git#<tag>) -> worker.
 	# Matches all paths under any *.git/ prefix: smart-HTTP endpoints (info/refs,
 	# git-upload-pack, git-receive-pack) plus HEAD (requested by git ≥2.28 on Windows

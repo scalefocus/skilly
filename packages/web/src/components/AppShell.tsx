@@ -499,6 +499,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </svg>
                     What&rsquo;s new
                   </Link>
+                  <Link href="/mcp" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0M12 12v9M4 7h16" />
+                    </svg>
+                    MCP server
+                  </Link>
                   <Link href="/installed" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M21 8v8a2 2 0 0 1-1 1.7l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.7l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" />

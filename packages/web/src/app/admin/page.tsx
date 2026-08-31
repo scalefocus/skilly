@@ -8,6 +8,7 @@ import { readPref, writePref, PREF_DAU_RANGE, PREF_ONLINE_WINDOW, adminCardPrefK
 import { CollapsibleCard } from "./CollapsibleCard";
 import { EmailCard } from "./EmailCard";
 import { SystemBannerCard } from "./SystemBannerCard";
+import { McpCard } from "./McpCard";
 
 // recharts is heavy (d3) — code-split it out of the admin route's initial bundle.
 const ActiveUsersChart = nextDynamic(() => import("./ActiveUsersChart").then((m) => m.ActiveUsersChart), {
@@ -59,7 +60,7 @@ const NS_PAGE = 100;
 // persists it per-card (localStorage), and drives Expand all / Collapse all. Cards start collapsed.
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
-  "systembanner", "email", "scim", "platformadmins", "maintenance", "deleteuser", "online", "namespaces",
+  "systembanner", "mcp", "email", "scim", "platformadmins", "maintenance", "deleteuser", "online", "namespaces",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -545,6 +546,8 @@ export default function AdminPage() {
       <SystemBannerCard open={cards.open.systembanner} onToggle={() => cards.toggle("systembanner")} />
 
       {/* Email notifications (§12) — collapsible like every card */}
+      <McpCard open={cards.open.mcp} onToggle={() => cards.toggle("mcp")} />
+
       <EmailCard open={cards.open.email} onToggle={() => cards.toggle("email")} />
 
       {/* Identity sync (SCIM) diagnostics — explains an empty group picker before the mappings below. */}
