@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useApi, useEnterKey, SkeletonGrid, EmptyState, ScrollToTop, formatCount } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { SkillCard, SkillListRow, type CatalogEntry } from "../../components/SkillCard";
+import { CollapsibleFacetRow, FacetRow } from "../../components/CollapsibleFacetRow";
+import { initialFacetRowOpen, storedFacetRowOpen } from "../../lib/facetRow";
 import { agentLabel } from "@skilly/shared/agents";
 
 interface Facets {
@@ -37,6 +39,13 @@ function Catalog() {
   const [official, setOfficial] = useState(false);
   // Cards vs list presentation.
   const [view, setView] = useState<"cards" | "list">("cards");
+  // The Category chip row is collapsible and starts COLLAPSED (§10). Two pieces of state, not one:
+  // `categoryOpen` is what the row actually does, `categoryOpenPref` is what gets persisted. They
+  // diverge on arrival — a restored category filter force-opens the row so the viewer can see why
+  // the catalog is filtered, but that auto-expand must NOT rewrite the stored preference.
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [categoryOpenPref, setCategoryOpenPref] = useState(false);
+  const toggleCategory = () => { const next = !categoryOpen; setCategoryOpen(next); setCategoryOpenPref(next); };
   const pickView = (v: "cards" | "list") => setView(v);
 
   // The view + filters + sort are remembered across visits (localStorage). Loaded once on mount,
@@ -48,7 +57,7 @@ function Catalog() {
     try {
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
-        const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; type: "hosted" | "pointer" | null; sort: "relevance" | "top_rated" | "latest"; showArchived: boolean; mine: boolean; official: boolean; view: "cards" | "list" }>;
+        const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; type: "hosted" | "pointer" | null; sort: "relevance" | "top_rated" | "latest"; showArchived: boolean; mine: boolean; official: boolean; view: "cards" | "list"; categoryOpen: boolean }>;
         if ("category" in p) setCategory(p.category ?? null);
         if ("tool" in p) setTool(p.tool ?? null);
         if ("type" in p) setType(p.type ?? null);
@@ -57,6 +66,9 @@ function Catalog() {
         if (typeof p.mine === "boolean") setMine(p.mine);
         if (typeof p.official === "boolean") setOfficial(p.official);
         if (p.view === "cards" || p.view === "list") setView(p.view);
+        setCategoryOpenPref(storedFacetRowOpen(p.categoryOpen));
+        // Auto-expand (effective state only) when a category filter is restored alongside it.
+        setCategoryOpen(initialFacetRowOpen(p.categoryOpen, p.category));
       } else if (localStorage.getItem("skilly.catalogView") === "list") {
         setView("list"); // migrate the older single-key view preference
       }
@@ -66,9 +78,9 @@ function Catalog() {
   useEffect(() => {
     if (!prefsLoaded) return;
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, showArchived, mine, official, view }));
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, showArchived, mine, official, view, categoryOpen: categoryOpenPref }));
     } catch { /* private mode etc. */ }
-  }, [prefsLoaded, category, tool, type, sort, showArchived, mine, official, view]);
+  }, [prefsLoaded, category, tool, type, sort, showArchived, mine, official, view, categoryOpenPref]);
   // Managers (platform/namespace admins or maintainers) may surface archived skills to restore them.
   const { data: me } = useApi<{ isPlatformAdmin: boolean; namespaceRoles: { role: string }[]; maintainsSkills: boolean }>("/api/me");
   const canManage = !!me && (me.isPlatformAdmin || (me.namespaceRoles ?? []).some((r) => r.role === "namespace_admin") || me.maintainsSkills);
@@ -127,24 +139,24 @@ function Catalog() {
 
       {!maintainer && hasFacets && (
         <div className="reveal" style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 }}>
+          {/* The category vocabulary is unbounded, so this is the one row that can wrap to several
+              ragged lines — it collapses, and starts collapsed (§10). The header count is the whole
+              visible vocabulary (/api/skills/facets is filter-independent), so it never wobbles. */}
           {facets!.categories.length > 0 && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <span className="nav-label" style={{ padding: 0, minWidth: 74 }}>Category</span>
+            <CollapsibleFacetRow id="catalog-category" label="Category" count={facets!.categories.length} open={categoryOpen} onToggle={toggleCategory}>
               {facets!.categories.map((c) => (
                 <Chip key={c.name} active={category === c.name} label={c.name} count={c.count} onClick={() => setCategory(category === c.name ? null : c.name)} />
               ))}
-            </div>
+            </CollapsibleFacetRow>
           )}
           {facets!.tools.length > 0 && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <span className="nav-label" style={{ padding: 0, minWidth: 74 }}>Harness</span>
+            <FacetRow label="Harness">
               {facets!.tools.map((t) => (
                 <Chip key={t.name} active={tool === t.name} label={agentLabel(t.name)} count={t.count} onClick={() => setTool(tool === t.name ? null : t.name)} />
               ))}
-            </div>
+            </FacetRow>
           )}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <span className="nav-label" style={{ padding: 0, minWidth: 74 }}>Source</span>
+          <FacetRow label="Source">
             {(facets?.types.length ?? 0) > 1 && facets!.types.map((t) => (
               <Chip key={t.name} active={type === t.name} label={TYPE_LABEL[t.name] ?? t.name} count={t.count} onClick={() => setType(type === t.name ? null : t.name)} />
             ))}
@@ -156,7 +168,7 @@ function Catalog() {
             <button type="button" className={`facet${official ? " facet-on" : ""}`} aria-pressed={official} title="Only skills marked Official by a platform admin" onClick={() => setOfficial((o) => !o)}>
               ✓ Official
             </button>
-          </div>
+          </FacetRow>
           {(category || tool || type || mine || official) && (
             <button className="btn-ghost mono" style={{ fontSize: 12, alignSelf: "flex-start" }} onClick={() => { setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); }}>
               ✕ clear filters

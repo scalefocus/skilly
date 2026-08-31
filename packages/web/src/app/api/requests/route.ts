@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { enforceRateLimit } from "../../../lib/ratelimit";
-import { listOpenRequests, listMyRequests, createRequest, findSimilar, type RequestState } from "../../../lib/requests";
+import { listOpenRequests, listMyRequests, listRequestFacets, createRequest, findSimilar, type RequestState } from "../../../lib/requests";
 import { getNavSeen } from "../../../lib/settings";
 import { withSystemLog } from "../../../lib/apiLog";
 
@@ -27,12 +27,18 @@ export const GET = withSystemLog("/api/requests", async function GET(req: Reques
   // "Mine" toggle (§26): the caller's own requests, any state — instead of the org-wide open list.
   if (url.searchParams.get("mine") === "1") {
     if (!access.userId) return Response.json({ error: "unknown user" }, { status: 403 });
-    const requests = await listMyRequests(access.userId, {
-      q: url.searchParams.get("q")?.slice(0, 200) ?? undefined,
-      category: url.searchParams.get("category") ?? undefined,
-      tool: url.searchParams.get("tool") ?? undefined,
-    });
-    return Response.json({ requests, isAdmin });
+    // `facets` is scope-aware but filter-independent (§26) — computed for the caller's own
+    // requests in every state, ignoring q/category/tool, so the chips and the Category row's
+    // header count stay put while the viewer filters.
+    const [requests, facets] = await Promise.all([
+      listMyRequests(access.userId, {
+        q: url.searchParams.get("q")?.slice(0, 200) ?? undefined,
+        category: url.searchParams.get("category") ?? undefined,
+        tool: url.searchParams.get("tool") ?? undefined,
+      }),
+      listRequestFacets({ requesterUserId: access.userId }),
+    ]);
+    return Response.json({ requests, facets, isAdmin });
   }
   // State filter (§26): everyone sees OPEN only; a platform admin may also list `fulfilled` or all
   // (Open | Fulfilled | All). The gate is here — a non-admin `state` param is ignored (→ open).
@@ -44,14 +50,18 @@ export const GET = withSystemLog("/api/requests", async function GET(req: Reques
   // "New to you" per-row flag (§26) — same pattern as /api/skills' catalogSeenAt. Only meaningful on
   // the default open view; listOpenRequests only flags open rows anyway.
   const seenAt = access.userId ? (await getNavSeen(access.userId)).requestsSeenAt : null;
-  const requests = await listOpenRequests({
-    q: url.searchParams.get("q")?.slice(0, 200) ?? undefined,
-    category: url.searchParams.get("category") ?? undefined,
-    tool: url.searchParams.get("tool") ?? undefined,
-    seenAt,
-    states,
-  });
-  return Response.json({ requests, isAdmin });
+  const [requests, facets] = await Promise.all([
+    listOpenRequests({
+      q: url.searchParams.get("q")?.slice(0, 200) ?? undefined,
+      category: url.searchParams.get("category") ?? undefined,
+      tool: url.searchParams.get("tool") ?? undefined,
+      seenAt,
+      states,
+    }),
+    // Same state scope as the list, but blind to q/category/tool (§26).
+    listRequestFacets({ states }),
+  ]);
+  return Response.json({ requests, facets, isAdmin });
 });
 
 export const POST = withSystemLog("/api/requests", async function POST(req: Request) {

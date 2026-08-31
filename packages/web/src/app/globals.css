@@ -651,6 +651,34 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .facet-on { background: var(--accent-soft); color: var(--accent-2); border-color: transparent; font-weight: 600; }
 .facet-n { font-family: var(--font-mono); font-size: 10.5px; opacity: 0.7; }
 
+/* ── Facet rows (catalog / Requested-skills filter rows) ───────────────── */
+/* One shared label gutter so Category / Harness / Source chips all start at the same x, even
+   though each row is its own grid. The Category row spends that gutter on its collapse toggle
+   (label + total count + chevron), which is why it is wider than the label text alone. */
+/* 136px was MEASURED, not guessed: the widest realistic header — "CATEGORY · 15.8K" at the
+   .nav-label 10px/0.2em mono plus the count and chevron — is 119px, and a wider fallback mono
+   must not push the chevron out of the gutter. */
+.facet-row { display: grid; grid-template-columns: var(--facet-label-w, 136px) 1fr; gap: 10px; align-items: start; }
+/* 6px lifts the 10px label onto the first chip row baseline; the toggle inherits it via its own
+   nested .facet-row-label, so a labelled row and a collapsible one align identically. */
+.facet-row-label { padding: 6px 0 0; white-space: nowrap; }
+.facet-row-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; min-width: 0; }
+.facet-row-toggle {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  background: none; border: 0; padding: 6px 0 0; cursor: pointer; color: inherit; text-align: left;
+}
+/* The toggle carries the 6px itself so its label, count and chevron sit on one line. */
+.facet-row-toggle .facet-row-label { padding-top: 0; }
+.facet-row-toggle:hover .facet-row-label, .facet-row-toggle:focus-visible .facet-row-label { color: var(--accent-2); }
+.facet-row-chevron { transition: transform 0.15s; opacity: 0.75; }
+.facet-row-chevron[data-open="true"] { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .facet-row-chevron { transition: none; } }
+/* Narrow screens: the gutter costs more than it buys — stack the label above its chips. */
+@media (max-width: 620px) {
+  .facet-row { grid-template-columns: 1fr; gap: 4px; }
+  .facet-row-label, .facet-row-toggle { padding-top: 0; }
+}
+
 /* ── Tag input (multi-select combobox: search / create) ────────────────── */
 .taginput { position: relative; }
 .taginput-box { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 7px 9px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); cursor: text; transition: border-color 0.15s, box-shadow 0.15s; }
