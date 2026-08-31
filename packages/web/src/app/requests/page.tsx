@@ -1,6 +1,6 @@
 "use client";
 // Requested skills (§26): open skill requests, in the catalog's card/row language. Org-visible.
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useApi, useEnterKey, SkeletonGrid, EmptyState, ScrollToTop, Pill } from "../../components/ui";
@@ -9,6 +9,15 @@ import { UserBubble } from "../../components/UserBubble";
 import { useDateFmt } from "../../components/DateFormat";
 import { agentLabel } from "@skilly/shared/agents";
 import { plainText, descTooltip } from "../../lib/cardText";
+import { CollapsibleFacetRow, FacetRow } from "../../components/CollapsibleFacetRow";
+import { initialFacetRowOpen, storedFacetRowOpen } from "../../lib/facetRow";
+
+/** Mirrors `RequestFacets` from lib/requests (server-only module — the shape is restated here the
+ *  same way the catalog page restates its own `Facets`). */
+interface RequestFacets {
+  categories: { name: string; count: number }[];
+  tools: { name: string; count: number }[];
+}
 
 export interface RequestEntry {
   id: string;
@@ -112,6 +121,41 @@ function RequestsInner() {
   // switch to Fulfilled or All. Ignored server-side for non-admins. Not applicable in "Mine" mode
   // (Mine already spans every state).
   const [stateFilter, setStateFilter] = useState<"open" | "fulfilled" | "all">("open");
+  // The Category row collapses and starts collapsed, the catalog's way (§10/§26). Two states: the
+  // effective one, and the persisted preference an auto-expand must never overwrite.
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [categoryOpenPref, setCategoryOpenPref] = useState(false);
+  const toggleCategory = () => { const next = !categoryOpen; setCategoryOpen(next); setCategoryOpenPref(next); };
+
+  // This page previously remembered nothing, so a collapsed Category row could not survive a
+  // reload. It now carries its own prefs object mirroring the catalog's `skilly.catalogPrefs`
+  // (§26) — filters, view, and the collapse flag. Free-text search stays URL-driven (`?q=`) and is
+  // never persisted. `prefsLoaded` gates the save so the mount-time defaults can't clobber it.
+  const PREFS_KEY = "skilly.requestsPrefs";
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(PREFS_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; mine: boolean; stateFilter: "open" | "fulfilled" | "all"; view: "cards" | "list"; categoryOpen: boolean }>;
+        if ("category" in p) setCategory(p.category ?? null);
+        if ("tool" in p) setTool(p.tool ?? null);
+        if (typeof p.mine === "boolean") setMine(p.mine);
+        if (p.stateFilter === "open" || p.stateFilter === "fulfilled" || p.stateFilter === "all") setStateFilter(p.stateFilter);
+        if (p.view === "cards" || p.view === "list") setView(p.view);
+        setCategoryOpenPref(storedFacetRowOpen(p.categoryOpen));
+        // Auto-expand (effective state only) so a restored category filter is never invisible.
+        setCategoryOpen(initialFacetRowOpen(p.categoryOpen, p.category));
+      }
+    } catch { /* private mode / bad JSON — fall back to defaults */ }
+    setPrefsLoaded(true);
+  }, []);
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, mine, stateFilter, view, categoryOpen: categoryOpenPref }));
+    } catch { /* private mode etc. */ }
+  }, [prefsLoaded, category, tool, mine, stateFilter, view, categoryOpenPref]);
 
   const qs = new URLSearchParams();
   if (submitted) qs.set("q", submitted);
@@ -119,16 +163,18 @@ function RequestsInner() {
   if (tool) qs.set("tool", tool);
   if (mine) qs.set("mine", "1");
   else if (stateFilter !== "open") qs.set("state", stateFilter);
-  const { data, loading, error } = useApi<{ requests: RequestEntry[]; isAdmin?: boolean }>(`/api/requests${qs.toString() ? `?${qs}` : ""}`);
+  const { data, loading, error } = useApi<{ requests: RequestEntry[]; facets?: RequestFacets; isAdmin?: boolean }>(`/api/requests${qs.toString() ? `?${qs}` : ""}`);
   const requests = data?.requests ?? [];
   const isAdmin = data?.isAdmin ?? false;
   // Show the per-row state pill whenever the list can contain non-open rows: your own list (Mine),
   // or the admin viewing Fulfilled/All.
   const showState = mine || stateFilter !== "open";
 
-  // Facets derived from the returned set (requests are a small, org-visible list).
-  const categories = [...new Set(requests.flatMap((r) => r.categories))].sort();
-  const tools = [...new Set(requests.map((r) => r.toolHarness))].sort();
+  // Facets come from the SERVER now (§26), not from the returned rows: scope-aware (they honour
+  // Mine / the state filter) but blind to q/category/tool, so selecting a category can't shrink the
+  // vocabulary out from under the pointer — nor make the Category header count read "· 1".
+  const categories = data?.facets?.categories ?? [];
+  const tools = data?.facets?.tools ?? [];
 
   return (
     <div>
@@ -163,12 +209,6 @@ function RequestsInner() {
             ))}
           </div>
         )}
-        {categories.length > 1 && categories.map((c) => (
-          <button key={c} type="button" className={`facet${category === c ? " facet-on" : ""}`} onClick={() => setCategory(category === c ? null : c)}>{c}</button>
-        ))}
-        {tools.length > 1 && tools.map((t) => (
-          <button key={t} type="button" className={`facet${tool === t ? " facet-on" : ""}`} onClick={() => setTool(tool === t ? null : t)}>{agentLabel(t)}</button>
-        ))}
         {(category || tool) && (
           <button className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => { setCategory(null); setTool(null); }}>✕ clear</button>
         )}
@@ -178,6 +218,32 @@ function RequestsInner() {
           <button type="button" className={`sort-opt${view === "list" ? " sort-on" : ""}`} onClick={() => setView("list")} title="Compact list">☰ List</button>
         </div>
       </div>
+
+      {/* Category / Harness chips sit in their own labelled rows below the toolbar, the catalog's
+          way (§26) — the Category row collapsible and collapsed by default, sharing the catalog's
+          component so the two pages behave identically. Only Category collapses. */}
+      {(categories.length > 0 || tools.length > 0) && (
+        <div className="reveal" style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+          {categories.length > 0 && (
+            <CollapsibleFacetRow id="requests-category" label="Category" count={categories.length} open={categoryOpen} onToggle={toggleCategory}>
+              {categories.map((c) => (
+                <button key={c.name} type="button" className={`facet${category === c.name ? " facet-on" : ""}`} onClick={() => setCategory(category === c.name ? null : c.name)}>
+                  {c.name} <span className="facet-n">{c.count}</span>
+                </button>
+              ))}
+            </CollapsibleFacetRow>
+          )}
+          {tools.length > 0 && (
+            <FacetRow label="Harness">
+              {tools.map((t) => (
+                <button key={t.name} type="button" className={`facet${tool === t.name ? " facet-on" : ""}`} onClick={() => setTool(tool === t.name ? null : t.name)}>
+                  {agentLabel(t.name)} <span className="facet-n">{t.count}</span>
+                </button>
+              ))}
+            </FacetRow>
+          )}
+        </div>
+      )}
 
       {error ? (
         <EmptyState icon="⚠" title="Couldn’t load requests" hint={error} />

@@ -5,6 +5,7 @@
 // (fulfilWithExistingSkill, "Propose an existing skill"). Whichever happens first wins.
 import type { PoolClient } from "pg";
 import { pool } from "./db";
+import { createTtlCache } from "./ttlCache";
 import { appendAudit } from "./audit";
 
 export type RequestState = "open" | "fulfilled" | "withdrawn" | "removed";
@@ -129,6 +130,73 @@ export async function listMyRequests(requesterUserId: string, opts: { q?: string
     params,
   );
   return rows.map(toView);
+}
+
+const REQUEST_FACETS_TTL_MS = Number(process.env.FACETS_CACHE_TTL_MS ?? 30_000);
+const requestFacetsCache = createTtlCache<RequestFacets>(REQUEST_FACETS_TTL_MS);
+
+export interface RequestFacets {
+  categories: { name: string; count: number }[];
+  tools: { name: string; count: number }[];
+}
+
+/** The facet vocabulary for the Requested-skills filter rows (§26).
+ *
+ *  Deliberately **scope-aware but filter-independent**: it honours the caller's `mine`/`states`
+ *  scope (so a chip can never offer a value that yields an empty list) while ignoring `q`,
+ *  `category` and `tool` (so selecting a category cannot shrink the vocabulary — and the Category
+ *  row's `· <n>` header count cannot wobble down to `· 1` while fifteen categories exist).
+ *  Counted over the **whole** scope, not the capped page `listOpenRequests` returns. */
+export async function listRequestFacets(opts: { states?: readonly RequestState[]; requesterUserId?: string } = {}): Promise<RequestFacets> {
+  // The facets ride along on every list response, so they are recomputed on each keystroke of the
+  // page's live `?q=` filter. Cache per scope for a short window — the same trade the catalog makes
+  // for listFacets: the vocabulary only moves when a request is posted, fulfilled or edited.
+  const key = opts.requesterUserId ? `mine:${opts.requesterUserId}` : `states:${[...(opts.states ?? ["open"])].sort().join(",")}`;
+  return requestFacetsCache.get(key, () => computeRequestFacets(opts));
+}
+
+/** Test seam only. The facets cache is scope-keyed and 30s-lived, so back-to-back integration
+ *  tests that mutate the same scope would otherwise read a stale vocabulary. Unused by the app. */
+export function clearRequestFacetsCache(): void {
+  requestFacetsCache.clear();
+}
+
+async function computeRequestFacets(opts: { states?: readonly RequestState[]; requesterUserId?: string }): Promise<RequestFacets> {
+  const params: unknown[] = [];
+  const where: string[] = [];
+  if (opts.requesterUserId) {
+    // "Mine" spans every state, exactly like listMyRequests — no state clause here.
+    params.push(opts.requesterUserId);
+    where.push(`r.requester_user_id = $${params.length}`);
+  } else {
+    params.push(opts.states && opts.states.length ? [...opts.states] : (["open"] as RequestState[]));
+    where.push(`r.state = any($${params.length}::text[])`);
+  }
+  const clause = where.join(" and ");
+
+  const [cats, tools] = await Promise.all([
+    pool.query<{ name: string; count: string }>(
+      `select c.name, count(distinct r.id)::text as count
+         from skill_requests r
+         join skill_request_categories rc on rc.request_id = r.id
+         join categories c on c.id = rc.category_id
+        where ${clause}
+        group by c.name order by count(distinct r.id) desc, c.name asc`,
+      params,
+    ),
+    pool.query<{ name: string; count: string }>(
+      `select r.tool_harness as name, count(*)::text as count
+         from skill_requests r
+        where ${clause}
+        group by r.tool_harness order by count(*) desc, r.tool_harness asc`,
+      params,
+    ),
+  ]);
+
+  return {
+    categories: cats.rows.map((x) => ({ name: x.name, count: Number(x.count) })),
+    tools: tools.rows.map((x) => ({ name: x.name, count: Number(x.count) })),
+  };
 }
 
 export async function getRequest(id: string): Promise<SkillRequestView | null> {
