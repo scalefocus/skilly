@@ -83,20 +83,24 @@ test.describe.serial("maintainer contact editor (§30.6)", () => {
       const input = page.getByPlaceholder("search a user, or type a team email…").first();
       await expect(input).toBeVisible({ timeout: 20_000 });
 
+      // Assert the PERSISTED value, not the "✓ Saved" tick. The tick lingers ~2s, so after the
+      // second save it can still be on screen from the first — the assertion would pass instantly
+      // and race the PATCH it was meant to wait for.
+      const storedContact = () =>
+        page.request
+          .get(`/api/namespaces/${before.id}/settings`)
+          .then((r) => r.json())
+          .then((j) => j.namespace.maintainerContact as string | null);
+
       await input.fill("e2e-contact@example.com");
       await page.getByRole("button", { name: "Save" }).first().click();
       await expect(page.getByText("✓ Saved").first()).toBeVisible({ timeout: 10_000 });
-
-      let stored = (await (await page.request.get(`/api/namespaces/${before.id}/settings`)).json()).namespace;
-      expect(stored.maintainerContact).toBe("e2e-contact@example.com");
+      await expect.poll(storedContact, { timeout: 10_000 }).toBe("e2e-contact@example.com");
 
       // Clearing is always allowed and must reach the column as NULL.
       await input.fill("");
       await page.getByRole("button", { name: "Save" }).first().click();
-      await expect(page.getByText("✓ Saved").first()).toBeVisible({ timeout: 10_000 });
-
-      stored = (await (await page.request.get(`/api/namespaces/${before.id}/settings`)).json()).namespace;
-      expect(stored.maintainerContact).toBeNull();
+      await expect.poll(storedContact, { timeout: 10_000 }).toBeNull();
     } finally {
       // Restore whatever the namespace had before this spec ran.
       await page.request.patch(`/api/namespaces/${before.id}/settings`, {
