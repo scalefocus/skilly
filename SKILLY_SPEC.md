@@ -881,7 +881,13 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Auto-expands on arrival when a category filter is active.** Catalog filters are **persisted per browser** (`skilly.catalogPrefs`) and restored on every visit, so a collapsed row could otherwise present a silently-filtered catalog with **no visible cause** — a result count with nothing on screen explaining it. Whenever `category` is non-null at mount, the row therefore **opens**, regardless of the stored collapse preference. This is a **one-time, on-mount decision**, not a derived binding.
   - **Once open, it stays open.** Deselecting the active chip, or clicking `✕ clear filters`, does **not** re-collapse the row: chips must never vanish out from under the pointer that just clicked them, and re-selecting must not cost a re-expand.
   - **The stored preference is the user's own toggling, only.** The collapse flag joins the existing **`skilly.catalogPrefs`** object alongside view/sort/filters (absent ⇒ collapsed, so every existing browser starts collapsed). An **auto-expand never writes** to it — the preference records what the *user* chose, so a visit that happened to arrive with a filter active does not silently flip the default for every later visit.
-  - **Accessibility.** The header is a real `type="button"` carrying **`aria-expanded`** and **`aria-controls`** pointing at the chip container. Collapsed chips are **removed from the DOM**, not merely hidden, so they leave the tab order entirely. The collapsed header keeps the `nav-label` width of the `Harness`/`Source` labels below it, so the three rows stay left-aligned. **No height animation** — the row renders conditionally, matching the existing reveal treatment.
+  - **Accessibility.** The header is a real `type="button"` carrying **`aria-expanded`** and **`aria-controls`** pointing at the chip container. **Collapsed chips are unreachable: not focusable, not announced, not visible** — the chip container is **`inert` + `aria-hidden` while collapsed**, so every chip button leaves the tab order *and* the accessibility tree. *(This supersedes the original "collapsed chips are removed from the DOM" mechanism. The **guarantee** is unchanged — a collapsed chip can neither be tabbed to nor read out — but the chips now stay **mounted**, because content that isn't in the box cannot have its height animated. The mounted-and-inert form is the same one the admin cards use, §5.)* The collapsed header keeps the `nav-label` width of the `Harness`/`Source` labels below it, so the three rows stay left-aligned.
+  - **Animation — the row animates open and closed** *(supersedes the original "No height animation" rule)*. Expand/collapse runs a **height transition on the chip block, ~0.2s ease**, via the same **`grid-template-rows: 0fr → 1fr`** mechanism as the §5 admin-card bodies, with an **opacity fade over the same 0.2s** layered on the chips. **No per-chip stagger** — this is a filter control clicked repeatedly, and a stagger makes it feel slower with every click. The **chevron rotation moves from 0.15s to the same 0.2s ease**, so header and body read as one motion rather than two.
+    - **Only a user toggle animates.** Every way the row can already be open at first paint — the stored preference, the auto-expand above, or the row's first appearance once `GET /api/skills/facets` resolves under the block's `.reveal` rise — renders **already-open, with no transition**. Animating on mount would stack a second staggered slide on top of the reveal on every page load.
+    - **The clip is released once open** (~0.2s after the toggle, the admin cards' `data-settled` pattern): a permanent `overflow: hidden` shaves the focus ring off chips on the block's top and bottom edges. Collapsing **re-clips immediately**, so the close animation still clips.
+    - **`prefers-reduced-motion: reduce` ⇒ instant toggle** — no height transition, no fade, no chevron transition (matching §5).
+    - **Accepted layout consequence:** expanding pushes `Harness`, `Source` and the results grid down by one to several ragged chip lines, and collapsing pulls them back up. There is **no scroll anchoring** — the toggle sits near the top of the page, and this is how the admin cards already behave.
+    - **Markup.** The chip block gains the two nested wrappers the grid-rows mechanism needs (an animated track plus a clipping inner that carries the padding — padding on the track itself is incompressible and would let chips peek out while collapsed, §5). The component's **public props are unchanged**, and the `.facet-row` label-gutter grid and its single-column variant under 680px are unaffected.
   - **Unchanged:** the **maintained-by view** (`?maintainer=`) still hides the whole facet block, so it has no collapsed state to restore.
   - **Shared with `/requests`.** One `CollapsibleFacetRow` component backs this row and the §26 Requested-skills category row, so category filtering looks and behaves identically on both pages rather than diverging into two inline copies.
 - **"My Skills" toggle** (`?mine=1`): narrows the catalog to skills the caller is an **explicit maintainer** of (`skill_maintainers`, §19) — the same definition as `maintainsSkills` in `/api/me`. Implicit (namespace-admin) maintainership is **not** included: "My Skills" means skills named to you, not every skill in a namespace you administer. Visibility-filtered like everything else.
@@ -1188,7 +1194,9 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       `100%` — composer, button row, message rows — is laid out at that larger width and spills to
       the right of the card. The animated body wrapper therefore **pins its minimum size to the card
       width** (`min-width: 0`) so the released clip changes what is *visible*, never what is *wide*.
-      This is a shared rule for **all** collapsible cards, not a per-card patch.
+      This is a shared rule for **all** collapsible regions animated this way, not a per-card patch —
+      it therefore also binds the **§10/§26 collapsible Category facet row**, whose chips can carry an
+      unbreakable long category name.
     - **Rendered markdown breaks long words.** Message and description bodies (`.md`) break an
       over-long unbroken run (a bare URL, a long identifier) rather than overflowing their column.
   - **Fixed-height catalog cards (no ragged grids).** Every `.skill-card` in a card grid renders at
@@ -2467,7 +2475,11 @@ the requester is notified, and the fulfiller earns leaderboard credit.
   (`Category` / `Harness`) below it. The **Category row is collapsible and starts collapsed**, using
   the **same shared `CollapsibleFacetRow`** as the catalog — same `Category · <n> ▸` header, same
   always-collapsible rule, same **auto-expand when a category filter is active**, same
-  **stays-open-once-opened** rule, same `aria-expanded`/`aria-controls` and DOM-removal semantics.
+  **stays-open-once-opened** rule, same `aria-expanded`/`aria-controls`, the same
+  **`inert`-while-collapsed** semantics *(previously DOM removal — §10)*, and the same
+  **~0.2s height-plus-fade expand/collapse animation** (§10), including its user-toggle-only rule,
+  its settle-release, and its instant `prefers-reduced-motion` form. The animation is **not**
+  optional per page: it lives in the shared component precisely so the two surfaces cannot drift.
   As on the catalog, **only** the Category row collapses; the `Harness` row renders flat.
 - **View/filter preferences are now remembered (`skilly.requestsPrefs`).** The page previously
   persisted nothing, so a collapsed Category row could not survive a reload — which would have made
