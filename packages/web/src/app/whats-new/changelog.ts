@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.144.2",
+    date: "2026-09-01",
+    summary:
+      "The two connect snippets on the MCP page now copy the way a minted install command does: the copy control sits inside the box rather than beside it, clicking anywhere in the box copies the whole snippet, and both confirm with the same “✓ Copied” message. The control stays put when a long line scrolls sideways, and selecting text inside a snippet no longer triggers a copy — so you can still drag out just the server URL from the mcp.json block.",
+  },
+  {
     version: "1.144.1",
     date: "2026-08-31",
     summary:

@@ -10,73 +10,6 @@ export function formatCount(n: number): string {
   return Number.isFinite(n) ? COMPACT.format(n) : String(n);
 }
 
-/** Copyable install command, styled like a terminal line. With `autoCopy`, it copies itself to the
- *  clipboard whenever the command changes (e.g. a freshly generated install command) and shows the
- *  same "Install command copied" toast — best-effort, since a post-fetch clipboard write may be
- *  blocked outside the click's activation; clicking the row always copies. */
-export function CopyCommand({ command, autoCopy }: { command: string; autoCopy?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    let ok = false;
-    try {
-      await navigator.clipboard.writeText(command);
-      ok = true;
-    } catch {
-      // Clipboard API can fail (permissions, unfocused document) — fall back to the
-      // legacy selection-based copy before giving up.
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = command;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        ok = document.execCommand("copy");
-        ta.remove();
-      } catch {
-        /* ignore */
-      }
-    }
-    if (ok) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    }
-  };
-  // Auto-copy a newly generated command (the install flow), surfacing the same toast.
-  useEffect(() => {
-    if (autoCopy && command) void copy();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [command, autoCopy]);
-  // The whole row is clickable to copy (cursor:pointer signals it); the button is a visual
-  // affordance — clicks on it bubble up to this handler, so copy fires exactly once.
-  // Feedback is a centered toast (portaled to <body>): on mobile the command box scrolls
-  // horizontally, so an in-box "copied" label at the right edge would be off-screen.
-  return (
-    <div
-      className="code"
-      onClick={copy}
-      role="button"
-      tabIndex={0}
-      title="Click to copy"
-      aria-label="Copy install command"
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          copy();
-        }
-      }}
-      style={{ cursor: "pointer" }}
-    >
-      <span className="prompt">$</span>
-      <code className="code-cmd">{command}</code>
-      <span className="btn btn-sm" style={{ marginLeft: "auto" }} aria-hidden>
-        copy
-      </span>
-      {copied && createPortal(<div className="toast" role="status">✓ Install command copied</div>, document.body)}
-    </div>
-  );
-}
-
 /** Copy a value to the clipboard, with a legacy fallback. Returns whether it succeeded. */
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -97,6 +30,129 @@ async function copyToClipboard(text: string): Promise<boolean> {
       return false;
     }
   }
+}
+
+/** Copyable code, styled like a terminal line. The whole box is the click target and the `copy`
+ *  pill is a visual affordance (`aria-hidden`), so there is no nested interactive. Confirmation is a
+ *  centered toast portaled to <body>: the box scrolls horizontally on mobile, so in-box feedback at
+ *  the right edge could sit off-screen.
+ *
+ *  - `prompt` (default true) draws the `$` terminal prompt — switch it off for anything that is not
+ *    a shell command (§29's `mcp.json` snippet).
+ *  - `pin` puts the pill INSIDE the box, anchored to the top-right, for a snippet that is too tall
+ *    or too wide for an inline affordance (§29's connect snippets).
+ *  - `autoCopy` copies whenever the command changes (a freshly minted install command) and shows the
+ *    same toast — best-effort, since a post-fetch clipboard write may be blocked outside the click's
+ *    activation; clicking the box always copies.
+ *
+ *  A click is ignored while the user has text selected, so dragging one line out of a multi-line
+ *  snippet never silently replaces the clipboard with the whole thing. */
+export function CopyCommand({
+  command,
+  autoCopy,
+  prompt = true,
+  pin,
+  ariaLabel = "Copy install command",
+}: {
+  command: string;
+  autoCopy?: boolean;
+  prompt?: boolean;
+  pin?: boolean;
+  ariaLabel?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    if (await copyToClipboard(command)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    }
+  };
+  // Activation from a click or a keypress: bail out when the user is selecting text rather than
+  // asking for the whole snippet. `copy()` itself stays unguarded, so autoCopy is unaffected by
+  // whatever happens to be selected elsewhere on the page when a command is minted.
+  const activate = () => {
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+    void copy();
+  };
+  // Auto-copy a newly generated command (the install flow), surfacing the same toast.
+  useEffect(() => {
+    if (autoCopy && command) void copy();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [command, autoCopy]);
+
+  // The interactive attributes go on whichever element WRAPS both the code and the pill, so that a
+  // click on the pill counts too. Unpinned that is the .code row itself; pinned it is the outer
+  // wrapper, since there the pill is a sibling of the scrolling box rather than a child of it.
+  const interactive = {
+    onClick: activate,
+    role: "button",
+    tabIndex: 0,
+    title: "Click to copy",
+    // An explicit name, or a screen reader reads the whole snippet as the button's label.
+    "aria-label": ariaLabel,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        activate();
+      }
+    },
+  } as const;
+  const toast = copied && createPortal(<div className="toast" role="status">✓ Copied</div>, document.body);
+
+  if (pin) {
+    return (
+      <>
+        {/* `minWidth: 0` is load-bearing: this wrapper is a grid item, and the default
+            `min-width: auto` would size it to the snippet's widest line — pushing the pill
+            off-screen and scrolling the whole PAGE on a narrow viewport, instead of letting the
+            box scroll inside itself. */}
+        <div {...interactive} style={{ position: "relative", minWidth: 0, cursor: "pointer" }}>
+          <div
+            className="code"
+            // `display:block` overrides .code's flex: Chromium cannot drag-select text inside a flex
+            // container, and a snippet a user cannot partially select is a step back from the plain
+            // <pre> this replaces. Nothing needs flex here — the pill is positioned. The right-hand
+            // reserve keeps characters from ending up underneath it.
+            style={{ display: "block", paddingRight: 76 }}
+          >
+            {prompt && <span className="prompt">$</span>}
+            <code className="code-cmd">{command}</code>
+          </div>
+          {/* Anchored to the wrapper, not to the scrolling box, so it never scrolls out of view. The
+              band runs to the box's edge in the box's own colour, so a long line scrolling past does
+              not leave a sliver of text stranded beside the pill. */}
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              top: 1,
+              right: 1,
+              display: "flex",
+              padding: "7px 7px 7px 10px",
+              background: "var(--surface-2, rgba(127,127,127,.08))",
+              borderRadius: "0 var(--radius-sm) 0 var(--radius-sm)",
+            }}
+          >
+            <span className="btn btn-sm">copy</span>
+          </span>
+        </div>
+        {toast}
+      </>
+    );
+  }
+  return (
+    <>
+      <div {...interactive} className="code" style={{ cursor: "pointer" }}>
+        {prompt && <span className="prompt">$</span>}
+        <code className="code-cmd">{command}</code>
+        <span className="btn btn-sm" style={{ marginLeft: "auto" }} aria-hidden>
+          copy
+        </span>
+      </div>
+      {toast}
+    </>
+  );
 }
 
 /**

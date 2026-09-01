@@ -8,7 +8,7 @@
 // §23 install command, which does leak into shell history and committed config.
 import { useState } from "react";
 import Link from "next/link";
-import { useApi, EmptyState, Pill, ScrollToTop } from "../../components/ui";
+import { useApi, EmptyState, Pill, ScrollToTop, CopyCommand } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 
@@ -26,42 +26,14 @@ interface McpInfo {
   connections: Connection[];
 }
 
-const mono: React.CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
-  lineHeight: 1.6,
-  background: "var(--surface-2, rgba(127,127,127,.08))",
-  border: "1px solid var(--line)",
-  borderRadius: "var(--radius-sm)",
-  padding: "10px 12px",
-  overflowX: "auto",
-  whiteSpace: "pre",
-  margin: 0,
-};
-
-function Snippet({ label, code }: { label: string; code: string }) {
-  const [copied, setCopied] = useState(false);
+// A labelled connect snippet. The copy affordance lives INSIDE the box and the whole box is the
+// click target — the same component (and the same "✓ Copied" toast) as §23's install-command row,
+// so the two surfaces cannot drift apart. No `$` prompt on either field: one of them is JSON.
+function Snippet({ label, code, ariaLabel }: { label: string; code: string; ariaLabel: string }) {
   return (
     <div style={{ display: "grid", gap: 6 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ fontSize: 13, fontWeight: 500 }}>{label}</div>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(code);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            } catch {
-              /* clipboard blocked — the text is selectable anyway */
-            }
-          }}
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <pre style={mono}>{code}</pre>
+      <div style={{ fontSize: 13, fontWeight: 500 }}>{label}</div>
+      <CopyCommand command={code} prompt={false} pin ariaLabel={ariaLabel} />
     </div>
   );
 }
@@ -118,11 +90,24 @@ function McpInner() {
             goes into your config — you sign in with Entra ID and consent once.
           </p>
         </div>
-        <Snippet label="Claude Code" code={`claude mcp add --transport http skilly ${url}`} />
-        <Snippet
-          label="Claude Desktop / VS Code (mcp.json)"
-          code={JSON.stringify({ mcpServers: { skilly: { type: "http", url } } }, null, 2)}
-        />
+        {/* Not until the server URL has actually arrived: a snippet rendered mid-fetch would carry an
+            empty URL, and the whole box being click-to-copy makes pasting that truncated command easy. */}
+        {url ? (
+          <>
+            <Snippet
+              label="Claude Code"
+              code={`claude mcp add --transport http skilly ${url}`}
+              ariaLabel="Copy the Claude Code command"
+            />
+            <Snippet
+              label="Claude Desktop / VS Code (mcp.json)"
+              code={JSON.stringify({ mcpServers: { skilly: { type: "http", url } } }, null, 2)}
+              ariaLabel="Copy the mcp.json configuration"
+            />
+          </>
+        ) : (
+          <p style={{ fontSize: 13, color: "var(--faint)", margin: 0 }}>Loading&hellip;</p>
+        )}
         <p style={{ fontSize: 12.5, color: "var(--faint)", margin: 0, lineHeight: 1.6 }}>
           Server URL: <code style={{ fontFamily: "var(--font-mono)" }}>{url}</code>
         </p>

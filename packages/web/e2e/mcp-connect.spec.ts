@@ -152,8 +152,89 @@ test.describe("MCP connect flow (§29)", () => {
   test("the MCP page shows the server URL and the connect snippets", async ({ page }) => {
     await devSignIn(page);
     await page.goto("/mcp");
-    await expect(page.getByText("claude mcp add --transport http skilly")).toBeVisible();
-    await expect(page.getByText(/"mcpServers"/)).toBeVisible();
+    // The copy affordance is the box itself, named per field (§29) — not a "Copy" button beside it.
+    // Neither box renders until the server URL has loaded, and a cold `next dev` route compile can
+    // outlast the default expect timeout, so the first wait is explicit.
+    const code = page.getByRole("button", { name: "Copy the Claude Code command" });
+    await expect(code).toBeVisible({ timeout: 30_000 });
+    // Asserted WITH the URL: a bare `getByText("claude mcp add …")` also matches the truncated
+    // command the page used to render mid-fetch, so it proved nothing about the URL being there.
+    await expect(code).toHaveText(/^claude mcp add --transport http skilly https?:\/\/\S+$/);
+
+    const json = page.getByRole("button", { name: "Copy the mcp.json configuration" });
+    await expect(json).toBeVisible();
+    await expect(json).toContainText('"mcpServers"');
+    await expect(json).toContainText(/"url": "https?:\/\/\S+"/);
+  });
+
+  // §29: clicking anywhere in a connect snippet copies the whole thing, the same UX as §23's
+  // install-command row. Clipboard permissions are Chromium-only — the suite's only project.
+  test("clicking either connect snippet copies it to the clipboard", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await devSignIn(page);
+    await page.goto("/mcp");
+
+    await page.getByRole("button", { name: "Copy the Claude Code command" }).click();
+    await expect(page.getByRole("status")).toHaveText("✓ Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
+      /^claude mcp add --transport http skilly https?:\/\/\S+$/,
+    );
+
+    await page.getByRole("button", { name: "Copy the mcp.json configuration" }).click();
+    const json = await page.evaluate(() => navigator.clipboard.readText());
+    expect(JSON.parse(json)).toMatchObject({ mcpServers: { skilly: { type: "http" } } });
+  });
+
+  // §29: the pill is a sibling of the scrolling box, not a child, so "click the field" and "click
+  // the button" only behave identically because the interactive attributes sit on the wrapper.
+  // Clicking the pill directly is the case that regresses silently if that ever moves.
+  test("clicking the copy pill itself copies, not just the field", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await devSignIn(page);
+    await page.goto("/mcp");
+    await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
+
+    const box = page.getByRole("button", { name: "Copy the Claude Code command" });
+    await box.waitFor({ timeout: 30_000 });
+    // Click the pill's own centre — not the box's.
+    const pill = await box.evaluate((el) => {
+      const r = el.querySelector("span.btn")!.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+    await page.mouse.click(pill.x, pill.y);
+    await expect(page.getByRole("status")).toHaveText("✓ Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
+      /^claude mcp add --transport http skilly https?:\/\/\S+$/,
+    );
+  });
+
+  // §29: a drag-select inside a snippet must NOT be hijacked into a full copy — the click event
+  // that follows mouseup sees a live selection and is ignored, so a user grabbing just the URL out
+  // of the mcp.json block keeps both their selection and their clipboard. This also guards the
+  // `display:block` override: text inside a flex container is not drag-selectable in Chromium at
+  // all, so a regression back to .code's flex would fail the precondition below.
+  test("drag-selecting inside a snippet does not copy the whole snippet", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await devSignIn(page);
+    await page.goto("/mcp");
+    await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
+
+    const box = page.getByRole("button", { name: "Copy the mcp.json configuration" });
+    // Derive the drag from the rendered <code> rather than hard-coded pixels: the vertical middle
+    // of the block lands on an inner JSON line, which is wide enough to select real characters.
+    const geo = await box.evaluate((el) => {
+      const r = el.querySelector("code")!.getBoundingClientRect();
+      return { x: r.left + 12, y: r.top + r.height / 2 };
+    });
+    await page.mouse.move(geo.x, geo.y);
+    await page.mouse.down();
+    await page.mouse.move(geo.x + 200, geo.y, { steps: 10 });
+    await page.mouse.up();
+
+    // Precondition, asserted so a drag that selected nothing fails loudly instead of masquerading
+    // as a working guard.
+    expect(await page.evaluate(() => (window.getSelection()?.toString() ?? "").trim())).not.toBe("");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("sentinel");
   });
 
   test("the account menu links to the MCP page", async ({ page }) => {

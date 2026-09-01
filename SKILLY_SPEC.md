@@ -3183,6 +3183,22 @@ since consumption is universal.
   **VS Code**. No credential appears in any snippet: the client registers itself and the user
   completes the browser consent leg. *(A genuine improvement on §23's token-in-URL install command,
   which does leak into shell history and committed config.)*
+  - **Copy is the field, not a button beside it.** Each snippet is a single click target: the label
+    sits above the box and the copy affordance lives *inside* it, anchored to the top-right of the
+    field's wrapper rather than placed inside the scrolling content, so it can never scroll out of
+    view. A long snippet scrolls *inside its own box* — never the page. Clicking anywhere in the box — or on the pill — copies the whole snippet and confirms with a
+    centered toast (**"✓ Copied"**), the same affordance and the same component as §23's
+    install-command row, so the two surfaces cannot drift apart again. A click is **ignored while the
+    user has text selected**, so dragging just the URL out of the `mcp.json`
+    block never silently replaces the clipboard with the whole block. Keyboard-reachable (Enter/Space)
+    with a per-field accessible name rather than five lines of JSON read aloud. The box is laid out as
+    a block, not a flex row: Chromium cannot drag-select text inside a flex container, and a snippet a
+    user cannot partially select would be a step back from the plain `<pre>` this replaces. Neither
+    `/mcp` snippet carries the `$` prompt the shell-command row shows — one of them is JSON. If the
+    clipboard write is blocked, a legacy selection-based copy is attempted and the text stays
+    selectable regardless.
+    Neither snippet renders before the server URL has loaded — a mid-fetch snippet would carry an
+    empty URL, and a whole-box click target makes copying that truncated command too easy.
 - **Connections** — the §23 `/installed` pattern applied to `oauth_grants`: one row per live grant
   with the client name, when it was authorized, **last used**, and a **Revoke** button (immediate;
   kills the grant and every token under it, audited `mcp.grant_revoked`). Revoking does **not**
