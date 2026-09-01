@@ -26,7 +26,9 @@ export interface SynthesizeInput {
   author?: { name: string; email: string };
 }
 
-function git(args: string[], opts: { gitDir?: string; cwd?: string; env?: NodeJS.ProcessEnv; input?: Buffer }): Promise<string> {
+/** Run a git plumbing command. Exported so the marketplace synthesizer (§30) reuses one spawn
+ *  path, one error shape, and one env-threading rule rather than forking its own. */
+export function runGit(args: string[], opts: { gitDir?: string; cwd?: string; env?: NodeJS.ProcessEnv; input?: Buffer }): Promise<string> {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, ...opts.env };
     if (opts.gitDir) env.GIT_DIR = opts.gitDir;
@@ -62,7 +64,7 @@ function emptyNode(): TreeNode {
 }
 
 async function writeBlob(gitDir: string, bytes: Uint8Array): Promise<string> {
-  const sha = await git(["hash-object", "-w", "--stdin"], { gitDir, input: Buffer.from(bytes) });
+  const sha = await runGit(["hash-object", "-w", "--stdin"], { gitDir, input: Buffer.from(bytes) });
   return sha.trim();
 }
 
@@ -73,14 +75,36 @@ async function mkTree(gitDir: string, node: TreeNode): Promise<string> {
     const ts = await mkTree(gitDir, dir);
     lines.push(`040000 tree ${ts}\t${name}`);
   }
-  const out = await git(["mktree"], { gitDir, input: Buffer.from(lines.join("\n") + "\n") });
+  const out = await runGit(["mktree"], { gitDir, input: Buffer.from(lines.join("\n") + "\n") });
   return out.trim();
+}
+
+/**
+ * Write a set of repo-relative files as a git tree and return its sha. Shared by skill-version
+ * synthesis and marketplace synthesis (§30) — both build a whole tree from bytes in memory
+ * against a bare repo, so the nested-tree assembly lives in one place.
+ */
+export async function writeTree(gitDir: string, files: readonly SkillFile[]): Promise<string> {
+  const root = emptyNode();
+  for (const f of files) {
+    const segments = f.path.split("/").filter(Boolean);
+    let node = root;
+    for (let i = 0; i < segments.length - 1; i++) {
+      const seg = segments[i]!;
+      if (!node.dirs.has(seg)) node.dirs.set(seg, emptyNode());
+      node = node.dirs.get(seg)!;
+    }
+    const name = segments[segments.length - 1]!;
+    const sha = await writeBlob(gitDir, f.bytes);
+    node.files.set(name, { mode: f.mode ?? "100644", sha });
+  }
+  return mkTree(gitDir, root);
 }
 
 /** The version tags present in a bare repo (empty list if the repo doesn't exist yet). */
 export async function listTags(bareRepoPath: string): Promise<string[]> {
   if (!(await exists(bareRepoPath))) return [];
-  const out = await git(["tag", "--list"], { gitDir: bareRepoPath });
+  const out = await runGit(["tag", "--list"], { gitDir: bareRepoPath });
   return out.split("\n").map((t) => t.trim()).filter(Boolean);
 }
 
@@ -94,18 +118,18 @@ export async function listTags(bareRepoPath: string): Promise<string[]> {
 export async function pointMainAtTag(bareRepoPath: string, tag: string): Promise<boolean> {
   let want: string;
   try {
-    want = (await git(["rev-parse", "--verify", `refs/tags/${tag}^{commit}`], { gitDir: bareRepoPath })).trim();
+    want = (await runGit(["rev-parse", "--verify", `refs/tags/${tag}^{commit}`], { gitDir: bareRepoPath })).trim();
   } catch {
     return false; // tag missing — the caller re-synthesizes the version instead
   }
   let cur = "";
   try {
-    cur = (await git(["rev-parse", "--verify", "refs/heads/main"], { gitDir: bareRepoPath })).trim();
+    cur = (await runGit(["rev-parse", "--verify", "refs/heads/main"], { gitDir: bareRepoPath })).trim();
   } catch {
     /* main is unborn */
   }
   if (cur === want) return false;
-  await git(["update-ref", "refs/heads/main", want], { gitDir: bareRepoPath });
+  await runGit(["update-ref", "refs/heads/main", want], { gitDir: bareRepoPath });
   return true;
 }
 
@@ -122,11 +146,11 @@ export async function synthesizeVersion(input: SynthesizeInput): Promise<{ commi
 
   if (!(await exists(bareRepoPath))) {
     await mkdir(bareRepoPath, { recursive: true });
-    await git(["init", "--bare", "--initial-branch=main", bareRepoPath], {});
+    await runGit(["init", "--bare", "--initial-branch=main", bareRepoPath], {});
   }
 
   // Immutability: never overwrite an existing version tag.
-  const existingTags = (await git(["tag", "--list"], { gitDir: bareRepoPath })).split("\n").map((t) => t.trim());
+  const existingTags = (await runGit(["tag", "--list"], { gitDir: bareRepoPath })).split("\n").map((t) => t.trim());
   if (existingTags.includes(tag)) {
     throw new Error(`version tag ${tag} already exists (immutable)`);
   }
@@ -135,20 +159,7 @@ export async function synthesizeVersion(input: SynthesizeInput): Promise<{ commi
   // installs a single-skill repo by reading a root-level SKILL.md (EXTERNAL_TOOL_CONTRACT
   // skillMdLocation = "repo-root"; the tool scans the root and `skills/<name>/`, NOT an
   // arbitrary top-level `<slug>/` wrapper — wrapping there yields "No skills found").
-  const root = emptyNode();
-  for (const f of files) {
-    const segments = f.path.split("/").filter(Boolean);
-    let node = root;
-    for (let i = 0; i < segments.length - 1; i++) {
-      const seg = segments[i]!;
-      if (!node.dirs.has(seg)) node.dirs.set(seg, emptyNode());
-      node = node.dirs.get(seg)!;
-    }
-    const name = segments[segments.length - 1]!;
-    const sha = await writeBlob(bareRepoPath, f.bytes);
-    node.files.set(name, { mode: f.mode ?? "100644", sha });
-  }
-  const treeSha = await mkTree(bareRepoPath, root);
+  const treeSha = await writeTree(bareRepoPath, files);
 
   const author = input.author ?? { name: "skilly", email: "skilly@localhost" };
   const date = input.date ?? "2026-01-01T00:00:00Z";
@@ -161,18 +172,18 @@ export async function synthesizeVersion(input: SynthesizeInput): Promise<{ commi
     GIT_COMMITTER_DATE: date,
   };
   const commit = (
-    await git(["commit-tree", treeSha, "-m", input.message ?? `skilly: publish ${tag}`], {
+    await runGit(["commit-tree", treeSha, "-m", input.message ?? `skilly: publish ${tag}`], {
       gitDir: bareRepoPath,
       env: commitEnv,
     })
   ).trim();
 
   // Immutable lightweight tag for this exact version.
-  await git(["update-ref", `refs/tags/${tag}`, commit], { gitDir: bareRepoPath });
+  await runGit(["update-ref", `refs/tags/${tag}`, commit], { gitDir: bareRepoPath });
 
   // main tracks latest stable.
   if (input.isLatestStable) {
-    await git(["update-ref", "refs/heads/main", commit], { gitDir: bareRepoPath });
+    await runGit(["update-ref", "refs/heads/main", commit], { gitDir: bareRepoPath });
   }
 
   return { commit, tag };

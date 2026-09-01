@@ -38,10 +38,10 @@ const toOnlineWindow = (s: string): number => (ONLINE_WINDOWS.some((w) => w.mins
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
 interface Mapping { id: string; role: Role; namespaceId: string | null; groupId: string; groupDisplayName: string; groupExternalId: string }
-interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; mappings: Mapping[] }
+interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -60,7 +60,7 @@ const NS_PAGE = 100;
 // persists it per-card (localStorage), and drives Expand all / Collapse all. Cards start collapsed.
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
-  "systembanner", "mcp", "email", "scim", "platformadmins", "maintenance", "deleteuser", "online", "namespaces",
+  "systembanner", "mcp", "email", "scim", "platformadmins", "maintenance", "deleteuser", "online", "namespaces", "marketplaces",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -238,6 +238,122 @@ function InstallTtlSetting({ value, busy, call, open, onToggle }: { value: numbe
         />
         <span className="muted" style={{ fontSize: 13.5 }}>months</span>
         <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave()}>Save</button>
+      </div>
+    </CollapsibleCard>
+  );
+}
+
+// Claude plugin marketplaces (§30). Platform admins own the PUBLIC marketplace — the one
+// marketplace with no namespace behind it, carrying every org-visible skill across the platform.
+// Per-namespace marketplaces are toggled on the Namespace administration page instead.
+// Also holds the two platform-wide knobs: the rebuild interval and the name prefix.
+function MarketplaceSettings({
+  settings, busy, call, open, onToggle,
+}: {
+  settings: { marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string };
+  busy: boolean;
+  call: (input: RequestInfo, init: RequestInit) => Promise<boolean>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const savedMinutes = String(settings.marketplaceSyncMinutes);
+  const savedPrefix = settings.marketplaceNamePrefix;
+  const [minutes, setMinutes] = useState(savedMinutes);
+  const [prefix, setPrefix] = useState(savedPrefix);
+  useEffect(() => { setMinutes(savedMinutes); }, [savedMinutes]);
+  useEffect(() => { setPrefix(savedPrefix); }, [savedPrefix]);
+
+  const patch = (body: Record<string, unknown>) =>
+    call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  const togglePublic = async () => {
+    if (settings.marketplacePublicEnabled) {
+      // Disabling revokes every public-marketplace key. Say so before it happens — and say what
+      // does NOT break, so the admin isn't guessing about consumers mid-flight.
+      if (!window.confirm(
+        `Disable the ${prefix}-public marketplace?\n\nIts URL stops working and every key for it is revoked, so nobody can add or update from it. Plugins already installed on people's machines keep working.`,
+      )) return;
+    }
+    await patch({ marketplacePublicEnabled: !settings.marketplacePublicEnabled });
+  };
+
+  return (
+    <CollapsibleCard
+      cardId="marketplaces"
+      title="Claude plugin marketplaces"
+      summary={settings.marketplacePublicEnabled ? `public on · every ${settings.marketplaceSyncMinutes}m` : `public off · every ${settings.marketplaceSyncMinutes}m`}
+      open={open}
+      onToggle={onToggle}
+    >
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
+        skilly can serve its catalog to Claude Code as plugin marketplaces (<code>/plugin marketplace add</code>). The
+        <strong> public</strong> marketplace below carries every <strong>org-visible</strong> skill across the platform and is
+        yours to switch on. Each namespace has its own marketplace for its <strong>restricted</strong> skills, toggled by
+        its admins on <a href="/namespaces">Namespace administration</a>.
+      </p>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+        <span style={label}>Public marketplace</span>
+        <span className="mono muted" style={{ fontSize: 12 }}>{prefix}-public</span>
+        <button className="btn btn-sm" disabled={busy} onClick={() => void togglePublic()}>
+          {settings.marketplacePublicEnabled ? "disable" : "enable"}
+        </button>
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <span style={label}>Rebuild interval</span>
+        <p className="muted" style={{ fontSize: 13.5, marginBottom: 10 }}>
+          How often the worker rebuilds marketplaces whose contents changed — whole minutes, 1–1440 (default 30). A newly
+          published skill appears in its marketplace within this window; rebuilding rewrites a whole repo, so it is
+          deliberately not part of publishing.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <input
+            type="number"
+            min={1}
+            max={1440}
+            step={1}
+            aria-label="Marketplace rebuild interval (minutes)"
+            value={minutes}
+            disabled={busy}
+            onChange={(e) => setMinutes(e.target.value)}
+            style={{ ...field, fontFamily: "var(--font-mono)", width: 110 }}
+          />
+          <span className="muted" style={{ fontSize: 13.5 }}>minutes</span>
+          <button
+            className="btn btn-sm"
+            disabled={busy || minutes.trim() === savedMinutes || minutes.trim() === ""}
+            onClick={() => void patch({ marketplaceSyncMinutes: Number(minutes.trim()) })}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <span style={label}>Marketplace name prefix</span>
+        <p className="muted" style={{ fontSize: 13.5, marginBottom: 10 }}>
+          Every marketplace is named <code>&lt;prefix&gt;-&lt;namespace&gt;</code> (and <code>&lt;prefix&gt;-public</code>). Claude Code lets a
+          person register only one marketplace per name, so a second skilly (a dev instance, say) must use a different
+          prefix or the two collide for anyone who adds both. Changing this renames every marketplace — people who
+          already added one keep working, but the name they see changes on the next update.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <input
+            aria-label="Marketplace name prefix"
+            value={prefix}
+            disabled={busy}
+            onChange={(e) => setPrefix(e.target.value)}
+            style={{ ...field, fontFamily: "var(--font-mono)", width: 180 }}
+          />
+          <button
+            className="btn btn-sm"
+            disabled={busy || prefix.trim() === savedPrefix || prefix.trim() === ""}
+            onClick={() => void patch({ marketplaceNamePrefix: prefix.trim() })}
+          >
+            Save
+          </button>
+        </div>
       </div>
     </CollapsibleCard>
   );
@@ -539,6 +655,7 @@ export default function AdminPage() {
       <ChatPollSetting value={data.settings.chatPollIntervals} busy={busy} call={call} open={cards.open.chatpoll} onToggle={() => cards.toggle("chatpoll")} />
 
       <InstallTtlSetting value={data.settings.installMaxTtlMonths} busy={busy} call={call} open={cards.open.installttl} onToggle={() => cards.toggle("installttl")} />
+      <MarketplaceSettings settings={data.settings} busy={busy} call={call} open={cards.open.marketplaces} onToggle={() => cards.toggle("marketplaces")} />
 
       <FeaturedCapSetting value={data.settings.maxFeaturedSkills} busy={busy} call={call} open={cards.open.featuredcap} onToggle={() => cards.toggle("featuredcap")} />
 
@@ -639,6 +756,21 @@ export default function AdminPage() {
                       Review: {ns.requireReview ? "required" : "optional"}
                     </button>
                     {ns.requireReview ? <Pill tone="warn">moderated</Pill> : <Pill tone="ok">direct publish</Pill>}
+                    {/* The same marketplace toggle namespace admins get on /namespaces (§30.6) —
+                        a deliberate dual surface: both write through the same endpoint and audit. */}
+                    <button
+                      className="btn btn-sm"
+                      disabled={busy}
+                      title="Publish this namespace's restricted skills as a Claude Code plugin marketplace"
+                      onClick={() => {
+                        if (ns.marketplaceEnabled && !window.confirm(
+                          `Disable the marketplace for @${ns.slug}?\n\nIts URL stops working and every key for it is revoked. Plugins already installed on people's machines keep working.`,
+                        )) return;
+                        void call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ marketplaceEnabled: !ns.marketplaceEnabled }) });
+                      }}
+                    >
+                      Marketplace: {ns.marketplaceEnabled ? "on" : "off"}
+                    </button>
                   </div>
 
                   <MaintainerEditor ns={ns} onSave={(v) => call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ maintainerContact: v }) })} busy={busy} />

@@ -81,6 +81,19 @@ export function canYankOrArchive(a: EffectiveAccess, namespaceId: string): boole
   return a.isPlatformAdmin || a.namespaceRoles.get(namespaceId) === "namespace_admin";
 }
 
+/** Edit a namespace's settings — `require_review`, `maintainer_contact`, and the Claude plugin
+ *  marketplace toggle — from the Namespace administration page or Administration (§30.6). */
+export function canManageNamespaceSettings(a: EffectiveAccess, namespaceId: string): boolean {
+  return a.isPlatformAdmin || a.namespaceRoles.get(namespaceId) === "namespace_admin";
+}
+
+/** May this user mint a token for a namespace's plugin marketplace? A namespace marketplace
+ *  carries restricted skills, so it takes the same access the skills themselves take — ANY role
+ *  in the namespace, not just admin. The PUBLIC marketplace needs no such check (§30.4). */
+export function canUseNamespaceMarketplace(a: EffectiveAccess, namespaceId: string): boolean {
+  return a.isPlatformAdmin || a.namespaceRoles.has(namespaceId);
+}
+
 /**
  * Is a skill visible to this user? org-wide skills are visible to all authenticated
  * users; namespace-scoped skills only to members of that namespace (any role) and

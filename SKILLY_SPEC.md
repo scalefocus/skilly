@@ -17,7 +17,7 @@ Every decision below was explicitly confirmed.
 | Build approach | **Greenfield**, SKILL.md-compatible. SkillHub is a reference, not a base. |
 | Name | **skilly** |
 | Stack | **TypeScript monorepo**: Next.js (UI+API), separate SCIM/sync worker, Postgres, S3/MinIO |
-| Client | **No custom CLI.** Consumption via `vercel-labs/skills` (`npx skills add`); skilly serves an **authenticated git smart server** (skill=repo, version=git tag), token-in-URL basic auth |
+| Client | **No custom CLI.** Consumption via `vercel-labs/skills` (`npx skills add`); skilly serves an **authenticated git smart server** (skill=repo, version=git tag), token-in-URL basic auth. **Second consumer: Claude Code plugin marketplaces** (§30) — one public marketplace + one per namespace, served as git repos from the same gateway |
 | Publishing | **Web UI only** + REST+PAT for scripted publish |
 | Identity | **Real SCIM 2.0** (worker-hosted) + **OIDC-only SSO** (Entra). Roles resolved from SCIM-synced groups |
 | RBAC | Explicit Entra-group→(namespace, role) mapping. Roles: Platform Admin / Namespace Admin / Namespace Member + implicit propose/consume |
@@ -120,7 +120,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `group_id`, `user_id`. Synced via SCIM. **Authoritative source of "who is in a group."**
 
 ### `namespaces`
-- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin — **free-text**, but the admin editor offers a **user-search typeahead** that fills a picked user's email; a shared mailbox / distribution list is still allowed), `created_at`.
+- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **free-text**, but the editor offers a **user-search typeahead** that fills a picked user's email; a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `created_at`.
 - Created explicitly by Platform Admins. `global` is special: `require_review` always true.
 
 ### `role_mappings` (the explicit Entra-group→role binding table)
@@ -179,8 +179,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id`, `actor_user_id`, `skill_version_id`, `skill_id` (nullable FK, `ON DELETE SET NULL` — links a fetch to its skill even when the exact version isn't resolved; powers install analytics, §21), `source`, `created_at`, `is_system` (BOOLEAN default false — the clone presented a **system installation** token, §23; distinguishes system clones from legacy anonymous/tokenless rows, both of which have `actor_user_id = NULL`).
 
 ### `tokens`
-- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install`; `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), `created_at`.
+- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), `created_at`.
 - **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23. **The §29 MCP/OAuth credentials are a separate regime in separate tables** (`oauth_*` below) — header-borne, short-lived and rotating; they never share a row or an enum with `tokens`.
+- **`marketplace` tokens** (§30.4) are the same handle for a **plugin marketplace** rather than a skill: `skill_id` is NULL and the scope is carried by **`marketplace_scope`** (`public` | `namespace`) + **`namespace_id`** (FK → `namespaces`, `ON DELETE CASCADE`; set **iff** scope = `namespace`). `skill_id` is therefore **nullable**, and a CHECK enforces the discriminant: `install` ⇒ `skill_id` NOT NULL ∧ `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL ∧ `marketplace_scope` NOT NULL ∧ (`namespace_id` NOT NULL ⇔ scope = `namespace`). **`last_served_commit`** (TEXT, nullable) is the per-token attribution cursor of §30.7. Same TTL, reuse, reactivate and hard-delete-on-remove semantics as `install`; **`is_system` is never set** — system marketplaces are deferred (§30.4).
 
 ### `categories`
 - Controlled vocabulary, admin-managed: `id`, `name`, `description`.
@@ -205,7 +206,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -248,7 +249,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 
 ### Roles
 - **Platform Admin** (platform-level): create namespaces + role mappings, govern `global`, approve in any namespace, see all audit logs, set namespace maintainer, yank/archive anywhere.
-- **Namespace Admin** (per namespace): approve/reject proposals targeting the namespace, manage namespace skills, publish versions, yank/archive in-namespace, edit namespace settings.
+- **Namespace Admin** (per namespace): approve/reject proposals targeting the namespace, manage namespace skills, publish versions, yank/archive in-namespace, edit namespace settings — `require_review`, `maintainer_contact` and the **Claude plugin marketplace toggle** — on the **Namespace administration** page (§30.6).
 - **Namespace Member** (per namespace): direct-publish/version into the namespace **only if** `require_review = false`; otherwise their submissions become proposals.
 - **Implicit (any authenticated Entra user):** **propose** to any namespace; **consume** (browse/search/install) any skill *visible* to them.
 
@@ -257,6 +258,10 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Action | Plat. Admin | NS Admin (own) | NS Member (own) | Auth user |
 |---|---|---|---|---|
 | Create namespace / role mapping | ✅ | ❌ | ❌ | ❌ |
+| Edit namespace settings — `require_review`, `maintainer_contact`, marketplace toggle (§30.6) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
+| Toggle the **public** plugin marketplace (§30.1) | ✅ | ❌ | ❌ | ❌ |
+| Mint a **namespace** marketplace token (§30.4) | ✅ | ✅ (own ns) | ✅ (own ns) | ❌ |
+| Mint a **public** marketplace token (§30.4) | ✅ | ✅ | ✅ | ✅ |
 | Approve/reject proposal | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Edit proposal in review | ✅ | ✅ (own ns) | ❌ | ❌ |
 | Direct publish/version | ✅ | ✅ (own ns) | ✅ if `require_review=false` | ❌ |
@@ -848,6 +853,12 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   yanked-aware, mirror-only for pointers, capped, rate-limited and `access_log`-recorded — and a first
   `SKILL.md` read **counts as adoption** so consumption stays measurable (§21/§29). The wire format in
   `external-tool.ts` is **unchanged**: MCP is a new caller of `buildInstallCommand`, not a new contract.
+- **A second consumer exists: Claude Code plugin marketplaces (§30).** It is served by this
+  same git gateway (so invariant #4 holds), but it is a **separate pinned contract** in
+  `packages/shared/src/plugin-marketplace.ts` — different repo shape (`.claude-plugin/`
+  marketplace + embedded plugins), different token scope (`marketplace`, not skill), no
+  tags. Neither module imports the other's wire format. Everything in this section describes
+  the `npx skills add` path only.
 
 ---
 
@@ -914,6 +925,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Catalog mutations (publish, new version, yank, archive, **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive or last-version yank, §7), visibility change, namespace reassignment).
   - **Scan overrides** (`proposal.scan_override`).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
+  - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
@@ -1318,7 +1330,8 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Administration**
 - `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
-- `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), …).
+- `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), …).
+- **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
@@ -1751,6 +1764,13 @@ added since the git gateway. The posture, in one place:
 An **installation** is a single `install` token (one table; the token IS the installation).
 Generating an install command on a skill's detail page mints one; using it (the first git
 clone) turns it into a recorded installation the user can see, expire, reactivate, or uninstall.
+
+> **Sibling surface:** §30 adds a **`marketplace`** token type to the same table and an
+> **Added marketplaces** page (`/marketplaces`) built to the same pattern — same derived
+> states, same TTL rules and `install_max_ttl_months` cap, same generate-purges-unclaimed
+> rule, same reactivate, same hard-delete-on-remove. It is scoped to a *marketplace*
+> (public, or one namespace) instead of a skill, and it is **not** eligible for the system
+> carve-out below. Everything in §23 describes `install` tokens unless stated otherwise.
 
 ### Install token model
 - **Type `install`** on `tokens` (the `pat`/`one_time` enum values are retired; PATs and the
@@ -3251,3 +3271,337 @@ since consumption is universal.
 7. **No headless/CI path** to the MCP surface in v1 — system installations (§23) remain the machine
    story.
 8. **No chunked MCP upload** — hosted bundles above 2 MiB decoded must go through the browser.
+## 30. Claude plugin marketplaces
+
+skilly exposes its catalog to **Claude Code** as [plugin marketplaces](https://code.claude.com/docs/en/plugin-marketplaces)
+— git repositories carrying `.claude-plugin/marketplace.json`, added by a consumer with
+`/plugin marketplace add <url>`. This is a **second consumption contract** alongside
+`npx skills add` (§9): both are served by the **same authenticated git smart server**, so
+invariant #4 (the gateway is the only path to bytes) is unchanged.
+
+> **Contract PINNED, separately from §9.** The `npx skills add` wire format stays in
+> `packages/shared/src/external-tool.ts`; the marketplace wire format lives in a **new**
+> `packages/shared/src/plugin-marketplace.ts`, carrying its own "pinned at Claude Code
+> v‹x›" note. Two tools, two contracts, two modules — neither imports the other's shape.
+> **CLAUDE.md's "the one constraint" is amended**: skilly still ships **no CLI**, but it
+> now serves **two** third-party consumers.
+
+### 30.1 Topology — N+1 marketplaces
+
+| Marketplace | Repo path | Contents | Toggle | Who may mint a token |
+|---|---|---|---|---|
+| **Public** | `/_marketplace/_public.git` | Every **active, `org`-visible** skill, **across all namespaces** | Platform setting `marketplace_public_enabled` (Administration) | Any authenticated user |
+| **Namespace** (one per ns) | `/_marketplace/<ns>.git` | That namespace's active **`namespace`-visibility** skills **only** | Per-namespace `marketplace_enabled` | Users with access to that namespace |
+
+- **The two sets are disjoint.** An `org`-visible skill owned by `team-a` appears in the
+  **public** marketplace and **never** in `skilly-team-a` — the namespace marketplace is
+  precisely "the restricted work of this team", the public one is "everything anyone may
+  see". No skill is listed twice, and a team member who adds both gets the complete
+  picture with no duplicates.
+- **The two toggles are independent.** `team-a` disabling its marketplace removes
+  `skilly-team-a`; team-a's `org`-visible skills stay in the public marketplace, which is
+  governed solely by the platform-admin switch. One switch, one repo.
+- **Visibility is enforced at the repo boundary, not inside the file** (invariant #3). The
+  public repo contains only org-visible bytes, so an open mint is safe; a namespace repo
+  contains restricted bytes, so minting *and* every clone require namespace access. There
+  is no per-principal filtering of a marketplace's contents — the gate is which repo you
+  can obtain a token for.
+- **`global`** is an ordinary namespace here: its own `marketplace_enabled` governs
+  `skilly-global`, which lists only its `namespace`-visibility skills (in practice few —
+  most `global` skills are org-visible and therefore live in the public marketplace).
+- **Path collision is structurally impossible.** `_marketplace` and `_public` both begin
+  with `_` and so can never be a namespace or skill slug (`^[a-z0-9][a-z0-9-]*$`,
+  `repoStore.ts`). No skill slugged `marketplace` can shadow a marketplace repo.
+
+### 30.2 Marketplace naming
+
+The public-facing `name` in `marketplace.json` is **`<prefix>-<ns>`** for a namespace and
+**`<prefix>-public`** for the public marketplace, where `prefix` is a platform setting
+**`marketplace_name_prefix`** (default **`skilly`**).
+
+- Claude Code allows a user to register **only one marketplace per name**, so the prefix is
+  the instance discriminator: a dev and a prod skilly must set **different** prefixes
+  (`skilly-dev` / `skilly`) or a user who adds both collides on `skilly-platform`.
+- **Reserved-name guard.** Anthropic reserves names (`claude-code-marketplace`,
+  `anthropic-plugins`, `agent-skills`, …). The **computed** name is validated — at namespace
+  create/rename **and** when `marketplace_name_prefix` changes — against the reserved list;
+  a collision is rejected **422** naming the offending namespace. Prefixing makes this
+  near-impossible, but the guard is cheap and the failure mode (a silently unusable
+  marketplace) is invisible to the admin otherwise.
+- `name` must be kebab-case; namespace slugs already are.
+
+### 30.3 Repo shape — plugins are embedded
+
+Each marketplace is a **self-contained** repo: the skill bytes live inside it, so **one
+credential is enough** and the per-skill repos of §9 are untouched.
+
+```
+<marketplace repo>/
+├── .claude-plugin/
+│   └── marketplace.json
+└── plugins/
+    └── <skill-slug>/
+        ├── .claude-plugin/
+        │   └── plugin.json
+        └── skills/
+            └── <skill-slug>/
+                ├── SKILL.md
+                └── …every other file from the version bundle
+```
+
+- **One plugin per skill**, sourced by **relative path** (`"source": "./plugins/<slug>"`,
+  with `metadata.pluginRoot = "./plugins"`) — the best-supported source type and the only
+  one that needs no second credential.
+- **The listed version is the skill's latest *stable* semver** (yanked and prerelease
+  excluded), materialized as the plugin entry's `version` and `plugin.json`'s `version`.
+  Because Claude Code only updates a plugin when that field changes, a marketplace resync
+  that touches nothing else is inert for consumers.
+- **Only the default branch (`main`) matters.** Marketplace repos carry **no tags** —
+  pinning a skill version is the `npx skills add` path (§9), not this one.
+- An enabled marketplace with **zero** qualifying skills is still synthesized and served,
+  with `"plugins": []`, so `/plugin marketplace add` succeeds and starts working the moment
+  a skill qualifies.
+
+**`marketplace.json`** (generated; fields beyond these are not emitted):
+
+```json
+{
+  "name": "skilly-team-a",
+  "owner": { "name": "<namespace display_name>", "email": "<namespace maintainer_contact>" },
+  "description": "Restricted skills from the <display_name> namespace on skilly.",
+  "version": "<synthesis serial>",
+  "metadata": { "pluginRoot": "./plugins" },
+  "plugins": [
+    {
+      "name": "<skill-slug>",
+      "source": "./plugins/<skill-slug>",
+      "displayName": "<skill title>",
+      "description": "<skill description>",
+      "version": "<latest stable semver>",
+      "keywords": ["<tags…>"],
+      "category": "<primary category slug>",
+      "homepage": "<registry base>/skills/<ns>/<slug>"
+    }
+  ]
+}
+```
+
+`owner.email` is omitted when the namespace has no `maintainer_contact`. The public
+marketplace's `owner` is the platform (`display_name` = the registry host, no email).
+
+**`plugin.json`** (generated per skill):
+
+```json
+{
+  "name": "<skill-slug>",
+  "description": "<skill description>",
+  "version": "<latest stable semver>",
+  "skills": ["./skills/"]
+}
+```
+
+#### Plugin-component pass-through
+A skilly skill bundle is `SKILL.md` + arbitrary files. Claude Code plugins additionally
+recognize `hooks.json`, `mcp.json`, `lsp.json`, `commands/` and `agents/`. **These are
+passed through, not stripped**: when a bundle carries any of them **at its root**, synthesis
+**hoists** them from `skills/<slug>/` to the **plugin root** and references them from
+`plugin.json` (`"hooks": "./hooks.json"`, `"mcpServers": "./mcp.json"`,
+`"lspServers": "./lsp.json"`, `"commands": ["./commands/"]`, `"agents": ["./agents/"]`).
+Everything else stays under `skills/<slug>/`.
+
+> **Security note (§22).** Hooks and MCP servers are **code that executes on the consumer's
+> machine** at session start, which `SKILL.md` alone is not. Pass-through is a deliberate,
+> accepted decision — it makes skilly a distributor of executable configuration. The
+> existing ClamAV scan of the bundle (§3, §6) is the control; no additional gate is added.
+> Revisit if a skill is ever published whose hooks are hostile.
+
+### 30.4 Serving & auth — the `marketplace` token
+
+A new token type on `tokens` (§3, §23): **`type = 'marketplace'`**.
+
+- **Scope** is a marketplace, not a skill: `marketplace_scope` (`public` | `namespace`) plus
+  `namespace_id` (set iff `namespace` scope). `skill_id` is NULL.
+- **Minting.** Any authenticated user may mint a **public** token. A **namespace** token
+  requires the caller to have access to that namespace (`isSkillVisible`'s namespace rule)
+  and that the namespace's marketplace is enabled.
+- **Clone-time re-check** mirrors §9 exactly: the gateway validates the token, and for a
+  namespace-scoped token re-resolves the owner's access — a mover/leaver loses the
+  marketplace the same way they lose a restricted skill. The owning user must still be
+  `status='active'`; an inactive owner gets the same indistinguishable **401** and the same
+  `install_token_owner_inactive` `system_event` (§23/§25).
+- **TTL** is identical to install tokens: an explicit date capped by `install_max_ttl_months`,
+  or **Never**. Same forward-only cap semantics. Expiry makes the token *inactive*, not
+  deleted — the practical failure mode is that Claude Code's **background marketplace
+  update starts failing**, which is why the "Added marketplaces" page (§30.6) surfaces
+  expiry prominently and offers reactivate.
+- **Generate purges prior unclaimed tokens** for the same marketplace and the same user,
+  exactly as §23 does per skill.
+- **Read-only, `upload-pack` only.** Push is refused 403 like every other repo.
+- **No system marketplaces in v1.** The §23 system-installation carve-out (no user, no
+  visibility re-check) is **not** extended to marketplaces: a machine-shared credential
+  that yields an entire namespace's restricted catalog is a materially larger blast radius
+  than one skill. Deferred, not refused.
+
+**Install form** (`plugin-marketplace.ts` owns it):
+
+```
+/plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/<ns>.git
+/plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/_public.git
+```
+
+**Credential fallback (shipped alongside, not instead).** Anthropic documents git credential
+helpers for interactive commands and notes that **background auto-updates disable them**,
+recommending a URL rewrite for private marketplaces. skilly's copy-paste panel therefore
+offers **both**: the token-in-URL command as the primary, and a one-line
+
+```
+git config --global url."https://x-access-token:<token>@<host>/_marketplace".insteadOf "https://<host>/_marketplace"
+```
+
+fallback (plus the credential-free add URL) for consumers whose auto-updates fail. If
+creds-in-URL prove to be stripped for marketplaces, only the panel's default ordering
+changes — the fallback is already specced and implemented.
+
+### 30.5 Synthesis & freshness
+
+- **Leader-locked worker sweep**, like the other §2 worker jobs. Interval is a platform
+  setting **`marketplace_sync_minutes`** — integer **1–1440, default 30** (Administration →
+  Marketplace sync). Marketplaces are therefore **eventually consistent**: a newly published
+  skill appears in its marketplace within the interval, not instantly. This is deliberate —
+  synthesis rewrites a whole repo and must not sit in the publish path.
+- Each sweep computes, per enabled marketplace, a **content hash** over its qualifying
+  skills (slug, title, description, tags, categories, latest-stable semver, bundle
+  `content_sha256`). Unchanged ⇒ no commit. Changed ⇒ the repo is rebuilt and **one commit**
+  is written to `main` whose message enumerates the added/updated/removed skill slugs — that
+  message is the attribution ledger §30.7 reads.
+- **Triggers to re-evaluate** (all naturally caught by the hash): publish, new version, yank,
+  archive/restore, delete, visibility change, namespace reassignment, title/description/tag/
+  category edits, marketplace enable.
+- **Self-heal**: a missing or ref-less marketplace repo for an enabled marketplace is
+  re-synthesized from scratch, matching `repoProvisioned`'s existing rule (§6).
+
+### 30.6 Enable / disable, and the two new pages
+
+**Default: off.** Every existing and newly created namespace starts `marketplace_enabled =
+false`; `marketplace_public_enabled` starts `false`. Nothing is served until someone opts in.
+
+**Disable** (namespace or public):
+- The repo returns **404** and is **deleted from disk** (re-synthesized on re-enable).
+- The marketplace's tokens are **revoked** (hard-deleted, as §23 uninstall does).
+- **Plugins already installed on a consumer's machine keep working** — they are on disk and
+  skilly is not in that loop. Only *adding* and *updating* stop. The confirm dialog says
+  exactly this, plus the token count being revoked.
+- **Re-enable** rebuilds the repo at the same URL, but every consumer must **mint a fresh
+  token and re-add** — the old URLs are dead.
+- Both transitions are **audited** (§30.8).
+
+**Page 1 — Namespace administration (`/namespaces`), new.** One page listing **every
+namespace the caller administers** (platform admins see all; namespace admins see theirs;
+anyone else gets 403 and no nav entry). It is the **new home for namespace settings
+generally**, not a single-toggle page:
+
+- **Claude plugin marketplace** — the enable/disable toggle, the computed marketplace name,
+  the add command once enabled, and a live count of the skills it publishes.
+- **`require_review`** — editable per namespace. **`global` renders read-only** with a note
+  that review is always required there (§4/§8).
+- **`maintainer_contact`** — editable, reusing the existing user-search typeahead that fills
+  a picked user's email (a shared mailbox is still allowed).
+- **The platform Administration → Namespaces card keeps all three.** Platform admins edit
+  from either surface; the two write through the same endpoints and audit identically. This
+  is a deliberate dual surface, not a migration.
+- Nav: a **Namespace administration** entry beside **Administration**, rendered only when the
+  caller administers ≥ 1 namespace.
+
+**Page 2 — Added marketplaces (`/marketplaces`), new.** The marketplace analogue of
+**Installed skills** (§23), and its structural twin: one row per `marketplace` token the
+caller owns, showing the marketplace name and scope, derived state (*generated-unused* /
+*active* / *inactive*, same predicates as §23), expiry, first-added time, last fetch, and the
+client UA/IP captured on first fetch. Actions: **copy command**, **reactivate** (inactive
+only — set a new expiry on the same token, the existing URL works again), and **remove**
+(hard-delete; the URL is refused, installed plugins on disk are untouched). Header search is
+a client-side live filter over the loaded rows, matching `/installed`'s non-registry mode
+(§10). Nav: the account menu, beside **Installed skills**.
+
+### 30.7 Install attribution
+
+A marketplace clone delivers **every** listed skill in one fetch; the git protocol gives
+skilly no per-plugin signal, and `defaultEnabled` is `true`, so every listed plugin is
+installed unless the consumer later disables it. Marketplace fetches are therefore credited
+as **real installs of the individual skills**, via a commit cursor:
+
+- `tokens.last_served_commit` records the marketplace `main` commit that token was last
+  served.
+- On each `/info/refs` advertisement with a valid marketplace token, the gateway compares
+  `last_served_commit` to current `main`:
+  - **NULL / unreachable** (first clone, or the repo was rebuilt from scratch after a
+    re-enable) ⇒ credit **+1 install to every skill** the marketplace currently lists.
+  - **Behind** ⇒ credit **+1 install to each skill added or version-changed** in the commit
+    range, read from the §30.5 commit messages. Removals credit nothing.
+  - **Equal** ⇒ credit nothing (a no-op poll).
+- Each credit goes through the **same `record_git_access` path as a direct install**, so a
+  marketplace install is indistinguishable from an `npx skills add` one in every downstream
+  metric — and inherits that path's rules exactly: an **`access_log` row and the monthly
+  `install_counters` increment on every credit**, and the **`install_count` bump + maintainer
+  leaderboard credits once per (user, skill)**, deduped through `skill_installs`.
+  `last_served_commit` is then advanced, in the same transaction as the credits.
+- **So an update is recorded as an install *event*, not as a second *adopter*.** A consumer
+  receiving v1.1.0 of a skill they already had writes a fresh `access_log` row (it shows in the
+  usage dashboard and the monthly totals) but does not re-bump `install_count`. This is
+  deliberate and is what "the same as a direct install" means — re-running `npx skills add` for
+  a new version behaves identically. Doing otherwise would make `install_count` grow without
+  bound on every republish and would fan phantom credits into the §21 contributor leaderboard.
+
+**Accepted consequences, stated rather than hidden:**
+- A consumer who **disables** a plugin still counted as installing it. skilly cannot see it.
+- A namespace-wide republish credits an install to **every changed skill** for **every**
+  marketplace consumer, whether or not they use those skills.
+- A user holding **both** a per-skill install token and a marketplace token double-counts
+  that skill. Neither path is suppressed.
+- These numbers are therefore **reach**, not engagement — the same thing `install_count`
+  already measured for `npx skills add`, applied consistently.
+
+### 30.8 Audit, settings, API
+
+**Audit actions** (§11), all `target_type = 'namespace'` except the public pair:
+- `namespace.marketplace_enabled` / `namespace.marketplace_disabled` — actor, namespace, and
+  on disable the count of revoked tokens.
+- `marketplace.public_enabled` / `marketplace.public_disabled` — platform-level, same shape.
+- Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the
+  **existing** `namespace.updated` audit action — same action, new actor class.
+- **Personal marketplace tokens are not audited**, consistent with personal install tokens
+  (§11); their lifecycle is visible to their owner on `/marketplaces`.
+
+**Platform settings** (§13, `settings` table):
+- `marketplace_public_enabled` — bool, default `false`.
+- `marketplace_sync_minutes` — int 1–1440, default `30`.
+- `marketplace_name_prefix` — kebab-case string, default `skilly`; validated against the
+  reserved-name list for every existing namespace on change.
+
+**Data model** (§3):
+- `namespaces` gains `marketplace_enabled BOOLEAN NOT NULL DEFAULT false`.
+- `tokens`: `type` gains `'marketplace'`; `skill_id` becomes **nullable**; new
+  `marketplace_scope TEXT` (`public` | `namespace`), `namespace_id UUID` (FK → `namespaces`,
+  `ON DELETE CASCADE`), `last_served_commit TEXT`. CHECK constraint: `install` ⇒ `skill_id`
+  NOT NULL and `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL,
+  `marketplace_scope` NOT NULL, and `namespace_id` NOT NULL **iff** scope = `namespace`.
+
+**API surface** (§15, indicative):
+- `GET|PATCH /api/namespaces/:id/settings` — the new page's read/write for
+  `marketplace_enabled`, `require_review`, `maintainer_contact`. Namespace admin (own) or
+  platform admin (any); `global.require_review` rejected 422.
+- `GET /api/namespaces/administered` — the page's list.
+- `POST /api/marketplaces/tokens` — mint (body: scope + namespace + expiry). Returns the token-in-URL
+  add command, plus the `git config … insteadOf` + credential-free pair for the auto-update fallback.
+- `GET /api/marketplaces` — the caller's marketplace tokens (the `/marketplaces` page), plus
+  `publicMarketplace { enabled, name }` so a **non-admin** consumer can add the public marketplace
+  from that page — there is no admin surface they would otherwise reach.
+- `PATCH|DELETE /api/marketplaces/tokens/:id` — reactivate / remove.
+- `PATCH /api/admin/namespaces/:id` also accepts `marketplaceEnabled`, delegating to the same
+  writer as the namespace-admin page so the dual surface can't diverge on revocation or audit.
+- `GET|PATCH /api/admin/settings` gains the three settings above.
+
+### 30.9 Build placement
+Lands after the current tiers as its own increment: **worker** (synthesis sweep + marketplace
+routes on the existing git server), **shared** (`plugin-marketplace.ts`, pinned), **web**
+(two pages, four endpoint groups, one Administration card), **db** (one migration:
+`namespaces.marketplace_enabled`, the `tokens` columns + CHECK, the three settings rows).

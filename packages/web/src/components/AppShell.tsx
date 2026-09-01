@@ -24,6 +24,7 @@ const USAGE_NAV = { href: "/usage", label: "Usage", icon: "M4 19V5M4 19h16M8 16v
 const AUDIT_NAV = { href: "/audit", label: "Audit log", icon: "M5 4h11l3 3v13H5zM8 11h8M8 15h5M8 7h4" };
 const SYSLOG_NAV = { href: "/system-log", label: "System log", icon: "M4 5h16v14H4zM7 9h2M7 13h2M7 17h2M12 9h5M12 13h5" };
 const ADMIN_NAV = { href: "/admin", label: "Administration", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" };
+const NS_ADMIN_NAV = { href: "/namespaces", label: "Namespace administration", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" };
 
 function Icon({ d }: { d: string }) {
   return (
@@ -40,6 +41,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [q, setQ] = useState("");
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  // Namespace administration (§30.6) — shown to anyone who administers at least one namespace.
+  const [canAdminNamespace, setCanAdminNamespace] = useState(false);
   const [canAudit, setCanAudit] = useState(false);
   const [canUsage, setCanUsage] = useState(false);
   // First-login onboarding: null = unknown (until /api/me resolves), false = never seen Quick
@@ -214,6 +217,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         setIsPlatformAdmin(Boolean(j.isPlatformAdmin));
         const nsAdmin = Array.isArray(j.namespaceRoles) && j.namespaceRoles.some((r) => r.role === "namespace_admin");
         setCanAudit(Boolean(j.isPlatformAdmin) || nsAdmin);
+        setCanAdminNamespace(Boolean(j.isPlatformAdmin) || nsAdmin);
         // Usage dashboard: platform admins, namespace admins, and explicit maintainers.
         setCanUsage(Boolean(j.isPlatformAdmin) || nsAdmin || Boolean(j.maintainsSkills));
         // First-login onboarding: null marker → they haven't seen Quick start; the gate below
@@ -465,6 +469,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             )}
           </Link>
         )}
+        {canAdminNamespace && (
+          <Link href={NS_ADMIN_NAV.href} className={`nav-item${isActive(NS_ADMIN_NAV.href) ? " active" : ""}`}>
+            <Icon d={NS_ADMIN_NAV.icon} />
+            {NS_ADMIN_NAV.label}
+          </Link>
+        )}
         {isPlatformAdmin && (
           <Link href={ADMIN_NAV.href} className={`nav-item${isActive(ADMIN_NAV.href) ? " active" : ""}`}>
             <Icon d={ADMIN_NAV.icon} />
@@ -510,6 +520,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                       <path d="M21 8v8a2 2 0 0 1-1 1.7l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.7l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" />
                     </svg>
                     Installed skills
+                  </Link>
+                  <Link href="/marketplaces" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M3 9h18l-1.5-4.5A1.5 1.5 0 0 0 18 3.5H6a1.5 1.5 0 0 0-1.5 1L3 9zM4.5 9v9A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5V9M9 13h6" />
+                    </svg>
+                    Added marketplaces
                   </Link>
                   <Link href="/profile" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

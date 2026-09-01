@@ -24,3 +24,4 @@ export * from "./installs.js";
 export * from "./remote-refs.js";
 export * from "./oauth.js";
 export * from "./mcp.js";
+export * from "./plugin-marketplace.js";

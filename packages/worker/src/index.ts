@@ -13,6 +13,7 @@ import { workerRateLimiter, mcpIpRateLimiter } from "./rateLimit.js";
 import { pgGitDeps } from "./git/pgDeps.js";
 import { publishPendingVersions, reprovisionMissingRepos } from "./git/publish.js";
 import { withdrawYankedVersions } from "./git/withdraw.js";
+import { syncMarketplaces, marketplaceSettings } from "./git/marketplaceSync.js";
 import { mirrorPendingVersions } from "./git/mirrorPending.js";
 import { s3ArtifactStore } from "./storage/objectStore.js";
 import { defaultRepoRoot } from "./git/repoStore.js";
@@ -111,6 +112,26 @@ async function leaderLoops(): Promise<void> {
   };
   await sweep();
   setInterval(sweep, Number(process.env.PUBLISH_SWEEP_INTERVAL_MS ?? 60000));
+
+  // Marketplace synthesis (§30.5): rebuild every enabled marketplace whose content changed, and
+  // remove the repo of every disabled one. Interval is the `marketplace_sync_minutes` platform
+  // setting (1–1440, default 30) — re-read every tick so an admin's change takes effect without a
+  // restart. Runs on a 1-minute heartbeat and skips ticks until the configured interval elapses.
+  let lastMarketplaceSync = 0;
+  const syncMarketplacesTick = async () => {
+    if (!isLeader) return;
+    try {
+      const { syncMinutes } = await marketplaceSettings(pool);
+      if (Date.now() - lastMarketplaceSync < syncMinutes * 60_000) return;
+      lastMarketplaceSync = Date.now();
+      const n = await syncMarketplaces(pool, publishDeps);
+      if (n > 0) console.log(JSON.stringify({ level: "info", msg: "marketplaces synthesized", count: n }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "marketplace sync failed", err: String(err) }));
+    }
+  };
+  await syncMarketplacesTick();
+  setInterval(syncMarketplacesTick, 60_000);
 
   // Token reaper: delete expired one-time/PAT tokens.
   const reap = async () => {

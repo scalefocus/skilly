@@ -35,6 +35,17 @@ function deps(over: Partial<GitAuthDeps> = {}): GitAuthDeps {
       // Owner-status gate (§5/§23): the token row matched but its owning user is inactive.
       if (raw === "inactive-org") return { userId: "u-gone", tokenId: "t5", type: "install", scopedSkillId: "s1", isSystem: false, ownerInactive: true } as TokenPrincipal;
       if (raw === "inactive-ns") return { userId: "u-gone", tokenId: "t6", type: "install", scopedSkillId: "s2", isSystem: false, ownerInactive: true } as TokenPrincipal;
+      // Marketplace tokens (§30.4) — scoped to a marketplace, never to a skill.
+      if (raw === "mkt-public") return { userId: "u2", tokenId: "m1", type: "marketplace", scopedMarketplace: { kind: "public" }, scopedNamespaceId: null, lastServedCommit: null, isSystem: false } as TokenPrincipal;
+      if (raw === "mkt-ns") return { userId: "u1", tokenId: "m2", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-a" }, scopedNamespaceId: NS_A, lastServedCommit: "abc", isSystem: false } as TokenPrincipal;
+      if (raw === "mkt-ns-outsider") return { userId: "u2", tokenId: "m3", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-a" }, scopedNamespaceId: NS_A, lastServedCommit: null, isSystem: false } as TokenPrincipal;
+      if (raw === "mkt-other-ns") return { userId: "u1", tokenId: "m4", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-b" }, scopedNamespaceId: "nsid-b", lastServedCommit: null, isSystem: false } as TokenPrincipal;
+      return null;
+    },
+    async findMarketplace(scope) {
+      if (scope.kind === "public") return { scope, namespaceId: null, enabled: true };
+      if (scope.namespaceSlug === "team-a") return { scope, namespaceId: NS_A, enabled: true };
+      if (scope.namespaceSlug === "team-off") return { scope, namespaceId: "nsid-off", enabled: false };
       return null;
     },
     async resolveAccess(userId) {
@@ -47,7 +58,7 @@ function deps(over: Partial<GitAuthDeps> = {}): GitAuthDeps {
 
 test("parses info/refs and rpc paths", () => {
   const a = parseGitPath("/team-a/pdf.git/info/refs", new URLSearchParams("service=git-upload-pack"));
-  assert.deepEqual(a, { namespaceSlug: "team-a", skillSlug: "pdf", operation: "upload-pack", isServiceRpc: false });
+  assert.deepEqual(a, { namespaceSlug: "team-a", skillSlug: "pdf", marketplace: null, operation: "upload-pack", isServiceRpc: false });
   const b = parseGitPath("/team-a/pdf.git/git-upload-pack", new URLSearchParams());
   assert.equal(b?.isServiceRpc, true);
   assert.equal(parseGitPath("/nope", new URLSearchParams()), null);
@@ -61,7 +72,7 @@ test("extracts token from basic auth header", () => {
 
 test("push is always denied", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "receive-pack", isServiceRpc: true },
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "receive-pack", isServiceRpc: true },
     "good-ns",
     deps(),
   );
@@ -70,7 +81,7 @@ test("push is always denied", async () => {
 
 test("org skill requires a token (no anonymous clones)", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "org-skill", operation: "upload-pack", isServiceRpc: false },
+    { namespaceSlug: "team-a", skillSlug: "org-skill", marketplace: null, operation: "upload-pack", isServiceRpc: false },
     undefined,
     deps(),
   );
@@ -79,7 +90,7 @@ test("org skill requires a token (no anonymous clones)", async () => {
 
 test("org skill: valid scoped token allowed", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "org-skill", operation: "upload-pack", isServiceRpc: false },
+    { namespaceSlug: "team-a", skillSlug: "org-skill", marketplace: null, operation: "upload-pack", isServiceRpc: false },
     "good-org",
     deps(),
   );
@@ -88,7 +99,7 @@ test("org skill: valid scoped token allowed", async () => {
 
 test("namespace skill requires a token", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "upload-pack", isServiceRpc: false },
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack", isServiceRpc: false },
     undefined,
     deps(),
   );
@@ -97,7 +108,7 @@ test("namespace skill requires a token", async () => {
 
 test("namespace skill: member with valid token allowed", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "upload-pack", isServiceRpc: true },
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack", isServiceRpc: true },
     "good-ns",
     deps(),
   );
@@ -106,7 +117,7 @@ test("namespace skill: member with valid token allowed", async () => {
 
 test("namespace skill: outsider with valid token forbidden", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "upload-pack", isServiceRpc: true },
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack", isServiceRpc: true },
     "good-ns-outsider",
     deps(),
   );
@@ -115,7 +126,7 @@ test("namespace skill: outsider with valid token forbidden", async () => {
 
 test("namespace skill: SYSTEM token allowed without namespace access (deliberate admin grant)", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "upload-pack", isServiceRpc: true },
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack", isServiceRpc: true },
     "system-ns",
     deps({
       async resolveAccess() {
@@ -128,7 +139,7 @@ test("namespace skill: SYSTEM token allowed without namespace access (deliberate
 
 test("org skill: token of an inactive owner refused with the GENERIC invalid-token 401", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "org-skill", operation: "upload-pack", isServiceRpc: false },
+    { namespaceSlug: "team-a", skillSlug: "org-skill", marketplace: null, operation: "upload-pack", isServiceRpc: false },
     "inactive-org",
     deps(),
   );
@@ -144,7 +155,7 @@ test("org skill: token of an inactive owner refused with the GENERIC invalid-tok
 
 test("namespace skill: inactive owner refused before any namespace re-check", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "upload-pack", isServiceRpc: true },
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack", isServiceRpc: true },
     "inactive-ns",
     deps({
       async resolveAccess() {
@@ -162,7 +173,7 @@ test("namespace skill: inactive owner refused before any namespace re-check", as
 
 test("token scoped to a different skill is forbidden", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "ns-skill", operation: "upload-pack", isServiceRpc: true },
+    { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack", isServiceRpc: true },
     "good-org", // scoped to s1 (org-skill), presented against s2 (ns-skill)
     deps(),
   );
@@ -171,9 +182,93 @@ test("token scoped to a different skill is forbidden", async () => {
 
 test("unknown / archived skill is 404", async () => {
   const d = await authorizeGitRequest(
-    { namespaceSlug: "team-a", skillSlug: "missing", operation: "upload-pack", isServiceRpc: false },
+    { namespaceSlug: "team-a", skillSlug: "missing", marketplace: null, operation: "upload-pack", isServiceRpc: false },
     "good-ns",
     deps(),
   );
   assert.deepEqual(d, { allow: false, status: 404, reason: "skill not found" });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin marketplaces (SKILLY_SPEC.md §30)
+// ---------------------------------------------------------------------------
+
+const mktPath = (key: string) => parseGitPath(`/_marketplace/${key}.git/info/refs`, new URLSearchParams("service=git-upload-pack"));
+
+test("marketplace paths parse into a scope, skill paths do not", () => {
+  assert.deepEqual(mktPath("_public")?.marketplace, { kind: "public" });
+  assert.deepEqual(mktPath("team-a")?.marketplace, { kind: "namespace", namespaceSlug: "team-a" });
+  assert.equal(parseGitPath("/team-a/pdf.git/info/refs", new URLSearchParams("service=git-upload-pack"))?.marketplace, null);
+});
+
+test("an unresolvable _marketplace path is not a route at all", () => {
+  // `_`-led first segments belong to the marketplace space; a junk key must 404, never fall
+  // through and be treated as a skill repo named `..` in a namespace named `_marketplace`.
+  assert.equal(mktPath(".."), null);
+  assert.equal(mktPath("Team-A"), null);
+  assert.equal(mktPath("_secret"), null);
+});
+
+test("push to a marketplace is denied like any other repo", async () => {
+  const d = await authorizeGitRequest(
+    { namespaceSlug: "_marketplace", skillSlug: "team-a", marketplace: { kind: "namespace", namespaceSlug: "team-a" }, operation: "receive-pack", isServiceRpc: true },
+    "mkt-ns",
+    deps(),
+  );
+  assert.deepEqual(d, { allow: false, status: 403, reason: "registry is read-only (push denied)" });
+});
+
+test("a disabled or unknown marketplace is a 404 — never a 403 that confirms it exists", async () => {
+  const off = await authorizeGitRequest(mktPath("team-off")!, "mkt-ns", deps());
+  assert.deepEqual(off, { allow: false, status: 404, reason: "marketplace not found" });
+  const missing = await authorizeGitRequest(mktPath("team-zzz")!, "mkt-ns", deps());
+  assert.deepEqual(missing, { allow: false, status: 404, reason: "marketplace not found" });
+});
+
+test("a marketplace clone requires a token", async () => {
+  const d = await authorizeGitRequest(mktPath("_public")!, undefined, deps());
+  assert.deepEqual(d, { allow: false, status: 401, reason: "authentication required" });
+});
+
+test("any authenticated owner may clone the PUBLIC marketplace", async () => {
+  // u2 has no namespace access at all — the public marketplace carries only org-visible skills,
+  // so there is nothing to gate beyond holding a valid token (§30.4).
+  const d = await authorizeGitRequest(mktPath("_public")!, "mkt-public", deps());
+  assert.equal(d.allow, true);
+  if (d.allow && d.kind === "marketplace") {
+    assert.deepEqual(d.marketplace.scope, { kind: "public" });
+    assert.equal(d.principal.lastServedCommit, null);
+  }
+});
+
+test("a NAMESPACE marketplace re-checks the owner's access on every clone", async () => {
+  const member = await authorizeGitRequest(mktPath("team-a")!, "mkt-ns", deps());
+  assert.equal(member.allow, true);
+  if (member.allow && member.kind === "marketplace") {
+    assert.equal(member.marketplace.namespaceId, NS_A);
+    assert.equal(member.principal.lastServedCommit, "abc");
+  }
+  // Same valid, unexpired, correctly-scoped token — but its owner is no longer in the namespace.
+  const outsider = await authorizeGitRequest(mktPath("team-a")!, "mkt-ns-outsider", deps());
+  assert.deepEqual(outsider, { allow: false, status: 403, reason: "not authorized for this namespace" });
+});
+
+test("a marketplace token is bound to its own marketplace", async () => {
+  const wrongNs = await authorizeGitRequest(mktPath("team-a")!, "mkt-other-ns", deps());
+  assert.deepEqual(wrongNs, { allow: false, status: 403, reason: "token is scoped to a different marketplace" });
+  const publicAtNs = await authorizeGitRequest(mktPath("team-a")!, "mkt-public", deps());
+  assert.deepEqual(publicAtNs, { allow: false, status: 403, reason: "token is scoped to a different marketplace" });
+});
+
+test("install and marketplace tokens are not interchangeable", async () => {
+  // An install token must not open a marketplace...
+  const installAtMkt = await authorizeGitRequest(mktPath("_public")!, "good-org", deps());
+  assert.deepEqual(installAtMkt, { allow: false, status: 403, reason: "token is scoped to a different marketplace" });
+  // ...and a marketplace token must not open a skill, not even an org-visible one.
+  const mktAtSkill = await authorizeGitRequest(
+    { namespaceSlug: "team-a", skillSlug: "org-skill", marketplace: null, operation: "upload-pack", isServiceRpc: false },
+    "mkt-public",
+    deps(),
+  );
+  assert.deepEqual(mktAtSkill, { allow: false, status: 403, reason: "token is scoped to a different skill" });
 });
