@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.145.1",
+    date: "2026-09-01",
+    summary:
+      "The Category filter row now slides open and closed instead of snapping, on both the catalog and Requested skills — a 0.2s height-and-fade that moves with the chevron. Reduced-motion browsers still get the instant toggle.",
+  },
+  {
     version: "1.145.0",
     date: "2026-09-01",
     summary:

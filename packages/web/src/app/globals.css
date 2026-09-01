@@ -670,13 +670,42 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 /* The toggle carries the 6px itself so its label, count and chevron sit on one line. */
 .facet-row-toggle .facet-row-label { padding-top: 0; }
 .facet-row-toggle:hover .facet-row-label, .facet-row-toggle:focus-visible .facet-row-label { color: var(--accent-2); }
-.facet-row-chevron { transition: transform 0.15s; opacity: 0.75; }
+/* 0.2s, not 0.15s: the chevron and the chip block below animate as ONE motion (§10). */
+.facet-row-chevron { transition: transform 0.2s ease; opacity: 0.75; }
 .facet-row-chevron[data-open="true"] { transform: rotate(90deg); }
-@media (prefers-reduced-motion: reduce) { .facet-row-chevron { transition: none; } }
-/* Narrow screens: the gutter costs more than it buys — stack the label above its chips. */
+
+/* The collapsible Category row's chip block animates open/closed (§10) with the same mechanism as
+   the §5 admin-card bodies: a grid row track 0fr→1fr for the height, plus an opacity fade, both
+   0.2s ease. The chips stay mounted (the component marks the block `inert` while collapsed) —
+   unmounted content has no height to animate. */
+.facet-row-chipbox { display: grid; grid-template-rows: 0fr; overflow: hidden; min-width: 0; }
+.facet-row-chipbox[data-open="true"] { grid-template-rows: 1fr; }
+/* Padding and margins live INSIDE the clipping wrapper, never on the track: they are
+   incompressible, so on the track they would feed the 0fr minimum and let chips peek out from
+   under the header while collapsed. min-width:0 pins the item to its column (§14) so releasing
+   the clip below changes what is VISIBLE, never what is WIDE. */
+.facet-row-chipbox-inner { overflow: hidden; min-height: 0; min-width: 0; opacity: 0; }
+.facet-row-chipbox[data-open="true"] > .facet-row-chipbox-inner { opacity: 1; }
+/* Transitions are armed only after the first render (data-anim), so an already-open row — restored
+   preference, or the auto-expand from a live category filter — paints open without sliding. */
+.facet-row-chipbox[data-anim="true"] { transition: grid-template-rows 0.2s ease; }
+.facet-row-chipbox[data-anim="true"] > .facet-row-chipbox-inner { transition: opacity 0.2s ease; }
+/* Fully open (data-settled, ~0.2s after data-open — see CollapsibleFacetRow): release the clip so
+   a focus ring on a top/bottom-edge chip isn't shaved. Collapsing drops data-settled at once, so
+   the close animation still clips. */
+.facet-row-chipbox[data-settled="true"],
+.facet-row-chipbox[data-settled="true"] > .facet-row-chipbox-inner { overflow: visible; }
+@media (prefers-reduced-motion: reduce) {
+  .facet-row-chevron { transition: none; }
+  .facet-row-chipbox, .facet-row-chipbox > .facet-row-chipbox-inner { transition: none; }
+}
+/* Narrow screens: the gutter costs more than it buys — stack the label above its chips. The 4px
+   moves from the grid's row gap onto the chips themselves, so it rides INSIDE the animated block:
+   a collapsed row is then exactly as tall as its header, gap included. */
 @media (max-width: 620px) {
-  .facet-row { grid-template-columns: 1fr; gap: 4px; }
+  .facet-row { grid-template-columns: 1fr; gap: 0; }
   .facet-row-label, .facet-row-toggle { padding-top: 0; }
+  .facet-row-chips { margin-top: 4px; }
 }
 
 /* ── Tag input (multi-select combobox: search / create) ────────────────── */
