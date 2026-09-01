@@ -1,7 +1,7 @@
 // Platform-admin: read/update platform settings (e.g. contribution policy). SKILLY_SPEC.md §4.
 import { currentAccess } from "../../../../lib/guard";
 import { pool } from "../../../../lib/db";
-import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
+import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,7 @@ export async function GET() {
 export async function PATCH(req: Request) {
   const access = await currentAccess();
   if (!access?.userId || !access.isPlatformAdmin) return Response.json({ error: "platform admin required" }, { status: 403 });
-  const body = (await req.json().catch(() => ({}))) as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number };
+  const body = (await req.json().catch(() => ({}))) as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string };
   if (typeof body.proposalsOpen === "boolean") await setProposalsOpen(body.proposalsOpen, access.userId);
   if (body.dateFormat === "eu" || body.dateFormat === "us") await setDateFormat(body.dateFormat, access.userId);
   if (body.duplicateEnforcement === "block" || body.duplicateEnforcement === "warn") await setDuplicateEnforcement(body.duplicateEnforcement, access.userId);
@@ -77,5 +77,25 @@ export async function PATCH(req: Request) {
       }
     }
   }
-  return Response.json(await getPlatformSettings(pool));
+  // Plugin marketplaces (§30). Disabling the public marketplace revokes its tokens, so the
+  // response reports how many went — the UI states that up front in its confirm dialog.
+  let publicTokensRevoked: number | undefined;
+  if (typeof body.marketplacePublicEnabled === "boolean") {
+    publicTokensRevoked = await setMarketplacePublicEnabled(body.marketplacePublicEnabled, access.userId);
+  }
+  if (body.marketplaceSyncMinutes !== undefined) {
+    try {
+      await setMarketplaceSyncMinutes(body.marketplaceSyncMinutes, access.userId);
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : "invalid marketplace sync interval" }, { status: 422 });
+    }
+  }
+  if (body.marketplaceNamePrefix !== undefined) {
+    try {
+      await setMarketplaceNamePrefix(body.marketplaceNamePrefix, access.userId);
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : "invalid marketplace name prefix" }, { status: 422 });
+    }
+  }
+  return Response.json({ ...(await getPlatformSettings(pool)), publicTokensRevoked });
 }

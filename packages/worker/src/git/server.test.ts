@@ -14,6 +14,8 @@ import { resolveAccess, type RoleMapping } from "@skilly/shared";
 import { gitServer, type GitServerDeps, type OwnerInactiveRefusal } from "./server.js";
 import { synthesizeVersion } from "./synth.js";
 import { repoPath } from "./repoStore.js";
+import { synthesizeMarketplace, marketplaceRepoDir, marketplaceHead } from "./marketplace.js";
+import type { MarketplaceCredit } from "./server.js";
 
 const exec = promisify(execFile);
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -30,6 +32,11 @@ const used: string[] = [];
 const ips: string[] = [];
 const logged: { skillId: string; userId: string | null; isSystem: boolean; countInstall: boolean }[] = [];
 const refusals: OwnerInactiveRefusal[] = [];
+const credits: MarketplaceCredit[] = [];
+/** Simulated `tokens.last_served_commit` per marketplace token — the §30.7 attribution cursor.
+ *  creditMarketplaceFetch advances it exactly as the real transaction does, so a repeat clone
+ *  genuinely exercises the "already at head, credit nothing" branch. */
+const cursors = new Map<string, string | null>([["m-pub", null], ["m-ns", null], ["m-out", null]]);
 
 const mappings: RoleMapping[] = [{ id: "m1", groupId: "g-a", namespaceId: NSID, role: "namespace_member" }];
 
@@ -47,7 +54,28 @@ const deps: GitServerDeps = {
     if (raw === "system-secret") return { userId: null, tokenId: "t-sys", type: "install", scopedSkillId: "s-secret", isSystem: true };
     // Owner-status gate (§5/§23): valid row, but the owning user is inactive.
     if (raw === "inactive-pdf") return { userId: "u-gone", tokenId: "t-gone", type: "install", scopedSkillId: "s-pdf", isSystem: false, ownerInactive: true };
+    // Marketplace tokens (§30.4) — scoped to a marketplace, never to a skill.
+    if (raw === "mkt-pub") return { userId: "u1", tokenId: "m-pub", type: "marketplace", scopedMarketplace: { kind: "public" }, scopedNamespaceId: null, lastServedCommit: cursors.get("m-pub") ?? null, isSystem: false };
+    if (raw === "mkt-ns") return { userId: "u1", tokenId: "m-ns", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-a" }, scopedNamespaceId: NSID, lastServedCommit: cursors.get("m-ns") ?? null, isSystem: false };
+    if (raw === "mkt-outsider") return { userId: "u2", tokenId: "m-out", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-a" }, scopedNamespaceId: NSID, lastServedCommit: null, isSystem: false };
     return null;
+  },
+  async findMarketplace(scope) {
+    if (scope.kind === "public") return { scope, namespaceId: null, enabled: true };
+    if (scope.namespaceSlug === "team-a") return { scope, namespaceId: NSID, enabled: true };
+    if (scope.namespaceSlug === "team-off") return { scope, namespaceId: "nsid-off", enabled: false };
+    return null;
+  },
+  async markMarketplaceUsed(tokenId, _ua, clientIp) {
+    const first = !used.includes(tokenId);
+    used.push(tokenId);
+    if (clientIp) ips.push(clientIp);
+    return first;
+  },
+  async creditMarketplaceFetch(input) {
+    credits.push(input);
+    cursors.set(input.tokenId, input.newCommit);
+    return input.slugs.length;
   },
   async resolveAccess(userId) {
     return resolveAccess(userId === "u1" ? new Set(["g-a"]) : new Set(), mappings);
@@ -78,6 +106,35 @@ before(async () => {
   // Restricted skill `secret`.
   const secret = repoPath(deps.repoRoot, "team-a", "secret");
   await synthesizeVersion({ bareRepoPath: secret, semver: "1.0.0", isLatestStable: true, files: [{ path: "SKILL.md", bytes: enc("# top secret\n") }] });
+
+  // Marketplaces (§30): the public one lists the org-visible `pdf`; team-a's lists `secret`.
+  await synthesizeMarketplace({
+    bareRepoPath: marketplaceRepoDir(deps.repoRoot!, { kind: "public" }),
+    manifest: { prefix: "skilly", scope: { kind: "public" }, ownerName: "skilly.test", version: "v1" },
+    plugins: [
+      {
+        skillSlug: "pdf",
+        title: "PDF",
+        description: "pdf things",
+        version: "2.0.0",
+        files: [
+          { path: "SKILL.md", bytes: enc("# pdf v2\n") },
+          { path: "hooks.json", bytes: enc("{}\n") },
+        ],
+      },
+    ],
+    change: { added: ["pdf"], updated: [], removed: [] },
+    date: "2026-01-01T00:00:00Z",
+  });
+  await synthesizeMarketplace({
+    bareRepoPath: marketplaceRepoDir(deps.repoRoot!, { kind: "namespace", namespaceSlug: "team-a" }),
+    manifest: { prefix: "skilly", scope: { kind: "namespace", namespaceSlug: "team-a" }, ownerName: "Team A", version: "v1" },
+    plugins: [
+      { skillSlug: "secret", title: "Secret", description: null, version: "1.0.0", files: [{ path: "SKILL.md", bytes: enc("# top secret\n") }] },
+    ],
+    change: { added: ["secret"], updated: [], removed: [] },
+    date: "2026-01-01T00:00:00Z",
+  });
 
   const app = express();
   app.use(gitServer(deps));
@@ -182,4 +239,77 @@ test("restricted skill: SYSTEM token clones without namespace access; first clon
   await exec("git", ["clone", `http://x-access-token:system-secret@127.0.0.1:${port}/team-a/secret.git`, dest2], { env: cloneEnv });
   assert.equal(logged.length, 2);
   assert.deepEqual(logged[1], { skillId: "s-secret", userId: null, isSystem: true, countInstall: false });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin marketplaces (SKILLY_SPEC.md §30)
+// ---------------------------------------------------------------------------
+
+test("marketplace: a tokened clone serves the manifest and the embedded plugin layout", async () => {
+  const dest = join(workDir, "c-mkt-pub");
+  await exec("git", ["clone", `http://x-access-token:mkt-pub@127.0.0.1:${port}/_marketplace/_public.git`, dest], { env: cloneEnv });
+
+  const manifest = JSON.parse((await exec("git", ["-C", dest, "show", "main:.claude-plugin/marketplace.json"])).stdout);
+  assert.equal(manifest.name, "skilly-public");
+  assert.equal(manifest.metadata.pluginRoot, "./plugins");
+  assert.equal(manifest.plugins[0].source, "./plugins/pdf");
+  assert.equal(manifest.plugins[0].version, "2.0.0");
+
+  // The skill lands under skills/<slug>/, and a bundle-root hooks.json is HOISTED to the plugin
+  // root (under skills/<slug>/ Claude Code would never read it) and wired into plugin.json. §30.3
+  const skillMd = (await exec("git", ["-C", dest, "show", "main:plugins/pdf/skills/pdf/SKILL.md"])).stdout;
+  assert.match(skillMd, /pdf v2/);
+  const pluginJson = JSON.parse((await exec("git", ["-C", dest, "show", "main:plugins/pdf/.claude-plugin/plugin.json"])).stdout);
+  assert.deepEqual(pluginJson.skills, ["./skills/"]);
+  assert.equal(pluginJson.hooks, "./hooks.json");
+  await exec("git", ["-C", dest, "show", "main:plugins/pdf/hooks.json"]);
+});
+
+test("marketplace: a marketplace repo carries no version tags (§30.3)", async () => {
+  const dest = join(workDir, "c-mkt-tags");
+  await exec("git", ["clone", `http://x-access-token:mkt-pub@127.0.0.1:${port}/_marketplace/_public.git`, dest], { env: cloneEnv });
+  const tags = (await exec("git", ["-C", dest, "tag", "--list"])).stdout.trim();
+  assert.equal(tags, "");
+});
+
+test("marketplace: the first clone credits every listed skill, a repeat clone credits nothing", async () => {
+  credits.length = 0;
+  cursors.set("m-ns", null);
+  const dir = marketplaceRepoDir(deps.repoRoot!, { kind: "namespace", namespaceSlug: "team-a" });
+  const head = await marketplaceHead(dir);
+
+  const first = join(workDir, "c-mkt-ns-1");
+  await exec("git", ["clone", `http://x-access-token:mkt-ns@127.0.0.1:${port}/_marketplace/team-a.git`, first], { env: cloneEnv });
+  assert.equal(credits.length, 1);
+  assert.deepEqual(credits[0]!.slugs, ["secret"]);
+  assert.equal(credits[0]!.newCommit, head);
+  assert.equal(credits[0]!.userId, "u1");
+
+  // Cursor now at head: a re-clone is a no-op poll and must not re-credit (§30.7).
+  const second = join(workDir, "c-mkt-ns-2");
+  await exec("git", ["clone", `http://x-access-token:mkt-ns@127.0.0.1:${port}/_marketplace/team-a.git`, second], { env: cloneEnv });
+  assert.equal(credits.length, 2);
+  assert.deepEqual(credits[1]!.slugs, []);
+});
+
+test("marketplace: a namespace marketplace is refused for someone without namespace access", async () => {
+  const dest = join(workDir, "c-mkt-outsider");
+  await assert.rejects(
+    exec("git", ["clone", ...noCred, `http://x-access-token:mkt-outsider@127.0.0.1:${port}/_marketplace/team-a.git`, dest], { env: cloneEnv }),
+  );
+});
+
+test("marketplace: no token, wrong-scope token, and a disabled marketplace are all refused", async () => {
+  const noAuth = await fetch(`${base()}/_marketplace/_public.git/info/refs?service=git-upload-pack`);
+  assert.equal(noAuth.status, 401);
+
+  // A skill install token must not open a marketplace.
+  const wrong = "Basic " + Buffer.from("x-access-token:good-pdf").toString("base64");
+  const wrongRes = await fetch(`${base()}/_marketplace/_public.git/info/refs?service=git-upload-pack`, { headers: { authorization: wrong } });
+  assert.equal(wrongRes.status, 403);
+
+  // A disabled marketplace 404s — it never confirms that the namespace exists.
+  const auth = "Basic " + Buffer.from("x-access-token:mkt-ns").toString("base64");
+  const off = await fetch(`${base()}/_marketplace/team-off.git/info/refs?service=git-upload-pack`, { headers: { authorization: auth } });
+  assert.equal(off.status, 404);
 });

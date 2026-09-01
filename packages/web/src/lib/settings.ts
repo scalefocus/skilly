@@ -17,6 +17,9 @@ import {
   assertMcpRefreshTtlDays,
   assertMcpInlineUploadBytes,
   assertMcpResourceBytes,
+  DEFAULT_MARKETPLACE_NAME_PREFIX,
+  reservedNameConflicts,
+  validateMarketplacePrefix,
 } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
@@ -107,6 +110,21 @@ function coerceChatPollIntervals(value: unknown): number[] {
  *  callers. */
 export { INSTALL_TTL_MONTHS_DEFAULT, INSTALL_TTL_MONTHS_MIN, INSTALL_TTL_MONTHS_MAX, addMonths, installExpiryCeiling } from "@skilly/shared";
 
+/** How often the worker rebuilds changed marketplaces (§30.5). Whole minutes. */
+export const MARKETPLACE_SYNC_MIN = 1;
+export const MARKETPLACE_SYNC_MAX = 1440;
+export const MARKETPLACE_SYNC_DEFAULT = 30;
+
+function coerceMarketplaceSyncMinutes(value: unknown): number {
+  return Number.isInteger(value) && (value as number) >= MARKETPLACE_SYNC_MIN && (value as number) <= MARKETPLACE_SYNC_MAX
+    ? (value as number)
+    : MARKETPLACE_SYNC_DEFAULT;
+}
+
+function coerceMarketplacePrefix(value: unknown): string {
+  return typeof value === "string" && validateMarketplacePrefix(value) === null ? value : DEFAULT_MARKETPLACE_NAME_PREFIX;
+}
+
 export interface PlatformSettings {
   /** true = any authenticated user may propose; false = only namespace members/admins (+ platform admins). */
   proposalsOpen: boolean;
@@ -134,9 +152,15 @@ export interface PlatformSettings {
   mcpMaxInlineUploadBytes: number;
   /** §29 cap on a single skill-file/SKILL.md read over MCP (bytes). */
   mcpMaxResourceBytes: number;
+  /** is the platform-wide PUBLIC plugin marketplace served? (§30.1) */
+  marketplacePublicEnabled: boolean;
+  /** how often the worker rebuilds changed marketplaces, in whole minutes (§30.5). */
+  marketplaceSyncMinutes: number;
+  /** instance-discriminating prefix for every marketplace name (§30.2). */
+  marketplaceNamePrefix: string;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined) };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -159,12 +183,102 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     mcpRefreshTtlDays: coerceMcpRefreshTtlDays(map.get("mcp_refresh_token_ttl_days")),
     mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(map.get("mcp_max_inline_upload_bytes")),
     mcpMaxResourceBytes: coerceMcpResourceBytes(map.get("mcp_max_resource_bytes")),
+    marketplacePublicEnabled: map.get("marketplace_public_enabled") === true,
+    marketplaceSyncMinutes: coerceMarketplaceSyncMinutes(map.get("marketplace_sync_minutes")),
+    marketplaceNamePrefix: coerceMarketplacePrefix(map.get("marketplace_name_prefix")),
   };
 }
 
 /** Is the §29 MCP server enabled? Read on every /oauth and /api/mcp request. */
 export async function getMcpEnabled(db: Pool = pool): Promise<boolean> {
   return (await getPlatformSettings(db)).mcpEnabled;
+}
+
+/** The instance-wide marketplace name prefix (§30.2). */
+export async function getMarketplaceNamePrefix(db: Pool = pool): Promise<string> {
+  return (await getPlatformSettings(db)).marketplaceNamePrefix;
+}
+
+/** Is the platform-wide public marketplace served? (§30.1) */
+export async function getMarketplacePublicEnabled(db: Pool = pool): Promise<boolean> {
+  return (await getPlatformSettings(db)).marketplacePublicEnabled;
+}
+
+async function writeSetting(key: string, value: unknown, actorUserId: string): Promise<void> {
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ($1, $2::jsonb, $3, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [key, JSON.stringify(value), actorUserId],
+  );
+}
+
+/**
+ * Toggle the platform-wide PUBLIC marketplace (§30.1/§30.6). Platform admins only — it is the one
+ * marketplace with no namespace behind it, so no per-namespace switch can govern it.
+ *
+ * Disabling REVOKES every public marketplace token (hard-delete, like an uninstall): the repo
+ * stops being served immediately (the gateway reads this flag), and the worker removes it from
+ * disk on its next pass. Plugins already installed on a consumer's machine keep working — skilly
+ * is not in that loop; only adding and updating stop. Returns how many tokens were revoked.
+ */
+export async function setMarketplacePublicEnabled(enabled: boolean, actorUserId: string): Promise<number> {
+  await writeSetting("marketplace_public_enabled", enabled, actorUserId);
+  let revoked = 0;
+  if (!enabled) {
+    const { rowCount } = await pool.query(
+      `delete from tokens where type = 'marketplace' and marketplace_scope = 'public'`,
+    );
+    revoked = rowCount ?? 0;
+  }
+  await appendAudit(pool, {
+    actorUserId,
+    action: enabled ? "marketplace.public_enabled" : "marketplace.public_disabled",
+    targetType: "marketplace",
+    targetId: "public",
+    after: enabled ? { enabled: true } : { enabled: false, tokensRevoked: revoked },
+  });
+  return revoked;
+}
+
+/** Set the marketplace rebuild interval in whole minutes (§30.5). Validated + audited. */
+export async function setMarketplaceSyncMinutes(minutes: number, actorUserId: string): Promise<void> {
+  if (!Number.isInteger(minutes) || minutes < MARKETPLACE_SYNC_MIN || minutes > MARKETPLACE_SYNC_MAX) {
+    throw new Error(`marketplace sync interval must be a whole number of minutes between ${MARKETPLACE_SYNC_MIN} and ${MARKETPLACE_SYNC_MAX}`);
+  }
+  await writeSetting("marketplace_sync_minutes", minutes, actorUserId);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "marketplace_sync_minutes",
+    after: { marketplaceSyncMinutes: minutes },
+  });
+}
+
+/**
+ * Set the marketplace name prefix (§30.2). Rejects a prefix under which ANY existing namespace's
+ * computed marketplace name would land on one of Anthropic's reserved names — the failure mode
+ * otherwise is a silently unusable marketplace that no admin would ever notice.
+ */
+export async function setMarketplaceNamePrefix(prefix: string, actorUserId: string): Promise<void> {
+  const trimmed = prefix.trim();
+  const err = validateMarketplacePrefix(trimmed);
+  if (err) throw new Error(`marketplace name prefix: ${err}`);
+  const { rows } = await pool.query<{ slug: string }>(`select slug from namespaces`);
+  const conflicts = reservedNameConflicts(trimmed, rows.map((r) => r.slug));
+  if (conflicts.length > 0) {
+    const named = conflicts.map((c) => (c === null ? "the public marketplace" : `namespace "${c}"`)).join(", ");
+    throw new Error(`prefix "${trimmed}" would give ${named} a name Anthropic reserves — pick another prefix`);
+  }
+  await writeSetting("marketplace_name_prefix", trimmed, actorUserId);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "marketplace_name_prefix",
+    after: { marketplaceNamePrefix: trimmed },
+  });
 }
 
 export async function getMaxFeaturedSkills(db: Pool = pool): Promise<number> {

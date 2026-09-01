@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.145.0",
+    date: "2026-09-01",
+    summary:
+      "Claude Code plugin marketplaces: add skilly straight into Claude Code with /plugin marketplace add. A platform-wide public marketplace carries every org-visible skill, and each namespace can publish its restricted skills as its own — toggled on the new Namespace administration page, with the marketplaces you've added listed under Added marketplaces.",
+  },
+  {
     version: "1.144.2",
     date: "2026-09-01",
     summary:

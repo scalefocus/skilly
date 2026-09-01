@@ -3,9 +3,10 @@
 // only manages the (group → namespace → role) bindings.
 import type { Pool } from "pg";
 import type { Role } from "@skilly/shared";
+import { marketplaceName, reservedNameConflicts } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { invalidateAccessCaches } from "./access";
-import { getPlatformSettings, type PlatformSettings } from "./settings";
+import { getMarketplaceNamePrefix, getPlatformSettings, type PlatformSettings } from "./settings";
 
 export interface RoleMappingView {
   id: string;
@@ -21,6 +22,8 @@ export interface NamespaceView {
   displayName: string;
   requireReview: boolean;
   maintainerContact: string | null;
+  /** Is this namespace's Claude plugin marketplace served? (§30.6) */
+  marketplaceEnabled: boolean;
   mappings: RoleMappingView[];
 }
 export interface GroupView { id: string; externalId: string; displayName: string }
@@ -72,8 +75,8 @@ export async function countNamespaces(pool: Pool, q?: string, requireReview?: bo
 export async function listNamespacePage(pool: Pool, offset: number, limit = NS_PAGE_SIZE, q?: string, requireReview?: boolean): Promise<NamespaceView[]> {
   const f = nsFilter(q, requireReview);
   const [nsRows, mappings] = await Promise.all([
-    pool.query<{ id: string; slug: string; display_name: string; require_review: boolean; maintainer_contact: string | null }>(
-      `select id, slug, display_name, require_review, maintainer_contact from namespaces ${f.where} order by slug limit $${f.params.length + 1} offset $${f.params.length + 2}`,
+    pool.query<{ id: string; slug: string; display_name: string; require_review: boolean; maintainer_contact: string | null; marketplace_enabled: boolean }>(
+      `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled from namespaces ${f.where} order by slug limit $${f.params.length + 1} offset $${f.params.length + 2}`,
       [...f.params, Math.min(200, limit), Math.max(0, offset)],
     ),
     allMappings(pool),
@@ -88,6 +91,7 @@ export async function listNamespacePage(pool: Pool, offset: number, limit = NS_P
     displayName: n.display_name,
     requireReview: n.require_review,
     maintainerContact: n.maintainer_contact,
+    marketplaceEnabled: n.marketplace_enabled,
     mappings: byNs.get(n.id) ?? [],
   }));
 }
@@ -141,6 +145,14 @@ export async function createNamespace(
   if (!SLUG.test(input.slug)) return { error: "slug must be lowercase letters, digits, hyphens" };
   const exists = await pool.query(`select 1 from namespaces where slug = $1`, [input.slug]);
   if (exists.rowCount) return { error: `namespace '${input.slug}' already exists` };
+
+  // Reserved-name guard (§30.2): this namespace's computed Claude marketplace name must not land
+  // on one Anthropic reserves, or its marketplace would be silently unusable — a failure nobody
+  // would notice until a consumer tried to add it.
+  const prefix = await getMarketplaceNamePrefix(pool);
+  if (reservedNameConflicts(prefix, [input.slug]).includes(input.slug)) {
+    return { error: `slug '${input.slug}' would give this namespace a Claude marketplace name Anthropic reserves (${marketplaceName(prefix, { kind: "namespace", namespaceSlug: input.slug })}) — pick another slug` };
+  }
 
   const client = await pool.connect();
   try {
