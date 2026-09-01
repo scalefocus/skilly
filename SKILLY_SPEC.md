@@ -120,7 +120,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `group_id`, `user_id`. Synced via SCIM. **Authoritative source of "who is in a group."**
 
 ### `namespaces`
-- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **free-text**, but the editor offers a **user-search typeahead** that fills a picked user's email; a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `created_at`.
+- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **a validated email address**: any valid address, **not** required to be a registered user, shape-checked on write in the browser and on the server; the editor offers a shared **user-search typeahead** that fills a picked user's email, and a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `created_at`.
 - Created explicitly by Platform Admins. `global` is special: `require_review` always true.
 
 ### `role_mappings` (the explicit Entra-group→role binding table)
@@ -1199,6 +1199,35 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       unbreakable long category name.
     - **Rendered markdown breaks long words.** Message and description bodies (`.md`) break an
       over-long unbroken run (a bare URL, a long identifier) rather than overflowing their column.
+  - **Form controls — one canonical `.input`.** Every text input and `select` in the app is
+    styled by **one CSS class in `globals.css`**, not by a per-page inline style object. Before this
+    rule **five files** each declared their own `field`/`label` const with **four divergent value
+    sets** (`admin/page.tsx` `8px 11px`/13.5, `propose/page.tsx` `10px 12px`/14,
+    `proposals/[id]/page.tsx` `9px 11px`/13.5, `admin/McpCard.tsx` `6px 9px`/13,
+    `admin/SystemBannerCard.tsx` a copy of admin's) across ~39 usage sites, and the `/namespaces`
+    maintainer-contact input carried a `className="input"` for which **no rule existed anywhere** —
+    it rendered with native browser chrome (an unthemed white box in dark mode). The canonical box is
+    the **admin density** (`padding: 8px 11px`, `font-size: 13.5`, `var(--radius-sm)`,
+    `1px solid var(--line)`, `var(--surface)`, `var(--ink)`, body font, and a visible focus ring);
+    three modifiers preserve the densities that already shipped, so no existing form changes
+    appearance **with one deliberate exception**: the reviewer-edit form on `/proposals/:id` was
+    `9px 11px`, a density one pixel off the canonical box and shared with nothing else, so it is
+    **normalised to `8px 11px`** rather than earning a fourth modifier for 1px of vertical
+    padding. The modifiers are: **`.input-lg`** (`10px 12px`/14 — the propose form), **`.input-mono`** (mono face
+    — command/URL fields such as the install-command paste box and the external git URL), and
+    **`.input-sm`** (`6px 9px`/13 — the MCP card's numeric boxes, whose fixed `width` stays inline
+    as a per-use layout concern). Per-use concerns — `width`, `flex`, `maxWidth`, and error borders
+    — stay inline; only the box belongs to the class. **Selects are in scope** (three sites use the
+    same consts), and so are **textareas** — not directly, but through the two components that
+    take the box as a prop and put it on their own control: `MarkdownField` (its Write-tab
+    textarea) and `ToolHarnessPicker` (its combobox input). Both therefore gained a `className`
+    prop defaulting to `.input`, and callers pass the density modifier instead of a style object.
+    The composer and `MarkdownField`'s *preview* pane keep their own bespoke styling. This is **presentation only** and **CSP-neutral** — `style-src` keeps
+    `'unsafe-inline'` (§22), so the migration neither relies on nor relaxes the policy. The
+    **uppercase-mono micro-label** above a field stays a convention of *form* surfaces (propose,
+    proposals, administration cards); **settings rows inside a card keep their inline sentence-case
+    `muted` label** so a row matches its siblings — the label treatment is a property of the
+    surface, the input box is global.
   - **Fixed-height catalog cards (no ragged grids).** Every `.skill-card` in a card grid renders at
     **one constant height** — a single `--skill-card-h` custom property (**366px**, *measured* in the
     browser, not derived from arithmetic) — so a long description can never inflate its grid row and
@@ -1339,11 +1368,11 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), …).
-- **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove).
+- **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
@@ -3398,7 +3427,7 @@ credential is enough** and the per-skill repos of §9 are untouched.
 }
 ```
 
-`owner.email` is omitted when the namespace has no `maintainer_contact`. The public
+`owner.email` is omitted when the namespace has no `maintainer_contact`; when present it is **guaranteed email-shaped** by the write-side validation (§30.6), which is the reason that validation exists — a free-text value here emitted a manifest with an invalid `owner.email`. The public
 marketplace's `owner` is the platform (`display_name` = the registry host, no email).
 
 **`plugin.json`** (generated per skill):
@@ -3517,7 +3546,58 @@ generally**, not a single-toggle page:
 - **`require_review`** — editable per namespace. **`global` renders read-only** with a note
   that review is always required there (§4/§8).
 - **`maintainer_contact`** — editable, reusing the existing user-search typeahead that fills
-  a picked user's email (a shared mailbox is still allowed).
+  a picked user's email (a shared mailbox is still allowed). **One shared component serves
+  both surfaces** (this page and the Administration → Namespaces card), so they cannot drift
+  on styling, typeahead, or validation:
+  - **Typeahead source: `GET /api/users/suggest?q=`** (§10/§24), *not* the platform-admin-only
+    `GET /api/admin/users/search`. That endpoint 403s a namespace admin, so on this page the
+    typeahead would have been permanently empty. `users/suggest` is already open to **any
+    signed-in user** — people have no per-user visibility model (§28 precedent) — so a
+    namespace admin searching the directory here gains no reach they did not already have via
+    mentions and the header's people mode, and **no new endpoint and no new permission are
+    introduced**. It is also the better source on its own merits: rate-limited, bounded, and it
+    excludes non-active users, so a leaver can no longer be picked as a maintainer contact.
+    `GET /api/admin/users/search` stays platform-admin-only and keeps its sole remaining
+    consumer, the **Delete User Info** pickers (§4).
+  - **Validation.** The value is **email-shaped or empty** — checked in the browser (save
+    disabled, inline message) **and on the server** (`PATCH /api/namespaces/:id/settings` and
+    `PATCH /api/admin/namespaces/:id` → **422**). The column has **three** write paths, not one
+    — `updateNamespaceSettings` (the namespace-admin page and the marketplace toggle),
+    `updateNamespace` (the Administration card), and `createNamespace` (a contact supplied at
+    creation) — so what they share is the **single shared validator in `@skilly/shared`**, which
+    is also the function the browser calls. A namespace therefore cannot be *born* with a value
+    the editors would refuse to save. Fixing this also fixed a latent bug on the Administration
+    path: it wrote the contact with `coalesce`, so an explicit null read as “not supplied” and
+    **clearing the contact there silently kept the old address**. **Empty clears to `NULL`** and is always allowed. A value picked
+    from the typeahead is a directory email and trivially passes. Shared mailboxes and
+    distribution lists remain allowed — the check is on *address shape*, never on *being a
+    registered user*, which is what the column's original “free-text” wording protected.
+    **Existing rows are left as they are**: values stored before this rule were legal, are not
+    migrated, and are not retro-rejected — they are re-validated only when someone next edits
+    that namespace's contact. (`owner.email` in a marketplace manifest is therefore guaranteed
+    email-shaped only for contacts written after this change; §30.3.)
+  - **Presentation.** The input uses the canonical `.input` box (§14 *Form controls*), so it is
+    themed identically on both surfaces — replacing a `className="input"` on this page that
+    matched no rule and therefore rendered as an unthemed native input. The **label differs by
+    surface, deliberately**: the Administration card keeps its uppercase-mono micro-label above
+    the field (it is a form-style card), while **this page keeps the inline sentence-case
+    `muted` label** used by its sibling rows (Require review, key expiry, marketplace) —
+    stacking a micro-label on one row alone would make it the odd row on its own card. Width is
+    capped rather than full-bleed (an email address in a full-width field on a wide card reads
+    as a mistake) — the cap lives in `.ns-contact-field` in CSS, not inline, because an inline
+    `max-width` would silently defeat the narrow-viewport override below. A help line states that the contact is **published as `owner.email`** in
+    the namespace's plugin-marketplace manifest — editors otherwise have no way to know the
+    value is outward-facing.
+  - **Narrow viewports.** The row gets its own stacking rule (§14 *Narrow-viewport
+    containment*), the pattern already used by `.create-ns-form` / `.delete-user-form`: label,
+    input, and Save each take a full-width line instead of wrapping mid-row.
+- **Saving must not blank the page.** A save calls `reload()` to pick up the stored value and any
+  revoked-key count. That also flips the list's `loading`, and the page rendered **skeletons**
+  whenever `loading` was true — unmounting every namespace card and destroying the state holding
+  its confirmation, so **no confirmation on this page could ever be read** ("✓ Saved", *Review
+  policy saved.*, and the marketplace enable/disable messages alike). Skeletons are therefore for
+  the **first load only** (`loading && data === null`); while a refetch is in flight the
+  already-rendered list stays put.
 - **The platform Administration → Namespaces card keeps all three.** Platform admins edit
   from either surface; the two write through the same endpoints and audit identically. This
   is a deliberate dual surface, not a migration.
@@ -3600,7 +3680,8 @@ as **real installs of the individual skills**, via a commit cursor:
 **API surface** (§15, indicative):
 - `GET|PATCH /api/namespaces/:id/settings` — the new page's read/write for
   `marketplace_enabled`, `require_review`, `maintainer_contact`. Namespace admin (own) or
-  platform admin (any); `global.require_review` rejected 422.
+  platform admin (any); `global.require_review` rejected 422; a `maintainer_contact` that is
+  neither empty nor a valid email address rejected 422 (§30.6).
 - `GET /api/namespaces/administered` — the page's list.
 - `POST /api/marketplaces/tokens` — mint (body: scope + namespace + expiry). Returns the token-in-URL
   add command, plus the `git config … insteadOf` + credential-free pair for the auto-update fallback.

@@ -19,7 +19,6 @@ import { uploadBundle as uploadBundleRequest } from "../../lib/uploadBundleClien
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
 // stole focus on each character. Hoisting them fixes that.
-const field = { width: "100%", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 14 } as const;
 const label = { display: "block", fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 7 } as const;
 // Two-up on desktop, but auto-collapses to a single stacked column on narrow/mobile viewports
 // (each field keeps a sane min width) — fixes the external-URL / pinned-tag misalignment. §10.
@@ -933,7 +932,9 @@ function ProposeForm() {
               </label>
               <input
                 ref={pasteRef}
-                style={{ ...field, fontFamily: "var(--font-mono)", fontSize: 13, ...(pasteErr ? { border: "1px solid var(--danger)" } : {}) }}
+                className="input input-lg input-mono"
+                aria-invalid={pasteErr ? true : undefined}
+                style={{ width: "100%", fontSize: 13 }}
                 value={pasteCmd}
                 onChange={(e) => applyPaste(e.target.value)}
                 placeholder={phText}
@@ -949,11 +950,12 @@ function ProposeForm() {
                 </p>
               )}
             </div>
-            <div><label style={label}>External git URL</label><input style={{ ...field, fontFamily: "var(--font-mono)" }} value={f.externalUrl} onChange={set("externalUrl")} placeholder="https://github.com/anthropics/skills.git" /></div>
+            <div><label style={label}>External git URL</label><input className="input input-lg input-mono" style={{ width: "100%" }} value={f.externalUrl} onChange={set("externalUrl")} placeholder="https://github.com/anthropics/skills.git" /></div>
             <div>
               <label style={label}>{hubSource ? "Pinned version" : "Pinned ref (branch/tag/commit)"} <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>{hubSource ? "· registry version · defaults to the latest" : "· defaults to main"}</span></label>
               <input
-                style={{ ...field, fontFamily: "var(--font-mono)" }}
+                className="input input-lg input-mono"
+                style={{ width: "100%" }}
                 value={f.externalRef}
                 onChange={(e) => {
                   const v = e.target.value;
@@ -999,7 +1001,8 @@ function ProposeForm() {
             <div>
               <label style={label}>Skill name <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· optional · subfolder in the repo</span></label>
               <input
-                style={{ ...field, fontFamily: "var(--font-mono)", ...(subdirMismatch ? { border: "1px solid var(--warn, #b58900)" } : {}) }}
+                className="input input-lg input-mono"
+                style={{ width: "100%", ...(subdirMismatch ? { border: "1px solid var(--warn, #b58900)" } : {}) }}
                 value={f.externalSubdir}
                 onChange={(e) => {
                   const subdir = e.target.value;
@@ -1031,7 +1034,8 @@ function ProposeForm() {
             <label style={label}>Namespace{!lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · pick one you can contribute to</span>}</label>
             <div className={`select-wrap${lock ? " is-disabled" : ""}`}>
               <select
-                style={{ ...field, fontFamily: "var(--font-mono)", padding: "10px 38px 10px 12px", ...(lock ? lockedStyle : {}) }}
+                className="input input-lg input-mono"
+                style={{ width: "100%", padding: "10px 38px 10px 12px", ...(lock ? lockedStyle : {}) }}
                 value={f.namespaceSlug}
                 onChange={set("namespaceSlug")}
                 disabled={lock}
@@ -1056,7 +1060,7 @@ function ProposeForm() {
               )}
             </p>
           </div>
-          <div><label style={label}>Skill slug{lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · locked</span>}</label><input style={{ ...field, ...(lock ? lockedStyle : {}) }} value={f.skillSlug} onChange={set("skillSlug")} onBlur={() => { const slug = f.skillSlug.trim(); if (!lock && slug && !f.title.trim()) setF((prev) => ({ ...prev, title: titleize(slug) })); }} placeholder="pdf-tools" disabled={lock} /></div>
+          <div><label style={label}>Skill slug{lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · locked</span>}</label><input className="input input-lg" style={{ width: "100%", ...(lock ? lockedStyle : {}) }} value={f.skillSlug} onChange={set("skillSlug")} onBlur={() => { const slug = f.skillSlug.trim(); if (!lock && slug && !f.title.trim()) setF((prev) => ({ ...prev, title: titleize(slug) })); }} placeholder="pdf-tools" disabled={lock} /></div>
         {!lock && existingSkill && existingSkill.ns === f.namespaceSlug.trim() && existingSkill.slug === f.skillSlug.trim() && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
             <span aria-hidden>ℹ</span>
@@ -1093,7 +1097,7 @@ function ProposeForm() {
           <label style={label}>Title</label>
           {/* Editable in new-version mode too (§8): a re-version may retitle the skill — synced on
               accept. The slug stays the immutable identity. */}
-          <input style={field} value={f.title} onChange={set("title")} placeholder="PDF Tools" />
+          <input className="input input-lg" style={{ width: "100%" }} value={f.title} onChange={set("title")} placeholder="PDF Tools" />
           {lock && <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Editing the title renames the skill when this version is accepted (the slug never changes).</p>}
         </div>
         <div>
@@ -1118,12 +1122,12 @@ function ProposeForm() {
           <label style={label}>Description <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· Markdown</span></label>
           {/* Description stays editable in new-version mode (like categories) — on accept the skill's
               description is updated to match. Other skill-level metadata stays locked. §8. */}
-          <MarkdownField value={f.description} onChange={(v) => setF((prev) => ({ ...prev, description: v }))} rows={3} placeholder="What does this skill do?" style={field} />
+          <MarkdownField value={f.description} onChange={(v) => setF((prev) => ({ ...prev, description: v }))} rows={3} placeholder="What does this skill do?" className="input input-lg" />
           {lock && <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Editing the description updates the skill's description when this version is accepted.</p>}
         </div>
         <div>
           <label style={label}>Usage <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· how it's triggered, options (Markdown)</span></label>
-          <MarkdownField value={f.usageExamples} onChange={(v) => setF((prev) => ({ ...prev, usageExamples: v }))} rows={4} mono style={field} placeholder={"Shown as a quick-start above SKILL.md. e.g.\n\nTrigger by asking to \"summarize a PDF\".\n\nOptions:\n- `pages`: page range"} />
+          <MarkdownField value={f.usageExamples} onChange={(v) => setF((prev) => ({ ...prev, usageExamples: v }))} rows={4} mono className="input input-lg" placeholder={"Shown as a quick-start above SKILL.md. e.g.\n\nTrigger by asking to \"summarize a PDF\".\n\nOptions:\n- `pages`: page range"} />
         </div>
         {/* "What changed" note (§8): per-version release note. New-version mode only — a skill's
             first version has no predecessor to describe. Plain text (no Markdown), required. */}
@@ -1131,7 +1135,8 @@ function ProposeForm() {
           <div>
             <label style={label}>What changed <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· plain-text note for this version (required)</span></label>
             <textarea
-              style={{ ...field, resize: "vertical", fontFamily: "var(--font-mono)", fontSize: 13 }}
+              className="input input-lg input-mono"
+              style={{ width: "100%", resize: "vertical", fontSize: 13 }}
               rows={4}
               maxLength={WHAT_CHANGED_MAX_LEN}
               value={f.whatChanged}
@@ -1152,7 +1157,8 @@ function ProposeForm() {
           <ToolHarnessPicker
             value={f.toolHarness}
             onChange={(slug) => setF((prev) => ({ ...prev, toolHarness: slug }))}
-            style={{ ...field, fontFamily: "var(--font-mono)" }}
+            className="input input-lg input-mono"
+            style={{ width: "100%" }}
           />
           <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
             {f.toolHarness && f.toolHarness !== GENERIC_AGENT ? (
@@ -1164,7 +1170,7 @@ function ProposeForm() {
           </p>
         </div>
         {mode === "have" && (
-          <div><label style={label}>Version</label><input style={{ ...field, fontFamily: "var(--font-mono)" }} value={f.semver} onChange={set("semver")} placeholder="1.0.0" /></div>
+          <div><label style={label}>Version</label><input className="input input-lg input-mono" style={{ width: "100%" }} value={f.semver} onChange={set("semver")} placeholder="1.0.0" /></div>
         )}
 
         {/* Advisory similar-match (soft-warn, §26): something like this already exists — the

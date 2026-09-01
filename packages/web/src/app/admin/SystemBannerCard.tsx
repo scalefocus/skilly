@@ -19,7 +19,6 @@ const DURATIONS = [
 ] as const;
 type DurationHours = (typeof DURATIONS)[number]["hours"];
 
-const field = { padding: "8px 11px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 13.5 } as const;
 
 interface SystemBanner { message: string; expiresAt: string }
 
@@ -125,7 +124,7 @@ export function SystemBannerCard({ open, onToggle }: { open: boolean; onToggle: 
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && text.trim() && !busy) void onSave(); }}
           placeholder="e.g. Scheduled maintenance tonight 22:00–23:00 UTC"
-          style={{ ...field, flex: 1, minWidth: 260, maxWidth: 460 }}
+          className="input" style={{ flex: 1, minWidth: 260, maxWidth: 460 }}
         />
         <span className="muted mono" style={{ fontSize: 11.5 }}>{text.length}/{SYSTEM_BANNER_MAX_LEN}</span>
         <div className="sort-toggle" role="group" aria-label="Duration">

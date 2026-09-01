@@ -17,6 +17,7 @@ export function MarkdownField({
   disabled = false,
   mono = false,
   style,
+  className = "input",
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -25,6 +26,8 @@ export function MarkdownField({
   disabled?: boolean;
   mono?: boolean;
   style?: CSSProperties;
+  /** The textarea's box class — the canonical `.input` plus any density modifier (§14). */
+  className?: string;
 }) {
   const [tab, setTab] = useState<"write" | "preview">("write");
 
@@ -48,7 +51,8 @@ export function MarkdownField({
       </div>
       {tab === "write" ? (
         <textarea
-          style={{ ...style, resize: "vertical", ...(mono ? { fontFamily: "var(--font-mono)", fontSize: 13 } : {}) }}
+          className={className}
+          style={{ width: "100%", ...style, resize: "vertical", ...(mono ? { fontFamily: "var(--font-mono)", fontSize: 13 } : {}) }}
           rows={rows}
           value={value}
           placeholder={placeholder}

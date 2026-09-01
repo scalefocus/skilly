@@ -54,6 +54,10 @@
     "./notifications": {
       "types": "./dist/notifications.d.ts",
       "default": "./dist/notifications.js"
+    },
+    "./contact": {
+      "types": "./dist/contact.d.ts",
+      "default": "./dist/contact.js"
     }
   },
   "scripts": {

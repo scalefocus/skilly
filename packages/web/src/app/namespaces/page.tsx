@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
+import { MaintainerContactField } from "../../components/MaintainerContactField";
 
 /** One namespace the caller administers (SKILLY_SPEC.md §30.6). */
 interface NamespaceRow {
@@ -56,11 +57,10 @@ function CopyLine({ label, value, hint }: { label: string; value: string; hint?:
 function NamespaceCard({ ns, maxMonths, onChanged }: { ns: NamespaceRow; maxMonths: number; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
-  const [contact, setContact] = useState(ns.maintainerContact ?? "");
   const [minted, setMinted] = useState<MintResult | null>(null);
   const [addExpiry, setAddExpiry] = useState<string | null>(null);
 
-  const patch = async (body: Record<string, unknown>, okText: string) => {
+  const patch = async (body: Record<string, unknown>, okText: string | null) => {
     setBusy(true);
     setMsg(null);
     try {
@@ -72,11 +72,16 @@ function NamespaceCard({ ns, maxMonths, onChanged }: { ns: NamespaceRow; maxMont
       const j = (await r.json().catch(() => ({}))) as { error?: string; tokensRevoked?: number };
       if (!r.ok) throw new Error(j.error ?? "Failed to save");
       const revoked = j.tokensRevoked ?? 0;
-      setMsg({ kind: "ok", text: revoked > 0 ? `${okText} ${revoked} marketplace key${revoked === 1 ? "" : "s"} revoked.` : okText });
+      // `okText: null` = the caller shows its own confirmation (the maintainer-contact field).
+      if (okText !== null) {
+        setMsg({ kind: "ok", text: revoked > 0 ? `${okText} ${revoked} marketplace key${revoked === 1 ? "" : "s"} revoked.` : okText });
+      }
       setMinted(null);
       onChanged();
+      return true;
     } catch (e) {
       setMsg({ kind: "err", text: String((e as Error).message) });
+      return false;
     } finally {
       setBusy(false);
     }
@@ -141,20 +146,16 @@ function NamespaceCard({ ns, maxMonths, onChanged }: { ns: NamespaceRow; maxMont
         )}
       </div>
 
-      {/* --- Maintainer contact ------------------------------------------- */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span className="muted" style={{ fontSize: 12.5, minWidth: 130 }}>Maintainer contact</span>
-        <input
-          className="input"
-          style={{ flex: 1, minWidth: 220 }}
-          value={contact}
-          placeholder="team@example.com or a shared mailbox"
-          onChange={(e) => setContact(e.target.value)}
-        />
-        <button className="btn btn-sm" disabled={busy || contact === (ns.maintainerContact ?? "")} onClick={() => patch({ maintainerContact: contact }, "Contact saved.")}>
-          save
-        </button>
-      </div>
+      {/* --- Maintainer contact (§30.6) ------------------------------------
+          The same component the Administration card uses, in its `inline` layout: the label sits
+          beside the field like every other settings row on this card, while the input, typeahead
+          and validation are shared so the two surfaces cannot drift. */}
+      <MaintainerContactField
+        value={ns.maintainerContact}
+        busy={busy}
+        layout="inline"
+        onSave={(v) => patch({ maintainerContact: v }, null)}
+      />
 
       {/* --- Claude plugin marketplace ------------------------------------ */}
       <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
@@ -200,6 +201,12 @@ function NamespacesInner() {
   const { data: me } = useApi<{ installMaxTtlMonths?: number }>("/api/me");
   const { data, loading, error, reload } = useApi<{ namespaces: NamespaceRow[] }>("/api/namespaces/administered");
   const namespaces = data?.namespaces ?? [];
+  // Skeletons are for the FIRST load only. `reload()` (which every save calls, to pick up
+  // revoked-key counts and the stored value) also flips `loading`, and swapping the list for
+  // skeletons unmounts every card — which destroyed the state holding each card's confirmation,
+  // so "✓ Saved", "Review policy saved." and the marketplace messages could never be read. While
+  // a refetch is in flight the already-rendered list stays put.
+  const firstLoad = loading && data === null;
 
   return (
     <div style={{ maxWidth: 860 }}>
@@ -215,7 +222,7 @@ function NamespacesInner() {
 
       {error ? (
         <EmptyState icon="⚠" title="Couldn’t load your namespaces" hint={error} />
-      ) : loading ? (
+      ) : firstLoad ? (
         <div className="rows">
           {Array.from({ length: 2 }).map((_, i) => (
             <div className="row" key={i}>

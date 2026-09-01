@@ -159,9 +159,48 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .srctab.active { color: var(--accent-2); border-bottom-color: var(--accent); }
 .srctab:disabled { cursor: not-allowed; opacity: 0.45; }
 
+/* Form controls: ONE canonical box (SKILLY_SPEC.md §14 "Form controls — one canonical .input").
+   Every text input and <select> in the app wears `.input`, so a control is themed once and cannot
+   drift per page. Five pages used to carry their own inline `field` const with four divergent value
+   sets; the canonical box below is the densest of them (the administration density). Three
+   modifiers carry the other densities that already shipped, so adopting the class changed no
+   existing form's appearance. Per-use concerns — width, flex, max-width — stay inline; only the box
+   lives here. */
+.input {
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input:focus, .input:focus-visible {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.input:disabled { opacity: 0.6; cursor: not-allowed; }
+.input::placeholder { color: var(--faint); }
+/* The propose form's roomier density. */
+.input-lg { padding: 10px 12px; font-size: 14px; }
+/* Commands, URLs, refs, digests — anything pasted from a terminal. */
+.input-mono { font-family: var(--font-mono); }
+/* The MCP card's numeric boxes (their fixed width stays inline — it is layout, not the box). */
+.input-sm { padding: 6px 9px; font-size: 13px; }
+/* An invalid value. Always paired with `aria-invalid`, so the cue is never colour-only (WCAG AA). */
+.input[aria-invalid="true"] { border-color: var(--danger); }
+.input[aria-invalid="true"]:focus, .input[aria-invalid="true"]:focus-visible {
+  border-color: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft);
+}
+
+/* Maintainer-contact row (§30.6): the field's width cap lives here, not inline, so the
+   narrow-viewport rule below can lift it. An email address in a full-bleed field on a wide card
+   reads as a mistake, hence the cap. */
+.ns-contact-field { flex: 1; max-width: 360px; }
+
 /* Themed <select>: strip the native arrow/chrome and supply our own chevron so dropdowns
-   match the other form controls in both themes. The box itself reuses the shared field style
-   (passed inline); this only handles appearance + the chevron. */
+   match the other form controls in both themes. The box itself is `.input`; this only handles
+   appearance + the chevron. */
 .select-wrap { position: relative; }
 .select-wrap > select {
   width: 100%; appearance: none; -webkit-appearance: none; -moz-appearance: none; cursor: pointer;
@@ -931,6 +970,12 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   /* Delete User Info: stack the two pickers + the Delete button, each on its own full-width line. */
   .delete-user-form { flex-direction: column; align-items: stretch; }
   .delete-user-form > * { width: 100%; }
+  /* Maintainer contact (§30.6): the label, the input and Save each take a full-width line rather
+     than wrapping mid-row. One rule covers both surfaces — the inline row on /namespaces and the
+     stacked field on the Administration card share these two class names. */
+  .ns-contact-row { flex-direction: column; }
+  .ns-contact-row > * { width: 100%; }
+  .ns-contact-field { max-width: none; }
   /* A selected-user chip restacks: ✕ on top-right, the status tag below the name + email. */
   .user-picked {
     display: grid; grid-template-columns: auto 1fr auto;

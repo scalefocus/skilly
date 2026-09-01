@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.145.2",
+    date: "2026-09-01",
+    summary:
+      "Maintainer contact is a proper field now: on Namespace administration it was an unstyled box that ignored your theme, and it had no user search. Both surfaces that edit it — the namespace page and Administration — now share one field with the user typeahead, and the address is checked before it saves (it's published as your marketplace's owner email, so a typo used to ship). Clearing a contact from Administration also works again, and confirmations on the namespace page no longer vanish the instant they appear. Every text box and dropdown in the app now shares one style, so forms look the same wherever you meet them.",
+  },
+  {
     version: "1.145.1",
     date: "2026-09-01",
     summary:

@@ -5,11 +5,13 @@ import { TOOL_OPTIONS, agentLabel, GENERIC_AGENT } from "@skilly/shared/agents";
 // Closed-but-searchable picker for a skill's tool/harness (coding agent). The label is shown; the
 // slug is stored via onChange. Filtering matches label OR slug; `Generic` (default) sits first.
 // SKILLY_SPEC.md §3/§8. When `disabled` (new-version lock) it renders a read-only label.
-export function ToolHarnessPicker({ value, onChange, disabled, style }: {
+export function ToolHarnessPicker({ value, onChange, disabled, style, className = "input" }: {
   value: string;
   onChange: (slug: string) => void;
   disabled?: boolean;
   style?: React.CSSProperties;
+  /** The input's box class — the canonical `.input` plus any density modifier (§14). */
+  className?: string;
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
@@ -32,7 +34,7 @@ export function ToolHarnessPicker({ value, onChange, disabled, style }: {
   }, [open]);
 
   if (disabled) {
-    return <input style={style} value={agentLabel(value)} disabled readOnly />;
+    return <input className={className} style={style} value={agentLabel(value)} disabled readOnly />;
   }
 
   const pick = (slug: string) => { onChange(slug); setOpen(false); setEditing(false); setQ(""); };
@@ -40,6 +42,7 @@ export function ToolHarnessPicker({ value, onChange, disabled, style }: {
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
       <input
+        className={className}
         style={style}
         // Show the selected label when idle; clear to a search box while editing.
         value={editing ? q : agentLabel(value)}
