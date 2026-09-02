@@ -78,7 +78,6 @@ const ACTION_LABEL: Record<string, string> = {
 const SEV_TONE: Record<string, "ok" | "warn" | "danger" | "muted"> = { critical: "danger", high: "danger", medium: "warn", low: "muted", info: "muted" };
 const STATE_TONE: Record<string, "ok" | "warn" | "danger" | "muted"> = { proposed: "muted", under_review: "warn", changes_requested: "warn", accepted: "ok", rejected: "danger" };
 
-const fieldStyle = { width: "100%", padding: "9px 11px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 13.5 } as const;
 const labelStyle = { display: "block", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 6 } as const;
 
 /** Editable copy of the submitted metadata (same controls as the propose form). Used by reviewer
@@ -558,10 +557,10 @@ function ProposalDetailInner() {
                     {isSubmitter ? (reviseMode ? " You can also replace the files below — the version stays locked while in review." : " You can also revise the files and the version below.") : ""}
                   </p>
                 )}
-                <div><label style={labelStyle}>Title</label><input style={fieldStyle} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></div>
+                <div><label style={labelStyle}>Title</label><input className="input" style={{ width: "100%" }} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></div>
                 <div>
                   <label style={labelStyle}>Description <span style={{ textTransform: "none", letterSpacing: 0 }}>· Markdown</span></label>
-                  <MarkdownField value={edit.description} onChange={(v) => setEdit({ ...edit, description: v })} rows={3} style={fieldStyle} />
+                  <MarkdownField value={edit.description} onChange={(v) => setEdit({ ...edit, description: v })} rows={3} />
                 </div>
                 {/* Same responsive two-up as the propose form: stacks once columns can't fit 220px. */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
@@ -572,12 +571,13 @@ function ProposalDetailInner() {
                     <ToolHarnessPicker
                       value={edit.toolHarness}
                       onChange={(slug) => setEdit({ ...edit, toolHarness: slug })}
-                      style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }}
+                      className="input input-mono"
+                      style={{ width: "100%" }}
                     />
                   </div>
                   <div>
                     <label style={labelStyle}>Visibility</label>
-                    <select style={fieldStyle} value={edit.visibility} onChange={(e) => setEdit({ ...edit, visibility: e.target.value as "org" | "namespace" })} disabled={!editVisibility}>
+                    <select className="input" style={{ width: "100%" }} value={edit.visibility} onChange={(e) => setEdit({ ...edit, visibility: e.target.value as "org" | "namespace" })} disabled={!editVisibility}>
                       <option value="org">org-wide</option>
                       <option value="namespace">restricted to namespace</option>
                     </select>
@@ -593,7 +593,7 @@ function ProposalDetailInner() {
                 </div>
                 <div>
                   <label style={labelStyle}>Usage <span style={{ textTransform: "none", letterSpacing: 0 }}>· Markdown</span></label>
-                  <MarkdownField value={edit.usageExamples} onChange={(v) => setEdit({ ...edit, usageExamples: v })} rows={4} mono style={fieldStyle} />
+                  <MarkdownField value={edit.usageExamples} onChange={(v) => setEdit({ ...edit, usageExamples: v })} rows={4} mono />
                 </div>
                 {/* Per-version "What changed" note (§8) — new-version proposals only (a first
                     version has no predecessor). Plain text, required; reviewer-editable. */}
@@ -601,7 +601,8 @@ function ProposalDetailInner() {
                   <div>
                     <label style={labelStyle}>What changed <span style={{ textTransform: "none", letterSpacing: 0 }}>· plain text, required</span></label>
                     <textarea
-                      style={{ ...fieldStyle, resize: "vertical", fontFamily: "var(--font-mono)", fontSize: 13 }}
+                      className="input input-mono"
+                      style={{ width: "100%", resize: "vertical", fontSize: 13 }}
                       rows={4}
                       maxLength={WHAT_CHANGED_MAX_LEN}
                       value={edit.whatChanged}
@@ -619,7 +620,8 @@ function ProposalDetailInner() {
                       {/* §8: the proposed semver is LOCKED mid-review — changeable only on
                           resubmit after changes are requested. */}
                       <input
-                        style={{ ...fieldStyle, fontFamily: "var(--font-mono)", ...(reviseMode ? { opacity: 0.6 } : {}) }}
+                        className="input input-mono"
+                        style={{ width: "100%", ...(reviseMode ? { opacity: 0.6 } : {}) }}
                         value={edit.semver}
                         onChange={(e) => !reviseMode && setEdit({ ...edit, semver: e.target.value })}
                         readOnly={reviseMode}
@@ -680,15 +682,15 @@ function ProposalDetailInner() {
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                         <div style={{ gridColumn: "1 / -1" }}>
                           <label style={labelStyle}>Repository URL</label>
-                          <input style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }} value={edit.pointer.url} onChange={(e) => setEdit({ ...edit, pointer: { ...edit.pointer!, url: e.target.value } })} spellCheck={false} />
+                          <input className="input input-mono" style={{ width: "100%" }} value={edit.pointer.url} onChange={(e) => setEdit({ ...edit, pointer: { ...edit.pointer!, url: e.target.value } })} spellCheck={false} />
                         </div>
                         <div>
                           <label style={labelStyle}>Pinned ref</label>
-                          <input style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }} value={edit.pointer.ref} onChange={(e) => setEdit({ ...edit, pointer: { ...edit.pointer!, ref: e.target.value } })} spellCheck={false} />
+                          <input className="input input-mono" style={{ width: "100%" }} value={edit.pointer.ref} onChange={(e) => setEdit({ ...edit, pointer: { ...edit.pointer!, ref: e.target.value } })} spellCheck={false} />
                         </div>
                         <div>
                           <label style={labelStyle}>Subfolder <span style={{ textTransform: "none", letterSpacing: 0 }}>· optional</span></label>
-                          <input style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }} value={edit.pointer.subdir} onChange={(e) => setEdit({ ...edit, pointer: { ...edit.pointer!, subdir: e.target.value } })} spellCheck={false} placeholder="path/in/repo" />
+                          <input className="input input-mono" style={{ width: "100%" }} value={edit.pointer.subdir} onChange={(e) => setEdit({ ...edit, pointer: { ...edit.pointer!, subdir: e.target.value } })} spellCheck={false} placeholder="path/in/repo" />
                         </div>
                       </div>
                     ) : (

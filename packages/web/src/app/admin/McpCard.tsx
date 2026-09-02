@@ -33,17 +33,6 @@ interface McpStatus {
   clients: AdminClient[];
 }
 
-const field: React.CSSProperties = {
-  padding: "6px 9px",
-  borderRadius: "var(--radius-sm)",
-  border: "1px solid var(--line)",
-  background: "var(--surface)",
-  color: "var(--ink)",
-  fontFamily: "var(--font-body)",
-  fontSize: 13,
-  width: 90,
-};
-
 /** Bytes → a short MiB label for the placeholders. */
 function mib(bytes: number | undefined): string {
   return bytes == null ? "" : String(Math.round((bytes / (1024 * 1024)) * 10) / 10);
@@ -150,7 +139,8 @@ export function McpCard({ open, onToggle }: { open: boolean; onToggle: () => voi
           Access-token lifetime (minutes)
           <span style={{ display: "flex", gap: 6 }}>
             <input
-              style={field}
+              className="input input-sm"
+              style={{ width: 90 }}
               inputMode="numeric"
               placeholder={String(data?.accessTtlMinutes ?? 60)}
               value={accessTtl}
@@ -170,7 +160,8 @@ export function McpCard({ open, onToggle }: { open: boolean; onToggle: () => voi
           Refresh-token lifetime (days)
           <span style={{ display: "flex", gap: 6 }}>
             <input
-              style={field}
+              className="input input-sm"
+              style={{ width: 90 }}
               inputMode="numeric"
               placeholder={String(data?.refreshTtlDays ?? 90)}
               value={refreshTtl}
@@ -193,7 +184,8 @@ export function McpCard({ open, onToggle }: { open: boolean; onToggle: () => voi
           Inline upload limit (MiB)
           <span style={{ display: "flex", gap: 6 }}>
             <input
-              style={field}
+              className="input input-sm"
+              style={{ width: 90 }}
               inputMode="decimal"
               placeholder={mib(data?.maxInlineUploadBytes)}
               value={inlineMb}
@@ -216,7 +208,8 @@ export function McpCard({ open, onToggle }: { open: boolean; onToggle: () => voi
           Single-read limit (MiB)
           <span style={{ display: "flex", gap: 6 }}>
             <input
-              style={field}
+              className="input input-sm"
+              style={{ width: 90 }}
               inputMode="decimal"
               placeholder={mib(data?.maxResourceBytes)}
               value={readMb}

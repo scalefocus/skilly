@@ -4,7 +4,7 @@
 // This is deliberately a DUAL surface, not a migration: Administration → Namespaces keeps every
 // control it had, and both paths write through here so validation and audit are identical.
 import type { EffectiveAccess } from "@skilly/shared";
-import { PUBLIC_SCOPE, canManageNamespaceSettings, marketplaceName } from "@skilly/shared";
+import { PUBLIC_SCOPE, canManageNamespaceSettings, marketplaceName, maintainerContactError, normalizeMaintainerContact } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { marketplaceSkillCount, revokeNamespaceMarketplaceTokens } from "./marketplaces";
@@ -107,10 +107,17 @@ export async function updateNamespaceSettings(
   if (patch.requireReview === false && before.slug === GLOBAL_SLUG) {
     return { ok: false, status: 422, error: "the global namespace always requires review" };
   }
+  // The contact is published as `owner.email` in this namespace's marketplace manifest (§30.3),
+  // so it must be an address or empty. Same shared check the browser runs, so the two surfaces
+  // (and the client) cannot disagree on what is acceptable (§30.6).
+  if (patch.maintainerContact !== undefined) {
+    const contactError = maintainerContactError(patch.maintainerContact);
+    if (contactError) return { ok: false, status: 422, error: contactError };
+  }
 
   const requireReview = patch.requireReview ?? before.require_review;
   const maintainerContact =
-    patch.maintainerContact === undefined ? before.maintainer_contact : (patch.maintainerContact?.trim() || null);
+    patch.maintainerContact === undefined ? before.maintainer_contact : normalizeMaintainerContact(patch.maintainerContact);
   const marketplaceEnabled = patch.marketplaceEnabled ?? before.marketplace_enabled;
 
   await pool.query(

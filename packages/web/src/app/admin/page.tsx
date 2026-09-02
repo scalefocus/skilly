@@ -9,6 +9,7 @@ import { CollapsibleCard } from "./CollapsibleCard";
 import { EmailCard } from "./EmailCard";
 import { SystemBannerCard } from "./SystemBannerCard";
 import { McpCard } from "./McpCard";
+import { MaintainerContactField } from "../../components/MaintainerContactField";
 
 // recharts is heavy (d3) — code-split it out of the admin route's initial bundle.
 const ActiveUsersChart = nextDynamic(() => import("./ActiveUsersChart").then((m) => m.ActiveUsersChart), {
@@ -86,7 +87,6 @@ function useAdminCards() {
   return { open, toggle, setAll, allOpen };
 }
 
-const field = { padding: "8px 11px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 13.5 } as const;
 const label = { display: "block", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 6 } as const;
 
 // Identity-sync (SCIM) diagnostics: shows whether Entra has provisioned groups/users, since the
@@ -154,7 +154,7 @@ function ChatPollSetting({ value, busy, call, open, onToggle }: { value: number[
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && dirty && !busy) void onSave(); }}
           placeholder="7, 11, 17, 19, 29, 41, 53"
-          style={{ ...field, fontFamily: "var(--font-mono)", flex: 1, minWidth: 260, maxWidth: 420 }}
+          className="input input-mono" style={{ flex: 1, minWidth: 260, maxWidth: 420 }}
         />
         <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave()}>Save</button>
       </div>
@@ -197,7 +197,7 @@ function UploadChunkSetting({ valueBytes, busy, call }: { valueBytes: number; bu
           disabled={busy}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && dirty && !busy) void onSave(); }}
-          style={{ ...field, fontFamily: "var(--font-mono)", width: 110 }}
+          className="input input-mono" style={{ width: 110 }}
         />
         <span className="muted" style={{ fontSize: 13.5 }}>MB</span>
         <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave()}>Save</button>
@@ -234,7 +234,7 @@ function InstallTtlSetting({ value, busy, call, open, onToggle }: { value: numbe
           disabled={busy}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && dirty && !busy) void onSave(); }}
-          style={{ ...field, fontFamily: "var(--font-mono)", width: 110 }}
+          className="input input-mono" style={{ width: 110 }}
         />
         <span className="muted" style={{ fontSize: 13.5 }}>months</span>
         <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave()}>Save</button>
@@ -317,7 +317,7 @@ function MarketplaceSettings({
             value={minutes}
             disabled={busy}
             onChange={(e) => setMinutes(e.target.value)}
-            style={{ ...field, fontFamily: "var(--font-mono)", width: 110 }}
+            className="input input-mono" style={{ width: 110 }}
           />
           <span className="muted" style={{ fontSize: 13.5 }}>minutes</span>
           <button
@@ -344,7 +344,7 @@ function MarketplaceSettings({
             value={prefix}
             disabled={busy}
             onChange={(e) => setPrefix(e.target.value)}
-            style={{ ...field, fontFamily: "var(--font-mono)", width: 180 }}
+            className="input input-mono" style={{ width: 180 }}
           />
           <button
             className="btn btn-sm"
@@ -390,7 +390,7 @@ function FeaturedCapSetting({ value, busy, call, open, onToggle }: { value: numb
           disabled={busy}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && dirty && !busy) void onSave(); }}
-          style={{ ...field, fontFamily: "var(--font-mono)", width: 110 }}
+          className="input input-mono" style={{ width: 110 }}
         />
         <span className="muted" style={{ fontSize: 13.5 }}>skills</span>
         <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave()}>Save</button>
@@ -709,7 +709,7 @@ export default function AdminPage() {
         {/* Server-side search + review-policy filter (the list is paginated). */}
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
               <input
-                style={{ ...field, flex: 1, minWidth: 200 }}
+                className="input" style={{ flex: 1, minWidth: 200 }}
                 value={nsQ}
                 onChange={(e) => setNsQ(e.target.value)}
                 placeholder="Search namespaces by slug or name…"
@@ -773,7 +773,15 @@ export default function AdminPage() {
                     </button>
                   </div>
 
-                  <MaintainerEditor ns={ns} onSave={(v) => call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ maintainerContact: v }) })} busy={busy} />
+                  {/* §30.6: the same component /namespaces uses, in its `stacked` layout — this is a
+                      form-style card, so the micro-label sits above the field. */}
+                  <MaintainerContactField
+                    value={ns.maintainerContact}
+                    busy={busy}
+                    layout="stacked"
+                    labelStyle={label}
+                    onSave={(v) => call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ maintainerContact: v }) })}
+                  />
 
                   <hr className="divider" style={{ margin: "16px 0" }} />
                   <div className="nav-label" style={{ padding: "0 0 10px" }}>Role mappings</div>
@@ -816,78 +824,18 @@ function AddMapping({ groups, onAdd, busy, fixedRole, namespaceRoles }: { groups
   const [role, setRole] = useState<Role>(namespaceRoles ? "namespace_member" : (fixedRole ?? "namespace_member"));
   return (
     <div className="add-mapping" style={{ display: "flex", gap: 9, flexWrap: "wrap", alignItems: "center" }}>
-      <select style={field} value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+      <select className="input" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
         <option value="">Select Entra group…</option>
         {groups.map((g) => <option key={g.id} value={g.id}>{g.displayName}</option>)}
       </select>
       {namespaceRoles && (
-        <select style={field} value={role} onChange={(e) => setRole(e.target.value as Role)}>
+        <select className="input" value={role} onChange={(e) => setRole(e.target.value as Role)}>
           <option value="namespace_member">member</option>
           <option value="namespace_admin">admin</option>
         </select>
       )}
       <button className="btn btn-sm" disabled={busy || !groupId} onClick={() => onAdd(groupId, fixedRole ?? role)}>+ Add mapping</button>
       {groups.length === 0 && <span className="muted" style={{ fontSize: 12 }}>No synced groups yet — see “Identity sync (SCIM)” above.</span>}
-    </div>
-  );
-}
-
-function MaintainerEditor({ ns, onSave, busy }: { ns: Namespace; onSave: (v: string) => Promise<boolean>; busy: boolean }) {
-  const [v, setV] = useState(ns.maintainerContact ?? "");
-  const [saved, setSaved] = useState(false);
-  // User typeahead: search as you type and let the admin pick a user (fills their email), while the
-  // field stays free-text so a shared mailbox / distribution list is still allowed. Reuses the
-  // platform-admin user search (same backend as Delete User Info).
-  const [results, setResults] = useState<{ userId: string; displayName: string; email: string }[]>([]);
-  const [open, setOpen] = useState(false);
-  // Keep the field authoritative to the saved value once a save (and reload) lands.
-  useEffect(() => { setV(ns.maintainerContact ?? ""); }, [ns.maintainerContact]);
-  useEffect(() => {
-    if (v.trim().length < 3) { setResults([]); return; }
-    let live = true;
-    const t = setTimeout(async () => {
-      try {
-        const r = await fetch(`/api/admin/users/search?q=${encodeURIComponent(v.trim())}`);
-        if (r.ok && live) setResults((await r.json()).users ?? []);
-      } catch { /* ignore transient search errors */ }
-    }, 200);
-    return () => { live = false; clearTimeout(t); };
-  }, [v]);
-  const save = async () => {
-    if (await onSave(v.trim())) {
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    }
-  };
-  return (
-    <div style={{ marginTop: 14 }}>
-      <label style={label}>Maintainer contact</label>
-      <div style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
-        <div style={{ position: "relative", flex: 1, maxWidth: 360 }} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }}>
-          <input
-            style={{ ...field, width: "100%" }}
-            value={v}
-            onChange={(e) => { setV(e.target.value); setOpen(true); }}
-            onFocus={() => { if (results.length) setOpen(true); }}
-            placeholder="search a user, or type a team email…"
-            autoComplete="off"
-          />
-          {open && results.length > 0 && (
-            <ul className="search-ac" role="listbox">
-              {results.map((u) => (
-                <li key={u.userId} role="option" aria-selected={false}>
-                  <button type="button" className="search-ac-item" onClick={() => { setV(u.email); setOpen(false); }}>
-                    <span className="search-ac-title">{u.displayName}</span>
-                    <span className="search-ac-sub mono">{u.email}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <button className="btn btn-sm" disabled={busy || v.trim() === (ns.maintainerContact ?? "")} onClick={save}>Save</button>
-        {saved && <span style={{ fontSize: 12, color: "var(--ok)", whiteSpace: "nowrap", alignSelf: "center" }}>✓ Saved</span>}
-      </div>
     </div>
   );
 }
@@ -900,8 +848,8 @@ function CreateNamespace({ onCreate, busy }: { onCreate: (b: { slug: string; dis
     <div className="card card-pad" style={{ background: "var(--surface-2)", borderStyle: "dashed" }}>
       <div className="nav-label" style={{ padding: "0 0 10px" }}>Create a namespace</div>
       <div className="create-ns-form">
-        <input style={{ ...field, fontFamily: "var(--font-mono)" }} value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="team-a" />
-        <input style={{ ...field, flex: 1, minWidth: 180 }} value={displayName} onChange={(e) => setName(e.target.value)} placeholder="Team A" />
+        <input className="input input-mono" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="team-a" />
+        <input className="input" style={{ flex: 1, minWidth: 180 }} value={displayName} onChange={(e) => setName(e.target.value)} placeholder="Team A" />
         <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 13 }}>
           <input type="checkbox" checked={requireReview} onChange={(e) => setReq(e.target.checked)} /> require review
         </label>
@@ -1094,7 +1042,7 @@ function OnlineUsers({ open, onToggle }: { open: boolean; onToggle: () => void }
       </div>
 
       <input
-        style={{ ...field, width: "100%", marginBottom: 14 }}
+        className="input" style={{ width: "100%", marginBottom: 14 }}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Search online users by name or email…"
@@ -1174,7 +1122,7 @@ function UserPicker({ value, onChange, placeholder, excludeId }: {
 
   if (value) {
     return (
-      <div className="user-picked" style={{ ...field }}>
+      <div className="user-picked input">
         <span className="up-av"><UserBubble name={value.displayName} avatar={value.avatar} userId={value.userId} size={24} /></span>
         <span className="up-name" style={{ flex: 1, minWidth: 0 }}>
           <span style={{ fontSize: 13.5 }}>{value.displayName}</span> <span className="muted mono" style={{ fontSize: 11 }}>{value.email}</span>
@@ -1187,7 +1135,7 @@ function UserPicker({ value, onChange, placeholder, excludeId }: {
   return (
     <div style={{ position: "relative" }} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false); }}>
       <input
-        style={{ ...field, width: "100%" }}
+        className="input" style={{ width: "100%" }}
         value={q}
         onChange={(e) => { setQ(e.target.value); setOpen(true); }}
         onFocus={() => results.length > 0 && setOpen(true)}
@@ -1327,7 +1275,7 @@ function DeleteUserInfo({ open, onToggle }: { open: boolean; onToggle: () => voi
           </p>
           <label style={label}>Type <span className="mono" style={{ textTransform: "none", letterSpacing: 0 }}>{target.displayName}</span> to confirm</label>
           <div style={{ display: "flex", gap: 9, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
-            <input style={{ ...field, flex: 1, maxWidth: 320 }} value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={target.displayName} spellCheck={false} />
+            <input className="input" style={{ flex: 1, maxWidth: 320 }} value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder={target.displayName} spellCheck={false} />
             <button type="button" className="btn btn-sm btn-danger" disabled={!confirmReady || busy} onClick={erase}>{busy ? "Working…" : "Erase user"}</button>
             <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => { setConfirming(false); setConfirmText(""); }}>Cancel</button>
           </div>

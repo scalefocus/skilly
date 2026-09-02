@@ -48,6 +48,38 @@ test("admin flows: namespaces + role mappings + audit", { skip: !enabled }, asyn
     const globalId = cfg.namespaces.find((n) => n.slug === "global")!.id;
     assert.ok((await updateNamespace(pool, globalId, { requireReview: false }, actor)) !== null, "global guard blocks");
 
+    // maintainer contact (§30.6): the same shared check the editors run, on this write path too.
+    const contactOf = async () => (await pool.query<{ maintainer_contact: string | null }>(
+      `select maintainer_contact from namespaces where id = $1`, [nsId],
+    )).rows[0]!.maintainer_contact;
+
+    assert.equal(await updateNamespace(pool, nsId, { maintainerContact: "team-z@example.com" }, actor), null);
+    assert.equal(await contactOf(), "team-z@example.com");
+
+    // Malformed values are refused and leave the stored value untouched.
+    for (const bad of ["ask the team", "team-z", "team-z@", "team-z@example.c", "team-z@org"]) {
+      assert.ok((await updateNamespace(pool, nsId, { maintainerContact: bad }, actor)) !== null, `refuses ${bad}`);
+      assert.equal(await contactOf(), "team-z@example.com", `a refused write must not change the row (${bad})`);
+    }
+
+    // Clearing must reach the column: this path used to `coalesce` the contact, so an explicit
+    // null read as "not supplied" and silently kept the old address.
+    assert.equal(await updateNamespace(pool, nsId, { maintainerContact: "" }, actor), null);
+    assert.equal(await contactOf(), null, "empty clears the contact");
+    assert.equal(await updateNamespace(pool, nsId, { maintainerContact: "team-z@example.com" }, actor), null);
+    assert.equal(await updateNamespace(pool, nsId, { maintainerContact: null }, actor), null);
+    assert.equal(await contactOf(), null, "an explicit null clears the contact");
+
+    // A patch that omits the contact still leaves it alone.
+    assert.equal(await updateNamespace(pool, nsId, { maintainerContact: "keep-z@example.com" }, actor), null);
+    assert.equal(await updateNamespace(pool, nsId, { requireReview: true }, actor), null);
+    assert.equal(await contactOf(), "keep-z@example.com", "an unrelated patch must not touch the contact");
+
+    // A namespace cannot be BORN with a contact the editors would refuse to save.
+    assert.ok("error" in (await createNamespace(
+      pool, { slug: "team-bad-contact", displayName: "Bad", requireReview: true, maintainerContact: "nope" }, actor,
+    )), "create refuses a malformed contact");
+
     // role mapping invariants
     assert.ok("error" in (await createRoleMapping(pool, { groupId: group, namespaceId: nsId, role: "platform_admin" }, actor)));
     assert.ok("error" in (await createRoleMapping(pool, { groupId: group, namespaceId: null, role: "namespace_admin" }, actor)));

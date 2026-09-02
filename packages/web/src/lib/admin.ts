@@ -3,7 +3,7 @@
 // only manages the (group → namespace → role) bindings.
 import type { Pool } from "pg";
 import type { Role } from "@skilly/shared";
-import { marketplaceName, reservedNameConflicts } from "@skilly/shared";
+import { marketplaceName, reservedNameConflicts, maintainerContactError, normalizeMaintainerContact } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { invalidateAccessCaches } from "./access";
 import { getMarketplaceNamePrefix, getPlatformSettings, type PlatformSettings } from "./settings";
@@ -143,6 +143,10 @@ export async function createNamespace(
   actorUserId: string,
 ): Promise<{ id: string } | { error: string }> {
   if (!SLUG.test(input.slug)) return { error: "slug must be lowercase letters, digits, hyphens" };
+  // §30.6: the maintainer contact is an email address or empty on EVERY write path, so a
+  // namespace can't be born with a value the editors would refuse to save.
+  const createContactError = maintainerContactError(input.maintainerContact);
+  if (createContactError) return { error: createContactError };
   const exists = await pool.query(`select 1 from namespaces where slug = $1`, [input.slug]);
   if (exists.rowCount) return { error: `namespace '${input.slug}' already exists` };
 
@@ -159,7 +163,7 @@ export async function createNamespace(
     await client.query("begin");
     const { rows } = await client.query<{ id: string }>(
       `insert into namespaces (slug, display_name, require_review, maintainer_contact) values ($1,$2,$3,$4) returning id`,
-      [input.slug, input.displayName, input.requireReview, input.maintainerContact ?? null],
+      [input.slug, input.displayName, input.requireReview, normalizeMaintainerContact(input.maintainerContact)],
     );
     const id = rows[0]!.id;
     await appendAudit(client, { actorUserId, action: "namespace.created", targetType: "namespace", targetId: id, namespaceId: id, after: input });
@@ -183,13 +187,23 @@ export async function updateNamespace(
   const ns = (await pool.query<{ slug: string }>(`select slug from namespaces where id = $1`, [id])).rows[0];
   if (!ns) return { error: "namespace not found" };
   if (ns.slug === "global" && patch.requireReview === false) return { error: "global namespace always requires review" };
+  // Same shared check as lib/namespaceAdmin and the browser (§30.6) — the dual surface must not
+  // diverge on what a maintainer contact may be.
+  if (patch.maintainerContact !== undefined) {
+    const contactError = maintainerContactError(patch.maintainerContact);
+    if (contactError) return { error: contactError };
+  }
 
+  // `maintainer_contact` cannot use `coalesce`: clearing the contact sends an explicit null,
+  // which coalesce would read as "not supplied" and silently keep the old value (§30.6 requires
+  // empty → NULL). A separate boolean says whether the column is in the patch at all.
+  const contactSupplied = patch.maintainerContact !== undefined;
   await pool.query(
     `update namespaces set
        require_review = coalesce($2, require_review),
-       maintainer_contact = coalesce($3, maintainer_contact)
+       maintainer_contact = case when $4::boolean then $3 else maintainer_contact end
      where id = $1`,
-    [id, patch.requireReview ?? null, patch.maintainerContact ?? null],
+    [id, patch.requireReview ?? null, normalizeMaintainerContact(patch.maintainerContact), contactSupplied],
   );
   await appendAudit(pool, { actorUserId, action: "namespace.updated", targetType: "namespace", targetId: id, namespaceId: id, after: patch });
   return null;
