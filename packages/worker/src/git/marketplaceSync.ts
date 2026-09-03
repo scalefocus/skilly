@@ -26,6 +26,7 @@ import {
   type MarketplaceChange,
   type MarketplacePlugin,
 } from "./marketplace.js";
+import { stampMarketplaceSynced } from "./syncStamp.js";
 
 export interface MarketplaceSyncDeps {
   store: ArtifactStore;
@@ -198,7 +199,12 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
       const skills = await qualifyingSkills(pool, target.scope, target.namespaceId);
       const hash = contentHash(skills);
       const prev = await previousManifest(dir);
-      if (prev && prev.version === hash) continue; // nothing changed — no commit, no consumer churn
+      if (prev && prev.version === hash) {
+        // Nothing changed — no commit, no consumer churn. Still "synced": the catalog was checked
+        // and the repo matches it, which is what the Marketplaces page's freshness line reports.
+        await stampMarketplaceSynced(pool, target.scope, target.namespaceId);
+        continue;
+      }
 
       const plugins: MarketplacePlugin[] = [];
       for (const s of skills) {
@@ -228,6 +234,8 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
         change: diffChange(prev?.versions ?? null, skills),
       });
       rebuilt++;
+      // Stamped only after the rebuild succeeded: a failed synthesis is not "synced" (§30.5).
+      await stampMarketplaceSynced(pool, target.scope, target.namespaceId);
       console.log(JSON.stringify({ level: "info", msg: "marketplace synthesized", marketplace: marketplaceName(prefix, target.scope), skills: skills.length }));
     } catch (err) {
       console.error(JSON.stringify({ level: "error", msg: "marketplace sync failed", scope: target.scope, err: String(err) }));

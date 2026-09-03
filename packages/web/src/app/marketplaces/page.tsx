@@ -1,5 +1,6 @@
 "use client";
 import { Suspense, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
@@ -21,100 +22,6 @@ interface Marketplace {
   stillServed: boolean;
 }
 
-interface MintResult {
-  name: string;
-  command: string;
-  gitConfigCommand: string;
-  plainCommand: string;
-}
-
-function CopyLine({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span className="muted" style={{ fontSize: 12 }}>{label}</span>
-        <button
-          className="btn btn-sm"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(value);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            } catch {
-              setCopied(false);
-            }
-          }}
-        >
-          {copied ? "copied" : "copy"}
-        </button>
-      </div>
-      <pre className="mono" style={{ fontSize: 11.5, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, padding: "8px 10px", background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: 6 }}>
-        {value}
-      </pre>
-      {hint && <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>{hint}</div>}
-    </div>
-  );
-}
-
-/** Adding the PUBLIC marketplace needs no admin rights (§30.4), and there is no admin page a
- *  regular consumer would visit — so the offer lives here, above their list. */
-function AddPublic({ name, maxMonths }: { name: string; maxMonths: number }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [expiry, setExpiry] = useState<string | null>(null);
-  const [minted, setMinted] = useState<MintResult | null>(null);
-
-  const mint = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await fetch("/api/marketplaces/tokens", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "public", expiresAt: expiry }),
-      });
-      const j = (await r.json().catch(() => ({}))) as MintResult & { error?: string };
-      if (!r.ok) throw new Error(j.error ?? "Failed to generate");
-      setMinted(j);
-    } catch (e) {
-      setErr(String((e as Error).message));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="row" style={{ flexDirection: "column", alignItems: "stretch", gap: 10, marginBottom: 18 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontWeight: 600, fontSize: 14.5 }}>Public marketplace</span>
-        <span className="mono muted" style={{ fontSize: 11.5 }}>{name}</span>
-      </div>
-      <div className="muted" style={{ fontSize: 12.5 }}>
-        Every skill in this organization that everyone can see, as Claude Code plugins.
-      </div>
-      {err && <div style={{ fontSize: 13, color: "var(--danger)" }}>{err}</div>}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <span className="muted" style={{ fontSize: 12.5 }}>key expiry</span>
-        <ExpiryPicker maxMonths={maxMonths} onChange={setExpiry} />
-        <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => void mint()}>
-          Generate add command
-        </button>
-      </div>
-      {minted && (
-        <>
-          <CopyLine label="Run in Claude Code" value={minted.command} />
-          <CopyLine
-            label="If background updates fail"
-            value={`${minted.gitConfigCommand}\n${minted.plainCommand}`}
-            hint="Claude Code turns off git credential helpers for background marketplace updates. Run the git config line once, then add the marketplace with the credential-free URL."
-          />
-        </>
-      )}
-    </div>
-  );
-}
-
 /** Best-effort friendly client label from the git User-Agent (OS is usually absent). */
 function clientLabel(ua: string | null): string {
   if (!ua) return "unknown client";
@@ -126,7 +33,7 @@ function MarketplacesInner() {
   const fmt = useDateFmt();
   const q = (useSearchParams().get("q") ?? "").trim();
   const { data: me } = useApi<{ installMaxTtlMonths?: number }>("/api/me");
-  const { data, loading, error, reload } = useApi<{ marketplaces: Marketplace[]; publicMarketplace?: { enabled: boolean; name: string } }>("/api/marketplaces");
+  const { data, loading, error, reload } = useApi<{ marketplaces: Marketplace[] }>("/api/marketplaces");
   const marketplaces = data?.marketplaces ?? [];
   const filtered = filterMarketplaces(marketplaces, q);
 
@@ -185,16 +92,13 @@ function MarketplacesInner() {
         <h1 className="page-title">Added marketplaces.</h1>
         <p className="page-sub">
           Claude Code plugin marketplaces you’ve added. Each carries a unique key — remove one to revoke its URL, or
-          reactivate an expired one to revive the same URL without re-adding it.
+          reactivate an expired one to revive the same URL without re-adding it. To add another, browse{" "}
+          <Link href="/catalog/marketplaces">Marketplaces</Link>.
         </p>
       </div>
 
       {msg && (
         <div style={{ marginBottom: 14, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>
-      )}
-
-      {data?.publicMarketplace?.enabled && (
-        <AddPublic name={data.publicMarketplace.name} maxMonths={me?.installMaxTtlMonths ?? 12} />
       )}
 
       {error ? (
@@ -210,7 +114,7 @@ function MarketplacesInner() {
       ) : marketplaces.length === 0 ? (
         <EmptyState
           title="No marketplaces added yet"
-          hint="Generate an add command from Namespace administration (or the public marketplace card) and run it in Claude Code — it’ll show up here."
+          hint="Generate an add command from the Marketplaces page and run it in Claude Code — it’ll show up here."
         />
       ) : filtered.length === 0 ? (
         <EmptyState title={`No marketplaces match “${q}”`} hint="Clear the search to see all of yours." />

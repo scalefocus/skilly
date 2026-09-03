@@ -1,0 +1,11 @@
+-- Marketplaces page freshness stamp (SKILLY_SPEC.md §30.5, §30.6 Page 3).
+--
+-- The marketplace sweep stamps the time it last EVALUATED each enabled marketplace, whether or not
+-- the content hash changed ("synced" = checked against the catalog, not "committed"). Marketplaces
+-- are eventually consistent, and this is the consumer's only signal that the live skill count they
+-- see and the clone they get may briefly disagree. NULL until the first sweep after enabling; reset
+-- to NULL on disable (the repo is deleted, so "not synced yet" is the truth).
+--
+-- The public marketplace's stamp lives in platform_settings under `marketplace_public_synced_at`,
+-- written lazily by the worker (the `related_last_run_at` precedent) — no seed row needed.
+ALTER TABLE namespaces ADD COLUMN IF NOT EXISTS marketplace_synced_at TIMESTAMPTZ;

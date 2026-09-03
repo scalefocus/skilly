@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.146.0",
+    date: "2026-09-03",
+    summary:
+      "New Marketplaces page under Catalog: every Claude Code plugin marketplace you can add, with its published-skill count and last sync, the namespace contact (message them, email a shared mailbox, or N/A), a Skills link to that namespace’s catalog, and an inline Install panel that generates the add command. Added marketplaces now points here instead of carrying the public-marketplace card.",
+  },
+  {
     version: "1.145.2",
     date: "2026-09-01",
     summary:

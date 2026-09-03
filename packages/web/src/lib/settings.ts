@@ -230,6 +230,9 @@ export async function setMarketplacePublicEnabled(enabled: boolean, actorUserId:
       `delete from tokens where type = 'marketplace' and marketplace_scope = 'public'`,
     );
     revoked = rowCount ?? 0;
+    // The repo is gone, so the freshness stamp goes too — "not synced yet" until the sweep
+    // rebuilds it after a re-enable (§30.5, §30.6 Page 3).
+    await pool.query(`delete from platform_settings where key = 'marketplace_public_synced_at'`);
   }
   await appendAudit(pool, {
     actorUserId,
