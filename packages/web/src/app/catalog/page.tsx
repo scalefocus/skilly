@@ -28,6 +28,12 @@ function Catalog() {
   // a dismissible banner; `by` carries the display name for the banner (no extra lookup).
   const maintainer = params.get("maintainer");
   const maintainerName = params.get("by") ?? "";
+  // Namespace view (from the Marketplaces page's Skills action, §30.6): one namespace's skills the
+  // viewer can see. On arrival it ignores the viewer's saved filters, but — unlike the maintained-by
+  // view — the facet rows stay usable, since a namespace can hold many skills. `nsName` carries the
+  // display name for the banner (no extra lookup).
+  const nsView = params.get("ns");
+  const nsViewName = params.get("nsName") ?? "";
   const [category, setCategory] = useState<string | null>(null);
   const [tool, setTool] = useState<string | null>(null);
   const [type, setType] = useState<"hosted" | "pointer" | null>(null);
@@ -75,12 +81,18 @@ function Catalog() {
     } catch { /* private mode / bad JSON — fall back to defaults */ }
     setPrefsLoaded(true);
   }, []);
+  // Namespace view arrival: start from an unfiltered view of that namespace (declared after the
+  // prefs restore so it wins on mount). Filters picked inside the view are not persisted (below).
   useEffect(() => {
-    if (!prefsLoaded) return;
+    if (!nsView) return;
+    setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setShowArchived(false);
+  }, [nsView]);
+  useEffect(() => {
+    if (!prefsLoaded || nsView) return;
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, showArchived, mine, official, view, categoryOpen: categoryOpenPref }));
     } catch { /* private mode etc. */ }
-  }, [prefsLoaded, category, tool, type, sort, showArchived, mine, official, view, categoryOpenPref]);
+  }, [prefsLoaded, nsView, category, tool, type, sort, showArchived, mine, official, view, categoryOpenPref]);
   // Managers (platform/namespace admins or maintainers) may surface archived skills to restore them.
   const { data: me } = useApi<{ isPlatformAdmin: boolean; namespaceRoles: { role: string }[]; maintainsSkills: boolean }>("/api/me");
   const canManage = !!me && (me.isPlatformAdmin || (me.namespaceRoles ?? []).some((r) => r.role === "namespace_admin") || me.maintainsSkills);
@@ -90,6 +102,7 @@ function Catalog() {
     // Focused maintained-by view — ignore the viewer's other saved filters on arrival. §21
     qs.set("maintainer", maintainer);
   } else {
+    if (nsView) qs.set("ns", nsView); // namespace view (§10) — combines with the facets below
     if (submitted) qs.set("q", submitted);
     if (category) qs.set("category", category);
     if (tool) qs.set("tool", tool);
@@ -132,6 +145,16 @@ function Catalog() {
       {maintainer && (
         <div className="reveal" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 20, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
           <span>Skills maintained by <strong>{maintainerName || "this person"}</strong> — that you can see.</span>
+          <span style={{ flex: 1 }} />
+          <Link href="/catalog" className="btn-ghost mono" style={{ fontSize: 12 }}>✕ clear</Link>
+        </div>
+      )}
+
+      {/* Namespace-view banner (from the Marketplaces page's Skills action, §30.6): names the
+          namespace and offers a one-click return to the full catalog. Facets stay available. */}
+      {!maintainer && nsView && (
+        <div className="reveal ns-view-banner" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 20, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
+          <span>Skills in <strong>{nsViewName || nsView}</strong> — that you can see.</span>
           <span style={{ flex: 1 }} />
           <Link href="/catalog" className="btn-ghost mono" style={{ fontSize: 12 }}>✕ clear</Link>
         </div>
@@ -227,6 +250,8 @@ function Catalog() {
           {skills.length === 0 ? (
             maintainer ? (
               <EmptyState title="No skills to show" hint={`${maintainerName || "This person"} maintains no skills you have access to.`} />
+            ) : nsView && !(submitted || category || tool || type || mine || official) ? (
+              <EmptyState title="No skills to show" hint={`${nsViewName || nsView} has no skills you have access to yet.`} />
             ) : (
             <EmptyState title={showArchived ? "No archived skills" : submitted || category || tool || type ? "No skills match your filters" : "No skills published yet"} hint={showArchived ? "You have no archived skills to restore." : canManage ? "Try a different search, clear filters, or toggle Archived above." : "Try a different search or clear filters."} />
             )

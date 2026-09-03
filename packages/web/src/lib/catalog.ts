@@ -144,7 +144,7 @@ function ilikeSearch(params: unknown[], q: string, where: string[]): string {
  */
 export async function searchSkills(
   access: EffectiveAccess,
-  opts: { q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest"; limit?: number; archivedOnly?: boolean; officialOnly?: boolean; featuredOnly?: boolean; ownerUserId?: string | null; maintainerUserId?: string | null; catalogSeenAt?: string | null },
+  opts: { q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest"; limit?: number; archivedOnly?: boolean; officialOnly?: boolean; featuredOnly?: boolean; ownerUserId?: string | null; maintainerUserId?: string | null; namespaceSlug?: string | null; catalogSeenAt?: string | null },
 ): Promise<CatalogEntry[]> {
   M.searches.inc();
   const params: unknown[] = [];
@@ -218,6 +218,14 @@ export async function searchSkills(
   if (opts.maintainerUserId) {
     params.push(opts.maintainerUserId);
     where.push(`exists (select 1 from skill_maintainers sm where sm.skill_id = s.id and sm.user_id = $${params.length})`);
+  }
+  // Namespace view (§10): one namespace's skills — the Marketplaces page's per-row "Skills" action
+  // (§30.6). Just one more predicate on the already-joined namespaces row; the visibility predicate
+  // above still applies, so an outsider filtering on a namespace they don't belong to sees only its
+  // org-visible skills. An unknown slug simply matches nothing.
+  if (opts.namespaceSlug) {
+    params.push(opts.namespaceSlug);
+    where.push(`n.slug = $${params.length}`);
   }
   params.push(Math.min(100, opts.limit ?? 60));
   const limitIdx = params.length;

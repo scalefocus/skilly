@@ -120,8 +120,13 @@ export async function updateNamespaceSettings(
     patch.maintainerContact === undefined ? before.maintainer_contact : normalizeMaintainerContact(patch.maintainerContact);
   const marketplaceEnabled = patch.marketplaceEnabled ?? before.marketplace_enabled;
 
+  // Disabling also clears the freshness stamp: the repo is deleted, so "not synced yet" is the
+  // truth until the sweep rebuilds it after a re-enable (§30.5, §30.6 Page 3).
   await pool.query(
-    `update namespaces set require_review = $2, maintainer_contact = $3, marketplace_enabled = $4 where id = $1`,
+    `update namespaces
+        set require_review = $2, maintainer_contact = $3, marketplace_enabled = $4,
+            marketplace_synced_at = case when $4::boolean then marketplace_synced_at else null end
+      where id = $1`,
     [namespaceId, requireReview, maintainerContact, marketplaceEnabled],
   );
 

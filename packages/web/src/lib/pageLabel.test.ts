@@ -27,6 +27,9 @@ test("resolveStaticPageLabel: longest-prefix match doesn't get shadowed", () => 
   // /system-log must resolve to its own label, not fall through to an unrelated shorter prefix.
   assert.equal(resolveStaticPageLabel("/system-log"), "System log");
   assert.notEqual(resolveStaticPageLabel("/system-log"), resolveStaticPageLabel("/"));
+  // The Marketplaces page nests under /catalog in the URL but is its own page (§30.6 Page 3).
+  assert.equal(resolveStaticPageLabel("/catalog/marketplaces"), "Marketplaces");
+  assert.equal(resolveStaticPageLabel("/catalog"), "Catalog");
 });
 
 test("resolveStaticPageLabel: unrecognized routes resolve to null (nothing to beacon)", () => {

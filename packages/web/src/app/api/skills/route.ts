@@ -15,6 +15,13 @@ function maintainerParam(url: URL): string | undefined {
   return m && UUID_RE.test(m) ? m : undefined;
 }
 
+const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+/** The `?ns=` namespace slug (the catalog's namespace view, §10), only if slug-shaped (else ignored). */
+function namespaceParam(url: URL): string | undefined {
+  const ns = url.searchParams.get("ns");
+  return ns && SLUG_RE.test(ns) ? ns : undefined;
+}
+
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   const oid = (session as { oid?: string } | null)?.oid;
@@ -47,6 +54,9 @@ export async function GET(req: Request) {
     // searchSkills, so this never reveals a skill the viewer couldn't already see (invariant #3). The
     // maintainer value is UUID-validated so a malformed id is ignored rather than erroring the query.
     maintainerUserId: maintainerParam(url) ?? (url.searchParams.get("mine") === "1" ? access.userId : undefined),
+    // Namespace view (§10): `?ns=<slug>` from the Marketplaces page's "Skills" action (§30.6).
+    // Visibility is still enforced in searchSkills (invariant #3).
+    namespaceSlug: namespaceParam(url),
     catalogSeenAt,
   });
   return Response.json({ skills });

@@ -120,7 +120,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `group_id`, `user_id`. Synced via SCIM. **Authoritative source of "who is in a group."**
 
 ### `namespaces`
-- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **a validated email address**: any valid address, **not** required to be a registered user, shape-checked on write in the browser and on the server; the editor offers a shared **user-search typeahead** that fills a picked user's email, and a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `created_at`.
+- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **a validated email address**: any valid address, **not** required to be a registered user, shape-checked on write in the browser and on the server; the editor offers a shared **user-search typeahead** that fills a picked user's email, and a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `marketplace_synced_at` (TIMESTAMPTZ, nullable — when the worker's marketplace sweep last evaluated this namespace's marketplace, stamped every sweep whether or not content changed; NULL until the first sweep after enabling and reset to NULL on disable; shown as "synced N min ago" on the Marketplaces page, §30.6), `created_at`.
 - Created explicitly by Platform Admins. `global` is special: `require_review` always true.
 
 ### `role_mappings` (the explicit Entra-group→role binding table)
@@ -281,7 +281,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Currently online (presence)
 - The **Administration** page has a **"Currently online"** section, **platform-admins only**, listing the users active right now.
 - **Presence is activity-window based, not session-based** (sessions are stateless JWTs with no server-side store, so there is nothing to enumerate). Every authenticated request resolves the user through the single `currentAccess()` choke point, which **stamps `users.last_seen = now()`** as a **fire-and-forget, best-effort** write: it never blocks or fails the request, and is **throttled in-process per user (~60s)** so the high call volume (page renders + the app's 60s background polls) doesn't translate into a write per request. A backgrounded tab stops refreshing (client polling pauses when hidden), which is the intended semantics.
-- **Last-seen page.** Alongside `last_seen`, presence also tracks **which page the user was last on**, shown in the online list between the identity block and the "active … ago" pill (below). Captured **client-side**: the app shell watches the route (`usePathname`) and fires on every navigation (and on initial mount), resolving the current route to a short **human-readable label** — never a raw pathname or query string (invariant #6) — via a **static route→label map** for fixed pages (Overview, Catalog, Propose a skill, Requests, Proposals, Leaderboard, Installed skills, Notifications, Profile, Usage, Audit, System log, Admin, Quick start, What's new), while the three dynamic-title pages **override** that default label once they've fetched their own data: `/skills/[ns]/[slug]` → `"Skill: <display name>"`, `/requests/[id]` → `"Request: <title>"`, `/proposals/[id]` → `"Proposal: <skill title>"`. The resolved label is POSTed to `POST /api/presence/page {label}` (auth required; a no-op — silent 401, no error surfaced — for a signed-out caller), which calls `touchLastSeen(userId, label)`, the **same choke point and same ~60s per-user throttle** `currentAccess()` uses: a beacon call inside another call's throttle window is dropped just like an extra plain stamp, so the shown page can lag the real navigation by up to the throttle window — an accepted trade-off, consistent with `last_seen`'s existing staleness. Plain `currentAccess()` stamps (no label) update `last_seen` only and never clear a previously-stamped `last_seen_page`. Rows with no page yet (pre-upgrade or never-beaconed) show **"—"** in that slot.
+- **Last-seen page.** Alongside `last_seen`, presence also tracks **which page the user was last on**, shown in the online list between the identity block and the "active … ago" pill (below). Captured **client-side**: the app shell watches the route (`usePathname`) and fires on every navigation (and on initial mount), resolving the current route to a short **human-readable label** — never a raw pathname or query string (invariant #6) — via a **static route→label map** for fixed pages (Overview, Catalog, Marketplaces, Propose a skill, Requests, Proposals, Leaderboard, Installed skills, Notifications, Profile, Usage, Audit, System log, Admin, Quick start, What's new), while the three dynamic-title pages **override** that default label once they've fetched their own data: `/skills/[ns]/[slug]` → `"Skill: <display name>"`, `/requests/[id]` → `"Request: <title>"`, `/proposals/[id]` → `"Proposal: <skill title>"`. The resolved label is POSTed to `POST /api/presence/page {label}` (auth required; a no-op — silent 401, no error surfaced — for a signed-out caller), which calls `touchLastSeen(userId, label)`, the **same choke point and same ~60s per-user throttle** `currentAccess()` uses: a beacon call inside another call's throttle window is dropped just like an extra plain stamp, so the shown page can lag the real navigation by up to the throttle window — an accepted trade-off, consistent with `last_seen`'s existing staleness. Plain `currentAccess()` stamps (no label) update `last_seen` only and never clear a previously-stamped `last_seen_page`. Rows with no page yet (pre-upgrade or never-beaconed) show **"—"** in that slot.
 - **Online = `last_seen` within a selectable activity window.** A **window selector** — **5 min (default) / 1 h / 8 h / 24 h / 30 d** — sits **just above the search box**, right-aligned in a header row that mirrors the trend chart's range toggle (the "Users active within the last …; reach out to start a direct message" caption is that row's left-hand label), so the viewing admin decides how generous "online" is (5 min comfortably absorbs the 60s poll cadence; the long windows turn the card into "active today"/"active this month"). The choice is a **per-admin view preference, remembered in the browser** (`skilly.online-window`, same localStorage mechanism as the chart windows) — it is *not* a platform setting and never affects other admins. The server accepts the window as a `window=<minutes>` query param but **validates it against the fixed option set** (anything else falls back to 5) — never an arbitrary interval from the client. Changing the window re-queries the list and count; the **DAU/WAU/MAU counters and the trend chart are unaffected** (their windows are fixed by definition). Only `status = 'active'` users appear (SCIM-deprovisioned users never show). The viewing admin sees themselves.
 - The section reuses the **maintainer card** (avatar + name + email), with the **last-seen page** label inserted between the name/email block and the tag slot — same row, muted/secondary text, truncated with an ellipsis (full value on hover via `title`) so a long resolved label never pushes the pill or breaks the row — then the relative activity ("active … ago") in the tag slot and the **"Reach out"** DM action kept; there is no remove control. It shows a **live count**, a **search box** (ILIKE over name/email, debounced), and loads **100 at a time with infinite scroll**, ordered most-recently-active first. It polls every **60s** (visibility-aware): the count always refreshes, and the list refreshes only when it's safe to (scrolled to top, no active search) so it never yanks the admin's view mid-scroll/search.
 - **DAU / WAU / MAU counters** sit directly above the online list, inside the same card. Three **rolling** trailing-window counts — `last_seen` within the last **24h / 7d / 30d** respectively — computed live off the **same `last_seen` signal** as presence above (deliberately not a narrower "real navigation only" signal, for consistency) and the same `status = 'active'` filter. They are a **live snapshot only, not a historical trend**: `last_seen` holds each user's most-recent activity, not a log, so there is no way to ask "what was DAU on a past date" — only "how many right now". They **piggyback on the same 60s poll** as the online list (one round trip, not a second endpoint) and always reflect the platform-wide total regardless of the list's search/pagination state.
@@ -892,6 +892,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Shared with `/requests`.** One `CollapsibleFacetRow` component backs this row and the §26 Requested-skills category row, so category filtering looks and behaves identically on both pages rather than diverging into two inline copies.
 - **"My Skills" toggle** (`?mine=1`): narrows the catalog to skills the caller is an **explicit maintainer** of (`skill_maintainers`, §19) — the same definition as `maintainsSkills` in `/api/me`. Implicit (namespace-admin) maintainership is **not** included: "My Skills" means skills named to you, not every skill in a namespace you administer. Visibility-filtered like everything else.
 - **Maintained-by view** (`?maintainer=<userId>&by=<name>`): the same explicit-maintainer filter for an **arbitrary** person (used by the leaderboard's per-row "Skills" action, §21). The catalog shows a **dismissible "Skills maintained by &lt;name&gt;" banner** (the name is carried in the URL, no extra lookup) and, on arrival, **ignores the viewer's other saved filters** (category/tool/type/My-Skills) to show everything by that maintainer the viewer can see. Both surfaces share one server filter (`searchSkills.maintainerUserId`); the `maintainer` value is validated as a UUID and the result is **still viewer-visibility-scoped** (invariant #3), so it never reveals a restricted skill to someone who couldn't already see it.
+- **Namespace view** (`?ns=<slug>&nsName=<display name>`): the catalog narrowed to **one namespace's skills** — used by the Marketplaces page's per-row "Skills" action (§30.6) so a consumer can browse a marketplace's namespace before adding it. Same shape as the maintained-by view: a **dismissible "Skills in &lt;display name&gt;" banner** (the name carried in the URL, no extra lookup), and on arrival the view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) to show everything in that namespace the viewer can see — the facet rows **stay available** afterwards, since a namespace can hold many skills and narrowing within it is useful. One server filter (`searchSkills.namespaceSlug`, matched on `namespaces.slug`); the result is **still viewer-visibility-scoped** (invariant #3): an outsider filtering on a namespace they don't belong to sees only that namespace's `org`-visible skills, exactly what they'd see by browsing. An unknown slug yields an empty list, not an error. Note the difference from the marketplace row's count: this view lists the namespace's **whole visible catalog** (`org` + `namespace` visibility), while the row counts only the **marketplace payload** (`namespace`-visibility skills, §30.1) — the two numbers are expected to differ.
 - **Presentation:** the catalog offers a **cards / list toggle** (card grid vs a compact one-line list; same data + visibility filtering, pure view preference persisted client-side). The skill detail page shows **created** (skill row) and **last updated** (newest version — versions are immutable, so the latest version's timestamp IS the last content update) dates. The **card view is fixed-height** — every card in the grid is exactly as tall as every other, with the description clamped and reserved at four lines, the title at two, the categories row clipped to one, and the top meta row capped at two; see §14 *Fixed-height catalog cards* for the zone budget and its accepted losses.
 - **"What changed" per version (detail page).** The detail page's **Versions** list shows each version's proposer-authored **"What changed"** note (§8): the **latest stable version's** note is **featured** near the top, and each other version's note is **expandable from its row**. Rendered as **escaped plain text with newlines preserved** — **no Markdown** (unlike the *Usage* block, §20). **First versions** and any **pre-feature** versions carry no note and render nothing. Visible to **anyone who can see the skill** (visibility-filtered like all catalog content).
 - **Per-version file changes (detail page).** The note is the author's *claim* about a version; the **file changes** are the mechanical truth, and the detail page now shows both. Each version row's expander carries — under the note — an **auto-computed file-change view** of that version against its predecessor, so a re-version that actually replaced files can never read as "Updated metadata". It is the **same engine and the same renderer** as the reviewer file-change view (§8), re-baselined for a published version:
@@ -1368,7 +1369,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), …).
-- **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove).
+- **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
@@ -3520,8 +3521,14 @@ changes — the fallback is already specced and implemented.
   category edits, marketplace enable.
 - **Self-heal**: a missing or ref-less marketplace repo for an enabled marketplace is
   re-synthesized from scratch, matching `repoProvisioned`'s existing rule (§6).
+- **Freshness stamp.** For every enabled marketplace it evaluates, the sweep stamps the run time
+  — `namespaces.marketplace_synced_at`, or the `platform_settings` row
+  `marketplace_public_synced_at` for the public marketplace — **whether or not the hash
+  changed**. "Synced" means "checked against the catalog", not "committed". The Marketplaces
+  page (§30.6, Page 3) renders it as "synced N min ago", the consumer's only signal that the
+  count they see and the clone they get may briefly disagree.
 
-### 30.6 Enable / disable, and the two new pages
+### 30.6 Enable / disable, and the three pages
 
 **Default: off.** Every existing and newly created namespace starts `marketplace_enabled =
 false`; `marketplace_public_enabled` starts `false`. Nothing is served until someone opts in.
@@ -3608,11 +3615,122 @@ generally**, not a single-toggle page:
 **Installed skills** (§23), and its structural twin: one row per `marketplace` token the
 caller owns, showing the marketplace name and scope, derived state (*generated-unused* /
 *active* / *inactive*, same predicates as §23), expiry, first-added time, last fetch, and the
-client UA/IP captured on first fetch. Actions: **copy command**, **reactivate** (inactive
+client UA/IP captured on first fetch. Actions: **reactivate** (inactive
 only — set a new expiry on the same token, the existing URL works again), and **remove**
-(hard-delete; the URL is refused, installed plugins on disk are untouched). Header search is
+(hard-delete; the URL is refused, installed plugins on disk are untouched). *(There is
+deliberately **no "copy command"** action: tokens are stored **hashed only** (§3, §23) and the
+raw secret is shown exactly once, at mint. Re-obtaining a command means minting again — from
+the **Marketplaces** page below.)* Header search is
 a client-side live filter over the loaded rows, matching `/installed`'s non-registry mode
 (§10). Nav: the account menu, beside **Installed skills**.
+
+- **The public-marketplace card moved.** This page originally carried an "add the public
+  marketplace" card because a non-admin consumer had no other surface to mint from. That
+  surface now exists — **Page 3** — so the card is **removed** here and the empty-state hint
+  points at **Marketplaces** instead of at Namespace administration.
+
+**Page 3 — Marketplaces (`/catalog/marketplaces`), new.** The consumer-facing **directory of
+the marketplaces the caller can add**, in the visual idiom of the leaderboard (§21): one row
+per marketplace, a bubble for the namespace's contact, and per-row actions. Available to
+**every authenticated user**.
+
+- **Why it exists.** Any user holding a role in a namespace has had the *right* to mint that
+  namespace's marketplace key (`canUseNamespaceMarketplace` — any role), but the only mint
+  surfaces were admin pages (Namespace administration, Administration) plus the public card on
+  Page 2. A namespace *member* had no UI at all. This page closes that gap and becomes the
+  **single consumer-side mint surface**; the two admin surfaces keep their Generate buttons
+  (an admin verifying a freshly enabled marketplace should not have to leave the page).
+- **Which rows appear — and nothing else.** Served by `GET /api/marketplaces/directory`:
+  - the **public marketplace**, **pinned first**, iff `marketplace_public_enabled` is on;
+  - then **every namespace the caller may mint for** — namespaces they hold **any role in**
+    (all namespaces for a platform admin) — **whose marketplace is enabled**, **alphabetical
+    by slug**.
+  - **Disabled marketplaces are hidden**, not greyed: there is no repo, no URL, and a mint
+    would 404, so a row would have no working action. (Consequence, accepted: on an instance
+    where nothing has been enabled yet, most users see an empty page — the empty state says
+    so and points at the namespace admins.)
+  - **Zero-skill marketplaces are listed.** §30.3 already serves an empty marketplace; adding it
+    is how a consumer starts receiving skills the moment one qualifies.
+  - **Invariant #3.** The endpoint never returns a namespace the caller has no role in, so no
+    restricted namespace's *existence*, count, or contact is revealed. The public row's count
+    spans only `org`-visible skills. No ordinal rank and no sort toggle — ranking marketplaces
+    is meaningless.
+- **Each row shows:**
+  - the namespace **display name** with the computed **marketplace name** (`skilly-team-a`,
+    §30.2) in mono beneath it; the public row reads "Public marketplace" / `skilly-public`;
+  - the **skill count — the marketplace payload, not the namespace's catalog size.** It is
+    `marketplaceSkillCount` (§30.6), the same live qualifying-skill rule the worker uses, so a
+    namespace with 40 catalog skills of which 3 are `namespace`-visible reads **"publishes 3
+    skills"** — the label carries the verb precisely because the bare number would be
+    misread. Beneath it, freshness: **"synced N min ago"** from `marketplace_synced_at` (below),
+    or **"not synced yet"** when NULL — marketplaces are eventually consistent (§30.5), and
+    without this line a maintainer who just published sees a count the clone does not yet
+    deliver and files a bug;
+  - the **contact bubble**, resolved server-side from `maintainer_contact` into one of **three
+    states** (the column is a free-text email that may name a shared mailbox, so a two-state
+    model cannot work):
+    1. **No contact set** → an inert bubble whose text is **`N/A`**, the name slot reads
+       *No contact*, and **Reach out is disabled**.
+    2. **Contact resolves to a skilly user** — case-insensitive match on `users.email`,
+       **`status = 'active'` only** (a leaver or an erased tombstone never resolves) → the
+       standard `UserBubble` with the user id: avatar or initials, leader badges, the §28
+       directory hover card, and **Reach out** opening a 1:1 conversation via
+       `POST /api/messages/direct`, exactly as the leaderboard. **The viewer's own row hides
+       Reach out**, mirroring the leaderboard.
+    3. **Contact set but resolves to nobody** (distribution list, external address, inactive
+       user) → an inert bubble carrying a **group glyph** (not initials — there is no person),
+       the name slot shows the **email address**, and **Reach out is a `mailto:` link** to it.
+       A distribution list *is* the intended contact for a team; disabling outreach to it
+       would defeat the feature.
+    - **Decision, stated:** this is the **first user-facing exposure** of `maintainer_contact`
+      (until now only admin editors showed it). It is intended: the value is a work contact
+      whose whole purpose is reachability, and it is shown **only inside a row the caller may
+      see**, i.e. a namespace they belong to — the same Entra-group boundary that gates the
+      marketplace itself. The public row's contact is **always `N/A`** (its owner is the
+      platform, §30.3).
+  - a **Skills** action → `/catalog?ns=<slug>&nsName=<display_name>`, the new **namespace view**
+    of the catalog (§10), so the consumer can browse what they are about to add. The public
+    row's Skills action goes to the plain `/catalog` (the public marketplace *is* "everything
+    org-visible");
+  - the **Install** action → opens an **inline panel in the row**, the same two-step the skill
+    detail page uses (§23): an **`ExpiryPicker`** (same `install_max_ttl_months` horizon, same
+    "Never" option) and a **Generate add command** button. Generating calls
+    `POST /api/marketplaces/tokens` (unchanged: purges the caller's prior *unclaimed* tokens
+    for that marketplace, §30.4) and renders the **`/plugin marketplace add …` command with a
+    copy button**, plus — **behind a disclosure** labelled *If background updates fail* — the
+    `git config … insteadOf` line and the credential-free add URL (§30.4). A one-click
+    "copy" button was rejected: the click **mints a reusable credential**, so the TTL must be
+    the user's decision, not an implicit default.
+  - **Added state.** When the caller already holds a **used, unexpired** `marketplace` token
+    for that row, the row carries an **`added` pill** linking to Added marketplaces
+    (`/marketplaces`), and the action reads **Add again** — it still mints a fresh key, because
+    the raw secret of the existing one **cannot be re-shown** (hashed at rest). The old key
+    keeps working; the user then has two rows on Added marketplaces, which is legal and
+    visible there. When the caller's only tokens for that row are **expired**, the pill reads
+    **`expired`** and links to `/marketplaces`, where **reactivate** revives the same URL —
+    the row's Install action stays available as an alternative.
+- **Loading & search.** The endpoint returns **every** row the caller may see (bounded by their
+  namespace memberships — tens to low hundreds); the page renders them with **client-side
+  infinite scroll, 100 rows per page**, the pattern `/usage` (§21) and the admin online list
+  (§4) already use. The **global header box** is a **client-side live filter** over the loaded
+  rows (display name, slug, marketplace name, contact email), matching `/marketplaces` and
+  `/installed`'s non-registry mode (§10) — `/catalog/marketplaces` joins the live-filter page
+  set. **Empty state**: *No marketplaces are available to you yet* with a hint that a
+  namespace admin enables a marketplace from Namespace administration.
+- **Nav.** A new sidebar item **Marketplaces**, **directly below Catalog**, for every signed-in
+  user; page eyebrow **Catalog**. The sidebar's prefix-based `isActive` must treat
+  `/catalog/marketplaces` as **this** item, not Catalog's (exact match for `/catalog`). The
+  presence route→label map (§4) gains **"Marketplaces"**. The account-menu entry keeps its
+  existing, distinct label **Added marketplaces** — two entries reading "Marketplaces" would be
+  a bug.
+- **Freshness stamp — `marketplace_synced_at`.** Every §30.5 sweep, for **each enabled
+  marketplace it evaluates**, stamps the time it ran **whether or not the hash changed**
+  (unchanged ⇒ no commit, but still "synced"): `namespaces.marketplace_synced_at` for a
+  namespace marketplace, and the `platform_settings` row **`marketplace_public_synced_at`**
+  for the public one (worker-stamped state in `platform_settings` follows the existing
+  `related_last_run_at` precedent). **Disable resets the stamp to NULL** alongside deleting the
+  repo, so a re-enabled marketplace reads "not synced yet" until the next sweep — which is
+  the truth: its repo does not exist yet.
 
 ### 30.7 Install attribution
 
@@ -3668,9 +3786,14 @@ as **real installs of the individual skills**, via a commit cursor:
 - `marketplace_sync_minutes` — int 1–1440, default `30`.
 - `marketplace_name_prefix` — kebab-case string, default `skilly`; validated against the
   reserved-name list for every existing namespace on change.
+- `marketplace_public_synced_at` — **worker-stamped state, not an admin-editable setting**
+  (the `related_last_run_at` precedent): the last sweep time of the public marketplace, NULL
+  until the first sweep after enabling, reset to NULL on disable (§30.5, §30.6 Page 3). Not
+  shown in Administration.
 
 **Data model** (§3):
-- `namespaces` gains `marketplace_enabled BOOLEAN NOT NULL DEFAULT false`.
+- `namespaces` gains `marketplace_enabled BOOLEAN NOT NULL DEFAULT false`, and — in the
+  later Marketplaces-page migration — `marketplace_synced_at TIMESTAMPTZ` (nullable).
 - `tokens`: `type` gains `'marketplace'`; `skill_id` becomes **nullable**; new
   `marketplace_scope TEXT` (`public` | `namespace`), `namespace_id UUID` (FK → `namespaces`,
   `ON DELETE CASCADE`), `last_served_commit TEXT`. CHECK constraint: `install` ⇒ `skill_id`
@@ -3689,6 +3812,18 @@ as **real installs of the individual skills**, via a commit cursor:
   `publicMarketplace { enabled, name }` so a **non-admin** consumer can add the public marketplace
   from that page — there is no admin surface they would otherwise reach.
 - `PATCH|DELETE /api/marketplaces/tokens/:id` — reactivate / remove.
+- `GET /api/marketplaces/directory` — the Marketplaces page (Page 3). Returns
+  `{ rows, syncMinutes }`; each row carries `scope` (`public` | `namespace`), `namespaceSlug`,
+  `displayName`, `name` (the computed marketplace name), `skillCount` (payload count,
+  `marketplaceSkillCount`), `syncedAt` (nullable), `contact` — one of
+  `{ kind: 'none' }` / `{ kind: 'user', userId, displayName, avatar }` (active user matched
+  case-insensitively on email) / `{ kind: 'email', email }` — and `added` (`none` | `active` |
+  `expired`, from the caller's own used `marketplace` tokens). Rows: the public marketplace
+  iff enabled, then the caller's role-bearing namespaces whose marketplace is enabled,
+  alphabetical by slug. **No pagination parameters** — the set is bounded by memberships and
+  the page scrolls client-side. Any signed-in user.
+- `GET /api/skills?ns=<slug>` — the catalog's namespace view (§10); the same
+  visibility-scoped `searchSkills` with one more predicate.
 - `PATCH /api/admin/namespaces/:id` also accepts `marketplaceEnabled`, delegating to the same
   writer as the namespace-admin page so the dual surface can't diverge on revocation or audit.
 - `GET|PATCH /api/admin/settings` gains the three settings above.
@@ -3698,3 +3833,14 @@ Lands after the current tiers as its own increment: **worker** (synthesis sweep 
 routes on the existing git server), **shared** (`plugin-marketplace.ts`, pinned), **web**
 (two pages, four endpoint groups, one Administration card), **db** (one migration:
 `namespaces.marketplace_enabled`, the `tokens` columns + CHECK, the three settings rows).
+
+The **Marketplaces page** (§30.6 Page 3) is a **second increment** on top: **web** (the
+`/catalog/marketplaces` page, `GET /api/marketplaces/directory`, the catalog `?ns=` view, the
+sidebar item, removal of the public card from `/marketplaces`), **worker** (the sync stamp),
+**db** (one migration: `namespaces.marketplace_synced_at`; the `marketplace_public_synced_at`
+settings row is written lazily by the worker, no seed needed). Tests: unit for contact
+resolution and row assembly; integration for the directory endpoint's visibility rules (a
+non-member never receives a restricted namespace; disabled marketplaces and a disabled public
+marketplace are absent; `added` state from the caller's tokens only) and the `?ns=` filter's
+visibility scoping; e2e for the page rendering its rows and the inline Install panel minting a
+command.

@@ -15,6 +15,9 @@ import { resolveStaticPageLabel } from "../lib/pageLabel";
 const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "review" | "requests" }[] = [
   { href: "/", label: "Overview", icon: "M3 12 12 4l9 8M5 10v9h14v-9" },
   { href: "/catalog", label: "Catalog", icon: "M4 5h16M4 12h16M4 19h10", badge: "catalog" },
+  // The consumer-facing marketplace directory (§30.6 Page 3) — nested under /catalog in the URL,
+  // its own sidebar entry directly below Catalog. Same storefront glyph as "Added marketplaces".
+  { href: "/catalog/marketplaces", label: "Marketplaces", icon: "M3 9h18l-1.5-4.5A1.5 1.5 0 0 0 18 3.5H6a1.5 1.5 0 0 0-1.5 1L3 9zM4.5 9v9A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5V9M9 13h6" },
   { href: "/propose", label: "Propose a skill", icon: "M12 5v14M5 12h14" },
   { href: "/requests", label: "Requested skills", icon: "M12 17h.01M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4", badge: "requests" },
   { href: "/proposals", label: "Review queue", icon: "M5 4h11l3 3v13H5zM9 12h6M9 16h6", badge: "review" },
@@ -89,7 +92,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const onInstalled = pathname === "/installed";
   const onUsage = pathname === "/usage";
   const onRequests = pathname === "/requests";
-  const liveFilter = onCatalog || onInstalled || onUsage || onRequests;
+  // The Marketplaces directory filters an already-loaded list client-side, like /installed (§30.6).
+  const onMarketplaceDir = pathname === "/catalog/marketplaces";
+  const liveFilter = onCatalog || onInstalled || onUsage || onRequests || onMarketplaceDir;
 
   // People mode (§10): a query whose FIRST character is `@` turns the box into a people typeahead
   // on EVERY page — it overrides the live-filter modes (nothing is mirrored to ?q= while active)
@@ -160,7 +165,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!liveFilter) return;
     if (peopleMode) return; // §10 people mode suspends the live filter — nothing written to ?q=
-    const floor = onInstalled ? 1 : 2;
+    const floor = onInstalled || onMarketplaceDir ? 1 : 2;
     const term = q.trim();
     const t = setTimeout(() => {
       const sp = new URLSearchParams(window.location.search);
@@ -172,7 +177,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       router.replace(qs ? `${pathname}?${qs}` : pathname);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, liveFilter, peopleMode, onInstalled, pathname, router]);
+  }, [q, liveFilter, peopleMode, onInstalled, onMarketplaceDir, pathname, router]);
 
   // Ctrl/Cmd+K focuses the registry search (only while signed in, since the box only
   // exists then). The kbd hint next to the box advertises the shortcut.
@@ -372,7 +377,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [status]);
 
-  const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+  // Prefix match, except the two entries that are prefixes of another entry: "/" and "/catalog"
+  // (the Marketplaces page lives at /catalog/marketplaces and must light up its own item only).
+  const isActive = (href: string) => (href === "/" || href === "/catalog" ? pathname === href : pathname.startsWith(href));
 
   // Close the mobile drawer + menus whenever the route changes (i.e. a nav item was tapped).
   useEffect(() => { setNavOpen(false); setAcOpen(false); setUserMenuOpen(false); }, [pathname]);
@@ -652,8 +659,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   if (e.key === "ArrowDown") { e.preventDefault(); setAcHi((i) => (i + 1) % count); }
                   else if (e.key === "ArrowUp") { e.preventDefault(); setAcHi((i) => (i <= 0 ? count - 1 : i - 1)); }
                 }}
-                placeholder={onInstalled ? "Search installed skills…" : onUsage ? "Search usage…" : onRequests ? "Search requests…" : "Search the registry…"}
-                aria-label={onInstalled ? "Search installed skills" : onUsage ? "Search usage" : onRequests ? "Search requests" : "Search skills"}
+                placeholder={onInstalled ? "Search installed skills…" : onUsage ? "Search usage…" : onRequests ? "Search requests…" : onMarketplaceDir ? "Search marketplaces…" : "Search the registry…"}
+                aria-label={onInstalled ? "Search installed skills" : onUsage ? "Search usage" : onRequests ? "Search requests" : onMarketplaceDir ? "Search marketplaces" : "Search skills"}
                 aria-autocomplete="list"
                 autoComplete="off"
               />

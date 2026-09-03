@@ -9,6 +9,8 @@ import { authedTest as test, expect } from "./fixtures";
 const ROUTES = [
   "/",
   "/catalog",
+  "/catalog/marketplaces",
+  "/marketplaces",
   "/installed",
   "/mcp",
   "/leaderboard",

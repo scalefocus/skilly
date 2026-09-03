@@ -6,6 +6,8 @@
 const STATIC_ROUTES: { prefix: string; label: string; exact?: boolean }[] = [
   { prefix: "/", label: "Overview", exact: true },
   { prefix: "/catalog", label: "Catalog" },
+  // Longest-prefix match keeps this from being swallowed by /catalog (§30.6 Page 3).
+  { prefix: "/catalog/marketplaces", label: "Marketplaces" },
   { prefix: "/propose", label: "Propose a skill" },
   { prefix: "/requests", label: "Requested skills" },
   { prefix: "/proposals", label: "Review queue" },
