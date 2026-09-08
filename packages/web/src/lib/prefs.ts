@@ -54,3 +54,9 @@ export function removePref(key: string): void {
 // `id` on /namespaces). Set/clear/arrival rules: lib/lastWatched.ts.
 export const PREF_ADMIN_LAST_CARD = "skilly.admin.last-card";
 export const PREF_NS_LAST_CARD = "skilly.namespaces.last-card";
+
+// The marketplace add-command panel's remembered route tab (§30.4 / §30.6): `terminal` | `cli` |
+// `settings`. One key shared by the Marketplaces directory and Namespace administration — a
+// consumer has a preferred tooling and should not re-pick it per row or per page. Unknown or
+// missing ⇒ Terminal.
+export const PREF_MARKETPLACE_ADD_ROUTE = "skilly.marketplace.add-route";

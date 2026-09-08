@@ -10,7 +10,7 @@ import { useApi, Pill, EmptyState, ScrollToTop, LoadMoreSentinel, formatCount } 
 import { RequireAuth } from "../../../components/RequireAuth";
 import { UserBubble } from "../../../components/UserBubble";
 import { ExpiryPicker } from "../../../components/ExpiryPicker";
-import { CopyLine } from "../../../components/CopyLine";
+import { MarketplaceAddCommand, type MarketplaceMint } from "../../../components/MarketplaceAddCommand";
 import { useDateFmt } from "../../../components/DateFormat";
 import { filterDirectory, syncedLabel, type AddedState, type DirectoryContact } from "../../../lib/marketplaceDirectoryFilter";
 
@@ -23,14 +23,6 @@ interface Row {
   syncedAt: string | null;
   contact: DirectoryContact;
   added: AddedState;
-}
-
-interface MintResult {
-  name: string;
-  command: string;
-  gitConfigCommand: string;
-  plainCommand: string;
-  expiresAt: string | null;
 }
 
 /** Client-side infinite scroll page size — the pattern /usage and the admin online list use. */
@@ -82,7 +74,7 @@ function ContactBubble({ contact, size = 34 }: { contact: DirectoryContact; size
 /**
  * The inline Install panel: the same two-step the skill detail page uses (§23) — pick an expiry,
  * then Generate — because the click MINTS a reusable credential, so the TTL is the user's decision.
- * The auto-update fallback sits behind a disclosure (§30.4).
+ * The result is the shared three-route add-command panel (§30.4 / §30.6).
  */
 function InstallPanel({ row, maxMonths }: { row: Row; maxMonths: number }) {
   const fmt = useDateFmt();
@@ -90,7 +82,7 @@ function InstallPanel({ row, maxMonths }: { row: Row; maxMonths: number }) {
   const [pending, setPending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [minted, setMinted] = useState<MintResult | null>(null);
+  const [minted, setMinted] = useState<MarketplaceMint | null>(null);
 
   const mint = async () => {
     if (pending) {
@@ -108,7 +100,7 @@ function InstallPanel({ row, maxMonths }: { row: Row; maxMonths: number }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      const j = (await r.json().catch(() => ({}))) as MintResult & { error?: string };
+      const j = (await r.json().catch(() => ({}))) as MarketplaceMint & { error?: string };
       if (!r.ok) throw new Error(j.error ?? "Failed to generate");
       setMinted(j);
     } catch (e) {
@@ -130,18 +122,10 @@ function InstallPanel({ row, maxMonths }: { row: Row; maxMonths: number }) {
       {err && <div role="alert" style={{ marginTop: 8, fontSize: 13, color: "var(--danger)" }}>{err}</div>}
       {minted && (
         <>
-          <CopyLine label="Run in Claude Code" value={minted.command} />
+          <MarketplaceAddCommand minted={minted} />
           <div className="muted mono" style={{ fontSize: 11, marginTop: 6 }}>
             {minted.expiresAt ? `key expires ${fmt.date(minted.expiresAt)}` : "key never expires"} · manage it in Added marketplaces
           </div>
-          <details style={{ marginTop: 8 }}>
-            <summary className="muted" style={{ fontSize: 12.5, cursor: "pointer" }}>If background updates fail</summary>
-            <CopyLine
-              label="Run the git config line once, then add with the credential-free URL"
-              value={`${minted.gitConfigCommand}\n${minted.plainCommand}`}
-              hint="Claude Code turns off git credential helpers for background marketplace updates, so a URL rewrite carries the key instead."
-            />
-          </details>
         </>
       )}
     </div>

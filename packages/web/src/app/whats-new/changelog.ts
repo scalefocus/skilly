@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.148.0",
+    date: "2026-09-08",
+    summary:
+      "Marketplace add commands now come in three tabs — Terminal (the default; a `claude plugin marketplace add` line that works from any shell, including the Claude desktop app's Terminal panel), Claude CLI (the `/plugin marketplace add` slash command for an interactive session), and Settings file (a credential-free extraKnownMarketplaces entry for ~/.claude/settings.json or a project's .claude/settings.json, paired with the one-time git config line). Copy takes just that tab's runnable text, your last tab is remembered per browser across the Marketplaces page and Namespace administration, and switching tabs never mints a new key.",
+  },
+  {
     version: "1.147.1",
     date: "2026-09-08",
     summary:

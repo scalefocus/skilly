@@ -169,6 +169,57 @@ export function buildMarketplaceAddCommandPlain(input: Omit<MarketplaceUrlInput,
 }
 
 // ---------------------------------------------------------------------------
+// The three add routes (§30.4) — Terminal · Claude CLI · Settings file
+// ---------------------------------------------------------------------------
+
+/**
+ * How a consumer registers a marketplace. Tab order on the add-command panel (§30.6) is the
+ * array order; `terminal` is the default because it is the one route that works everywhere —
+ * the Claude desktop app's Code tab cannot run `/plugin` (it resolves slash commands as skills).
+ */
+export const MARKETPLACE_ADD_ROUTES = ["terminal", "cli", "settings"] as const;
+export type MarketplaceAddRoute = (typeof MARKETPLACE_ADD_ROUTES)[number];
+export const DEFAULT_MARKETPLACE_ADD_ROUTE: MarketplaceAddRoute = "terminal";
+
+/** Narrow an untrusted string (a remembered localStorage value) to a route, or null. */
+export function parseMarketplaceAddRoute(value: string | null | undefined): MarketplaceAddRoute | null {
+  return (MARKETPLACE_ADD_ROUTES as readonly string[]).includes(value ?? "") ? (value as MarketplaceAddRoute) : null;
+}
+
+/** Tab labels, in the fixed §30.4 order. */
+export const MARKETPLACE_ADD_ROUTE_LABELS: Record<MarketplaceAddRoute, string> = {
+  terminal: "Terminal",
+  cli: "Claude CLI",
+  settings: "Settings file",
+};
+
+/** The Terminal route: the `claude` CLI subcommand, runnable from any shell (§30.4 route 1). */
+export function buildMarketplaceShellCommand(input: MarketplaceUrlInput): string {
+  return `claude plugin marketplace add ${buildMarketplaceUrl(input)}`;
+}
+
+/** The credential-free Terminal command, paired with the git-config rewrite in the disclosure. */
+export function buildMarketplaceShellCommandPlain(input: Omit<MarketplaceUrlInput, "token">): string {
+  return buildMarketplaceShellCommand({ ...input, token: undefined });
+}
+
+/**
+ * The Settings-file route (§30.4 route 3): an `extraKnownMarketplaces` entry for
+ * `~/.claude/settings.json` or a project's `.claude/settings.json`. Settings files are routinely
+ * committed, so this NEVER embeds the token — the URL is credential-free and the git-config
+ * rewrite is the route's mandatory first step. Keyed by the marketplace's manifest name so a
+ * later `/plugin install <plugin>@<name>` resolves against the name Claude Code indexes.
+ */
+export function buildMarketplaceSettingsSnippet(input: Omit<MarketplaceUrlInput, "token"> & { name: string }): string {
+  const url = buildMarketplaceUrl({ registryBaseUrl: input.registryBaseUrl, scope: input.scope });
+  return JSON.stringify(
+    { extraKnownMarketplaces: { [input.name]: { source: { source: "git", url } } } },
+    null,
+    2,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Manifest generation (§30.3)
 // ---------------------------------------------------------------------------
 

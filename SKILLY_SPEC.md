@@ -3523,25 +3523,61 @@ A new token type on `tokens` (§3, §23): **`type = 'marketplace'`**.
   that yields an entire namespace's restricted catalog is a materially larger blast radius
   than one skill. Deferred, not refused.
 
-**Install form** (`plugin-marketplace.ts` owns it):
+**Install form — three routes** (`plugin-marketplace.ts` owns every one of them; nothing
+else may compose marketplace command text). A consumer reaches the same marketplace by
+whichever tooling they have in front of them, so the add-command panel (§30.6) offers the
+three routes as **tabs**, in this order:
 
-```
-/plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/<ns>.git
-/plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/_public.git
-```
+1. **Terminal** (the default) — the `claude` CLI subcommand, runnable from any shell,
+   including the Terminal panel of the Claude desktop app, whose Code tab cannot run slash
+   commands (`/plugin` there is resolved as a skill and fails with *Unknown skill: plugin*):
 
-**Credential fallback (shipped alongside, not instead).** Anthropic documents git credential
-helpers for interactive commands and notes that **background auto-updates disable them**,
-recommending a URL rewrite for private marketplaces. skilly's copy-paste panel therefore
-offers **both**: the token-in-URL command as the primary, and a one-line
+   ```
+   claude plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/<ns>.git
+   claude plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/_public.git
+   ```
 
-```
-git config --global url."https://x-access-token:<token>@<host>/_marketplace".insteadOf "https://<host>/_marketplace"
-```
+2. **Claude CLI** — the slash command typed inside an interactive `claude` session:
 
-fallback (plus the credential-free add URL) for consumers whose auto-updates fail. If
-creds-in-URL prove to be stripped for marketplaces, only the panel's default ordering
-changes — the fallback is already specced and implemented.
+   ```
+   /plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/<ns>.git
+   /plugin marketplace add https://x-access-token:<token>@<host>/_marketplace/_public.git
+   ```
+
+3. **Settings file** — an `extraKnownMarketplaces` entry for `~/.claude/settings.json`
+   (user) or the project's `.claude/settings.json` (shared with the team). Settings files are
+   routinely committed, so **this route never embeds the token**: the snippet carries the
+   **credential-free** URL, and the `git config … insteadOf` rewrite below is the route's
+   **mandatory first step**, not a fallback. The JSON key is the marketplace's **manifest
+   name** (§30.2), so a later `/plugin install <plugin>@<name>` resolves against the same name
+   Claude Code indexes:
+
+   ```
+   git config --global url."https://x-access-token:<token>@<host>/_marketplace".insteadOf "https://<host>/_marketplace"
+   ```
+   ```json
+   {
+     "extraKnownMarketplaces": {
+       "<name>": {
+         "source": { "source": "git", "url": "https://<host>/_marketplace/<ns>.git" }
+       }
+     }
+   }
+   ```
+
+There is **no "Claude Desktop" route**: the desktop app has a plugin browser but no
+documented way to register a custom git marketplace, and it shares `~/.claude` with the CLI,
+so the Terminal route *is* the desktop route (run it in the app's Terminal panel, relaunch, and
+the marketplace appears under **+ → Plugins → Add plugin**). Anthropic does not document how
+the desktop app handles credentials for private marketplaces; the panel stays silent on it.
+
+**Credential fallback (shipped alongside the Terminal and Claude CLI routes).** Anthropic
+documents git credential helpers for interactive commands and notes that **background
+auto-updates disable them**, recommending a URL rewrite for private marketplaces. The two
+token-in-URL routes therefore keep the same one-line `git config … insteadOf` rewrite (above)
+**plus the credential-free add command of that route** behind a disclosure, for consumers
+whose auto-updates fail. If creds-in-URL prove to be stripped for marketplaces, only the
+panel's default tab changes — the fallback is already specced and implemented.
 
 ### 30.5 Synthesis & freshness
 
@@ -3588,8 +3624,8 @@ anyone else gets 403 and no nav entry). It is the **new home for namespace setti
 generally**, not a single-toggle page:
 
 - **Claude plugin marketplace** — an **on/off switch** (the shared `Switch`, below), the
-  computed marketplace name, the add command once enabled, and a live count of the skills it
-  publishes. Switching **off** goes through the disable confirm dialog above; switching on
+  computed marketplace name, the **shared add-command panel** (Page 3, below — same three route
+  tabs, same remembered choice) once enabled, and a live count of the skills it publishes. Switching **off** goes through the disable confirm dialog above; switching on
   saves immediately.
 - **`require_review`** — an **on/off switch** labelled **"Require review for submissions"**
   (label left, switch right). Switching **on** saves immediately. Switching **off** first asks
@@ -3780,11 +3816,32 @@ per marketplace, a bubble for the namespace's contact, and per-row actions. Avai
     detail page uses (§23): an **`ExpiryPicker`** (same `install_max_ttl_months` horizon, same
     "Never" option) and a **Generate add command** button. Generating calls
     `POST /api/marketplaces/tokens` (unchanged: purges the caller's prior *unclaimed* tokens
-    for that marketplace, §30.4) and renders the **`/plugin marketplace add …` command with a
-    copy button**, plus — **behind a disclosure** labelled *If background updates fail* — the
-    `git config … insteadOf` line and the credential-free add URL (§30.4). A one-click
-    "copy" button was rejected: the click **mints a reusable credential**, so the TTL must be
-    the user's decision, not an implicit default.
+    for that marketplace, §30.4) and renders the **shared add-command panel** (below). A
+    one-click "copy" button was rejected: the click **mints a reusable credential**, so the
+    TTL must be the user's decision, not an implicit default.
+  - **The add-command panel (shared).** One component, rendered identically here and on
+    Namespace administration (Page 1). Above the command it shows a **tab strip with the three
+    routes of §30.4, in this order: `Terminal` · `Claude CLI` · `Settings file`**. Each tab shows
+    that route's text with a **Copy button that copies only the runnable text** of the route —
+    the Terminal / Claude CLI command, or, on Settings file, the `git config` line followed by
+    the JSON snippet, which is that route's complete runnable text. Any prose (file paths,
+    step hints) is never copied.
+    - **Terminal is the default tab**, because it is the one route that works in every
+      context, the Claude desktop app included.
+    - **The chosen tab is remembered per browser** under one localStorage key,
+      `skilly.marketplace.add-route` (values `terminal` | `cli` | `settings`), shared by both
+      pages — a consumer has a preferred tooling and should not re-pick it per row or per page.
+      Same mechanism as the remembered chart windows (§5); a missing or unknown value falls back
+      to Terminal. Not a URL feature, not a platform setting.
+    - The **Terminal** and **Claude CLI** tabs keep the *If background updates fail*
+      **disclosure** (§30.4): the `git config … insteadOf` line and **that route's**
+      credential-free add command. The **Settings file** tab has **no disclosure** — the rewrite
+      is already its mandatory first step, and its hint names both candidate files
+      (`~/.claude/settings.json` for the user alone; the project's `.claude/settings.json` to
+      share with the team).
+    - Switching tabs **never mints**: all three routes are composed server-side from the one
+      token the Generate click minted, and returned together (§30.8). Same token, same audit
+      (§30.8), regardless of which tab the consumer copies from.
   - **Added state.** When the caller already holds a **used, unexpired** `marketplace` token
     for that row, the row carries an **`added` pill** linking to Added marketplaces
     (`/marketplaces`), and the action reads **Add again** — it still mints a fresh key, because
@@ -3890,8 +3947,15 @@ as **real installs of the individual skills**, via a commit cursor:
   platform admin (any); `global.require_review` rejected 422; a `maintainer_contact` that is
   neither empty nor a valid email address rejected 422 (§30.6).
 - `GET /api/namespaces/administered` — the page's list.
-- `POST /api/marketplaces/tokens` — mint (body: scope + namespace + expiry). Returns the token-in-URL
-  add command, plus the `git config … insteadOf` + credential-free pair for the auto-update fallback.
+- `POST /api/marketplaces/tokens` — mint (body: scope + namespace + expiry). Returns **every
+  route's text for the one minted token**, so the panel's tabs never re-mint: `name` (the
+  manifest name), `command` (the Claude CLI slash command, token-in-URL), `shellCommand` (the
+  Terminal route, `claude plugin marketplace add …`, token-in-URL), `settingsSnippet` (the
+  Settings-file JSON with the credential-free URL, keyed by `name`), `gitConfigCommand` (the
+  `git config … insteadOf` rewrite carrying the token), `plainCommand` and `plainShellCommand`
+  (the credential-free slash / shell add commands the disclosures pair with the rewrite), and
+  `expiresAt`. All text is composed by `plugin-marketplace.ts` builders — the response is the
+  only path by which the raw token reaches the browser.
 - `GET /api/marketplaces` — the caller's marketplace tokens (the `/marketplaces` page), plus
   `publicMarketplace { enabled, name }` so a **non-admin** consumer can add the public marketplace
   from that page — there is no admin surface they would otherwise reach.

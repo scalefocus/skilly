@@ -58,6 +58,10 @@
     "./contact": {
       "types": "./dist/contact.d.ts",
       "default": "./dist/contact.js"
+    },
+    "./plugin-marketplace": {
+      "types": "./dist/plugin-marketplace.d.ts",
+      "default": "./dist/plugin-marketplace.js"
     }
   },
   "scripts": {

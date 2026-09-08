@@ -9,6 +9,9 @@ import {
   buildMarketplaceAddCommand,
   buildMarketplaceAddCommandPlain,
   buildMarketplaceGitConfigCommand,
+  buildMarketplaceSettingsSnippet,
+  buildMarketplaceShellCommand,
+  buildMarketplaceShellCommandPlain,
   canUseNamespaceMarketplace,
   marketplaceName,
   type MarketplaceScope,
@@ -74,15 +77,26 @@ export async function POST(req: Request) {
   const prefix = await getMarketplaceNamePrefix();
   const registryBaseUrl = process.env.SKILLY_REGISTRY_URL ?? new URL(req.url).origin;
 
+  const name = marketplaceName(prefix, scope);
+
+  // Every route's text for the ONE token just minted (§30.4 / §30.8), so the panel's tabs never
+  // re-mint. This response is the only path by which the raw token reaches the browser.
   return Response.json({
-    name: marketplaceName(prefix, scope),
-    // Primary: the token embedded in the clone URL, exactly as §9 does for skills.
+    name,
+    // Claude CLI route: the slash command inside an interactive `claude` session, token-in-URL.
     command: buildMarketplaceAddCommand({ registryBaseUrl, scope, token: raw }),
+    // Terminal route (the default tab): the `claude` CLI subcommand, token-in-URL — works from any
+    // shell, including the Claude desktop app's Terminal panel.
+    shellCommand: buildMarketplaceShellCommand({ registryBaseUrl, scope, token: raw }),
+    // Settings-file route: credential-free by construction (settings files get committed); the
+    // git-config rewrite below is its mandatory first step.
+    settingsSnippet: buildMarketplaceSettingsSnippet({ registryBaseUrl, scope, name }),
     // Fallback for consumers whose BACKGROUND marketplace updates fail: Claude Code disables git
     // credential helpers for those, so a global URL rewrite carries the credential instead. One
     // rewrite covers every marketplace on this host. §30.4
     gitConfigCommand: buildMarketplaceGitConfigCommand({ registryBaseUrl, scope, token: raw }),
     plainCommand: buildMarketplaceAddCommandPlain({ registryBaseUrl, scope }),
+    plainShellCommand: buildMarketplaceShellCommandPlain({ registryBaseUrl, scope }),
     expiresAt: expiresAt?.toISOString() ?? null,
   });
 }

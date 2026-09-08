@@ -4,6 +4,7 @@ import { useApi, Pill, EmptyState, ScrollToTop, Switch } from "../../components/
 import { RequireAuth } from "../../components/RequireAuth";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
+import { MarketplaceAddCommand, type MarketplaceMint } from "../../components/MarketplaceAddCommand";
 import { useLastWatched } from "../../lib/useLastWatched";
 import { PREF_NS_LAST_CARD } from "../../lib/prefs";
 
@@ -20,42 +21,6 @@ interface NamespaceRow {
   marketplaceSkillCount: number;
 }
 
-interface MintResult {
-  name: string;
-  command: string;
-  gitConfigCommand: string;
-  plainCommand: string;
-}
-
-function CopyLine({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div style={{ marginTop: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span className="muted" style={{ fontSize: 12 }}>{label}</span>
-        <button
-          className="btn btn-sm"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(value);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            } catch {
-              setCopied(false);
-            }
-          }}
-        >
-          {copied ? "copied" : "copy"}
-        </button>
-      </div>
-      <pre className="mono" style={{ fontSize: 11.5, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, padding: "8px 10px", background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: 6 }}>
-        {value}
-      </pre>
-      {hint && <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>{hint}</div>}
-    </div>
-  );
-}
-
 // `watch` / `flash`: the last-watched card behavior (§30.6) — any pointer press or keyboard focus
 // inside the card marks it as the one to return to; `flash` rings it briefly on arrival.
 function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
@@ -63,7 +28,7 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
-  const [minted, setMinted] = useState<MintResult | null>(null);
+  const [minted, setMinted] = useState<MarketplaceMint | null>(null);
   const [addExpiry, setAddExpiry] = useState<string | null>(null);
 
   const patch = async (body: Record<string, unknown>, okText: string | null) => {
@@ -121,7 +86,7 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ scope: "namespace", namespaceSlug: ns.slug, expiresAt: addExpiry }),
       });
-      const j = (await r.json().catch(() => ({}))) as MintResult & { error?: string };
+      const j = (await r.json().catch(() => ({}))) as MarketplaceMint & { error?: string };
       if (!r.ok) throw new Error(j.error ?? "Failed to generate");
       setMinted(j);
     } catch (e) {
@@ -200,16 +165,9 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
                 Generate add command
               </button>
             </div>
-            {minted && (
-              <>
-                <CopyLine label="Run in Claude Code" value={minted.command} />
-                <CopyLine
-                  label="If background updates fail"
-                  value={`${minted.gitConfigCommand}\n${minted.plainCommand}`}
-                  hint="Claude Code turns off git credential helpers for background marketplace updates. Run the git config line once, then add the marketplace with the credential-free URL."
-                />
-              </>
-            )}
+            {/* The shared three-route panel — the same tabs and remembered choice as the
+                Marketplaces directory (§30.6). */}
+            {minted && <MarketplaceAddCommand minted={minted} />}
           </div>
         )}
       </div>
