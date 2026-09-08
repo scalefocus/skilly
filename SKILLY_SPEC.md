@@ -3548,10 +3548,17 @@ namespace the caller administers** (platform admins see all; namespace admins se
 anyone else gets 403 and no nav entry). It is the **new home for namespace settings
 generally**, not a single-toggle page:
 
-- **Claude plugin marketplace** — the enable/disable toggle, the computed marketplace name,
-  the add command once enabled, and a live count of the skills it publishes.
-- **`require_review`** — editable per namespace. **`global` renders read-only** with a note
-  that review is always required there (§4/§8).
+- **Claude plugin marketplace** — an **on/off switch** (the shared `Switch`, below), the
+  computed marketplace name, the add command once enabled, and a live count of the skills it
+  publishes. Switching **off** goes through the disable confirm dialog above; switching on
+  saves immediately.
+- **`require_review`** — an **on/off switch** labelled **"Require review for submissions"**
+  (label left, switch right). Switching **on** saves immediately. Switching **off** first asks
+  for confirmation — *"Turn off review for @<slug>? Namespace members will publish new skills
+  and versions directly, without a reviewer."* — because it widens who can publish (§4/§8);
+  cancel leaves the switch on. Success shows *Review policy saved.* as before. **`global`
+  renders the switch on, disabled and dimmed**, with the note that review is always required
+  there (§4/§8).
 - **`maintainer_contact`** — editable, reusing the existing user-search typeahead that fills
   a picked user's email (a shared mailbox is still allowed). **One shared component serves
   both surfaces** (this page and the Administration → Namespaces card), so they cannot drift
@@ -3607,7 +3614,21 @@ generally**, not a single-toggle page:
   already-rendered list stays put.
 - **The platform Administration → Namespaces card keeps all three.** Platform admins edit
   from either surface; the two write through the same endpoints and audit identically. This
-  is a deliberate dual surface, not a migration.
+  is a deliberate dual surface, not a migration. Its **review** and **marketplace** controls
+  are the **same `Switch`** as Page 1 — labelled **"Require review"** and **"Marketplace"**
+  in the card's compact header row — with the **same confirm dialogs** on switching off
+  (review-off and marketplace-disable) and the same read-only rendering for `global`'s
+  review switch. The moderated / direct publish pill next to it stays.
+- **The `Switch` control (shared, `components/ui.tsx`).** One component serves every on/off
+  setting so the surfaces cannot drift: a `<button role="switch" aria-checked>` — a
+  pill-shaped track (~38 × 22 px, distinct from the larger header theme toggle) whose knob
+  slides right and whose track fills with the ok colour when on, neutral when off; **no
+  on/off text** inside the track. Toggled by click, **Space** and **Enter**; clicking its
+  label toggles it too (`aria-labelledby` / wrapping `<label>`). Disabled renders dimmed
+  with `aria-disabled` and ignores input; while a save is in flight the switch is disabled
+  rather than reverted, and it shows the **server-confirmed** state (no optimistic flip), so a
+  failed save never leaves it lying. Callers own any confirm step — the switch itself never
+  prompts.
 - Nav: a **Namespace administration** entry beside **Administration**, rendered only when the
   caller administers ≥ 1 namespace.
 
