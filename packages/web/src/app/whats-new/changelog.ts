@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.147.1",
+    date: "2026-09-08",
+    summary:
+      "The on/off switches for Require review and Marketplace (Administration → Namespaces) and for Require review for submissions and Claude plugin marketplace (Namespace administration) now light up in the same soft blue as the install-expiry “Never / On a date” picker when on, instead of green — one consistent active colour across the settings pages, in both themes.",
+  },
+  {
     version: "1.147.0",
     date: "2026-09-08",
     summary:
