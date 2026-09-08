@@ -15,7 +15,7 @@ import {
   MARKETPLACE_ADD_ROUTE_LABELS,
   parseMarketplaceAddRoute,
   type MarketplaceAddRoute,
-} from "@skilly/shared";
+} from "@skilly/shared/plugin-marketplace"; // client-safe subpath: the root export pulls in node-only modules
 import { CopyLine } from "./CopyLine";
 import { PREF_MARKETPLACE_ADD_ROUTE, readPref, writePref } from "../lib/prefs";
 
