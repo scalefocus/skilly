@@ -4,8 +4,10 @@ import nextDynamic from "next/dynamic";
 import { Pill, EmptyState, LoadMoreSentinel, ScrollToTop, formatCount } from "../../components/ui";
 import { UserBubble } from "../../components/UserBubble";
 import { useDateFmt } from "../../components/DateFormat";
-import { readPref, writePref, PREF_DAU_RANGE, PREF_ONLINE_WINDOW, adminCardPrefKey } from "../../lib/prefs";
-import { CollapsibleCard } from "./CollapsibleCard";
+import { readPref, writePref, PREF_DAU_RANGE, PREF_ONLINE_WINDOW, adminCardPrefKey, removePref, PREF_ADMIN_LAST_CARD } from "../../lib/prefs";
+import { CollapsibleCard, CardWatchContext } from "./CollapsibleCard";
+import { useLastWatched } from "../../lib/useLastWatched";
+import { afterToggle } from "../../lib/lastWatched";
 import { EmailCard } from "./EmailCard";
 import { SystemBannerCard } from "./SystemBannerCard";
 import { McpCard } from "./McpCard";
@@ -76,15 +78,27 @@ function useAdminCards() {
   const toggle = useCallback((id: CardId) => setOpen((m) => {
     const next = !m[id];
     writePref(adminCardPrefKey(id), next ? "1" : "0");
+    // Last-watched card (§5): expanding remembers the card; collapsing never counts, except that
+    // collapsing the remembered card clears it (lib/lastWatched.ts).
+    const remembered = afterToggle(readPref(PREF_ADMIN_LAST_CARD, "") || null, id, next);
+    if (remembered) writePref(PREF_ADMIN_LAST_CARD, remembered); else removePref(PREF_ADMIN_LAST_CARD);
     return { ...m, [id]: next };
+  }), []);
+  // Arrival auto-expand (§5): writes the card's own open preference exactly like a manual expand,
+  // so the two mechanisms never disagree; leaves the last-card key as it is (it already names this card).
+  const expand = useCallback((id: string) => setOpen((m) => {
+    if (!(ADMIN_CARD_IDS as readonly string[]).includes(id) || m[id as CardId]) return m;
+    writePref(adminCardPrefKey(id), "1");
+    return { ...m, [id]: true };
   }), []);
   const setAll = useCallback((v: boolean) => setOpen(() => {
     const next = {} as Record<CardId, boolean>;
     for (const id of ADMIN_CARD_IDS) { next[id] = v; writePref(adminCardPrefKey(id), v ? "1" : "0"); }
+    removePref(PREF_ADMIN_LAST_CARD); // a bulk choice is not "watching" a card (§5)
     return next;
   }), []);
   const allOpen = ADMIN_CARD_IDS.every((id) => open[id]);
-  return { open, toggle, setAll, allOpen };
+  return { open, toggle, expand, setAll, allOpen };
 }
 
 const label = { display: "block", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 6 } as const;
@@ -415,6 +429,14 @@ export default function AdminPage() {
   // Every card is collapsible (§5): collapsed by default, remembered per browser, driven by the
   // Expand all / Collapse all control below.
   const cards = useAdminCards();
+  // Last-watched card (§5): once the data gate resolves, auto-expand + scroll to + flash the card
+  // the admin was last working in. Body interactions mark a card as watched via CardWatchContext.
+  const lastWatched = useLastWatched({
+    key: PREF_ADMIN_LAST_CARD,
+    ready: !loading && data !== null && error === null,
+    rendered: ADMIN_CARD_IDS,
+    onArrive: cards.expand,
+  });
   useEffect(() => {
     const t = setTimeout(() => setNsQDeb(nsQ.trim()), 300);
     return () => clearTimeout(t);
@@ -512,8 +534,10 @@ export default function AdminPage() {
   const groups = data.groups;
 
   return (
+    <CardWatchContext.Provider value={{ watch: lastWatched.watch, flashId: lastWatched.flashId }}>
     <div style={{ maxWidth: 940 }}>
-      <ScrollToTop />
+      {/* Back to top also forgets the last-watched card — "I'm done here" (§5, answer 15). */}
+      <ScrollToTop onPress={lastWatched.clear} />
       <div className="page-head reveal">
         <div className="eyebrow">Platform administration</div>
         <h1 className="page-title">Run the platform.</h1>
@@ -798,6 +822,7 @@ export default function AdminPage() {
         <LoadMoreSentinel hasMore={data.namespaces.length < data.namespacesTotal} loading={nsLoading} onLoadMore={() => void loadMoreNs()} />
       </CollapsibleCard>
     </div>
+    </CardWatchContext.Provider>
   );
 }
 

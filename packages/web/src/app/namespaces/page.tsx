@@ -4,6 +4,8 @@ import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
+import { useLastWatched } from "../../lib/useLastWatched";
+import { PREF_NS_LAST_CARD } from "../../lib/prefs";
 
 /** One namespace the caller administers (SKILLY_SPEC.md §30.6). */
 interface NamespaceRow {
@@ -54,7 +56,11 @@ function CopyLine({ label, value, hint }: { label: string; value: string; hint?:
   );
 }
 
-function NamespaceCard({ ns, maxMonths, onChanged }: { ns: NamespaceRow; maxMonths: number; onChanged: () => void }) {
+// `watch` / `flash`: the last-watched card behavior (§30.6) — any pointer press or keyboard focus
+// inside the card marks it as the one to return to; `flash` rings it briefly on arrival.
+function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
+  ns: NamespaceRow; maxMonths: number; onChanged: () => void; watch: (id: string) => void; flash: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
   const [minted, setMinted] = useState<MintResult | null>(null);
@@ -119,8 +125,14 @@ function NamespaceCard({ ns, maxMonths, onChanged }: { ns: NamespaceRow; maxMont
   };
 
   return (
-    <div className="row" style={{ flexDirection: "column", alignItems: "stretch", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+    <div
+      className={`row${flash ? " card-flash" : ""}`}
+      style={{ flexDirection: "column", alignItems: "stretch", gap: 12 }}
+      data-last-card={ns.id}
+      onPointerDownCapture={() => watch(ns.id)}
+      onFocusCapture={() => watch(ns.id)}
+    >
+      <div data-card-header style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontWeight: 600, fontSize: 15 }}>{ns.displayName}</span>
         <span className="ns mono" style={{ fontSize: 11.5 }}>@{ns.slug}</span>
         {ns.marketplaceEnabled ? <Pill tone="ok">marketplace on</Pill> : <Pill tone="muted">marketplace off</Pill>}
@@ -207,10 +219,19 @@ function NamespacesInner() {
   // so "✓ Saved", "Review policy saved." and the marketplace messages could never be read. While
   // a refetch is in flight the already-rendered list stays put.
   const firstLoad = loading && data === null;
+  // Last-watched namespace card (§30.6): after the FIRST load, scroll to + flash the card the admin
+  // last worked in; a remembered namespace no longer in the list is forgotten silently. Refetches
+  // never re-trigger it (once per visit).
+  const lastWatched = useLastWatched({
+    key: PREF_NS_LAST_CARD,
+    ready: !loading && data !== null && !error,
+    rendered: namespaces.map((n) => n.id),
+  });
 
   return (
     <div style={{ maxWidth: 860 }}>
-      <ScrollToTop />
+      {/* Back to top also forgets the last-watched card (§30.6 / §5). */}
+      <ScrollToTop onPress={lastWatched.clear} />
       <div className="page-head reveal">
         <div className="eyebrow">Namespace administration</div>
         <h1 className="page-title">Run your namespaces.</h1>
@@ -235,7 +256,14 @@ function NamespacesInner() {
       ) : (
         <div className="rows reveal">
           {namespaces.map((ns) => (
-            <NamespaceCard key={ns.id} ns={ns} maxMonths={me?.installMaxTtlMonths ?? 12} onChanged={reload} />
+            <NamespaceCard
+              key={ns.id}
+              ns={ns}
+              maxMonths={me?.installMaxTtlMonths ?? 12}
+              onChanged={reload}
+              watch={lastWatched.watch}
+              flash={lastWatched.flashId === ns.id}
+            />
           ))}
         </div>
       )}
