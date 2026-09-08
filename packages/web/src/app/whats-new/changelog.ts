@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.147.0",
+    date: "2026-09-08",
+    summary:
+      "Administration and Namespace administration remember the card you were last working in (per browser) and, on your next visit, scroll it to the centre, expand it if it was collapsed, and flash it briefly. Expanding a card or using anything inside it marks it; collapsing that card, Expand all / Collapse all, or the back-to-top button forgets it. Skipped when the page opens with a #anchor or you scroll before it loads.",
+  },
+  {
     version: "1.146.1",
     date: "2026-09-08",
     summary:

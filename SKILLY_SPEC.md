@@ -362,6 +362,45 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   - **Animation.** Expand/collapse animates the body open/closed via a height transition (~200ms ease) with the chevron rotating as today; `prefers-reduced-motion` gets an instant toggle with no height animation.
   - **Data & polling unchanged (answer 3c).** Collapsing only hides a card's body — it does **not** stop that card's data fetching or polling. Currently online keeps its 60s poll and trend-chart fetch, Maintenance keeps polling a running rebuild, and Namespaces keeps its loaded pages and active search/filter, all regardless of collapse state. Reopening a card shows current data with no reload flash.
   - **Expand all / Collapse all.** A small **Expand all / Collapse all** control sits at the top of the page (near the page header). It sets every card's open/closed state at once and writes each card's persisted preference, so the bulk choice sticks per browser like an individual toggle.
+  - **Last-watched card (remembered + auto-scroll).** The console is long and an admin usually
+    returns to the card they were just working in, so the page **remembers the last card the
+    admin was watching** and, on the next visit, **scrolls to it, expands it, and flashes it**.
+    Per browser, like every other `skilly.*` preference (lib/prefs.ts); one key for this page,
+    **`skilly.admin.last-card`**, holding the card's stable `cardId`; **no expiry** — it persists
+    until replaced or cleared. The Namespace administration page has its own, independent copy of
+    this behavior under `skilly.namespaces.last-card` (§30.6).
+    - **What sets it (answers 1a+1b, 2).** Two gestures write the key: **expanding** a card via
+      its header, and **any interaction inside a card's body** — a pointer press or keyboard focus
+      landing anywhere in the body (a click, typing in a field, saving), so keyboard-only admins
+      get the same behavior. **Collapsing never counts** as watching.
+    - **What clears it (answers 4, 2, 15).** Three gestures clear the key: **Expand all /
+      Collapse all** (a bulk choice is not "watching" a card); **collapsing the currently
+      remembered card** (otherwise the auto-expand on return would silently override the admin's
+      last explicit choice); and the shared floating **back-to-top** control (`ui.tsx`) — pressing
+      it means "I'm done here", so the next visit opens at the top like a fresh one. Clearing
+      removes the key; nothing else in the card changes.
+    - **Arrival (answers 3, 7, 8, 9, 14).** Exactly **once per visit**, immediately after the
+      page's **data gate** resolves and the cards first paint (never during the skeleton), the
+      page looks up the remembered `cardId`. If it names a rendered card: **expand it** if
+      collapsed (writing the card's `skilly.admin.card.<id>-open` preference to `"1"` exactly as a
+      manual expand would, so the two mechanisms never disagree — answer 3); **scroll** so the
+      card's **header** is **centered** in the viewport, `smooth`, instant under
+      `prefers-reduced-motion: reduce`; and play a **brief highlight flash** on the card (a ring
+      that fades over ~1.2s; none under reduced motion beyond a static ring that clears). The
+      scroll targets the header's **position at that moment** and does **not** re-anchor after
+      the ~200ms expand animation — the body grows *below* the header, so a header-centered scroll
+      stays put (answer 9). "Every visit" includes in-app navigation back and forth (answer 10):
+      there is no session-level "already scrolled" memory.
+    - **Skips (answers 10, 11).** The **whole** arrival behavior — no expand, no scroll, no flash
+      — is skipped when the URL carries a **`#hash`** (the browser's own anchor wins) or when the
+      admin has **already scrolled** before the data gate resolved (a scroll position other than
+      the top at that moment). When the card is **already fully in view**, only the scroll motion
+      is dropped: the card still auto-expands and flashes (answer 11 / follow-up 4), so the page
+      never jumps for no reason. A remembered `cardId` that no longer exists (a retired card) is
+      **cleared silently**; an unreadable/absent key (private mode, first visit) means a plain
+      visit at the top.
+    - **Not a URL feature.** The remembered card is a browser preference only — it is not written
+      to the URL, not shared between browsers or users, and not stored server-side.
 - **Administration page framing.** The page is the platform-management console, not a namespaces-only screen. Its header reads — eyebrow **"Platform administration"**, title **"Run the platform."**, subtitle *"Every platform-wide control lives on this page. Expand a card to work with it."* The subtitle deliberately does **not** enumerate individual functions (they change often), so no per-feature list needs maintaining as cards are added.
 
 ### Directory profile (job title, office, department)
@@ -3629,6 +3668,22 @@ generally**, not a single-toggle page:
   rather than reverted, and it shows the **server-confirmed** state (no optimistic flip), so a
   failed save never leaves it lying. Callers own any confirm step — the switch itself never
   prompts.
+- **Last-watched namespace card (remembered + auto-scroll).** The same behavior as the §5
+  Administration console's *Last-watched card*, adapted to cards that have no collapse toggle,
+  under its own key **`skilly.namespaces.last-card`** (per browser, no expiry, holding the
+  namespace **`id`** — the stable identity even if a slug were ever renamed). **Set** by any
+  interaction inside a namespace card's body — pointer press or keyboard focus (toggle the
+  marketplace, mint a key, edit the contact or review policy) — there being no header toggle to
+  count. **Cleared** by the shared floating back-to-top control (§5), and **silently** when the
+  remembered namespace is **no longer in the administered list** on arrival (deleted, or the
+  caller lost the namespace-admin role — answer 6). **Arrival:** once, right after the list's
+  **first load** (the `loading && data === null` skeleton gate above — refetches never re-trigger
+  it), scroll the card's **header** to the **center** of the viewport (`smooth`; instant under
+  `prefers-reduced-motion`) and play the same brief highlight flash; skipped entirely when the URL
+  carries a `#hash` or the user has already scrolled away from the top before the list arrived;
+  scroll motion alone dropped (flash still plays) when the card is already fully in view. Nothing
+  is expanded because nothing here collapses. Browser preference only — never in the URL, never
+  server-side.
 - Nav: a **Namespace administration** entry beside **Administration**, rendered only when the
   caller administers ≥ 1 namespace.
 

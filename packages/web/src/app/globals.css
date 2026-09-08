@@ -537,6 +537,20 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   .field-flash { animation: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--danger) 45%, transparent); }
 }
 
+/* Last-watched card ring (SKILLY_SPEC.md §5 Administration, §30.6 Namespace administration): on
+   arrival the remembered card gets .card-flash for ~1.4s — an accent ring fading out over 1.2s.
+   An INSET outline (not box-shadow) so it survives an `overflow: hidden` ancestor (.rows on the
+   namespaces page) and never fights .card's own shadow. Reduced motion: a static ring for the
+   same span (the page removes the class), no animation. */
+@keyframes card-flash {
+  0%   { outline-color: color-mix(in oklab, var(--accent) 85%, transparent); }
+  100% { outline-color: transparent; }
+}
+.card-flash { outline: 3px solid transparent; outline-offset: -3px; animation: card-flash 1.2s ease-out 1; }
+@media (prefers-reduced-motion: reduce) {
+  .card-flash { animation: none; outline-color: color-mix(in oklab, var(--accent) 70%, transparent); }
+}
+
 .pill {
   display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
   font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px;

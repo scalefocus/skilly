@@ -399,7 +399,9 @@ export function LoadMoreSentinel({ onLoadMore, hasMore, loading }: { onLoadMore:
  * Floating "back to top" affordance: fades/slides in once the user scrolls past `threshold`,
  * and returns to the top with an animated (smooth) scroll.
  */
-export function ScrollToTop({ threshold = 400 }: { threshold?: number }) {
+// `onPress` runs before the scroll — the admin pages use it to forget their last-watched card
+// (SKILLY_SPEC.md §5 / §30.6: pressing back-to-top means "I'm done here").
+export function ScrollToTop({ threshold = 400, onPress }: { threshold?: number; onPress?: () => void }) {
   const [visible, setVisible] = useState(false);
   // Portal target — only set after mount (no document during SSR).
   const [body, setBody] = useState<HTMLElement | null>(null);
@@ -420,7 +422,10 @@ export function ScrollToTop({ threshold = 400 }: { threshold?: number }) {
       type="button"
       aria-label="Scroll back to top"
       title="Back to top"
-      onClick={() => window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}
+      onClick={() => {
+        onPress?.();
+        window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      }}
       style={{
         position: "fixed",
         right: 26,

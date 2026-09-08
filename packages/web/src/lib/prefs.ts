@@ -38,3 +38,19 @@ export const PREF_ONLINE_WINDOW = "skilly.online-window";
 // the default. (The legacy single-card `skilly.admin.ns-open` and `skilly.admin.email-open` keys
 // are retired — no migration.)
 export const adminCardPrefKey = (id: string): string => `skilly.admin.card.${id}-open`;
+
+export function removePref(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    /* private mode — nothing to remove */
+  }
+}
+
+// Last-watched card (§5 Administration, §30.6 Namespace administration): the card the admin was
+// last working in, remembered per browser with no expiry and auto-scrolled/flashed on the next
+// visit. One key per page; the value is the card's stable id (a `cardId` on /admin, a namespace
+// `id` on /namespaces). Set/clear/arrival rules: lib/lastWatched.ts.
+export const PREF_ADMIN_LAST_CARD = "skilly.admin.last-card";
+export const PREF_NS_LAST_CARD = "skilly.namespaces.last-card";
