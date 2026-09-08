@@ -17,6 +17,13 @@ import {
   buildMarketplaceAddCommand,
   buildMarketplaceAddCommandPlain,
   buildMarketplaceGitConfigCommand,
+  buildMarketplaceShellCommand,
+  buildMarketplaceShellCommandPlain,
+  buildMarketplaceSettingsSnippet,
+  MARKETPLACE_ADD_ROUTES,
+  MARKETPLACE_ADD_ROUTE_LABELS,
+  DEFAULT_MARKETPLACE_ADD_ROUTE,
+  parseMarketplaceAddRoute,
   buildMarketplaceJson,
   buildPluginJson,
   planPluginLayout,
@@ -117,6 +124,50 @@ test("add command and the credential-helper fallback", () => {
     buildMarketplaceGitConfigCommand(input),
     'git config --global url."https://x-access-token:tok123@skilly.example.com/_marketplace".insteadOf "https://skilly.example.com/_marketplace"',
   );
+});
+
+test("Terminal route: the claude CLI subcommand, token-in-URL, with a credential-free twin", () => {
+  const input = { registryBaseUrl: "https://skilly.example.com", scope: NS, token: "tok123" };
+  assert.equal(
+    buildMarketplaceShellCommand(input),
+    "claude plugin marketplace add https://x-access-token:tok123@skilly.example.com/_marketplace/team-a.git",
+  );
+  assert.equal(
+    buildMarketplaceShellCommandPlain(input),
+    "claude plugin marketplace add https://skilly.example.com/_marketplace/team-a.git",
+  );
+  // The public marketplace resolves to the `_public` repo like every other builder.
+  assert.equal(
+    buildMarketplaceShellCommand({ ...input, scope: PUBLIC_SCOPE }),
+    "claude plugin marketplace add https://x-access-token:tok123@skilly.example.com/_marketplace/_public.git",
+  );
+});
+
+test("Settings-file route: extraKnownMarketplaces keyed by the manifest name, never carrying the token", () => {
+  const snippet = buildMarketplaceSettingsSnippet({ registryBaseUrl: "https://skilly.example.com", scope: NS, name: "skilly-team-a" });
+  const parsed = JSON.parse(snippet) as { extraKnownMarketplaces: Record<string, { source: { source: string; url: string } }> };
+  assert.deepEqual(Object.keys(parsed.extraKnownMarketplaces), ["skilly-team-a"]);
+  assert.deepEqual(parsed.extraKnownMarketplaces["skilly-team-a"]?.source, {
+    source: "git",
+    url: "https://skilly.example.com/_marketplace/team-a.git",
+  });
+  // Committed settings files must never carry a credential (§30.4 route 3).
+  assert.equal(snippet.includes("x-access-token"), false);
+  assert.equal(snippet.includes("tok"), false);
+  // Pretty-printed so it pastes cleanly into a hand-edited settings file.
+  assert.ok(snippet.includes("\n  \"extraKnownMarketplaces\""));
+});
+
+test("add routes: fixed order, Terminal default, untrusted values narrowed", () => {
+  assert.deepEqual([...MARKETPLACE_ADD_ROUTES], ["terminal", "cli", "settings"]);
+  assert.equal(DEFAULT_MARKETPLACE_ADD_ROUTE, "terminal");
+  assert.deepEqual(MARKETPLACE_ADD_ROUTES.map((r) => MARKETPLACE_ADD_ROUTE_LABELS[r]), ["Terminal", "Claude CLI", "Settings file"]);
+  assert.equal(parseMarketplaceAddRoute("cli"), "cli");
+  assert.equal(parseMarketplaceAddRoute("settings"), "settings");
+  assert.equal(parseMarketplaceAddRoute("desktop"), null);
+  assert.equal(parseMarketplaceAddRoute(""), null);
+  assert.equal(parseMarketplaceAddRoute(null), null);
+  assert.equal(parseMarketplaceAddRoute(undefined), null);
 });
 
 test("marketplace.json carries pluginRoot and relative plugin sources", () => {

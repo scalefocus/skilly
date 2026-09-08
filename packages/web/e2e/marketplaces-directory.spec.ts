@@ -2,7 +2,9 @@
 // view it links to (§10). The dev user is a platform admin, so every namespace is in their row set;
 // we switch a namespace's marketplace ON for the test (restoring it after), then assert the row,
 // its payload-count wording, the Skills link, the inline Install panel minting a command, the
-// fallback disclosure, and that the sidebar lights up the Marketplaces item (not Catalog).
+// three route tabs (Terminal default · Claude CLI · Settings file) with their remembered choice
+// (§30.4), the fallback disclosure, and that the sidebar lights up the Marketplaces item (not
+// Catalog).
 //
 // The mint creates a real token in the ephemeral CI DB; disabling the marketplace afterwards
 // revokes it, so the test leaves nothing behind when the marketplace started out disabled.
@@ -45,16 +47,51 @@ test.describe.serial("marketplaces directory (§30.6 Page 3)", () => {
       await expect(active).toHaveCount(1);
       await expect(active).toHaveText(/Marketplaces/);
 
-      // Inline Install: expiry picker + Generate, then the command and the fallback disclosure.
+      // Inline Install: expiry picker + Generate, then the three-route panel (§30.4 / §30.6).
       await row.getByRole("button", { name: /^(Install|Add again)$/ }).click();
       await expect(row.getByRole("group", { name: "Install expiry" })).toBeVisible();
       await row.getByRole("button", { name: "Generate add command" }).click();
-      await expect(row.getByText(/\/plugin marketplace add https:\/\//).first()).toBeVisible({ timeout: 15_000 });
+      const tabs = row.getByRole("tablist", { name: "How to add this marketplace" });
+      await expect(tabs).toBeVisible({ timeout: 15_000 });
+      await expect(tabs.getByRole("tab")).toHaveText(["Terminal", "Claude CLI", "Settings file"]);
+
+      // Terminal is the default: the `claude` CLI subcommand, token-in-URL, plus the disclosure.
+      await expect(tabs.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
+      await expect(row.getByText(/^claude plugin marketplace add https?:\/\/x-access-token:/).first()).toBeVisible();
       await expect(row.getByText("If background updates fail")).toBeVisible();
-      // The fallback is collapsed until opened.
+      // The fallback is collapsed until opened, and pairs the rewrite with the route's own plain command.
       await expect(row.getByText(/git config --global/)).toBeHidden();
       await row.getByText("If background updates fail").click();
       await expect(row.getByText(/git config --global/)).toBeVisible();
+      await expect(row.getByText(/\nclaude plugin marketplace add https?:\/\/[^x]/)).toBeVisible();
+
+      // Claude CLI: the slash command, token-in-URL, with its own disclosure.
+      await tabs.getByRole("tab", { name: "Claude CLI" }).click();
+      await expect(row.getByText(/^\/plugin marketplace add https?:\/\/x-access-token:/).first()).toBeVisible();
+      await expect(row.getByText(/^claude plugin marketplace add/)).toHaveCount(0);
+      await expect(row.getByText("If background updates fail")).toBeVisible();
+
+      // Settings file: the git-config line first, then an extraKnownMarketplaces entry keyed by the
+      // manifest name that never carries the key; no disclosure (the rewrite is already step one).
+      await tabs.getByRole("tab", { name: "Settings file" }).click();
+      const settings = row.locator("pre").first();
+      await expect(settings).toContainText("git config --global");
+      await expect(settings).toContainText('"extraKnownMarketplaces"');
+      await expect(settings).toContainText(`"${apiRow.name}"`);
+      await expect(settings).toContainText(`/_marketplace/${ns.slug}.git"`);
+      const settingsText = (await settings.textContent()) ?? "";
+      // The JSON part (after the rewrite line) is credential-free.
+      expect(settingsText.slice(settingsText.indexOf("{"))).not.toContain("x-access-token");
+      await expect(row.getByText("If background updates fail")).toHaveCount(0);
+
+      // The choice is remembered per browser under one shared key (§30.6).
+      expect(await page.evaluate(() => window.localStorage.getItem("skilly.marketplace.add-route"))).toBe("settings");
+      // …and a fresh panel opens on it: regenerate and the Settings tab is preselected.
+      await row.getByRole("button", { name: "Generate add command" }).click();
+      await expect(tabs.getByRole("tab", { name: "Settings file" })).toHaveAttribute("aria-selected", "true");
+      // Leave the browser on the default for the next spec.
+      await tabs.getByRole("tab", { name: "Terminal" }).click();
+      expect(await page.evaluate(() => window.localStorage.getItem("skilly.marketplace.add-route"))).toBe("terminal");
     } finally {
       if (!wasEnabled) await page.request.patch(`/api/namespaces/${ns.id}/settings`, { data: { marketplaceEnabled: false } });
     }
