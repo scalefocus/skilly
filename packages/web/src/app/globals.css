@@ -419,8 +419,10 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 [data-theme="dark"] .toggle-knob { transform: translateX(28px); }
 
 /* ── Switch (boolean settings, §30.6) ──────────────────────────────────────
-   Smaller than the header theme toggle; the track fills with the ok colour when on and the
-   knob slides right. State is carried by aria-checked so styling and a11y cannot disagree. */
+   Smaller than the header theme toggle. On uses the same accent treatment as the segmented
+   pickers (.sort-on: --accent-soft fill, --accent-2 foreground) so every active state on the
+   settings surfaces reads alike — not the ok green, which stays for status pills. The knob
+   slides right. State is carried by aria-checked so styling and a11y cannot disagree. */
 .switch-row {
   display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13.5px;
   user-select: none;
@@ -431,13 +433,13 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   flex-shrink: 0; border: 1px solid var(--line-strong); background: var(--surface-2);
   transition: background 0.2s, border-color 0.2s;
 }
-.switch[aria-checked="true"] { background: var(--ok); border-color: var(--ok); }
+.switch[aria-checked="true"] { background: var(--accent-soft); border-color: var(--accent); }
 .switch-knob {
   position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
   background: var(--surface); box-shadow: var(--shadow-sm);
   transition: transform 0.22s cubic-bezier(0.5, 1.4, 0.5, 1), background 0.2s;
 }
-.switch[aria-checked="true"] .switch-knob { transform: translateX(16px); background: #fff; }
+.switch[aria-checked="true"] .switch-knob { transform: translateX(16px); background: var(--accent-2); }
 .switch:disabled { opacity: 0.5; cursor: not-allowed; }
 .switch:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--accent-soft); border-color: var(--accent); }
 

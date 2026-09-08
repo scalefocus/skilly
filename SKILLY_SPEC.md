@@ -3661,8 +3661,16 @@ generally**, not a single-toggle page:
 - **The `Switch` control (shared, `components/ui.tsx`).** One component serves every on/off
   setting so the surfaces cannot drift: a `<button role="switch" aria-checked>` — a
   pill-shaped track (~38 × 22 px, distinct from the larger header theme toggle) whose knob
-  slides right and whose track fills with the ok colour when on, neutral when off; **no
-  on/off text** inside the track. Toggled by click, **Space** and **Enter**; clicking its
+  slides right; **no on/off text** inside the track. **Off** is neutral (`--surface-2` track,
+  `--line-strong` border, `--surface` knob). **On** uses the **accent treatment shared with the
+  segmented pickers** (the install-expiry "Never / On a date" control, Duplicate enforcement,
+  Date format, …) so every selected/active state on the settings surfaces reads the same:
+  track `--accent-soft`, border `--accent`, knob `--accent-2` — **not** the ok green, which
+  stays reserved for status pills. The same tokens apply in the dark theme (where
+  `--accent-soft` is a deep navy close to the off track; the accent border and bright
+  `--accent-2` knob carry the on state there, and that is accepted). The focus ring keeps its
+  `--accent-soft` glow even though it matches an on track, and a disabled-on switch (e.g.
+  `global`'s review) keeps the plain 50 % dim — both accepted as-is. Toggled by click, **Space** and **Enter**; clicking its
   label toggles it too (`aria-labelledby` / wrapping `<label>`). Disabled renders dimmed
   with `aria-disabled` and ignores input; while a save is in flight the switch is disabled
   rather than reverted, and it shows the **server-confirmed** state (no optimistic flip), so a
