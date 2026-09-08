@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.146.1",
+    date: "2026-09-08",
+    summary:
+      "Namespace settings are now on/off switches: Require review for submissions and the Claude plugin marketplace on Namespace administration, and their twins on the Administration → Namespaces card. Turning review off asks for confirmation first, since members can then publish directly; the global namespace shows a locked, always-on switch.",
+  },
+  {
     version: "1.146.0",
     date: "2026-09-03",
     summary:
