@@ -17,6 +17,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Administration and Namespace administration remember the card you were last working in (per browser) and, on your next visit, scroll it to the centre, expand it if it was collapsed, and flash it briefly. Expanding a card or using anything inside it marks it; collapsing that card, Expand all / Collapse all, or the back-to-top button forgets it. Skipped when the page opens with a #anchor or you scroll before it loads.",
   },
   {
+    version: "1.146.1",
+    date: "2026-09-08",
+    summary:
+      "Namespace settings are now on/off switches: Require review for submissions and the Claude plugin marketplace on Namespace administration, and their twins on the Administration → Namespaces card. Turning review off asks for confirmation first, since members can then publish directly; the global namespace shows a locked, always-on switch.",
+  },
+  {
     version: "1.146.0",
     date: "2026-09-03",
     summary:

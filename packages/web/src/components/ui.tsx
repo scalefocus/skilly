@@ -188,6 +188,47 @@ export function Pill({ tone = "muted", children }: { tone?: "ok" | "warn" | "dan
   return <span className={PILL_CLASS[tone]}>{children}</span>;
 }
 
+/**
+ * Switch — the one on/off control for boolean settings (SKILLY_SPEC.md §30.6). A
+ * `<button role="switch" aria-checked>` inside a wrapping `<label>`, so the label text is the
+ * control's accessible name AND clicking it toggles the switch (a button is a labelable element).
+ * A native button already toggles on click, Space and Enter — no key handling needed here.
+ *
+ * It renders whatever `checked` the caller passes (the server-confirmed value — no optimistic
+ * flip) and is disabled while a save is in flight, so a failed save can never leave it lying.
+ * Callers own any confirm step: the switch itself never prompts.
+ */
+export function Switch({
+  checked, onChange, disabled = false, label, title, style,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  /** The visible label, rendered to the LEFT of the switch. */
+  label: React.ReactNode;
+  title?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <label className="switch-row" style={style} title={title}>
+      <span className="switch-label">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-disabled={disabled || undefined}
+        disabled={disabled}
+        className="switch"
+        onClick={() => {
+          if (!disabled) onChange(!checked);
+        }}
+      >
+        <span className="switch-knob" />
+      </button>
+    </label>
+  );
+}
+
 // Shared client-side cache for GET JSON: dedupes concurrent identical requests and serves a
 // fresh-enough cached body to components that mount close together (e.g. several widgets all
 // reading /api/me on one page) or across a quick navigation — instead of every caller firing

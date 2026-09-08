@@ -112,8 +112,8 @@ test.describe("last-watched card — Namespace administration (§30.6)", () => {
     const cards = page.locator("[data-last-card]");
     const last = cards.last();
     const id = (await last.getAttribute("data-last-card"))!;
-    // Any control inside the card counts — focus the review-policy checkbox.
-    await last.getByRole("checkbox").focus();
+    // Any control inside the card counts — focus the review-policy switch (v1.146.1's `Switch`).
+    await last.getByRole("switch").first().focus();
     expect(await stored(page, NS_KEY)).toBe(id);
 
     await page.reload();

@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import nextDynamic from "next/dynamic";
-import { Pill, EmptyState, LoadMoreSentinel, ScrollToTop, formatCount } from "../../components/ui";
+import { Pill, EmptyState, LoadMoreSentinel, ScrollToTop, formatCount, Switch } from "../../components/ui";
 import { UserBubble } from "../../components/UserBubble";
 import { useDateFmt } from "../../components/DateFormat";
 import { readPref, writePref, PREF_DAU_RANGE, PREF_ONLINE_WINDOW, adminCardPrefKey, removePref, PREF_ADMIN_LAST_CARD } from "../../lib/prefs";
@@ -771,30 +771,31 @@ export default function AdminPage() {
                     <span className="ns" style={{ fontSize: 17 }}>@{ns.slug}</span>
                     <span className="muted">{ns.displayName}</span>
                     <span style={{ flex: 1 }} />
-                    <button
-                      className="btn btn-sm"
+                    {/* The same Switch + confirm-on-off as /namespaces (§30.6) — a deliberate dual
+                        surface: both write through the same endpoint and audit. */}
+                    <Switch
+                      label="Require review"
+                      checked={ns.requireReview}
                       disabled={busy || ns.slug === "global"}
-                      title={ns.slug === "global" ? "global always requires review" : ""}
-                      onClick={() => call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ requireReview: !ns.requireReview }) })}
-                    >
-                      Review: {ns.requireReview ? "required" : "optional"}
-                    </button>
+                      title={ns.slug === "global" ? "global always requires review" : undefined}
+                      onChange={(next) => {
+                        if (!next && !window.confirm(`Turn off review for @${ns.slug}?\n\nNamespace members will publish new skills and versions directly, without a reviewer.`)) return;
+                        void call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ requireReview: next }) });
+                      }}
+                    />
                     {ns.requireReview ? <Pill tone="warn">moderated</Pill> : <Pill tone="ok">direct publish</Pill>}
-                    {/* The same marketplace toggle namespace admins get on /namespaces (§30.6) —
-                        a deliberate dual surface: both write through the same endpoint and audit. */}
-                    <button
-                      className="btn btn-sm"
+                    <Switch
+                      label="Marketplace"
+                      checked={ns.marketplaceEnabled}
                       disabled={busy}
                       title="Publish this namespace's restricted skills as a Claude Code plugin marketplace"
-                      onClick={() => {
-                        if (ns.marketplaceEnabled && !window.confirm(
+                      onChange={(next) => {
+                        if (!next && !window.confirm(
                           `Disable the marketplace for @${ns.slug}?\n\nIts URL stops working and every key for it is revoked. Plugins already installed on people's machines keep working.`,
                         )) return;
-                        void call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ marketplaceEnabled: !ns.marketplaceEnabled }) });
+                        void call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ marketplaceEnabled: next }) });
                       }}
-                    >
-                      Marketplace: {ns.marketplaceEnabled ? "on" : "off"}
-                    </button>
+                    />
                   </div>
 
                   {/* §30.6: the same component /namespaces uses, in its `stacked` layout — this is a

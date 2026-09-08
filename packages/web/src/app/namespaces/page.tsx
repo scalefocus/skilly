@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
+import { useApi, Pill, EmptyState, ScrollToTop, Switch } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
@@ -93,6 +93,13 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
     }
   };
 
+  // Switching review OFF widens who can publish (members go direct, §4/§8), so it confirms first;
+  // switching ON saves immediately. Cancel leaves the switch where it was.
+  const toggleReview = async (next: boolean) => {
+    if (!next && !window.confirm(`Turn off review for @${ns.slug}?\n\nNamespace members will publish new skills and versions directly, without a reviewer.`)) return;
+    await patch({ requireReview: next }, "Review policy saved.");
+  };
+
   const toggleMarketplace = async () => {
     if (ns.marketplaceEnabled) {
       if (
@@ -140,17 +147,15 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
 
       {msg && <div style={{ fontSize: 13, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
 
-      {/* --- Review policy ------------------------------------------------- */}
+      {/* --- Review policy (§30.6) ----------------------------------------
+          The shared Switch: label left, switch right. `global` renders on + disabled. */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5 }}>
-          <input
-            type="checkbox"
-            checked={ns.requireReview}
-            disabled={busy || ns.requireReviewLocked}
-            onChange={(e) => patch({ requireReview: e.target.checked }, "Review policy saved.")}
-          />
-          Require review for submissions
-        </label>
+        <Switch
+          label="Require review for submissions"
+          checked={ns.requireReview}
+          disabled={busy || ns.requireReviewLocked}
+          onChange={(next) => void toggleReview(next)}
+        />
         {ns.requireReviewLocked && (
           <span className="muted" style={{ fontSize: 12 }}>
             the global namespace always requires review
@@ -172,11 +177,14 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
       {/* --- Claude plugin marketplace ------------------------------------ */}
       <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 13.5, fontWeight: 600 }}>Claude plugin marketplace</span>
+          {/* Same Switch; switching off goes through the disable confirm inside toggleMarketplace. */}
+          <Switch
+            label={<span style={{ fontWeight: 600 }}>Claude plugin marketplace</span>}
+            checked={ns.marketplaceEnabled}
+            disabled={busy}
+            onChange={() => void toggleMarketplace()}
+          />
           <span className="mono muted" style={{ fontSize: 11.5 }}>{ns.marketplaceName}</span>
-          <button className="btn btn-sm" disabled={busy} onClick={toggleMarketplace}>
-            {ns.marketplaceEnabled ? "disable" : "enable"}
-          </button>
         </div>
         <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
           Publishes this namespace’s {ns.marketplaceSkillCount} restricted skill{ns.marketplaceSkillCount === 1 ? "" : "s"} as
