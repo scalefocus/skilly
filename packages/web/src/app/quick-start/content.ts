@@ -14,6 +14,9 @@ export interface QuickStartStep {
   code?: string;
   /** Optional external links (e.g. official installer downloads) shown as buttons below the card. */
   links?: { label: string; href: string }[];
+  /** Optional in-app links (same-tab Next `Link`s to skilly pages) shown as buttons below the card.
+   *  Kept separate from `links` so an external new-tab anchor and an internal route can't be confused. */
+  internalLinks?: { label: string; href: string }[];
   /** Screenshot served from /quickstart/<file> (omit for intro/closing). */
   image?: string;
   alt?: string;
@@ -24,7 +27,7 @@ export const QUICK_START: QuickStartStep[] = [
     kind: "intro",
     title: "Welcome to skilly",
     lead:
-      "skilly is your organization's registry for agent skills — the SKILL.md packages that teach a coding agent how to do a task. This is the 10-minute tour: how to find a skill, install it into your agent, and keep it up to date. You can reopen this page any time from the account menu.",
+      "skilly is your organization's registry for agent skills — the SKILL.md packages that teach a coding agent how to do a task. This is the 10-minute tour: how to find a skill, install it into your agent — or add a whole marketplace, or connect over MCP — and keep it up to date. You can reopen this page any time from the account menu.",
   },
   {
     kind: "prereq",
@@ -91,15 +94,32 @@ export const QUICK_START: QuickStartStep[] = [
   {
     kind: "step",
     n: 4,
+    title: "Two more ways to connect your agent",
+    lead:
+      "Installing skills one at a time isn't the only route. If you use Claude Code, add a whole slice of the catalog as a plugin marketplace with a single command — there's one public marketplace, plus one for each team you belong to. The Marketplaces page lists every marketplace you can add and gives you the add command three ways (Terminal, Claude CLI, or a Settings file entry); the key in it is personal, and everything you've added is listed under My marketplaces in the account menu.",
+    points: [
+      "Or connect your agent over MCP: Claude Code, Claude Desktop, and VS Code can talk to skilly directly. No credential goes into any config file — you sign in once in the browser, and from then on the agent can search the catalog, read skills, install them, and propose new ones for you. Revoke a connection any time from the MCP server page.",
+      "Marketplaces need Claude Code; MCP needs an MCP-capable agent. Your administrator decides whether these are enabled for your registry.",
+    ],
+    internalLinks: [
+      { label: "Marketplaces →", href: "/catalog/marketplaces" },
+      { label: "MCP server →", href: "/mcp" },
+    ],
+    image: "/quickstart/connect.png",
+    alt: "The Marketplaces page listing the marketplaces you can add to Claude Code",
+  },
+  {
+    kind: "step",
+    n: 5,
     title: "Manage what you've installed",
     lead:
-      "Installed skills (in the account menu) lists everything you've added, newest first. From here you can re-copy a command, uninstall a skill, or reactivate one you removed.",
+      "My skills in the account menu opens Installed skills — everything you've added, newest first. From here you can re-copy a command, uninstall a skill, or reactivate one you removed.",
     image: "/quickstart/installed.png",
     alt: "The Installed skills page listing the user's installed skills",
   },
   {
     kind: "step",
-    n: 5,
+    n: 6,
     title: "Stay in the loop",
     lead:
       "skilly tells you when something you care about changes. The bell shows notifications — for example when a new version of a skill you maintain or installed ships — and What's new lists every product change, newest first.",
