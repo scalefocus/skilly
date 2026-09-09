@@ -2,6 +2,8 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+// Subpath import: client-safe pure constant (the root barrel pulls node:crypto).
+import { APP_VERSION } from "@skilly/shared/version";
 import { ScrollToTop, invalidateApi } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { QUICK_START, type QuickStartStep } from "./content";
@@ -103,12 +105,19 @@ function QuickStart() {
   // redirect gate (via the event) so navigating away never loops back, and persists it so later
   // logins skip Quick start. Best-effort; the page renders regardless. SKILLY_SPEC.md §8.
   useEffect(() => {
-    fetch("/api/me/onboarded", { method: "POST" })
-      .catch(() => {})
-      .finally(() => {
-        invalidateApi("/api/me");
-        window.dispatchEvent(new Event("skilly:onboarded"));
-      });
+    Promise.allSettled([
+      fetch("/api/me/onboarded", { method: "POST" }),
+      // Also baseline the What's new marker at the version they onboarded on, so a brand-new user
+      // is never shown the "Version X updated" toast for it (§23 What's new).
+      fetch("/api/me/whats-new-seen", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ version: APP_VERSION }),
+      }),
+    ]).finally(() => {
+      invalidateApi("/api/me");
+      window.dispatchEvent(new Event("skilly:onboarded"));
+    });
   }, []);
 
   const intro = QUICK_START.find((s) => s.kind === "intro");

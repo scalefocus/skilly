@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useSession, signIn, signOut } from "next-auth/react";
 // Subpath import: client-safe pure constant (the root barrel pulls node:crypto).
 import { APP_VERSION } from "@skilly/shared/version";
+import { whatsNewAction } from "@skilly/shared/whats-new";
 import { ThemeToggle } from "./ThemeToggle";
 import { MessagesMenu } from "./MessagesMenu";
 import { UserBubble } from "./UserBubble";
-import { cachedGet, usePopoverPresence, Pill } from "./ui";
+import { cachedGet, invalidateApi, usePopoverPresence, Pill } from "./ui";
 import { PageLabelOverrideProvider } from "./PageLabelOverride";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
 
@@ -51,6 +52,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   // First-login onboarding: null = unknown (until /api/me resolves), false = never seen Quick
   // start (gate forces it), true = seen. Drives the redirect gate below.
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  // The once-per-release "Version X updated — see what's new" toast (§23). `since` is the marker
+  // BEFORE this load's stamp — the link carries it so the page can draw the "New since your last
+  // visit" divider. Evaluated once per page load (the ref), the moment /api/me resolves.
+  const [whatsNewToast, setWhatsNewToast] = useState<{ version: string; since: string | null } | null>(null);
+  const whatsNewHandled = useRef(false);
   const [unread, setUnread] = useState(0);
   // "New since you last looked" counts for the Catalog / Review queue / Requested skills nav items.
   const [navBadges, setNavBadges] = useState<{ catalog: number; review: number; systemLog: number; requests: number }>({ catalog: 0, review: 0, systemLog: 0, requests: 0 });
@@ -216,7 +222,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null }>("/api/me")
+    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null }>("/api/me")
       .then((j) => {
         setMyUserId(j.userId ?? null);
         setIsPlatformAdmin(Boolean(j.isPlatformAdmin));
@@ -229,9 +235,37 @@ export function AppShell({ children }: { children: ReactNode }) {
         // forces it once. Tri-state (null = unknown until /api/me resolves) so we never bounce
         // a user before we know their status.
         setOnboarded(j.onboardedAt != null);
+        // What's new (§23): compare the stored marker with THIS bundle's APP_VERSION. Not onboarded →
+        // nothing (Quick start owns that load and stamps the marker). Minor/major newer → stamp NOW
+        // (seen on appearance — ignoring the toast never brings it back) and show the toast with a
+        // link carrying the previous marker. Patch-only newer → stamp silently. Equal/rollback → nothing.
+        if (!whatsNewHandled.current) {
+          const action = whatsNewAction(j.whatsNewSeenVersion ?? null, APP_VERSION, j.onboardedAt != null);
+          if (action !== "none") {
+            whatsNewHandled.current = true;
+            fetch("/api/me/whats-new-seen", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ version: APP_VERSION }),
+            })
+              .then((r) => (r.ok ? (r.json() as Promise<{ previous?: string | null }>) : null))
+              .catch(() => null)
+              .then((res) => {
+                invalidateApi("/api/me");
+                if (action === "toast") setWhatsNewToast({ version: APP_VERSION, since: res?.previous ?? null });
+              });
+          }
+        }
       })
       .catch(() => {});
   }, [status]);
+
+  // The What's new toast stays 7 seconds unless clicked away.
+  useEffect(() => {
+    if (!whatsNewToast) return;
+    const t = setTimeout(() => setWhatsNewToast(null), 7000);
+    return () => clearTimeout(t);
+  }, [whatsNewToast]);
 
   // The Quick start page stamps onboarded on mount and fires this event — flip local state
   // immediately so the gate releases without waiting for /api/me's short cache to expire.
@@ -760,6 +794,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           <PageLabelOverrideProvider value={setPageLabelOverride}>{children}</PageLabelOverrideProvider>
         </main>
       </div>
+      {/* What's new toast (§23): the same centred pill as "✓ Copied", owned by the shell (not a page)
+          so navigating right after landing doesn't lose it. Any click dismisses; the link also navigates. */}
+      {status === "authenticated" && whatsNewToast && (
+        <div className="toast toast-action" role="status" data-testid="whats-new-toast" onClick={() => setWhatsNewToast(null)}>
+          Version {whatsNewToast.version} updated &mdash;{" "}
+          <Link href={whatsNewToast.since ? `/whats-new?since=${encodeURIComponent(whatsNewToast.since)}` : "/whats-new"}>
+            see what&rsquo;s new
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

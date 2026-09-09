@@ -10,6 +10,12 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: "1.149.0",
+    date: "2026-09-09",
+    summary:
+      "New release, one heads-up: the first time you open skilly after a new minor or major version, a small “Version X updated — see what’s new” toast appears for 7 seconds. Its link opens What’s new with a “New since your last visit” divider above the entries you haven’t seen yet. Shown once per release; patch releases stay quiet; brand-new users go through Quick start instead.",
+  },
   { version: "1.148.1", date: "2026-09-09", summary: "Account menu: the “Installed skills” entry is now “My skills” and “Added marketplaces” is now “My marketplaces”. The pages themselves and their headings are unchanged." },
   {
     version: "1.148.0",

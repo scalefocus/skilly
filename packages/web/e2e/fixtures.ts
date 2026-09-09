@@ -6,18 +6,25 @@
 // (db/seed.dev.sql). It is NEVER present in production (auth.ts gates it on the env flag, and
 // instrumentation.ts hard-fails a production boot that sets it).
 import { test as base, expect, type Page } from "@playwright/test";
+import { APP_VERSION } from "@skilly/shared/version";
 
 /**
  * Dev sign-in via the next-auth `dev` credentials callback (no form fields): fetch the CSRF
  * token, then POST the credentials callback. `page.request` shares the page's cookie jar, so
  * every subsequent page navigation AND `page.request` call is authenticated as the dev user.
  */
-export async function devSignIn(page: Page): Promise<void> {
+export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean } = {}): Promise<void> {
   const csrf = await (await page.request.get("/api/auth/csrf")).json();
   const res = await page.request.post("/api/auth/callback/dev", {
     form: { csrfToken: csrf.csrfToken, json: "true" },
   });
   expect(res.ok(), await res.text()).toBeTruthy();
+  // Pre-stamp the What's new marker at the running version so the once-per-release toast (§23)
+  // never appears mid-spec and steals a click or a screenshot. whats-new-toast.spec.ts opts out
+  // to exercise the toast itself. Forward-only, so this never hides a toast a spec seeded.
+  if (opts.stampWhatsNew !== false) {
+    await page.request.post("/api/me/whats-new-seen", { data: { version: APP_VERSION } });
+  }
 }
 
 /** `authedTest` — a `test` whose `page` is already signed in as the dev admin. Use it for specs
