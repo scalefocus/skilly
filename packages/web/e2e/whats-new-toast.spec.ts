@@ -59,7 +59,8 @@ test.describe("What's new toast (§23)", () => {
       .toBe(APP_VERSION);
 
     await toast.getByRole("link", { name: "see what’s new" }).click();
-    await expect(page).toHaveURL(new RegExp(`/whats-new\\?since=${seeded!.replace(/\./g, "\\.")}$`));
+    // Structural URL check (path + query param) rather than a regex built from the version string.
+    await page.waitForURL((u) => u.pathname === "/whats-new" && u.searchParams.get("since") === seeded);
     await expect(page.getByRole("heading", { name: "What’s new." })).toBeVisible({ timeout: 20_000 });
 
     // The divider is present, and every entry above it is newer than the seeded version while the
