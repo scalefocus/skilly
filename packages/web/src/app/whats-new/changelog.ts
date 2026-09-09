@@ -10,6 +10,7 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  { version: "1.148.1", date: "2026-09-09", summary: "Account menu: the “Installed skills” entry is now “My skills” and “Added marketplaces” is now “My marketplaces”. The pages themselves and their headings are unchanged." },
   {
     version: "1.148.0",
     date: "2026-09-08",

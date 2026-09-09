@@ -526,13 +526,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M21 8v8a2 2 0 0 1-1 1.7l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.7l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z" /><path d="m3.3 7 8.7 5 8.7-5M12 22V12" />
                     </svg>
-                    Installed skills
+                    My skills
                   </Link>
                   <Link href="/marketplaces" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M3 9h18l-1.5-4.5A1.5 1.5 0 0 0 18 3.5H6a1.5 1.5 0 0 0-1.5 1L3 9zM4.5 9v9A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5V9M9 13h6" />
                     </svg>
-                    Added marketplaces
+                    My marketplaces
                   </Link>
                   <Link href="/profile" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
