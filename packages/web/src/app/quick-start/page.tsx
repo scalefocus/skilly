@@ -91,6 +91,13 @@ function Card({ step }: { step: QuickStartStep }) {
           ))}
         </div>
       )}
+      {step.internalLinks && step.internalLinks.length > 0 && (
+        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+          {step.internalLinks.map((l) => (
+            <Link key={l.href} href={l.href} className="btn btn-sm">{l.label}</Link>
+          ))}
+        </div>
+      )}
       {step.image && <StepImage src={step.image} alt={step.alt ?? step.title} />}
     </section>
   );
@@ -138,6 +145,8 @@ function QuickStart() {
             </button>
             <Link href="/whats-new" className="btn btn-sm">What&rsquo;s new</Link>
             <Link href="/installed" className="btn btn-sm">Installed skills</Link>
+            <Link href="/catalog/marketplaces" className="btn btn-sm">Marketplaces</Link>
+            <Link href="/mcp" className="btn btn-sm">MCP server</Link>
           </div>
         </section>
       )}

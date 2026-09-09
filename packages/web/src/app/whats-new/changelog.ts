@@ -10,6 +10,12 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: "1.149.0",
+    date: "2026-09-09",
+    summary:
+      "Quick start gains a new Step 4, \"Two more ways to connect your agent\": how to add a whole slice of the catalog to Claude Code as a plugin marketplace, and how to connect Claude Code, Claude Desktop, or VS Code to skilly over MCP with no credential in any config file — with buttons straight to the Marketplaces and MCP server pages. The closing card links to both pages too, and the intro now names all three ways to consume skills.",
+  },
   { version: "1.148.1", date: "2026-09-09", summary: "Account menu: the “Installed skills” entry is now “My skills” and “Added marketplaces” is now “My marketplaces”. The pages themselves and their headings are unchanged." },
   {
     version: "1.148.0",
