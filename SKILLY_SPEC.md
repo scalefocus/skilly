@@ -2030,9 +2030,12 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
 ### Quick start (first-login onboarding) — `/quick-start`
 - A short, **screenshot-driven** getting-started guide for new users, focused on the
   **consumer journey**: an unnumbered **"If you're new to the AI skill
-  game"** prerequisites section (below) → find a skill → open it → install it → manage installed
-  skills → stay in the loop, plus a "want to contribute?" pointer and a closing CTA. Reached any
-  time from the **account menu, above What's new** (the menu's first item).
+  game"** prerequisites section (below) → **1** find a skill → **2** open it → **3** install it →
+  **4** two more ways to connect your agent (marketplaces + MCP, below) → **5** manage installed
+  skills → **6** stay in the loop, plus a "want to contribute?" pointer and a closing CTA. Reached
+  any time from the **account menu, above What's new** (the menu's first item). The intro's
+  one-line promise names all three consumption routes ("find a skill, install it into your agent
+  — or add a whole marketplace, or connect over MCP — and keep it up to date").
 - **"If you're new to the AI skill game"** (fixed, unnumbered — sits right after the intro, before
   Step 1): explains that skills run on the **user's own machine**, not skilly's servers, so three
   free local tools matter before installing a first skill — **Node.js** (runs the `npx skills add`
@@ -2050,6 +2053,37 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   line on **Windows** (Win key → `cmd`/`PowerShell`/"Windows Terminal"), **macOS** (Cmd+Space →
   `Terminal`), and **Linux** (terminal app / Ctrl+Alt+T), and verifying with `node -v` / `git
   --version` / `python --version` (`python3 --version` on macOS/Linux).
+- **Step 4 — "Two more ways to connect your agent"** (numbered, sits between *Install* and
+  *Manage what you've installed*): one card presenting the two alternative consumption routes as
+  peers of `npx skills add`, each in its own short paragraph, in this order:
+  - **Claude plugin marketplaces (§30)** — for **Claude Code** users: instead of installing skills
+    one by one, add a whole slice of the catalog as a plugin marketplace with one command. One
+    sentence on topology: *one public marketplace, plus one per team you belong to*. The
+    **Marketplaces** page lists every marketplace the user may add and hands out the add command in
+    three flavours (Terminal, Claude CLI, Settings file — §30.6); the key in it is personal, and
+    everything added shows up under **My marketplaces** in the account menu (the Added
+    marketplaces page — mentioned in prose only, no button). Step 5 likewise names the menu
+    entry **My skills** as the way to the Installed skills page.
+  - **MCP server (§29)** — connect **Claude Code, Claude Desktop, or VS Code** to skilly directly.
+    No credential goes into any config file: the user signs in once in the browser, after which the
+    agent can search the catalog, read skills, install them, and propose new ones on the user's
+    behalf. A connection can be revoked at any time from the **MCP server** page.
+  - **Client requirement stated in the card, not in the prerequisites section** (which stays
+    unchanged): marketplaces need Claude Code; MCP needs an MCP-capable agent. A closing caveat
+    line: *your administrator decides whether these are enabled* — the card is **static** content
+    like the rest of the page and does **not** consult `mcp_enabled` / `marketplace_public_enabled`
+    (a user whose platform has neither on simply finds an empty directory or the `/mcp` disabled
+    notice, both of which explain themselves).
+  - **Two internal link buttons** below the card, same-tab (Next `Link`, not the external
+    `links` buttons which open in a new tab): **Marketplaces →** `/catalog/marketplaces` and
+    **MCP server →** `/mcp`. The content module gains an **`internalLinks`** field for these,
+    kept separate from `links` so the two link kinds cannot be confused.
+  - **Screenshot**: `/quickstart/connect.png` — a capture of the Marketplaces directory page
+    (captured with at least one marketplace enabled so the rows show).
+- **Closing CTA row** carries **Marketplaces** and **MCP server** alongside the existing What's new
+  and Installed skills buttons (the primary "go to the catalog" button is unchanged).
+- **No re-onboarding.** Adding the step does **not** reset anyone's `onboarded_at`; existing users
+  learn about it from What's new and can reopen Quick start from the account menu.
 - **Content** is a hand-authored module (`app/quick-start/content.ts`) rendered by the page.
   **Screenshots** are served from `packages/web/public/quickstart/` (Next only serves images from
   `public/`); they are a curated subset of the screenshots captured by **`e2e/shots.mjs`** (which

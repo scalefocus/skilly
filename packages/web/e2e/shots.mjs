@@ -114,6 +114,8 @@ async function go(page, url, waitSel) {
     ["/profile", "13-profile", "main", false],
     ["/whats-new", "14-whats-new", "main", false],
     ["/leaderboard", "15-leaderboard", "main", false],
+    ["/catalog/marketplaces", "16-marketplaces", "main", false],
+    ["/mcp", "17-mcp", "main", false],
   ];
 
   for (const [url, name, wait, full] of steps) {
@@ -147,6 +149,7 @@ async function go(page, url, waitSel) {
     "07-installed": "installed",
     "09-notifications": "notifications",
     "05-propose-hosted": "propose",
+    "16-marketplaces": "connect",
   };
   const PUB = path.resolve(process.cwd(), "public/quickstart");
   fs.mkdirSync(PUB, { recursive: true });
