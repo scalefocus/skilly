@@ -2067,7 +2067,10 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
 
 ### Account menu (presentation)
 - The bottom-left account menu (name/avatar trigger in the sidebar) lists, top to bottom:
-  **Quick start**, **What's new**, **Installed skills**, **Profile**, **Sign out**.
+  **Quick start**, **What's new**, **MCP server**, **My skills** (→ `/installed`, the Installed
+  skills page, §23), **My marketplaces** (→ `/marketplaces`, the Added marketplaces page, §30.6),
+  **Profile**, **Sign out**. The menu labels are the possessive short forms; the page titles
+  keep their own headings ("Installed skills.", "Added marketplaces.").
 - **Opens and closes with a brief animation** (fade + slight scale/translate from the trigger,
   ~150ms) rather than appearing/disappearing instantly; the close reverses the same transition
   before the menu unmounts. Uses the shared `.menu-pop` animation classes (also used by the
@@ -3742,7 +3745,7 @@ deliberately **no "copy command"** action: tokens are stored **hashed only** (§
 raw secret is shown exactly once, at mint. Re-obtaining a command means minting again — from
 the **Marketplaces** page below.)* Header search is
 a client-side live filter over the loaded rows, matching `/installed`'s non-registry mode
-(§10). Nav: the account menu, beside **Installed skills**.
+(§10). Nav: the account menu, labelled **My marketplaces**, beside **My skills**.
 
 - **The public-marketplace card moved.** This page originally carried an "add the public
   marketplace" card because a non-admin consumer had no other surface to mint from. That
@@ -3862,8 +3865,8 @@ per marketplace, a bubble for the namespace's contact, and per-row actions. Avai
   user; page eyebrow **Catalog**. The sidebar's prefix-based `isActive` must treat
   `/catalog/marketplaces` as **this** item, not Catalog's (exact match for `/catalog`). The
   presence route→label map (§4) gains **"Marketplaces"**. The account-menu entry keeps its
-  existing, distinct label **Added marketplaces** — two entries reading "Marketplaces" would be
-  a bug.
+  distinct label **My marketplaces** (formerly "Added marketplaces") — two entries reading
+  "Marketplaces" would be a bug.
 - **Freshness stamp — `marketplace_synced_at`.** Every §30.5 sweep, for **each enabled
   marketplace it evaluates**, stamps the time it ran **whether or not the hash changed**
   (unchanged ⇒ no commit, but still "synced"): `namespaces.marketplace_synced_at` for a
