@@ -62,6 +62,10 @@
     "./plugin-marketplace": {
       "types": "./dist/plugin-marketplace.d.ts",
       "default": "./dist/plugin-marketplace.js"
+    },
+    "./whats-new": {
+      "types": "./dist/whats-new.d.ts",
+      "default": "./dist/whats-new.js"
     }
   },
   "scripts": {

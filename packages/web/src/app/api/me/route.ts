@@ -49,8 +49,9 @@ export async function GET() {
             discussion_notifications: boolean;
             directory_hidden: boolean;
             onboarded_at: string | null;
+            whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, onboarded_at
+            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -69,6 +70,10 @@ export async function GET() {
     // First-login onboarding marker (UTC ISO, or null = never seen). When null, the app forces the
     // Quick start page once on the next page load (AppShell's global gate). SKILLY_SPEC.md §8.
     onboardedAt: prefs?.onboarded_at ?? null,
+    // What's new marker (§23): the highest app version whose release notes this user has been shown
+    // (null = never). AppShell compares it with the client bundle's APP_VERSION to decide whether to
+    // show the once-per-minor/major "Version X updated — see what's new" toast.
+    whatsNewSeenVersion: prefs?.whats_new_seen_version ?? null,
     // Dev passwordless sign-in is active — lets the UI offer dev-only affordances (e.g. "Reach out"
     // to yourself, to exercise messaging with a single account). Never true in production.
     devAuth: process.env.SKILLY_DEV_AUTH === "1",

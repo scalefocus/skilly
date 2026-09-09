@@ -1,5 +1,8 @@
 "use client";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { APP_VERSION } from "@skilly/shared/version";
+import { countNewSince } from "@skilly/shared/whats-new";
 import { ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
@@ -7,6 +10,11 @@ import { CHANGELOG } from "./changelog";
 
 function WhatsNew() {
   const fmt = useDateFmt();
+  // `?since=<version>` — set by the new-version toast's link (§23): the marker BEFORE this release
+  // was stamped. Entries newer than it sit above a "New since your last visit" divider. Missing,
+  // invalid, or not-lower → the plain timeline.
+  const since = useSearchParams().get("since");
+  const newCount = countNewSince(CHANGELOG.map((e) => e.version), since, APP_VERSION);
   return (
     <div className="reveal" style={{ maxWidth: 760 }}>
       <ScrollToTop />
@@ -21,10 +29,11 @@ function WhatsNew() {
       {/* A simple vertical timeline: version + date on the left rail, the change on the right. */}
       <ol style={{ listStyle: "none", margin: 0, padding: 0, position: "relative" }}>
         <span aria-hidden style={{ position: "absolute", left: 5, top: 6, bottom: 6, width: 2, background: "var(--line)" }} />
-        {CHANGELOG.map((e) => {
+        {CHANGELOG.map((e, i) => {
           const current = e.version === APP_VERSION;
+          const isNew = i < newCount;
           return (
-            <li key={e.version} style={{ position: "relative", paddingLeft: 28, paddingBottom: 22 }}>
+            <li key={e.version} data-new-since={isNew ? "true" : undefined} style={{ position: "relative", paddingLeft: 28, paddingBottom: 22 }}>
               <span
                 aria-hidden
                 style={{
@@ -45,6 +54,19 @@ function WhatsNew() {
                 {current && <span className="muted" style={{ fontSize: 11.5 }}>· current</span>}
               </div>
               <p style={{ margin: 0, fontSize: 14.5, lineHeight: 1.5 }}>{e.summary}</p>
+              {/* The divider sits under the LAST new entry: everything above it is new since the
+                  visitor's previous version, everything below they have already been told about. */}
+              {newCount > 0 && i === newCount - 1 && (
+                <div
+                  role="separator"
+                  aria-label="New since your last visit"
+                  data-testid="whats-new-divider"
+                  style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 22, marginBottom: 2 }}
+                >
+                  <span className="chip chip-accent" style={{ fontSize: 11.5, whiteSpace: "nowrap" }}>New since your last visit</span>
+                  <span aria-hidden style={{ flex: 1, height: 1, background: "var(--line-strong)" }} />
+                </div>
+              )}
             </li>
           );
         })}
@@ -56,7 +78,10 @@ function WhatsNew() {
 export default function WhatsNewPage() {
   return (
     <RequireAuth>
-      <WhatsNew />
+      {/* WhatsNew reads ?since= via useSearchParams — needs a Suspense boundary (like the catalog). */}
+      <Suspense fallback={<div className="skeleton" style={{ height: 16, width: "45%" }} />}>
+        <WhatsNew />
+      </Suspense>
     </RequireAuth>
   );
 }

@@ -108,7 +108,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* toast, §23), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -1412,7 +1412,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two first-view markers behind Quick start and the What's new toast, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
@@ -2097,7 +2097,72 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   **stamps `onboarded_at = now()` on mount** (`POST /api/me/onboarded`, idempotent via
   `coalesce(onboarded_at, now())`) and fires a `skilly:onboarded` event so the gate releases
   immediately — navigating away (e.g. the "Got it — go to the catalog" CTA) never loops back, and
-  later logins skip it. The page stays reachable from the menu afterward.
+  later logins skip it. The page stays reachable from the menu afterward. **Landing here also
+  stamps the What's new marker** (`POST /api/me/whats-new-seen {version: APP_VERSION}`, below), so a
+  brand-new user's release-notes baseline is the version they onboarded on and they are **never**
+  shown the new-version toast for it.
+
+### What's new — `/whats-new` (release notes + the new-version toast)
+- **Page.** A vertical timeline of every `CHANGELOG` entry (`app/whats-new/changelog.ts`, the
+  canonical shipped history, newest first — CLAUDE.md "What's new / changelog"): version chip, date
+  (viewer's timezone/style via `useDateFmt()`), one-line summary; the running `APP_VERSION` entry is
+  accented and labelled "current". Auth-required (`RequireAuth`). Reached from the **account menu**
+  (second item) and the Quick start page's footer button.
+- **New-version toast — once per minor/major release, per user, after onboarding.** When a user's
+  first authenticated page load after a deploy runs a **newer** app version than the one they last
+  saw, the app shell shows a single toast pointing at this page. Precisely:
+  - **Marker.** `users.whats_new_seen_version` (TEXT, nullable, semver string; migration 0067,
+    **no back-fill** — so on roll-out every existing, already-onboarded user gets the toast once on
+    their next load). `GET /api/me` returns it as `whatsNewSeenVersion` (`null` = never stamped).
+  - **Trigger rule** — evaluated **client-side in AppShell** once `/api/me` resolves, against the
+    **client bundle's `APP_VERSION`** (the same constant this page displays, so the toast can never
+    name a version the page it links to doesn't show). A pure shared function
+    `whatsNewAction(seen, current, onboarded)` → `"toast" | "advance" | "none"` (unit-tested):
+    - `"none"` when `onboarded` is false (`onboardedAt == null` — the Quick start gate owns that
+      load and stamps the marker itself; **a brand-new user never sees the toast**), when `seen` is
+      not lower than `current` (`compareSemver(current, seen) <= 0` — a **rollback** or a **stale
+      cached bundle** shows nothing and never touches the marker), or when `current` is not a valid
+      semver.
+    - `"toast"` when `seen` is `null`, or is lower than `current` **and differs in major or minor**.
+    - `"advance"` when `seen` is lower than `current` but **only the patch differs** — the marker is
+      moved forward silently, no toast. (Copy fixes and colour tweaks don't interrupt anyone; a user
+      who skips several patch releases and then a minor one sees exactly one toast.)
+  - **Stamp endpoint.** `POST /api/me/whats-new-seen {version}` (auth-required; **401**
+    unauthenticated, **403** unknown user). `version` must be a valid semver and **not greater than
+    the server's `APP_VERSION`** (a client can't claim the future) — **400** otherwise. Sets
+    `whats_new_seen_version = version` **only when the stored value is `null`, not valid semver
+    (corrupt → treated as never stamped), or strictly lower** (semver compare, then a single UPDATE
+    guarded on the value just read so concurrent stamps can't leapfrog) — idempotent, never regresses. Returns
+    `{ previous, current }` (`previous` = the value before the call, `null` if none; `current` = the
+    stored value after it). Called (1) **the moment the toast is shown** — seen on appearance,
+    ignoring it does not bring it back; (2) for a silent `"advance"`; (3) by the Quick start page on
+    mount alongside `POST /api/me/onboarded`. Not audited (a display preference, like `onboarded_at`).
+  - **Toast.** The same centred `.toast` status pill (`role="status"`, portaled to `<body>`) as
+    the "✓ Copied" confirmation, owned by **AppShell** so it **survives client-side navigation**
+    (a user who lands and immediately clicks into the catalog does not lose it). Text:
+    **"Version 1.149.0 updated — see what's new"**, where *see what's new* is a link to
+    `/whats-new?since=<previous>` (`since` omitted when `previous` was `null`). Stays **7 seconds**;
+    clicking the link or anywhere on the pill dismisses it early. At most one toast per page load;
+    two tabs loaded before the first stamp lands may each show it — accepted.
+  - **"New since your last visit" divider.** When the page opens with `?since=<v>` and `v` is a
+    valid semver lower than `APP_VERSION`, every entry with `version > v` is grouped above a
+    horizontal divider labelled **"New since your last visit"**, with the older entries below it.
+    Missing, invalid, or not-lower `since` → the plain page, no divider. `since` is a version string,
+    not a credential — it may live in the URL (invariant #6 is untouched) and it is never logged as
+    part of a presence label (the page's label stays the static "What's new", §4).
+  - **Ordering vs the Quick start gate.** The gate has priority: while `onboardedAt` is `null` the
+    rule returns `"none"`, Quick start renders, stamps both markers, and the toast never fires for the
+    version the user onboarded on. From the next minor/major release on they are treated like
+    everyone else.
+  - **Erasure** (§4) scrubs the `users` row and with it this marker. **Roles are irrelevant** — every
+    authenticated user gets the same behaviour.
+  - **Tests.** Unit: the trigger rule (null / patch-only / minor / major / equal / rollback / invalid /
+    not-onboarded). Integration: the stamp endpoint (null → set, lower → set, higher → unchanged with
+    `previous == current`, invalid or future version → 400, unauthenticated → 401). e2e: with the dev
+    user's marker seeded one minor below `APP_VERSION`, the toast appears with the expected text, its
+    link opens `/whats-new?since=…`, and the divider sits above exactly the newer entries; the e2e
+    sign-in helper and `shots.mjs` **pre-stamp the marker** so smoke runs and screenshots stay free of
+    the toast.
 
 ### Account menu (presentation)
 - The bottom-left account menu (name/avatar trigger in the sidebar) lists, top to bottom:

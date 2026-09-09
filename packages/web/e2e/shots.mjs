@@ -2,6 +2,7 @@
 // provider (SKILLY_DEV_AUTH=1), then visits each surface and writes a PNG.
 // Run from packages/web: node e2e/shots.mjs
 import { chromium } from "@playwright/test";
+import { APP_VERSION } from "@skilly/shared/version";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -65,6 +66,8 @@ async function go(page, url, waitSel) {
     form: { csrfToken: csrf.csrfToken, json: "true" },
   });
   console.log("signin status:", res.status());
+  // Pre-stamp the What's new marker so the once-per-release toast (§23) never lands in a screenshot.
+  await ctx.request.post(BASE + "/api/me/whats-new-seen", { data: { version: APP_VERSION } }).catch(() => {});
 
   // Clear any installs left over from a prior run of this script (claimed installs are durable
   // and would otherwise pile up as duplicate "PDF Tools" rows on every re-capture). Uninstall is
