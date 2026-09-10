@@ -19,9 +19,9 @@ export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean } = 
     form: { csrfToken: csrf.csrfToken, json: "true" },
   });
   expect(res.ok(), await res.text()).toBeTruthy();
-  // Pre-stamp the What's new marker at the running version so the once-per-release toast (§23)
-  // never appears mid-spec and steals a click or a screenshot. whats-new-toast.spec.ts opts out
-  // to exercise the toast itself. Forward-only, so this never hides a toast a spec seeded.
+  // Pre-stamp the What's new marker at the running version so the once-per-release update notice
+  // (§23) never appears mid-spec and steals a click or a screenshot. whats-new-notice.spec.ts opts
+  // out to exercise the notice itself. Forward-only, so this never hides a notice a spec seeded.
   if (opts.stampWhatsNew !== false) {
     await page.request.post("/api/me/whats-new-seen", { data: { version: APP_VERSION } });
   }

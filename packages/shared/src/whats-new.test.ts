@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { whatsNewAction, validateSeenVersion, countNewSince } from "./whats-new.js";
+import { whatsNewAction, validateSeenVersion, countNewSince, selectWhatsNewExcerpt } from "./whats-new.js";
 
 test("whatsNewAction: never for a user who has not completed Quick start", () => {
   assert.equal(whatsNewAction(null, "1.149.0", false), "none");
@@ -52,4 +52,37 @@ test("countNewSince: leading newer entries of a newest-first changelog", () => {
   assert.equal(countNewSince(log, null, "1.149.0"), 0);
   assert.equal(countNewSince(log, "nope", "1.149.0"), 0);
   assert.equal(countNewSince(["1.149.0", "bad", "1.148.0"], "1.147.0", "1.149.0"), 2);
+});
+
+const LOG = [
+  { version: "1.151.0", summary: "e" },
+  { version: "1.150.0", summary: "d" },
+  { version: "1.149.0", summary: "c" },
+  { version: "1.148.1", summary: "b" },
+  { version: "1.148.0", summary: "a" },
+];
+
+test("selectWhatsNewExcerpt: null or corrupt marker → only the running version's entry", () => {
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, null, "1.151.0"), { entries: [LOG[0]], overflow: 0 });
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, undefined, "1.151.0"), { entries: [LOG[0]], overflow: 0 });
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "garbage", "1.151.0"), { entries: [LOG[0]], overflow: 0 });
+  // Running version missing from the log (should not happen) → nothing rather than a wrong line.
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, null, "9.9.9"), { entries: [], overflow: 0 });
+});
+
+test("selectWhatsNewExcerpt: entries newer than the marker, newest first, capped with overflow", () => {
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "1.150.0", "1.151.0"), { entries: [LOG[0]], overflow: 0 });
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "1.148.1", "1.151.0"), { entries: [LOG[0], LOG[1], LOG[2]], overflow: 0 });
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "1.148.0", "1.151.0"), { entries: [LOG[0], LOG[1], LOG[2]], overflow: 1 });
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "1.0.0", "1.151.0", 2), { entries: [LOG[0], LOG[1]], overflow: 3 });
+  // Nothing newer (equal marker) → empty, no overflow.
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "1.151.0", "1.151.0"), { entries: [], overflow: 0 });
+});
+
+test("selectWhatsNewExcerpt: never excerpts past the running version or unparsable entries", () => {
+  // A stale bundle running 1.150.0 must not list 1.151.0.
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "1.148.1", "1.150.0"), { entries: [LOG[1], LOG[2]], overflow: 0 });
+  const dirty = [{ version: "bad", summary: "x" }, ...LOG];
+  assert.deepEqual(selectWhatsNewExcerpt(dirty, "1.150.0", "1.151.0"), { entries: [LOG[0]], overflow: 0 });
+  assert.deepEqual(selectWhatsNewExcerpt(LOG, "1.148.0", "nope"), { entries: [], overflow: 0 });
 });
