@@ -1,8 +1,9 @@
-// What's new — the once-per-release toast rule and its helpers (SKILLY_SPEC.md §23, "What's new").
-// Pure functions, client-safe (subpath export `@skilly/shared/whats-new`): the app shell decides
-// whether to show the "Version X updated — see what's new" toast, the stamp endpoint validates the
-// version a client claims to have seen, and the What's new page splits its timeline at the
-// "New since your last visit" divider. All three live here so client and server share one rule.
+// What's new — the once-per-release update-notice rule and its helpers (SKILLY_SPEC.md §23,
+// "What's new"). Pure functions, client-safe (subpath export `@skilly/shared/whats-new`): the app
+// shell decides whether to show the "What's new in X" notice and which changelog lines to excerpt
+// in it, the stamp endpoint validates the version a client claims to have acknowledged, and the
+// What's new page splits its timeline at the "New since your last visit" divider. All of it lives
+// here so client and server share one rule.
 import { parseSemver, compareSemver } from "./semver.js";
 
 export type WhatsNewAction = "toast" | "advance" | "none";
@@ -15,7 +16,9 @@ export type WhatsNewAction = "toast" | "advance" | "none";
  *  - "none"    — not onboarded (the Quick start gate owns this load and stamps the marker itself),
  *                `current` isn't a valid semver, or `seen` is not lower than `current` (a rollback
  *                or a stale cached bundle never shows anything and never touches the marker).
- *  - "toast"   — never stamped, or stamped at a version whose MAJOR or MINOR differs from `current`.
+ *  - "toast"   — show the update notice: never stamped, or stamped at a version whose MAJOR or
+ *                MINOR differs from `current`. (The literal predates the notice's card form and is
+ *                kept for API stability.)
  *  - "advance" — stamped lower, but only the PATCH differs: move the marker forward silently.
  *
  * A stored value that isn't valid semver (corrupt) is treated as never stamped.
@@ -57,4 +60,31 @@ export function countNewSince(versionsNewestFirst: readonly string[], since: str
     if (parseSemver(v) && compareSemver(v, s) > 0) n++;
   }
   return n;
+}
+
+/**
+ * Which changelog entries the update notice excerpts (§23), from a newest-first changelog:
+ *  - `seen` null / not valid semver (roll-out, no back-fill; or a corrupt marker): ONLY the entry
+ *    for `current` — the whole history is not "new since your last visit" in any useful sense.
+ *  - otherwise every entry with `seen < version <= current`, newest first, capped at `cap`; the
+ *    count beyond the cap is returned as `overflow` so the UI can fold it into "+N more".
+ * Entries with an unparsable version are never excerpted.
+ */
+export function selectWhatsNewExcerpt<T extends { version: string }>(
+  entriesNewestFirst: readonly T[],
+  seen: string | null | undefined,
+  current: string,
+  cap = 3,
+): { entries: T[]; overflow: number } {
+  const s = seen == null ? null : seen.trim();
+  if (s == null || !parseSemver(s)) {
+    const cur = entriesNewestFirst.find((e) => e.version === current);
+    return { entries: cur ? [cur] : [], overflow: 0 };
+  }
+  if (!parseSemver(current)) return { entries: [], overflow: 0 };
+  const newer = entriesNewestFirst.filter(
+    (e) => parseSemver(e.version) && compareSemver(e.version, s) > 0 && compareSemver(e.version, current) <= 0,
+  );
+  const n = Math.max(0, Math.floor(cap));
+  return { entries: newer.slice(0, n), overflow: Math.max(0, newer.length - n) };
 }

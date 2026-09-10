@@ -115,7 +115,7 @@ function QuickStart() {
     Promise.allSettled([
       fetch("/api/me/onboarded", { method: "POST" }),
       // Also baseline the What's new marker at the version they onboarded on, so a brand-new user
-      // is never shown the "Version X updated" toast for it (§23 What's new).
+      // is never shown the "What's new in X" update notice for it (§23 What's new).
       fetch("/api/me/whats-new-seen", {
         method: "POST",
         headers: { "content-type": "application/json" },

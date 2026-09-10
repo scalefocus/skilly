@@ -66,7 +66,7 @@ async function go(page, url, waitSel) {
     form: { csrfToken: csrf.csrfToken, json: "true" },
   });
   console.log("signin status:", res.status());
-  // Pre-stamp the What's new marker so the once-per-release toast (§23) never lands in a screenshot.
+  // Pre-stamp the What's new marker so the once-per-release update notice (§23) never lands in a screenshot.
   await ctx.request.post(BASE + "/api/me/whats-new-seen", { data: { version: APP_VERSION } }).catch(() => {});
 
   // Clear any installs left over from a prior run of this script (claimed installs are durable

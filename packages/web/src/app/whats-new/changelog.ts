@@ -11,6 +11,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.151.0",
+    date: "2026-09-10",
+    summary: "The release toast is now a floating What's new card that stays until you close it — with the latest changelog lines, a version chip, and a See what's new link; reloading before closing brings it back.",
+  },
+  {
     version: "1.150.0",
     date: "2026-09-09",
     summary:

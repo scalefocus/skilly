@@ -1,19 +1,45 @@
 "use client";
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { APP_VERSION } from "@skilly/shared/version";
 import { countNewSince } from "@skilly/shared/whats-new";
-import { ScrollToTop } from "../../components/ui";
+import { ScrollToTop, cachedGet, invalidateApi } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { CHANGELOG } from "./changelog";
 
 function WhatsNew() {
   const fmt = useDateFmt();
-  // `?since=<version>` — set by the new-version toast's link (§23): the marker BEFORE this release
-  // was stamped. Entries newer than it sit above a "New since your last visit" divider. Missing,
-  // invalid, or not-lower → the plain timeline.
-  const since = useSearchParams().get("since");
+  // `?since=<version>` — set by the update notice's link (§23): the user's marker before they
+  // acknowledged this release. Entries newer than it sit above a "New since your last visit"
+  // divider. When the param is absent the marker itself (as read BEFORE this page's own stamp) is
+  // the fallback, so the divider works from the account menu too. Present-but-invalid or not-lower
+  // → the plain timeline.
+  const sinceParam = useSearchParams().get("since");
+  const [markerSince, setMarkerSince] = useState<string | null>(null);
+
+  // Opening this page is the read receipt (§23): read the marker for the divider fallback, then
+  // stamp the running version and tell the shell so an open update notice closes without a second
+  // stamp. Best-effort — the page renders regardless.
+  useEffect(() => {
+    cachedGet<{ whatsNewSeenVersion?: string | null }>("/api/me")
+      .then((j) => j.whatsNewSeenVersion ?? null)
+      .catch(() => null)
+      .then((prev) => {
+        setMarkerSince(prev);
+        return fetch("/api/me/whats-new-seen", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ version: APP_VERSION }),
+        }).catch(() => null);
+      })
+      .then(() => {
+        invalidateApi("/api/me");
+        window.dispatchEvent(new Event("skilly:whats-new-seen"));
+      });
+  }, []);
+
+  const since = sinceParam ?? markerSince;
   const newCount = countNewSince(CHANGELOG.map((e) => e.version), since, APP_VERSION);
   return (
     <div className="reveal" style={{ maxWidth: 760 }}>

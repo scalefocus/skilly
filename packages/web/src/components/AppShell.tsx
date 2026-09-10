@@ -1,17 +1,19 @@
 "use client";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useSession, signIn, signOut } from "next-auth/react";
 // Subpath import: client-safe pure constant (the root barrel pulls node:crypto).
 import { APP_VERSION } from "@skilly/shared/version";
-import { whatsNewAction } from "@skilly/shared/whats-new";
+import { whatsNewAction, selectWhatsNewExcerpt } from "@skilly/shared/whats-new";
 import { ThemeToggle } from "./ThemeToggle";
 import { MessagesMenu } from "./MessagesMenu";
 import { UserBubble } from "./UserBubble";
 import { cachedGet, invalidateApi, usePopoverPresence, Pill } from "./ui";
 import { PageLabelOverrideProvider } from "./PageLabelOverride";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
+import { CHANGELOG } from "../app/whats-new/changelog";
 
 const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "review" | "requests" }[] = [
   { href: "/", label: "Overview", icon: "M3 12 12 4l9 8M5 10v9h14v-9" },
@@ -52,10 +54,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   // First-login onboarding: null = unknown (until /api/me resolves), false = never seen Quick
   // start (gate forces it), true = seen. Drives the redirect gate below.
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
-  // The once-per-release "Version X updated — see what's new" toast (§23). `since` is the marker
-  // BEFORE this load's stamp — the link carries it so the page can draw the "New since your last
-  // visit" divider. Evaluated once per page load (the ref), the moment /api/me resolves.
-  const [whatsNewToast, setWhatsNewToast] = useState<{ version: string; since: string | null } | null>(null);
+  // The once-per-release "What's new in X" update notice (§23). `since` is the user's marker as
+  // read from /api/me — the link carries it so the page can draw the "New since your last visit"
+  // divider, and the excerpt lists the changelog lines newer than it. Nothing is stamped on
+  // appearance: the marker moves only on dismissal (✕, the link, or opening /whats-new), so a
+  // reload before dismissing shows it again. Evaluated once per page load (the ref).
+  const [whatsNewNotice, setWhatsNewNotice] = useState<{ since: string | null } | null>(null);
   const whatsNewHandled = useRef(false);
   const [unread, setUnread] = useState(0);
   // "New since you last looked" counts for the Catalog / Review queue / Requested skills nav items.
@@ -236,36 +240,26 @@ export function AppShell({ children }: { children: ReactNode }) {
         // a user before we know their status.
         setOnboarded(j.onboardedAt != null);
         // What's new (§23): compare the stored marker with THIS bundle's APP_VERSION. Not onboarded →
-        // nothing (Quick start owns that load and stamps the marker). Minor/major newer → stamp NOW
-        // (seen on appearance — ignoring the toast never brings it back) and show the toast with a
-        // link carrying the previous marker. Patch-only newer → stamp silently. Equal/rollback → nothing.
+        // nothing (Quick start owns that load and stamps the marker). Minor/major newer → show the
+        // update notice WITHOUT stamping (the marker records acknowledgement, not display; it moves
+        // when the notice is dismissed). Patch-only newer → stamp silently. Equal/rollback → nothing.
         if (!whatsNewHandled.current) {
           const action = whatsNewAction(j.whatsNewSeenVersion ?? null, APP_VERSION, j.onboardedAt != null);
-          if (action !== "none") {
-            whatsNewHandled.current = true;
-            fetch("/api/me/whats-new-seen", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ version: APP_VERSION }),
-            })
-              .then((r) => (r.ok ? (r.json() as Promise<{ previous?: string | null }>) : null))
-              .catch(() => null)
-              .then((res) => {
-                invalidateApi("/api/me");
-                if (action === "toast") setWhatsNewToast({ version: APP_VERSION, since: res?.previous ?? null });
-              });
-          }
+          if (action !== "none") whatsNewHandled.current = true;
+          if (action === "toast") setWhatsNewNotice({ since: j.whatsNewSeenVersion ?? null });
+          else if (action === "advance") stampWhatsNewSeen();
         }
       })
       .catch(() => {});
   }, [status]);
 
-  // The What's new toast stays 7 seconds unless clicked away.
+  // The /whats-new page is the read receipt (§23): it stamps the marker on mount and fires this
+  // event — close the notice without a second stamp.
   useEffect(() => {
-    if (!whatsNewToast) return;
-    const t = setTimeout(() => setWhatsNewToast(null), 7000);
-    return () => clearTimeout(t);
-  }, [whatsNewToast]);
+    const seen = () => setWhatsNewNotice(null);
+    window.addEventListener("skilly:whats-new-seen", seen);
+    return () => window.removeEventListener("skilly:whats-new-seen", seen);
+  }, []);
 
   // The Quick start page stamps onboarded on mount and fires this event — flip local state
   // immediately so the gate releases without waiting for /api/me's short cache to expire.
@@ -794,16 +788,67 @@ export function AppShell({ children }: { children: ReactNode }) {
           <PageLabelOverrideProvider value={setPageLabelOverride}>{children}</PageLabelOverrideProvider>
         </main>
       </div>
-      {/* What's new toast (§23): the same centred pill as "✓ Copied", owned by the shell (not a page)
-          so navigating right after landing doesn't lose it. Any click dismisses; the link also navigates. */}
-      {status === "authenticated" && whatsNewToast && (
-        <div className="toast toast-action" role="status" data-testid="whats-new-toast" onClick={() => setWhatsNewToast(null)}>
-          Version {whatsNewToast.version} updated &mdash;{" "}
-          <Link href={whatsNewToast.since ? `/whats-new?since=${encodeURIComponent(whatsNewToast.since)}` : "/whats-new"}>
-            see what&rsquo;s new
-          </Link>
-        </div>
+      {/* What's new update notice (§23): a persistent floating card owned by the shell (not a page) so
+          navigating right after landing doesn't lose it, portaled to <body>. No timer — it stays until
+          the ✕ (stamps) or the link (the destination page stamps) dismisses it. Clicking the card body
+          does nothing. Hidden, not unmounted, while the mobile nav drawer is open. */}
+      {status === "authenticated" && whatsNewNotice && typeof document !== "undefined" && createPortal(
+        <UpdateNotice
+          since={whatsNewNotice.since}
+          hidden={navOpen}
+          onClose={() => { setWhatsNewNotice(null); stampWhatsNewSeen(); }}
+          onFollow={() => setWhatsNewNotice(null)}
+        />,
+        document.body,
       )}
+    </div>
+  );
+}
+
+/** Acknowledge the running version (§23 stamp endpoint). Best-effort and idempotent server-side: a
+ *  failure is neither retried nor surfaced — the notice simply reappears on the next load. */
+function stampWhatsNewSeen(): void {
+  fetch("/api/me/whats-new-seen", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ version: APP_VERSION }),
+  })
+    .catch(() => null)
+    .then(() => invalidateApi("/api/me"));
+}
+
+/** The floating "What's new in X" card (§23). Polite live region: it announces itself but never
+ *  steals focus; the ✕ is a real button reached by Tab. Excerpt = changelog lines newer than the
+ *  user's marker (cap 3, overflow folded into the link); a null marker shows only the running
+ *  version's line. */
+function UpdateNotice({ since, hidden, onClose, onFollow }: { since: string | null; hidden: boolean; onClose: () => void; onFollow: () => void }) {
+  const { entries, overflow } = selectWhatsNewExcerpt(CHANGELOG, since, APP_VERSION);
+  return (
+    <div className={`update-notice${hidden ? " update-notice-hidden" : ""}`} role="status" data-testid="whats-new-notice">
+      <div className="update-notice-head">
+        <h2 className="update-notice-title">
+          What&rsquo;s new in <span className="chip chip-accent mono">v{APP_VERSION}</span>
+        </h2>
+        <button type="button" className="update-notice-close" aria-label="Dismiss" onClick={onClose}>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+            <path d="M2 2l10 10M12 2L2 12" />
+          </svg>
+        </button>
+      </div>
+      {entries.length > 0 && (
+        <ul className="update-notice-list" data-testid="whats-new-notice-excerpt">
+          {entries.map((e) => (
+            <li key={e.version}>{e.summary}</li>
+          ))}
+        </ul>
+      )}
+      <Link
+        href={since ? `/whats-new?since=${encodeURIComponent(since)}` : "/whats-new"}
+        className="update-notice-link"
+        onClick={onFollow}
+      >
+        See what&rsquo;s new{overflow > 0 ? ` (+${overflow} more)` : ""}
+      </Link>
     </div>
   );
 }
