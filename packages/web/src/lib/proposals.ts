@@ -44,7 +44,6 @@ export interface ProposalMetadata {
   /** Zero or more category labels (tag-style; created on the fly). */
   categories?: string[];
   toolHarness: string;
-  tags?: string[];
   usageExamples?: string | null;
   /**
    * Per-version "What changed" note (plain text; §8). Required on a new VERSION (proposal / direct
@@ -177,6 +176,11 @@ export async function verifySubmissionPayload(
   ) {
     return "a skill restricted to a namespace can’t live in the global namespace — choose a specific namespace, or set visibility to org-wide";
   }
+  // Free-form tags were removed (§10). A stale client may still send `tags`; it is ignored
+  // silently (never a 400) and stripped so it is not persisted into the revision payload.
+  if (payload.metadata && "tags" in (payload.metadata as unknown as Record<string, unknown>)) {
+    delete (payload.metadata as unknown as Record<string, unknown>).tags;
+  }
   if (payload.metadata?.toolHarness != null) {
     // Closed vocabulary (§8): the picker submits a slug; normalize defensively, then require it to
     // be `generic` or a known agent — EXCEPT a grandfathered legacy value carried forward verbatim
@@ -245,7 +249,7 @@ const sameSet = (a: string[], b: string[]): boolean => a.length === b.length && 
 
 /**
  * §8 no-op guard for "Keep current files": with reused files, at least one field must actually
- * differ from the skill's current state (title, description, categories, tags, tool/harness) or
+ * differ from the skill's current state (title, description, categories, tool/harness) or
  * the reused version's usage — a bare semver bump is not a version. Returns the rejection
  * message, or null when something genuinely changes. `meta.toolHarness` is expected normalized
  * (verifySubmissionPayload runs first on every path).
@@ -257,9 +261,9 @@ async function reuseNoopError(
   reusedUsage: string | null,
 ): Promise<string | null> {
   const { rows } = await db.query<{
-    title: string; description: string; tool_harness: string; tags: string[] | null; categories: string[] | null;
+    title: string; description: string; tool_harness: string; categories: string[] | null;
   }>(
-    `select s.title, s.description, s.tool_harness, s.tags,
+    `select s.title, s.description, s.tool_harness,
             coalesce((select array_agg(c.name) from skill_categories sc
                         join categories c on c.id = sc.category_id
                        where sc.skill_id = s.id), '{}') as categories
@@ -272,12 +276,11 @@ async function reuseNoopError(
     (meta.title ?? "").trim() !== cur.title.trim() ||
     (meta.description ?? "").trim() !== cur.description.trim() ||
     (meta.toolHarness ?? "").trim() !== cur.tool_harness ||
-    !sameSet(normSet(meta.tags), normSet(cur.tags)) ||
     !sameSet(normSet(meta.categories, true), normSet(cur.categories, true)) ||
     ((meta.usageExamples ?? "").trim() || null) !== ((reusedUsage ?? "").trim() || null);
   return changed
     ? null
-    : "nothing changed — edit at least one field (title, description, categories, tags, tool/harness, or usage), or provide a new source";
+    : "nothing changed — edit at least one field (title, description, categories, tool/harness, or usage), or provide a new source";
 }
 
 /** The server-resolved "Keep current files" snapshot (§8). */
@@ -559,7 +562,6 @@ function payloadUnchanged(prev: RevisionPayload, next: RevisionPayload): boolean
     eqText(a.toolHarness, b.toolHarness) &&
     a.visibility === b.visibility &&
     sameSet(normSet(a.categories, true), normSet(b.categories, true)) &&
-    sameSet(normSet(a.tags), normSet(b.tags)) &&
     eqText(a.usageExamples, b.usageExamples) &&
     // A note-only revise IS a real edit reviewers should see (the note is required and travels with
     // the proposal) — so a changed "What changed" makes the revise non-noop. This is separate from
@@ -913,8 +915,8 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
   let skillId = input.targetSkillId;
   if (!skillId) {
     const { rows } = await client.query<{ id: string }>(
-      `insert into skills (namespace_id, slug, title, description, tool_harness, tags, type, visibility, promoted_from_skill_version_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, promoted_from_skill_version_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
        returning id`,
       [
         input.targetNamespaceId,
@@ -922,20 +924,19 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
         meta.title,
         meta.description,
         meta.toolHarness,
-        meta.tags ?? [],
         isPointer ? "pointer" : "hosted",
         meta.visibility,
         payload.promotedFromSkillVersionId ?? null,
       ],
     );
     skillId = rows[0]!.id;
-    // Categories are multi-valued tags; created on the fly and linked via skill_categories.
+    // Categories are multi-valued labels; created on the fly and linked via skill_categories.
     await syncCategories(client, skillId, meta.categories ?? []);
     // The submitter becomes the first explicit maintainer of a brand-new skill (if eligible). §19.
     await autoAddSubmitter(client, { id: skillId, namespaceId: input.targetNamespaceId, visibility: meta.visibility }, input.submittedBy);
   } else {
     // New version of an EXISTING skill: sync every skill-level field a re-version may change
-    // (§8) — title, description, categories, tags, and tool/harness — to the submitted values.
+    // (§8) — title, description, categories, and tool/harness — to the submitted values.
     // Each is guarded (coalesce / `!== undefined`) so a caller that omits one leaves the skill's
     // existing value untouched; the update re-fires the FTS trigger so search stays current.
     // VISIBILITY stays frozen (a skill-management action, never a re-version); the slug is
@@ -946,15 +947,13 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
       `update skills
           set title        = coalesce($2, title),
               description  = coalesce($3, description),
-              tool_harness = coalesce($4, tool_harness),
-              tags         = coalesce($5::text[], tags)
+              tool_harness = coalesce($4, tool_harness)
         where id = $1`,
       [
         skillId,
         meta.title?.trim() || null, // never wipe a title to blank
         meta.description !== undefined ? meta.description : null,
         meta.toolHarness?.trim() || null,
-        meta.tags ?? null, // [] is meaningful (clears tags); only undefined keeps the current value
       ],
     );
     // Version-acceptance maintainer auto-add (§19): gated against the skill's CURRENT
@@ -1069,9 +1068,9 @@ export async function promoteToGlobal(
   const skill = (
     await pool.query<{
       id: string; namespace_id: string; slug: string; title: string; description: string;
-      tool_harness: string; tags: string[]; categories: string[];
+      tool_harness: string; categories: string[];
     }>(
-      `select s.id, s.namespace_id, s.slug, s.title, s.description, s.tool_harness, s.tags,
+      `select s.id, s.namespace_id, s.slug, s.title, s.description, s.tool_harness,
               coalesce((select array_agg(c.name order by c.name)
                           from skill_categories sc join categories c on c.id = sc.category_id
                          where sc.skill_id = s.id), '{}') as categories
@@ -1106,7 +1105,6 @@ export async function promoteToGlobal(
     description: skill.description,
     categories: skill.categories ?? [],
     toolHarness: skill.tool_harness,
-    tags: skill.tags,
     usageExamples: lv.usage_examples,
     visibility: "org",
   };
@@ -1340,7 +1338,6 @@ export interface TargetSkillCurrent {
   title: string;
   description: string;
   toolHarness: string;
-  tags: string[];
   categories: string[];
   /** The latest stable version's usage examples (the re-version baseline); null if none. */
   usageExamples: string | null;
@@ -1464,9 +1461,9 @@ export async function getProposalDetail(
   let targetSkillCurrent: TargetSkillCurrent | null = null;
   if (p.target_skill_id) {
     const { rows: srows } = await pool.query<{
-      title: string; description: string; tool_harness: string; tags: string[] | null; categories: string[] | null;
+      title: string; description: string; tool_harness: string; categories: string[] | null;
     }>(
-      `select s.title, s.description, s.tool_harness, s.tags,
+      `select s.title, s.description, s.tool_harness,
               coalesce((select array_agg(c.name order by c.name) from skill_categories sc
                           join categories c on c.id = sc.category_id
                          where sc.skill_id = s.id), '{}') as categories
@@ -1484,7 +1481,6 @@ export async function getProposalDetail(
         title: s.title,
         description: s.description,
         toolHarness: s.tool_harness,
-        tags: s.tags ?? [],
         categories: s.categories ?? [],
         usageExamples: latestStable ? vrows.find((v) => v.semver === latestStable)?.usage_examples ?? null : null,
         latestStable,

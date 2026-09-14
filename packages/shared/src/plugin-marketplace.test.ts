@@ -183,7 +183,7 @@ test("marketplace.json carries pluginRoot and relative plugin sources", () => {
         title: "PDF Tools",
         description: "Work with PDFs",
         version: "1.2.0",
-        tags: ["pdf", "docs"],
+        categories: ["docs", "productivity"],
         category: "productivity",
         homepage: "https://skilly.example.com/skills/team-a/pdf-tools",
       },
@@ -199,7 +199,7 @@ test("marketplace.json carries pluginRoot and relative plugin sources", () => {
   assert.equal(p.source, "./plugins/pdf-tools");
   assert.equal(p.displayName, "PDF Tools");
   assert.equal(p.version, "1.2.0");
-  assert.deepEqual(p.keywords, ["pdf", "docs"]);
+  assert.deepEqual(p.keywords, ["docs", "productivity"], "keywords are the category names (tags were removed, §10)");
   assert.equal(p.category, "productivity");
 });
 

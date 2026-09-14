@@ -14,7 +14,6 @@ export interface CatalogEntry {
   visibility: "org" | "namespace";
   toolHarness: string;
   categories: string[];
-  tags: string[];
   installCount: number;
   ratingAvg: number;
   ratingCount: number;

@@ -47,7 +47,6 @@ export interface Skill {
   description: string;
   categoryId: string | null;
   toolHarness: string;
-  tags: string[];
   type: SkillType;
   visibility: Visibility;
   status: SkillStatus;

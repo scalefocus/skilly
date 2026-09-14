@@ -55,28 +55,28 @@ INSERT INTO categories (name, description) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 -- Skills
-INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, tags, type, visibility, install_count)
+INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, type, visibility, install_count)
   SELECT n.id, 'pdf-tools', 'PDF Tools', 'Read, merge, split and watermark PDF files directly from your agent.',
-         (SELECT id FROM categories WHERE name='documents'), 'claude-code', ARRAY['pdf','documents','merge'], 'hosted', 'org', 142
+         (SELECT id FROM categories WHERE name='documents'), 'claude-code', 'hosted', 'org', 142
     FROM namespaces n WHERE n.slug='global'
 ON CONFLICT (namespace_id, slug) DO NOTHING;
-INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, tags, type, visibility, install_count)
+INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, type, visibility, install_count)
   SELECT n.id, 'lint-fixer', 'Lint Fixer', 'Auto-applies your org ESLint + Prettier config and explains each fix.',
-         (SELECT id FROM categories WHERE name='devtools'), 'claude-code', ARRAY['lint','formatting'], 'hosted', 'org', 88
+         (SELECT id FROM categories WHERE name='devtools'), 'claude-code', 'hosted', 'org', 88
     FROM namespaces n WHERE n.slug='global'
 ON CONFLICT (namespace_id, slug) DO NOTHING;
-INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, tags, type, visibility, install_count)
+INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, type, visibility, install_count)
   SELECT n.id, 'web-scraper', 'Web Scraper', 'Mirrored from an upstream repo — polite, rate-limited scraping helpers.',
-         (SELECT id FROM categories WHERE name='data'), 'cursor', ARRAY['scraping','http'], 'pointer', 'org', 57
+         (SELECT id FROM categories WHERE name='data'), 'cursor', 'pointer', 'org', 57
     FROM namespaces n WHERE n.slug='global'
 ON CONFLICT (namespace_id, slug) DO NOTHING;
-INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, tags, type, visibility, install_count)
+INSERT INTO skills (namespace_id, slug, title, description, category_id, tool_harness, type, visibility, install_count)
   SELECT n.id, 'secret-helper', 'Secret Helper', 'Team-only: resolves secrets from the internal vault for local runs.',
-         (SELECT id FROM categories WHERE name='devtools'), 'claude-code', ARRAY['secrets','internal'], 'hosted', 'namespace', 11
+         (SELECT id FROM categories WHERE name='devtools'), 'claude-code', 'hosted', 'namespace', 11
     FROM namespaces n WHERE n.slug='team-a'
 ON CONFLICT (namespace_id, slug) DO NOTHING;
 
--- Categories as tags (many-to-many) — pdf-tools intentionally has two.
+-- Categories (many-to-many) — pdf-tools intentionally has two.
 INSERT INTO skill_categories (skill_id, category_id)
   SELECT s.id, c.id
     FROM skills s JOIN namespaces n ON n.id = s.namespace_id, categories c

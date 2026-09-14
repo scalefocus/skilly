@@ -115,7 +115,7 @@ test("proposal materialize: skill + version + maintainer + categories + usage", 
   }
 });
 
-test("re-version syncs skill-level metadata: title/description/categories/tags/harness (§8)", { skip: !enabled }, async () => {
+test("re-version syncs skill-level metadata: title/description/categories/harness (§8)", { skip: !enabled }, async () => {
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -129,7 +129,7 @@ test("re-version syncs skill-level metadata: title/description/categories/tags/h
       payload: {
         metadata: {
           skillSlug: "sync-skill", title: "Old Title", description: "old desc", toolHarness: "claude-code",
-          visibility: "org", categories: ["alpha"], tags: ["one"], usageExamples: "old usage",
+          visibility: "org", categories: ["alpha"], usageExamples: "old usage",
         },
         artifactObjectKey: "uploads/x/sync1.bundle",
         artifactSha256: "s1",
@@ -145,7 +145,7 @@ test("re-version syncs skill-level metadata: title/description/categories/tags/h
       payload: {
         metadata: {
           skillSlug: "sync-skill", title: "New Title", description: "new desc", toolHarness: "cursor",
-          visibility: "org", categories: ["beta", "gamma"], tags: ["two", "three"], usageExamples: "new usage",
+          visibility: "org", categories: ["beta", "gamma"], usageExamples: "new usage",
         },
         artifactObjectKey: "uploads/x/sync2.bundle",
         artifactSha256: "s2",
@@ -153,14 +153,13 @@ test("re-version syncs skill-level metadata: title/description/categories/tags/h
     });
     assert.ok(second.versionId, "second version created");
 
-    const s = (await client.query<{ title: string; description: string; tool_harness: string; tags: string[] }>(
-      `select title, description, tool_harness, tags from skills where id = $1`,
+    const s = (await client.query<{ title: string; description: string; tool_harness: string }>(
+      `select title, description, tool_harness from skills where id = $1`,
       [first.skillId],
     )).rows[0]!;
     assert.equal(s.title, "New Title", "title synced (§8)");
     assert.equal(s.description, "new desc", "description synced");
     assert.equal(s.tool_harness, "cursor", "tool/harness synced");
-    assert.deepEqual([...s.tags].sort(), ["three", "two"], "tags synced");
     const cats = (await client.query<{ name: string }>(
       `select c.name from skill_categories sc join categories c on c.id = sc.category_id where sc.skill_id = $1 order by c.name`,
       [first.skillId],
@@ -302,7 +301,7 @@ test("keep current files: resolveReuseSource snapshots latest stable + no-op gua
 
     const meta = {
       skillSlug: "reuse-skill", title: "Reuse Skill", description: "d", toolHarness: "claude-code",
-      visibility: "org" as const, categories: ["alpha"], tags: ["t1"], usageExamples: "usage v1",
+      visibility: "org" as const, categories: ["alpha"], usageExamples: "usage v1",
     };
     const first = await materializeVersion(client, {
       targetNamespaceId: ns, targetSkillId: null, semver: "1.0.0", submittedBy: submitter,
@@ -375,7 +374,7 @@ test("keep current files: pointer reuse carries external provenance, no mirror (
 
     const r = await resolveReuseSource(client, skillId, {
       skillSlug: "preuse-skill", title: "Pointer Skill RENAMED", description: "d", toolHarness: "generic",
-      visibility: "org", categories: [], tags: [], usageExamples: null,
+      visibility: "org", categories: [], usageExamples: null,
     });
     assert.equal(r.ok, true, "pointer reuse resolves");
     const reuse = (r as Extract<Awaited<ReturnType<typeof resolveReuseSource>>, { ok: true }>).reuse;
@@ -474,7 +473,7 @@ function mkPayload(userId: string, key: string, over: Partial<RevisionPayload["m
   return {
     metadata: {
       skillSlug: "revise-skill", title: "Revise Skill", description: "d", toolHarness: "claude-code",
-      visibility: "org", categories: [], tags: [], usageExamples: null, ...over,
+      visibility: "org", categories: [], usageExamples: null, ...over,
     },
     artifactObjectKey: key.startsWith("uploads/") ? key : `uploads/${userId}/${key}`,
     artifactSha256: "sha-" + key,
@@ -758,7 +757,7 @@ test("what changed note: null on a first version, persisted on a new version, ex
     // latest stable) is still a no-op — the note is not a satisfying field (§8).
     const noop = await resolveReuseSource(client, first.skillId, {
       skillSlug: "wc-skill", title: "WC", description: "d", toolHarness: "claude-code",
-      visibility: "org", categories: [], tags: [], usageExamples: "u", whatChanged: "a brand new note, but nothing else changed",
+      visibility: "org", categories: [], usageExamples: "u", whatChanged: "a brand new note, but nothing else changed",
     });
     assert.equal(noop.ok, false, "note-only change is still a reuse no-op");
 

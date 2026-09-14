@@ -65,7 +65,7 @@ function ProposeForm() {
   const router = useRouter();
   const params = useSearchParams();
   // New-version mode: pre-fill from an existing skill and LOCK the identity/access surface only —
-  // slug, visibility (namespace-derived), and delivery type. Title, description, categories, tags,
+  // slug, visibility (namespace-derived), and delivery type. Title, description, categories,
   // tool/harness, usage, and the semver are all editable (synced to the skill on accept, §8); the
   // source is optional (default "Keep current files"). It's entered either by URL
   // (?newVersion=1&ns=&slug=) OR in-place when a duplicate is detected and the user accepts the
@@ -125,7 +125,6 @@ function ProposeForm() {
     externalSubdir: "",
   });
   const [categories, setCategories] = useState<string[]>([]);
-  const [tags, setTags] = useState<string[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
   // Namespaces the user can file into (global + their namespaces) — feeds the namespace combobox.
   const [namespaceOptions, setNamespaceOptions] = useState<{ slug: string; displayName: string }[]>([]);
@@ -266,7 +265,7 @@ function ProposeForm() {
   const noteIsDefault = useRef(false);
   // Snapshot of the skill's current metadata at pre-fill, for the client-side §8 no-op guard
   // (with reused files, at least one field must differ; the server re-enforces with a 422).
-  const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; tags: string[]; categories: string[]; usageExamples: string } | null>(null);
+  const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; categories: string[]; usageExamples: string } | null>(null);
 
   // The "Updated metadata" default describes a metadata-only re-version, so it lives and dies with
   // Keep-current-files (§8): supplying a real source drops it (a version that ships files is never
@@ -347,7 +346,6 @@ function ProposeForm() {
           externalRef: "",
         }));
         setCategories(j.meta?.categories ?? []);
-        setTags(j.meta?.tags ?? []);
         setSourceType(j.meta?.type ?? "hosted");
         setNvLatest(j.latest ?? null);
         // Baseline for the §8 no-op guard (reuse mode: at least one field must differ from this).
@@ -355,7 +353,6 @@ function ProposeForm() {
           title: j.meta?.title ?? "",
           description: j.meta?.description ?? "",
           toolHarness: j.meta?.toolHarness ?? "generic",
-          tags: j.meta?.tags ?? [],
           categories: j.meta?.categories ?? [],
           usageExamples: j.usageExamples ?? "",
         };
@@ -605,7 +602,6 @@ function ProposeForm() {
         title: f.title,
         description: f.description,
         categories,
-        tags,
         toolHarness: f.toolHarness, // a slug from the closed picker; server validates membership (§8)
 
         usageExamples: f.usageExamples || null,
@@ -637,11 +633,10 @@ function ProposeForm() {
           f.title.trim() === b.title.trim() &&
           f.description.trim() === b.description.trim() &&
           f.toolHarness.trim() === b.toolHarness.trim() &&
-          setEq(tags, b.tags) &&
           setEq(categories, b.categories, true) &&
           f.usageExamples.trim() === b.usageExamples.trim()
         ) {
-          throw new Error("Nothing changed — edit at least one field (title, description, categories, tags, tool/harness, or usage), or provide a new source.");
+          throw new Error("Nothing changed — edit at least one field (title, description, categories, tool/harness, or usage), or provide a new source.");
         }
       } else if (sourceType === "hosted") {
         const up = await uploadBundle();
@@ -662,7 +657,7 @@ function ProposeForm() {
       }
 
       // In new-version mode, target the existing skill so this becomes a new version of it. On
-      // accept the skill's title/description/categories/tags/tool-harness are SYNCED to the
+      // accept the skill's title/description/categories/tool-harness are SYNCED to the
       // submitted values (§8) — only the slug and visibility stay frozen.
       const body = {
         namespaceSlug: f.namespaceSlug,
@@ -785,7 +780,7 @@ function ProposeForm() {
         <h1 className="page-title">{lock ? "Propose a new version." : mode === "want" ? "Request a skill." : "Propose a skill."}</h1>
         {lock ? (
           <p className="page-sub">
-            New version of <span className="mono">{f.namespaceSlug}/{f.skillSlug}</span>. The slug is locked — everything else (title, description, categories, tags, tool/harness, usage) is editable, and you can keep the current files or provide a fresh source. It enters the normal review/approval flow.
+            New version of <span className="mono">{f.namespaceSlug}/{f.skillSlug}</span>. The slug is locked — everything else (title, description, categories, tool/harness, usage) is editable, and you can keep the current files or provide a fresh source. It enters the normal review/approval flow.
           </p>
         ) : mode === "want" ? (
           <p className="page-sub">Describe the skill you wish existed. Your request appears on the Requested skills page, where anyone can pick it up and build it — you’ll be notified when it’s fulfilled.</p>
@@ -1110,14 +1105,6 @@ function ProposeForm() {
               : "Type to search existing categories, or enter a new one and press Enter. Add as many as fit."}
           </p>
         </div>
-        {mode === "have" && (
-          <div>
-            <label style={label}>Tags <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· optional, free-form</span></label>
-            {/* Free-form tags (§3 taxonomy) — editable in new-version mode too, synced on accept (§8). */}
-            <TagInput value={tags} onChange={setTags} placeholder="Add tags…" />
-            {lock && <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Pre-filled with the skill's current tags. Editing them updates the skill's tags when this version is accepted.</p>}
-          </div>
-        )}
         <div>
           <label style={label}>Description <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· Markdown</span></label>
           {/* Description stays editable in new-version mode (like categories) — on accept the skill's

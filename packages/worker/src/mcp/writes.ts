@@ -529,7 +529,6 @@ export interface ProposalMetadataInput {
   toolHarness: string;
   visibility: "org" | "namespace";
   categories?: string[];
-  tags?: string[];
   usageExamples?: string | null;
   whatChanged?: string | null;
 }
@@ -570,7 +569,8 @@ function validateMetadata(
   if (wc && wc.length > WHAT_CHANGED_MAX_LEN) return fail(`"whatChanged" is too long (${wc.length}/${WHAT_CHANGED_MAX_LEN})`);
   if (isNewVersion && !wc) return fail('describe what changed in this version — "whatChanged" is required for a new version');
   meta.categories = [...new Set((meta.categories ?? []).map((c) => c.trim().toLowerCase()).filter(Boolean))].slice(0, 12);
-  meta.tags = [...new Set((meta.tags ?? []).map((t) => t.trim()).filter(Boolean))].slice(0, 20);
+  // Free-form tags were removed (§10): a stale client's `tags` is dropped silently, never rejected.
+  delete (meta as unknown as Record<string, unknown>).tags;
   meta.usageExamples = meta.usageExamples?.trim() || null;
   return null;
 }
