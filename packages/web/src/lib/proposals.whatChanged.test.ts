@@ -15,10 +15,20 @@ function payload(whatChanged: string | null | undefined): RevisionPayload {
   return {
     metadata: {
       skillSlug: "demo", title: "Demo", description: "d", toolHarness: "generic",
-      categories: [], tags: [], usageExamples: null, whatChanged, visibility: "org",
+      categories: [], usageExamples: null, whatChanged, visibility: "org",
     },
   };
 }
+
+test("a stale client's `tags` field is ignored silently and stripped from the payload (§10)", async () => {
+  // Free-form tags were removed (migration 0068). Older browser tabs may still send the field: it
+  // must neither 400 nor be persisted into the revision payload.
+  const p = payload("Updated metadata");
+  (p.metadata as unknown as Record<string, unknown>).tags = ["legacy", "tag"];
+  const err = await verifySubmissionPayload(noDb, "u1", p, { targetSkillId: "skill-1" });
+  assert.equal(err, null, `tags must not cause a rejection, got: ${err}`);
+  assert.equal("tags" in (p.metadata as unknown as Record<string, unknown>), false, "tags stripped from the payload");
+});
 
 test("new-version submission REQUIRES a non-empty What-changed note", async () => {
   const err = await verifySubmissionPayload(noDb, "u1", payload(""), { targetSkillId: "skill-1" });

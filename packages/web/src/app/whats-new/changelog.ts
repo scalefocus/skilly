@@ -11,6 +11,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.152.0",
+    date: "2026-09-14",
+    summary: "Free-form tags are gone. They were never shown in the catalog or on skill pages and never worked as a filter, so the Tags field has been removed from the propose form and the proposal review page, and categories are now the single way to classify a skill. Search matches title, slug, description and usage as before (tags are no longer a hidden match term), and a plugin marketplace's keywords now come from the skill's categories instead. Existing tags were dropped, not converted into categories.",
+  },
+  {
     version: "1.151.0",
     date: "2026-09-10",
     summary: "The release toast is now a floating What's new card that stays until you close it — with the latest changelog lines, a version chip, and a See what's new link; reloading before closing brings it back.",

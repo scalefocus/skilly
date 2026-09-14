@@ -1,5 +1,5 @@
 // e2e: propose-a-new-version metadata editing + "Keep current files" (SKILLY_SPEC.md §8).
-// A re-version may now change the Title, description, categories, tags, and tool/harness — only
+// A re-version may now change the Title, description, categories, and tool/harness — only
 // the slug (and visibility) stay locked — and the source is optional: "Keep current files" (the
 // default when a stable version exists) reuses the latest stable artifact byte-for-byte, gated by
 // the no-op guard (at least one field must differ). Runs against the dev stack
@@ -31,15 +31,18 @@ test.describe("new-version proposal: editable metadata + keep current files (@gl
     ).toBeVisible();
   });
 
-  test("title, tags, and tool/harness are editable; the slug is locked", async ({ page }) => {
+  test("title, categories, and tool/harness are editable; the slug is locked; no Tags field", async ({ page }) => {
     // Slug stays read-only (the immutable identity).
     await expect(page.getByText("Skill slug · locked")).toBeVisible();
     // Title is an enabled input (§8: a re-version may retitle the skill).
     await expect(page.getByPlaceholder("PDF Tools")).toBeEnabled();
     await expect(page.getByText("Editing the title renames the skill", { exact: false })).toBeVisible();
-    // Tags input + harness picker are present and enabled. (The TagInput placeholder only shows
-    // when empty — the seeded skill has tags — so assert via the new-version hint text instead.)
-    await expect(page.getByText("Pre-filled with the skill's current tags", { exact: false })).toBeVisible();
+    // Categories input + harness picker are present and enabled. (The TagInput placeholder only
+    // shows when empty — the seeded skill has categories — so assert via the new-version hint.)
+    await expect(page.getByText("Pre-filled with the skill's current categories", { exact: false })).toBeVisible();
+    // Free-form tags were removed (§10): no Tags field anywhere on the form.
+    await expect(page.getByText("Pre-filled with the skill's current tags", { exact: false })).toHaveCount(0);
+    await expect(page.getByPlaceholder("Add tags…")).toHaveCount(0);
     await expect(page.getByPlaceholder("Search a tool… (default: Generic)")).toBeEnabled();
   });
 
