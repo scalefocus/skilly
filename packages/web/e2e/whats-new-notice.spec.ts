@@ -151,6 +151,65 @@ test.describe("What's new update notice (§23)", () => {
     await expect.poll(readMarker).toBe(APP_VERSION);
   });
 
+  /** Overflow (§23): the card never leaves the viewport however long the excerpted summaries are —
+   *  it is capped at 60vh, the list alone scrolls (and gains a Tab stop), and the ✕ + link stay in
+   *  view without scrolling. Relies on the current CHANGELOG holding long enough entries newer than
+   *  the seeded marker to overflow a 600px-tall viewport (the 2.0.0 and 1.152.0 entries do). */
+  async function expectOverflowContained(page: import("@playwright/test").Page) {
+    const notice = page.getByTestId("whats-new-notice");
+    await expect(notice).toBeVisible({ timeout: 20_000 });
+    const excerpt = notice.getByTestId("whats-new-notice-excerpt");
+    await expect(excerpt).toBeVisible();
+    // The list scrolls...
+    await expect.poll(() => excerpt.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    // ...and, because it does, is a labelled Tab stop.
+    await expect(excerpt).toHaveAttribute("tabindex", "0");
+    await expect(excerpt).toHaveAttribute("aria-label", "Release notes");
+    // Let the slide-up entry animation settle — mid-flight the card is translated a few px down,
+    // which would misreport its resting bounding box.
+    await notice.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+    // The whole card sits inside the viewport.
+    const vp = page.viewportSize()!;
+    const box = (await notice.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(vp.height + 0.5);
+    expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 0.5);
+    expect(box.height).toBeLessThanOrEqual(vp.height * 0.6 + 0.5);
+    // ✕ and the link are visible without scrolling anything.
+    await expect(notice.getByRole("button", { name: "Dismiss" })).toBeInViewport();
+    await expect(notice.getByRole("link", { name: /^See what’s new/ })).toBeInViewport();
+  }
+
+  test("long release notes: the card stays inside a short viewport and the list scrolls", async ({ page }) => {
+    const seeded = oneMinorBelow(APP_VERSION);
+    test.skip(!seeded, `cannot derive a lower minor from ${APP_VERSION}`);
+    await setMarker(seeded!);
+    await devSignIn(page, { stampWhatsNew: false });
+    await page.setViewportSize({ width: 1280, height: 600 });
+    await page.goto("/");
+    await expectOverflowContained(page);
+    // Keyboard reachability: Tab order is ✕ → list → link.
+    const notice = page.getByTestId("whats-new-notice");
+    await notice.getByRole("button", { name: "Dismiss" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(notice.getByTestId("whats-new-notice-excerpt")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(notice.getByRole("link", { name: /^See what’s new/ })).toBeFocused();
+    // Still not stamped — reading is not acknowledging.
+    expect(await readMarker()).toBe(seeded);
+  });
+
+  test("long release notes on mobile: the bottom sheet is capped and scrolls too", async ({ page }) => {
+    const seeded = oneMinorBelow(APP_VERSION);
+    test.skip(!seeded, `cannot derive a lower minor from ${APP_VERSION}`);
+    await setMarker(seeded!);
+    await devSignIn(page, { stampWhatsNew: false });
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.goto("/");
+    await expectOverflowContained(page);
+  });
+
   test("patch-only bump advances the marker silently — no notice", async ({ page }) => {
     const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(APP_VERSION)!;
     test.skip(Number(m[3]) === 0, `APP_VERSION ${APP_VERSION} has no lower patch`);

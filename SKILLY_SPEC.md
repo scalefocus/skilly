@@ -2174,7 +2174,13 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
 - **Page.** A vertical timeline of every `CHANGELOG` entry (`app/whats-new/changelog.ts`, the
   canonical shipped history, newest first — CLAUDE.md "What's new / changelog"): version chip, date
   (viewer's timezone/style via `useDateFmt()`), one-line summary; the running `APP_VERSION` entry is
-  accented and labelled "current". Auth-required (`RequireAuth`). Reached from the **account menu**
+  accented and labelled "current". **Summary length is a soft guideline, not a rule:** aim for
+  **2–3 sentences (≈ 350 characters)** per entry — what changed, in plain language, plus any action
+  the user must take (a breaking change may run longer). The update notice's scrolling excerpt
+  (below) is the safety net for entries that exceed it, not a licence to write paragraphs; nothing
+  enforces the limit in code and existing entries are left as they are. (The same guideline is
+  repeated in CLAUDE.md "What's new / changelog" and in the `changelog.ts` header.)
+  Auth-required (`RequireAuth`). Reached from the **account menu**
   (second item) and the Quick start page's footer button. **Opening the page is the read receipt:**
   on mount it stamps the marker (`POST /api/me/whats-new-seen {version: APP_VERSION}`, below) and
   closes any open update notice, whichever route brought the user here (the notice's link, the
@@ -2231,14 +2237,30 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
       3**: when `seen` is a valid semver, the entries with `version > seen`; when `seen` is `null`
       (roll-out, no back-fill), **only the running `APP_VERSION` entry**. When more entries qualify
       than the cap, the overflow is folded into the link as **"+N more"** (e.g. *See what's new
-      (+4 more)*); never a scrollable list inside the card.
+      (+4 more)*) — the cap bounds the **number** of entries, never their length. **Long summaries
+      scroll, they are never truncated:** the card has a height cap (below) and when the excerpt's
+      rendered height exceeds the room left under the heading and above the link, **the list alone
+      becomes a vertical scroll region** (`overflow-y: auto`) — the heading with its ✕ stays pinned
+      at the top and the link pinned at the bottom, so dismissal is always reachable without
+      scrolling. No text is clipped, no line-clamp, no ellipsis, no bottom fade. The scrollbar is
+      **thin and always visible while the list overflows** (`scrollbar-width: thin` on the app's
+      line/muted tokens, with the WebKit pseudo-element fallback) so the user can see there is more.
+      **Keyboard:** when — and only when — the list actually overflows (`scrollHeight >
+      clientHeight`, re-checked on resize) it receives `tabindex="0"` and an accessible name
+      (`aria-label="Release notes"`), so Tab order becomes ✕ → list → link and arrow keys scroll it;
+      a list that fits has no Tab stop. This adds a focusable region but does not change the
+      "never steals focus" rule: nothing is focused on appearance.
     - **Link** **"See what's new"** → `/whats-new?since=<seen>` (`since` omitted when `seen` is
       `null`). Following it dismisses the notice and stamps.
     - **Dismissal paths are exactly two:** the ✕ button and the link. Clicking elsewhere on the
       card, clicking outside it, or pressing Escape does **nothing**.
   - **Placement & style.** Accent-edged card on the `.card` tokens (surface, line, radius, shadow)
     with a left accent border: anchored **bottom-right** on desktop (max-width ≈ 380px, offset from
-    both edges), a **full-width bottom sheet** on mobile (≤ 560px). Slide-up entry animation,
+    both edges), a **full-width bottom sheet** on mobile (≤ 560px). **Height cap: the card never
+    exceeds ~60% of the viewport height (`max-height: 60vh`, the same on desktop and on the mobile
+    sheet)** — the card is a column flex box whose heading and link are fixed-size and whose list is
+    the only flexible, scrolling child (`min-height: 0`), so the card as a whole always fits inside
+    the viewport, whatever the length of the excerpted summaries. Slide-up entry animation,
     **none under `prefers-reduced-motion`**. Stacking: above page content and above the "✓ Copied"
     pill's layer, **below modal dialogs**; **hidden (not unmounted) while the mobile nav drawer is
     open** so it never sits over navigation; the account menu simply overlaps it. It never covers a
@@ -2270,7 +2292,11 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     body leaves it open, ✕ closes it and a reload no longer shows it (marker == `APP_VERSION`); a
     second seeded run follows the link, which opens `/whats-new?since=…` with the divider above
     exactly the newer entries; a third opens `/whats-new` from the account menu and sees the divider
-    from the marker fallback and the notice gone. The e2e sign-in helper and `shots.mjs`
+    from the marker fallback and the notice gone. **Overflow:** with the marker seeded so that the
+    excerpt holds three long entries and a **short viewport (≈ 1280×600)**, the notice's bounding box
+    lies entirely inside the viewport, the excerpt list is scrollable (`scrollHeight >
+    clientHeight`) and carries `tabindex="0"`, and the ✕ and the "See what's new" link are both
+    visible without scrolling; the same check at mobile width (≤ 560px). The e2e sign-in helper and `shots.mjs`
     **pre-stamp the marker** so smoke runs and screenshots stay free of the notice.
 
 ### Account menu (presentation)

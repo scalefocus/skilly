@@ -937,9 +937,14 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
    desktop, a full-width bottom sheet ≤560px. Unlike the transient .toast pill above it has no
    timer and takes pointer events: it stays until its ✕ or its link dismisses it. Stacking: above
    the pill's layer (80), below the directory hover card / dialogs (95). Hidden (not unmounted)
-   while the mobile nav drawer is open so it never sits over navigation. */
+   while the mobile nav drawer is open so it never sits over navigation.
+   Height: capped at 60vh (desktop and the mobile sheet alike). The card is a flex column whose
+   heading and link are fixed-size; the excerpt list is the only flexible child and scrolls (thin,
+   always-visible scrollbar from the global rule) when the summaries outgrow the cap, so the ✕ and
+   the link are always reachable without scrolling. Text is never truncated. */
 .update-notice {
   position: fixed; right: 22px; bottom: 22px; z-index: 85; width: min(380px, calc(100vw - 44px));
+  max-height: 60vh; box-sizing: border-box;
   background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong);
   border-left: 4px solid var(--accent); border-radius: var(--radius); box-shadow: var(--shadow);
   padding: 14px 16px 15px 18px; display: flex; flex-direction: column; gap: 10px;
@@ -947,7 +952,7 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 }
 @keyframes update-notice-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 .update-notice-hidden { display: none; }
-.update-notice-head { display: flex; align-items: flex-start; gap: 10px; }
+.update-notice-head { display: flex; align-items: flex-start; gap: 10px; flex-shrink: 0; }
 .update-notice-title {
   margin: 0; flex: 1; min-width: 0; font-size: 14.5px; font-weight: 600; letter-spacing: -0.005em;
   display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; line-height: 1.35;
@@ -960,10 +965,16 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 }
 .update-notice-close:hover { color: var(--ink); background: var(--surface-2); border-color: var(--line); }
 .update-notice-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.update-notice-list { margin: 0; padding: 0 0 0 18px; color: var(--muted); font-size: 13px; }
+.update-notice-list {
+  margin: 0; padding: 0 6px 0 18px; color: var(--muted); font-size: 13px;
+  flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+}
 .update-notice-list li + li { margin-top: 4px; }
+/* Only an overflowing list carries tabindex=0 (set by the component), so this ring only ever
+   shows on a list that can actually be scrolled with the keyboard. */
+.update-notice-list:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 .update-notice-link {
-  align-self: flex-start; color: var(--accent-2); font-weight: 600; text-decoration: underline;
+  align-self: flex-start; flex-shrink: 0; color: var(--accent-2); font-weight: 600; text-decoration: underline;
   text-underline-offset: 2px;
 }
 .update-notice-link:hover { text-decoration-thickness: 2px; }

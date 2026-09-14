@@ -146,6 +146,9 @@ committing & pushing:**
 - Prepend one `{ version, date, summary }` object (newest first) — `version` = the new `APP_VERSION`,
   `date` = today (UTC `YYYY-MM-DD`), `summary` = a single user-facing line derived from the commit
   message (what changed, in plain language — not the internal file list).
+- **Length (soft guideline):** aim for **2–3 sentences (≈ 350 characters)** — what changed plus any
+  action the user must take; a breaking change may run longer. The update notice scrolls long
+  entries rather than truncating them, but that is a safety net, not a licence for paragraphs.
 - If a commit batches several changes under one bump, write one entry covering them.
 - Source of truth for shipped history is **`changelog.ts` itself** — keep it complete and
   ordered newest-first; it is the canonical record, not `git log`.
