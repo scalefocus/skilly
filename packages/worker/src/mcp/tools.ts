@@ -76,7 +76,6 @@ const METADATA_SCHEMA = {
     toolHarness: str("The coding agent this skill targets. Use get_registry_metadata for the allowed values; 'generic' if it isn't agent-specific."),
     visibility: { type: "string", enum: ["org", "namespace"], description: "'org' = visible to everyone; 'namespace' = only to the namespace's members. Cannot be 'namespace' in the global namespace." },
     categories: strArr("Category labels (created on the fly, max 12)."),
-    tags: strArr("Free-form tags (max 20)."),
     usageExamples: str("Optional worked examples shown on the detail page and matched by search."),
     whatChanged: str("Required for a NEW VERSION of an existing skill: what changed, in plain text."),
   },
@@ -100,7 +99,7 @@ export function toolDefinitions(): ToolDefinition[] {
       inputSchema: {
         type: "object",
         properties: {
-          query: str("Free-text search over title, slug, description, tags and usage examples. Substring match, so partial words work."),
+          query: str("Free-text search over title, slug, description and usage examples. Substring match, so partial words work."),
           category: str("Restrict to one category label."),
           tool: str("Restrict to one tool/harness slug (e.g. claude-code)."),
           type: { type: "string", enum: ["hosted", "pointer"], description: "'hosted' = the bytes live in this registry; 'pointer' = mirrored from an external repo." },
@@ -115,7 +114,7 @@ export function toolDefinitions(): ToolDefinition[] {
       title: "Get skill details",
       readOnly: true,
       description:
-        "Full detail for one skill: description, categories, tags, rating, install count, maintainers, every published version (with which are installable), and the external source for a mirrored skill.",
+        "Full detail for one skill: description, categories, rating, install count, maintainers, every published version (with which are installable), and the external source for a mirrored skill.",
       inputSchema: { type: "object", properties: SKILL_REF_PROPS, required: SKILL_REF_REQUIRED },
     },
     {

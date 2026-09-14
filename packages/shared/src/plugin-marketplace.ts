@@ -230,7 +230,11 @@ export interface MarketplacePluginInput {
   description: string | null;
   /** The skill's latest STABLE semver. Claude Code only updates a plugin when this changes. */
   version: string;
-  tags?: readonly string[];
+  /**
+   * The skill's category names — emitted as the plugin's `keywords` so `/plugin` search has
+   * topical terms (§30.3). Free-form tags used to fill this field; they were removed (§10).
+   */
+  categories?: readonly string[];
   /** Primary category slug, or null. */
   category?: string | null;
   /** Absolute URL of the skill's detail page on this skilly. */
@@ -291,7 +295,7 @@ export function buildMarketplaceJson(input: MarketplaceJsonInput): MarketplaceJs
         version: p.version,
       };
       if (p.description) entry.description = p.description;
-      if (p.tags && p.tags.length > 0) entry.keywords = [...p.tags];
+      if (p.categories && p.categories.length > 0) entry.keywords = [...p.categories];
       if (p.category) entry.category = p.category;
       if (p.homepage) entry.homepage = p.homepage;
       return entry;

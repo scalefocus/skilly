@@ -27,7 +27,6 @@ export interface SkillHit {
   visibility: "org" | "namespace";
   toolHarness: string;
   categories: string[];
-  tags: string[];
   installCount: number;
   ratingAvg: number;
   ratingCount: number;
@@ -39,7 +38,7 @@ export interface SkillHit {
 }
 
 const HIT_COLUMNS = `n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
-        s.visibility, s.tool_harness, s.tags, s.install_count::text as install_count,
+        s.visibility, s.tool_harness, s.install_count::text as install_count,
         s.rating_sum::text as rating_sum, s.rating_count::text as rating_count,
         (s.official_at is not null) as official,
         coalesce(max(sv.created_at), s.created_at) as updated_at,
@@ -49,7 +48,7 @@ const HIT_COLUMNS = `n.slug as namespace_slug, s.slug as skill_slug, s.title, s.
         array_remove(array_agg(sv.semver) filter (where sv.status = 'active'), null) as versions`;
 
 const HIT_GROUP_BY = `group by n.slug, s.slug, s.title, s.description, s.type, s.visibility,
-        s.tool_harness, s.tags, s.install_count, s.rating_sum, s.rating_count, s.official_at, s.created_at, s.id`;
+        s.tool_harness, s.install_count, s.rating_sum, s.rating_count, s.official_at, s.created_at, s.id`;
 
 interface HitRow {
   namespace_slug: string;
@@ -60,7 +59,6 @@ interface HitRow {
   visibility: "org" | "namespace";
   tool_harness: string;
   categories: string[] | null;
-  tags: string[] | null;
   install_count: string;
   rating_sum: string;
   rating_count: string;
@@ -80,7 +78,6 @@ function toHit(r: HitRow): SkillHit {
     visibility: r.visibility,
     toolHarness: r.tool_harness,
     categories: r.categories ?? [],
-    tags: r.tags ?? [],
     installCount: Number(r.install_count),
     ratingAvg: ratingCount ? Math.round((Number(r.rating_sum) / ratingCount) * 100) / 100 : 0,
     ratingCount,
@@ -102,7 +99,7 @@ export interface SearchOpts {
 }
 
 /**
- * The §10 catalog search: the SAME substring predicate (title/slug/description/tags/usage), the
+ * The §10 catalog search: the SAME substring predicate (title/slug/description/usage), the
  * same facets, the same name-matches-first ranking — visibility-filtered per invariant #3. Active
  * skills only; archived skills are owner-only and not part of the MCP read surface.
  */
@@ -124,8 +121,7 @@ export async function searchSkills(
     const p = params.length;
     titleMatch = `(s.title ilike $${p} or s.slug ilike $${p})`;
     where.push(
-      `(${titleMatch} or s.description ilike $${p} or coalesce(s.usage_search, '') ilike $${p}` +
-        ` or exists (select 1 from unnest(s.tags) t where t ilike $${p}))`,
+      `(${titleMatch} or s.description ilike $${p} or coalesce(s.usage_search, '') ilike $${p})`,
     );
   }
   if (opts.category) {

@@ -65,7 +65,6 @@ export async function createHostedProposal(
         toolHarness: "generic",
         visibility: opts.visibility ?? "org",
         categories: opts.categories ?? [],
-        tags: [],
       },
       ...upload,
     },

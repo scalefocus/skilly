@@ -27,7 +27,6 @@ interface Meta {
   toolHarness: string;
   visibility: "org" | "namespace";
   categories?: string[];
-  tags?: string[];
   usageExamples?: string | null;
   /** Per-version "What changed" note (plain text, §8). Present on new-version proposals. */
   whatChanged?: string | null;
@@ -50,7 +49,7 @@ interface Revision {
 }
 /** The target skill's live state — the review page's old → new diff baseline (§8). */
 interface TargetSkillCurrent {
-  title: string; description: string; toolHarness: string; tags: string[]; categories: string[];
+  title: string; description: string; toolHarness: string; categories: string[];
   usageExamples: string | null; latestStable: string | null;
 }
 interface Detail {
@@ -85,7 +84,7 @@ const labelStyle = { display: "block", fontFamily: "var(--font-mono)", fontSize:
 interface NewArtifact { artifactObjectKey: string; artifactSha256: string; contentSha256: string; artifactFilename: string | null }
 interface EditDraft {
   title: string; description: string; toolHarness: string; visibility: "org" | "namespace";
-  categories: string[]; tags: string[]; usageExamples: string;
+  categories: string[]; usageExamples: string;
   /** Per-version "What changed" note (§8) — reviewer-editable on new-version proposals. */
   whatChanged: string;
   /** proposer resubmit: revised proposed semver. */
@@ -192,9 +191,6 @@ function ChangesOnAccept({ meta, cur, payload }: { meta: Meta; cur: TargetSkillC
   }
   if (!diffSameSet(diffNormSet(meta.categories, true), diffNormSet(cur.categories, true))) {
     rows.push(<DiffRow key="cats" label="Categories" oldNode={chips(cur.categories)} newNode={chips(diffNormSet(meta.categories, true))} />);
-  }
-  if (!diffSameSet(diffNormSet(meta.tags), diffNormSet(cur.tags))) {
-    rows.push(<DiffRow key="tags" label="Tags" oldNode={chips(cur.tags)} newNode={chips(diffNormSet(meta.tags))} />);
   }
   if (meta.toolHarness.trim() !== cur.toolHarness.trim()) {
     rows.push(<DiffRow key="harness" label="Harness" oldNode={<span className="chip">{cur.toolHarness}</span>} newNode={<span className="chip">{meta.toolHarness.trim()}</span>} />);
@@ -306,7 +302,6 @@ function ProposalDetailInner() {
         toolHarness: edit.toolHarness.trim(),
         visibility: edit.visibility,
         categories: edit.categories,
-        tags: edit.tags,
         usageExamples: edit.usageExamples.trim() || null,
         // §8: reviewer/proposer edit of the per-version note. Server requires it non-empty on a
         // new-version proposal; on a new-skill proposal it's absent (field hidden below).
@@ -484,7 +479,7 @@ function ProposalDetailInner() {
         // may resubmit (changes_requested) or revise mid-review (§8). Field rules below differ by
         // actor/type/state.
         const canEdit = data.allowedActions.length > 0 && (data.caps.isReviewer || canResubmit || canRevise);
-        // Editable sets (§8): title, description, categories, tags, and tool/harness are editable
+        // Editable sets (§8): title, description, categories, and tool/harness are editable
         // on BOTH proposal types — a re-version syncs them to the skill on accept. Only VISIBILITY
         // stays locked on a new-version proposal (skill-level frozen; a skill-management action).
         // Files + semver remain proposer-only.
@@ -530,7 +525,6 @@ function ProposalDetailInner() {
                       toolHarness: m.toolHarness,
                       visibility: m.visibility,
                       categories: m.categories ?? [],
-                      tags: m.tags ?? [],
                       usageExamples: m.usageExamples ?? "",
                       whatChanged: m.whatChanged ?? "",
                       semver: data.proposedSemver,
@@ -553,7 +547,7 @@ function ProposalDetailInner() {
                 {!isNewSkill && (
                   <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
                     New-version proposal — the slug and visibility are locked to the existing skill; title, description,
-                    categories, tags, tool/harness and usage are editable and sync to the skill on accept (§8).
+                    categories, tool/harness and usage are editable and sync to the skill on accept (§8).
                     {isSubmitter ? (reviseMode ? " You can also replace the files below — the version stays locked while in review." : " You can also revise the files and the version below.") : ""}
                   </p>
                 )}
@@ -586,10 +580,6 @@ function ProposalDetailInner() {
                 <div>
                   <label style={labelStyle}>Categories</label>
                   <TagInput value={edit.categories} onChange={(next) => setEdit({ ...edit, categories: next })} suggestions={categoryOptions} placeholder="Search or create categories…" />
-                </div>
-                <div>
-                  <label style={labelStyle}>Tags</label>
-                  <TagInput value={edit.tags} onChange={(next) => setEdit({ ...edit, tags: next })} placeholder="Add tags…" />
                 </div>
                 <div>
                   <label style={labelStyle}>Usage <span style={{ textTransform: "none", letterSpacing: 0 }}>· Markdown</span></label>
@@ -736,9 +726,6 @@ function ProposalDetailInner() {
                 )}
                 {(m.categories?.length ?? 0) > 0 && (
                   <ReadRow label="Categories">{m.categories!.map((c) => <span key={c} className="chip" style={{ marginRight: 6 }}>{c}</span>)}</ReadRow>
-                )}
-                {(m.tags?.length ?? 0) > 0 && (
-                  <ReadRow label="Tags">{m.tags!.map((t) => <span key={t} className="chip" style={{ marginRight: 6 }}>{t}</span>)}</ReadRow>
                 )}
                 {m.usageExamples && (
                   <ReadRow label="Usage" wide><Markdown source={m.usageExamples} /></ReadRow>
