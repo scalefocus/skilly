@@ -87,6 +87,15 @@ function Catalog() {
     if (!nsView) return;
     setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setShowArchived(false);
   }, [nsView]);
+  // `?category=<name>` arrival (§10): select that chip exactly as a click would — it overrides the
+  // remembered category for this visit and composes with `?ns=`. Marketplace plugin homepages
+  // (§30.3) land here. Declared after the prefs restore and the namespace reset so it wins on mount.
+  const arrivalCategory = params.get("category");
+  useEffect(() => {
+    if (!arrivalCategory) return;
+    setCategory(arrivalCategory);
+    setCategoryOpen(true);
+  }, [arrivalCategory]);
   useEffect(() => {
     if (!prefsLoaded || nsView) return;
     try {

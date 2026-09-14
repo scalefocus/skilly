@@ -7,7 +7,7 @@ import type { EffectiveAccess } from "@skilly/shared";
 import { PUBLIC_SCOPE, canManageNamespaceSettings, marketplaceName, maintainerContactError, normalizeMaintainerContact } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
-import { marketplaceSkillCount, revokeNamespaceMarketplaceTokens } from "./marketplaces";
+import { marketplacePluginCount, marketplaceSkillCount, revokeNamespaceMarketplaceTokens } from "./marketplaces";
 
 /** The `global` namespace always requires review (§4/§8) — the page renders it read-only. */
 export const GLOBAL_SLUG = "global";
@@ -25,6 +25,8 @@ export interface NamespaceAdminView {
   marketplaceName: string;
   /** How many skills this namespace's marketplace publishes right now. */
   marketplaceSkillCount: number;
+  /** Plugins the marketplace publishes — one per category present, plus `general` (§30.3). */
+  marketplacePluginCount: number;
 }
 
 /** Namespace ids the caller may administer: all of them for a platform admin, else the ones
@@ -65,6 +67,7 @@ export async function listAdministeredNamespaces(access: EffectiveAccess, prefix
       marketplaceEnabled: n.marketplace_enabled,
       marketplaceName: marketplaceName(prefix, { kind: "namespace", namespaceSlug: n.slug }),
       marketplaceSkillCount: await marketplaceSkillCount({ kind: "namespace", namespaceSlug: n.slug }, n.id),
+      marketplacePluginCount: await marketplacePluginCount({ kind: "namespace", namespaceSlug: n.slug }, n.id),
     })),
   );
 }
@@ -175,6 +178,7 @@ export async function updateNamespaceSettings(
       marketplaceEnabled,
       marketplaceName: marketplaceName(prefix, { kind: "namespace", namespaceSlug: before.slug }),
       marketplaceSkillCount: await marketplaceSkillCount({ kind: "namespace", namespaceSlug: before.slug }, before.id),
+      marketplacePluginCount: await marketplacePluginCount({ kind: "namespace", namespaceSlug: before.slug }, before.id),
     },
   };
 }
@@ -185,5 +189,6 @@ export async function publicMarketplaceView(prefix: string, enabled: boolean) {
     name: marketplaceName(prefix, PUBLIC_SCOPE),
     enabled,
     skillCount: await marketplaceSkillCount(PUBLIC_SCOPE, null),
+    pluginCount: await marketplacePluginCount(PUBLIC_SCOPE, null),
   };
 }

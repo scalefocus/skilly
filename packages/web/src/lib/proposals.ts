@@ -31,6 +31,8 @@ import {
   type ProposalState,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
+import { categoryListError, upsertCategory } from "./categories";
+import { normalizeCategoryNames } from "@skilly/shared";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
 import { findDuplicateSkill, type DuplicateMatch } from "./duplicate";
@@ -62,19 +64,15 @@ export interface ProposalMetadata {
  * skill-level metadata a re-version may change.
  */
 async function syncCategories(client: PoolClient, skillId: string, names: string[]): Promise<void> {
-  const clean = [...new Set((names ?? []).map((n) => n.trim().toLowerCase()).filter(Boolean))].slice(0, 12);
+  const clean = normalizeCategoryNames(names);
   const ids: string[] = [];
   for (const name of clean) {
-    const { rows } = await client.query<{ id: string }>(
-      `insert into categories (name) values ($1)
-         on conflict (name) do update set name = excluded.name
-       returning id`,
-      [name],
-    );
-    ids.push(rows[0]!.id);
+    // Slug derived once at creation, immutable thereafter (§3/§10) — upsertCategory owns that.
+    const id = await upsertCategory(client, name);
+    ids.push(id);
     await client.query(
       `insert into skill_categories (skill_id, category_id) values ($1, $2) on conflict do nothing`,
-      [skillId, rows[0]!.id],
+      [skillId, id],
     );
   }
   // Drop links no longer in the desired set (full sync, so a removed category is removed).
@@ -175,6 +173,14 @@ export async function verifySubmissionPayload(
     opts.namespaceSlug.trim().toLowerCase() === "global"
   ) {
     return "a skill restricted to a namespace can’t live in the global namespace — choose a specific namespace, or set visibility to org-wide";
+  }
+  // Categories (§10 *Category slugs*): every name must yield a real, non-reserved slug that no
+  // differently-named category already owns — checked HERE, at submit, so the proposer sees the
+  // message rather than the reviewer at accept. Same rule on every path (proposal, revise,
+  // resubmit, reviewer edit, direct publish); the MCP tools run the identical shared check.
+  if (payload.metadata?.categories) {
+    const catErr = await categoryListError(db, payload.metadata.categories);
+    if (catErr) return catErr;
   }
   // Free-form tags were removed (§10). A stale client may still send `tags`; it is ignored
   // silently (never a 400) and stripped so it is not persisted into the revision payload.

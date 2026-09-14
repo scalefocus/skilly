@@ -12,6 +12,7 @@
 //      author-and-self-approve hole (§29 Excluded surface) at the code level, not in a doc.
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { categorySlug, checkCategoryNames, normalizeCategoryNames, type KnownCategory } from "@skilly/shared";
 import {
   MAX_MENTIONS_PER_MESSAGE,
   PURE_SCANNERS,
@@ -480,7 +481,9 @@ export async function createSkillRequest(
   if (description.length < 10 || description.length > 4000) return fail("description must be between 10 and 4000 characters");
   const harness = normalizeHarness(input.toolHarness ?? "generic");
   if (!isAllowedToolHarness(harness)) return fail("choose a tool/harness from the list (see get_registry_metadata)");
-  const categories = [...new Set((input.categories ?? []).map((c) => c.trim().toLowerCase()).filter(Boolean))].slice(0, 12);
+  const categories = normalizeCategoryNames(input.categories, 12);
+  const catErr = checkCategoryNames(categories, await knownCategoriesFor(pool, categories));
+  if (catErr) return fail(catErr);
 
   const client = await pool.connect();
   try {
@@ -492,9 +495,10 @@ export async function createSkillRequest(
     );
     const id = rows[0]!.id;
     for (const name of categories) {
+      // Slug derived once at creation, immutable thereafter (§3/§10).
       const { rows: cat } = await client.query<{ id: string }>(
-        `insert into categories (name) values ($1) on conflict (name) do update set name = excluded.name returning id`,
-        [name],
+        `insert into categories (name, slug) values ($1, $2) on conflict (name) do update set name = excluded.name returning id`,
+        [name, categorySlug(name)],
       );
       await client.query(
         `insert into skill_request_categories (request_id, category_id) values ($1,$2) on conflict do nothing`,
@@ -542,6 +546,22 @@ interface BuiltPayload {
   contentSha256?: string;
 }
 
+/** The existing categories whose slug matches any candidate — input for the shared check (§10). */
+async function knownCategoriesFor(pool: Pool, names: readonly string[]): Promise<KnownCategory[]> {
+  const slugs = [...new Set(names.map(categorySlug).filter(Boolean))];
+  if (slugs.length === 0) return [];
+  const { rows } = await pool.query<KnownCategory>(`select name, slug from categories where slug = any($1::text[])`, [slugs]);
+  return rows;
+}
+
+/** §10 *Category slugs*: reserved `general` and slug collisions are refused at submit, like the web. */
+async function categoriesFailure(pool: Pool, categories: readonly string[] | undefined): Promise<WriteFailure | null> {
+  const clean = categories ?? [];
+  if (clean.length === 0) return null;
+  const err = checkCategoryNames(clean, await knownCategoriesFor(pool, clean));
+  return err ? fail(err) : null;
+}
+
 /** Shared metadata validation for both propose tools. Normalizes in place, like the web boundary. */
 function validateMetadata(
   meta: ProposalMetadataInput,
@@ -568,7 +588,7 @@ function validateMetadata(
   meta.whatChanged = wc;
   if (wc && wc.length > WHAT_CHANGED_MAX_LEN) return fail(`"whatChanged" is too long (${wc.length}/${WHAT_CHANGED_MAX_LEN})`);
   if (isNewVersion && !wc) return fail('describe what changed in this version — "whatChanged" is required for a new version');
-  meta.categories = [...new Set((meta.categories ?? []).map((c) => c.trim().toLowerCase()).filter(Boolean))].slice(0, 12);
+  meta.categories = normalizeCategoryNames(meta.categories, 12);
   // Free-form tags were removed (§10): a stale client's `tags` is dropped silently, never rejected.
   delete (meta as unknown as Record<string, unknown>).tags;
   meta.usageExamples = meta.usageExamples?.trim() || null;
@@ -711,7 +731,7 @@ export async function createMcpProposal(
 ): Promise<ProposeResult | WriteFailure> {
   const target = await resolveTarget(pool, namespace.id, payload.metadata.skillSlug, proposedSemver);
   if (!target.ok) return target;
-  const metaErr = validateMetadata(payload.metadata, namespace.slug, target.isNewVersion);
+  const metaErr = validateMetadata(payload.metadata, namespace.slug, target.isNewVersion) ?? (await categoriesFailure(pool, payload.metadata.categories));
   if (metaErr) return metaErr;
 
   const client = await pool.connect();
@@ -789,7 +809,7 @@ export async function proposerAction(
   const decision = canPerform(action, p.state, caps);
   if (!decision.ok) return fail(decision.reason);
 
-  const metaErr = validateMetadata(newPayload.metadata, p.namespaceSlug, p.targetSkillId !== null);
+  const metaErr = validateMetadata(newPayload.metadata, p.namespaceSlug, p.targetSkillId !== null) ?? (await categoriesFailure(pool, newPayload.metadata.categories));
   if (metaErr) return metaErr;
 
   const { rows: prevRows } = await pool.query<{ payload: BuiltPayload; revision_no: number }>(

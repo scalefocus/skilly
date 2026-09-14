@@ -14,11 +14,16 @@
 // Visibility is enforced at the repo boundary (which repo you can get a token for), never by
 // filtering inside a served file — see invariant #3 and §30.4.
 
+import { GENERAL_PLUGIN_SLUG } from "./category.js";
+
 /** Pinned contract metadata (mirrors EXTERNAL_TOOL_CONTRACT's role for the other consumer). */
 export const MARKETPLACE_CONTRACT = {
   toolName: "Claude Code (/plugin marketplace add)",
   /** Claude Code release the shape below was verified against. */
   pinnedAtToolVersion: "2.1.229",
+  /** Plugin shape: ONE PLUGIN PER CATEGORY (+ `general`), skills under skills/<dir>/ — skilly 2.0.0.
+   *  Before 2.0.0 it was one plugin per skill, named by the skill slug (§30.3 migration note). */
+  pluginShape: "category-groups" as const,
   /** How skilly serves a marketplace to the tool. */
   serveAs: "git-smart-http" as const,
   /** Auth mechanism: token as the git HTTP basic-auth password, same gateway as §9. */
@@ -220,26 +225,182 @@ export function buildMarketplaceSettingsSnippet(input: Omit<MarketplaceUrlInput,
 }
 
 // ---------------------------------------------------------------------------
+// Plugin grouping — one plugin per category (§30.3)
+// ---------------------------------------------------------------------------
+
+
+/** What the grouper needs to know about one qualifying skill. */
+export interface MarketplaceMemberSkill {
+  namespaceSlug: string;
+  skillSlug: string;
+  title: string;
+  /** The skill's category slugs (any order, may be empty). */
+  categorySlugs: readonly string[];
+}
+
+/** A skill placed inside a plugin, with the directory Claude Code will address it by. */
+export type PluginMember<M extends MarketplaceMemberSkill> = M & { skillDir: string };
+
+export interface PluginGroup<M extends MarketplaceMemberSkill> {
+  /** Category slug, or `general`. Also the plugin `name` and its directory under `plugins/`. */
+  slug: string;
+  /** Category name as stored, or `general`. */
+  displayName: string;
+  /** Category description when the vocabulary has one. */
+  categoryDescription: string | null;
+  /** Members in `(namespace slug, skill slug)` order — the order every first-wins rule uses. */
+  members: PluginMember<M>[];
+}
+
+/** A member that could not be placed because another member already owns its directory (§30.3). */
+export interface SkillDirCollision<M extends MarketplaceMemberSkill> {
+  pluginSlug: string;
+  skillDir: string;
+  winner: M;
+  skipped: M;
+}
+
+/** Deterministic member ordering: namespace slug, then skill slug. */
+export function compareMembers(a: MarketplaceMemberSkill, b: MarketplaceMemberSkill): number {
+  return a.namespaceSlug.localeCompare(b.namespaceSlug) || a.skillSlug.localeCompare(b.skillSlug);
+}
+
+/**
+ * The directory a member skill lives under inside a plugin — and therefore the consumer-visible
+ * skill name (`/<plugin>:<skillDir>`). Namespace marketplaces use the bare slug (unique within the
+ * namespace); the public marketplace spans namespaces, so it prefixes the namespace slug.
+ */
+export function memberSkillDir(scope: MarketplaceScope, namespaceSlug: string, skillSlug: string): string {
+  return scope.kind === "public" ? `${namespaceSlug}-${skillSlug}` : skillSlug;
+}
+
+/**
+ * Group a marketplace's qualifying skills into plugins (§30.3, the four membership rules):
+ *  - N ≥ 1 categories ⇒ a member of each of those N plugins, never of `general`;
+ *  - 0 categories ⇒ a member of `general` only;
+ *  - `general` exists only when it has a member; a category with no member yields no plugin.
+ * Plugins come back sorted by slug (`general` last); members in `compareMembers` order. Two
+ * members resolving to the same directory inside one plugin: the first wins, the later one is
+ * dropped from that plugin and reported — never silently.
+ */
+export function groupSkillsIntoPlugins<M extends MarketplaceMemberSkill>(
+  scope: MarketplaceScope,
+  skills: readonly M[],
+  categories: readonly { slug: string; name: string; description?: string | null }[],
+): { plugins: PluginGroup<M>[]; collisions: SkillDirCollision<M>[] } {
+  const byCategory = new Map(categories.map((c) => [c.slug, c]));
+  const buckets = new Map<string, M[]>();
+  for (const s of [...skills].sort(compareMembers)) {
+    const slugs = [...new Set(s.categorySlugs)].filter((c) => byCategory.has(c));
+    const targets = slugs.length > 0 ? slugs : [GENERAL_PLUGIN_SLUG];
+    for (const t of targets) {
+      const list = buckets.get(t) ?? [];
+      list.push(s);
+      buckets.set(t, list);
+    }
+  }
+
+  const collisions: SkillDirCollision<M>[] = [];
+  const plugins: PluginGroup<M>[] = [];
+  for (const [slug, list] of buckets) {
+    const seen = new Map<string, M>();
+    const members: PluginMember<M>[] = [];
+    for (const s of list) {
+      const skillDir = memberSkillDir(scope, s.namespaceSlug, s.skillSlug);
+      const winner = seen.get(skillDir);
+      if (winner) {
+        collisions.push({ pluginSlug: slug, skillDir, winner, skipped: s });
+        continue;
+      }
+      seen.set(skillDir, s);
+      members.push({ ...s, skillDir });
+    }
+    const cat = byCategory.get(slug);
+    plugins.push({
+      slug,
+      displayName: slug === GENERAL_PLUGIN_SLUG ? GENERAL_PLUGIN_SLUG : (cat?.name ?? slug),
+      categoryDescription: slug === GENERAL_PLUGIN_SLUG ? null : (cat?.description ?? null),
+      members,
+    });
+  }
+  plugins.sort((a, b) => {
+    if (a.slug === GENERAL_PLUGIN_SLUG) return 1;
+    if (b.slug === GENERAL_PLUGIN_SLUG) return -1;
+    return a.slug.localeCompare(b.slug);
+  });
+  return { plugins, collisions };
+}
+
+/** The manifest/plugin.json description: the category's own, else the §30.3 fallback. */
+export function pluginDescription(group: { slug: string; displayName: string; categoryDescription: string | null; members: readonly unknown[] }, ownerName: string): string {
+  if (group.categoryDescription && group.categoryDescription.trim()) return group.categoryDescription.trim();
+  const n = group.members.length;
+  const noun = n === 1 ? "skill" : "skills";
+  return group.slug === GENERAL_PLUGIN_SLUG
+    ? `${n} ${noun} without a category from ${ownerName}`
+    : `${n} ${noun} in ${group.displayName} from ${ownerName}`;
+}
+
+/** `keywords`: the union of member titles and slugs, de-duplicated, in member order (§30.3). */
+export function pluginKeywords(members: readonly MarketplaceMemberSkill[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of members) {
+    for (const k of [m.title.trim(), m.skillSlug]) {
+      if (k && !seen.has(k)) {
+        seen.add(k);
+        out.push(k);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * `homepage`: the catalog view showing exactly the plugin's skills, via the catalog's `?category=`
+ * arrival parameter (§10). `general` links to the same view without a category. Null when no
+ * registry base is configured.
+ */
+export function pluginHomepage(
+  registryBaseUrl: string | null | undefined,
+  scope: MarketplaceScope,
+  group: { slug: string; displayName: string },
+  namespaceDisplayName?: string | null,
+): string | null {
+  if (!registryBaseUrl) return null;
+  const u = new URL(registryBaseUrl);
+  u.pathname = "/catalog";
+  u.search = "";
+  if (scope.kind === "namespace") {
+    u.searchParams.set("ns", scope.namespaceSlug);
+    if (namespaceDisplayName) u.searchParams.set("nsName", namespaceDisplayName);
+  }
+  if (group.slug !== GENERAL_PLUGIN_SLUG) u.searchParams.set("category", group.displayName);
+  return u.toString();
+}
+
+/** Format a plugin's per-plugin counter as its manifest `version` (§30.3). */
+export function pluginVersion(n: number): string {
+  return `1.0.${n}`;
+}
+
+// ---------------------------------------------------------------------------
 // Manifest generation (§30.3)
 // ---------------------------------------------------------------------------
 
+/** One plugin entry as the manifest needs it — the grouper's output plus the decided version. */
 export interface MarketplacePluginInput {
-  /** Skill slug — becomes the plugin `name` and its directory under `plugins/`. Kebab-case. */
-  skillSlug: string;
-  title: string;
+  /** Category slug or `general` — the plugin `name` and its directory under `plugins/`. */
+  slug: string;
+  displayName: string;
   description: string | null;
-  /** The skill's latest STABLE semver. Claude Code only updates a plugin when this changes. */
+  /** `1.0.<n>` — Claude Code only updates a plugin when this changes. */
   version: string;
-  /**
-   * The skill's category names — emitted as the plugin's `keywords` so `/plugin` search has
-   * topical terms (§30.3). Free-form tags used to fill this field; they were removed (§10).
-   */
-  categories?: readonly string[];
-  /** Primary category slug, or null. */
+  keywords?: readonly string[];
+  /** The category slug; omitted for `general`. */
   category?: string | null;
-  /** Absolute URL of the skill's detail page on this skilly. */
   homepage?: string | null;
-  /** Plugin component files hoisted out of the bundle root — see planPluginLayout. */
+  /** Plugin component files hoisted out of member bundles — see planPluginLayout. */
   components?: PluginComponents;
 }
 
@@ -289,13 +450,13 @@ export function buildMarketplaceJson(input: MarketplaceJsonInput): MarketplaceJs
     metadata: { pluginRoot: `./${PLUGIN_ROOT}` },
     plugins: input.plugins.map((p) => {
       const entry: MarketplaceJson["plugins"][number] = {
-        name: p.skillSlug,
-        source: `./${PLUGIN_ROOT}/${p.skillSlug}`,
-        displayName: p.title,
+        name: p.slug,
+        source: `./${PLUGIN_ROOT}/${p.slug}`,
+        displayName: p.displayName,
         version: p.version,
       };
       if (p.description) entry.description = p.description;
-      if (p.categories && p.categories.length > 0) entry.keywords = [...p.categories];
+      if (p.keywords && p.keywords.length > 0) entry.keywords = [...p.keywords];
       if (p.category) entry.category = p.category;
       if (p.homepage) entry.homepage = p.homepage;
       return entry;
@@ -315,9 +476,9 @@ export interface PluginJson {
   lspServers?: string;
 }
 
-/** Build one plugin's manifest, wiring in whatever components the bundle carried (§30.3). */
+/** Build one plugin's manifest, wiring in whatever components its members carried (§30.3). */
 export function buildPluginJson(p: MarketplacePluginInput): PluginJson {
-  const out: PluginJson = { name: p.skillSlug, version: p.version, skills: [`./${SKILLS_DIR}/`] };
+  const out: PluginJson = { name: p.slug, version: p.version, skills: [`./${SKILLS_DIR}/`] };
   if (p.description) out.description = p.description;
   const c = p.components;
   if (c?.hooks) out.hooks = "./hooks.json";
@@ -332,7 +493,7 @@ export function buildPluginJson(p: MarketplacePluginInput): PluginJson {
 // Plugin layout planning — the component hoist (§30.3)
 // ---------------------------------------------------------------------------
 
-/** Directory holding the skill itself inside a plugin. */
+/** Directory holding the member skills inside a plugin. */
 export const SKILLS_DIR = "skills";
 
 /** Which recognized plugin components a bundle turned out to carry. */
@@ -363,19 +524,27 @@ export interface PluginLayout {
   components: PluginComponents;
 }
 
+/** True when a plugin-relative path is a hoisted component (file or directory member). */
+export function isComponentPath(pluginRelativePath: string): boolean {
+  if (COMPONENT_FILES[pluginRelativePath]) return true;
+  const first = pluginRelativePath.split("/")[0]!;
+  return pluginRelativePath.includes("/") && !!COMPONENT_DIRS[first];
+}
+
 /**
- * Map a skill bundle's files onto the plugin directory layout.
+ * Map ONE member skill's bundle files onto the plugin directory layout.
  *
  * A skilly bundle is `SKILL.md` at the root plus arbitrary files; a Claude Code plugin wants the
- * skill under `skills/<slug>/` and its COMPONENTS (`hooks.json`, `mcp.json`, `lsp.json`,
- * `commands/`, `agents/`) at the PLUGIN root. Left under `skills/<slug>/` those components would
- * be inert, so — per the approved §30.3 pass-through decision — recognized root components are
- * HOISTED to the plugin root and referenced from plugin.json; everything else moves under
- * `skills/<slug>/` unchanged.
+ * skill under `skills/<skillDir>/` and its COMPONENTS (`hooks.json`, `mcp.json`, `lsp.json`,
+ * `commands/`, `agents/`) at the PLUGIN root. Left under `skills/<skillDir>/` those components
+ * would be inert, so — per the approved §30.3 pass-through decision — recognized root components
+ * are HOISTED to the plugin root and referenced from plugin.json; everything else moves under
+ * `skills/<skillDir>/` unchanged. Several members' hoisted components are then MERGED by
+ * `mergeComponentJson` / first-wins on directory files (§30.3).
  *
  * Pure and total: any path that isn't a recognized root component is skill content.
  */
-export function planPluginLayout(skillSlug: string, paths: readonly string[]): PluginLayout {
+export function planPluginLayout(skillDir: string, paths: readonly string[]): PluginLayout {
   const moves: { from: string; to: string }[] = [];
   const components: PluginComponents = {};
   for (const raw of paths) {
@@ -394,12 +563,57 @@ export function planPluginLayout(skillSlug: string, paths: readonly string[]): P
       moves.push({ from: raw, to: path });
       continue;
     }
-    moves.push({ from: raw, to: `${SKILLS_DIR}/${skillSlug}/${path}` });
+    moves.push({ from: raw, to: `${SKILLS_DIR}/${skillDir}/${path}` });
   }
   return { moves, components };
 }
 
 /** Prefix a plugin-relative path with its position in the marketplace repo. */
-export function marketplaceRepoPath(skillSlug: string, pluginRelativePath: string): string {
-  return `${PLUGIN_ROOT}/${skillSlug}/${pluginRelativePath}`;
+export function marketplaceRepoPath(pluginSlug: string, pluginRelativePath: string): string {
+  return `${PLUGIN_ROOT}/${pluginSlug}/${pluginRelativePath}`;
+}
+
+// ---------------------------------------------------------------------------
+// Component merging — several members, one plugin root (§30.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge one member's JSON component (`hooks.json` / `mcp.json` / `lsp.json`) into the plugin's
+ * accumulated one. Exactly two levels deep, matching both shapes Claude Code uses:
+ *   depth 1 — top-level keys (`mcpServers`, `lspServers`, `hooks`): object-valued keys merge
+ *             their entries; anything else present in both keeps the first;
+ *   depth 2 — entries (a server name, a hook event): ARRAY entries CONCATENATE (a hook event's
+ *             matcher list), anything else present in both keeps the FIRST and is reported.
+ * Pure; the caller records every skipped key as a system event. `base` null = first member.
+ */
+export function mergeComponentJson(base: unknown, incoming: unknown): { merged: unknown; skipped: string[] } {
+  if (base == null) return { merged: incoming, skipped: [] };
+  if (!isPlainObject(base) || !isPlainObject(incoming)) return { merged: base, skipped: ["<root>"] };
+  const merged: Record<string, unknown> = { ...base };
+  const skipped: string[] = [];
+  for (const [key, val] of Object.entries(incoming)) {
+    if (!(key in merged)) {
+      merged[key] = val;
+      continue;
+    }
+    const cur = merged[key];
+    if (isPlainObject(cur) && isPlainObject(val)) {
+      const inner: Record<string, unknown> = { ...cur };
+      for (const [name, entry] of Object.entries(val)) {
+        if (!(name in inner)) inner[name] = entry;
+        else if (Array.isArray(inner[name]) && Array.isArray(entry)) inner[name] = [...(inner[name] as unknown[]), ...entry];
+        else skipped.push(`${key}.${name}`);
+      }
+      merged[key] = inner;
+    } else if (Array.isArray(cur) && Array.isArray(val)) {
+      merged[key] = [...cur, ...val];
+    } else {
+      skipped.push(key);
+    }
+  }
+  return { merged, skipped };
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }

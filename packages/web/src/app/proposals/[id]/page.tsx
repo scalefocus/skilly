@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useApi, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../../components/ui";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { TagInput } from "../../../components/TagInput";
+import { InfoTip } from "../../../components/ui";
 import { Markdown } from "../../../components/Markdown";
 import { MarkdownField } from "../../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../../components/ToolHarnessPicker";
@@ -258,7 +259,7 @@ function ProposalDetailInner() {
   }, []);
   // Same option source as the propose form (existing categories; the tool/harness picker is the
   // closed shared TOOL_OPTIONS list — §8).
-  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<{ name: string; slug: string }[]>([]);
   // Anti-virus (ClamAV) raw result — collapsed by default; reviewers expand to see the exact
   // per-file engine output, even when nothing was flagged.
   const [avOpen, setAvOpen] = useState(false);
@@ -578,8 +579,16 @@ function ProposalDetailInner() {
                   </div>
                 </div>
                 <div>
-                  <label style={labelStyle}>Categories</label>
-                  <TagInput value={edit.categories} onChange={(next) => setEdit({ ...edit, categories: next })} suggestions={categoryOptions} placeholder="Search or create categories…" />
+                  <label style={labelStyle}>
+                    Categories
+                    {/* ⓘ bubble (§10) — same copy as the propose form; one shared component. */}
+                    <InfoTip label="Categories also group skills into marketplace plugins">
+              Categories classify this skill in the catalog and its filters. They also decide which plugin carries it in the
+              Claude Code marketplaces: every category becomes a plugin named after it (e.g. <code>productivity@skilly-team-a</code>),
+              a skill with several categories ships in each of them, and a skill with none goes into the <code>general</code> plugin.
+            </InfoTip>
+                  </label>
+                  <TagInput value={edit.categories} onChange={(next) => setEdit({ ...edit, categories: next })} suggestions={categoryOptions.map((c) => c.name)} placeholder="Search or create categories…" />
                 </div>
                 <div>
                   <label style={labelStyle}>Usage <span style={{ textTransform: "none", letterSpacing: 0 }}>· Markdown</span></label>

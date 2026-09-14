@@ -5,6 +5,8 @@
 // (fulfilWithExistingSkill, "Propose an existing skill"). Whichever happens first wins.
 import type { PoolClient } from "pg";
 import { pool } from "./db";
+import { categoryListError, upsertCategory } from "./categories";
+import { normalizeCategoryNames } from "@skilly/shared";
 import { createTtlCache } from "./ttlCache";
 import { appendAudit } from "./audit";
 
@@ -228,18 +230,12 @@ function validate(input: RequestInput): string | null {
 /** Upsert category names into the shared vocabulary and link them to the request. */
 async function setCategories(client: PoolClient, requestId: string, names: string[]): Promise<void> {
   await client.query(`delete from skill_request_categories where request_id = $1`, [requestId]);
-  for (const raw of names) {
-    const name = raw.trim();
-    if (!name) continue;
-    const { rows } = await client.query<{ id: string }>(
-      `insert into categories (name) values ($1)
-       on conflict (name) do update set name = excluded.name
-       returning id`,
-      [name],
-    );
+  for (const name of normalizeCategoryNames(names, 10)) {
+    // Stored lowercase with an immutable slug (§3/§10) — the same writer the proposal path uses.
+    const id = await upsertCategory(client, name);
     await client.query(
       `insert into skill_request_categories (request_id, category_id) values ($1, $2) on conflict do nothing`,
-      [requestId, rows[0]!.id],
+      [requestId, id],
     );
   }
 }
@@ -248,7 +244,7 @@ export async function createRequest(
   requesterUserId: string,
   input: RequestInput,
 ): Promise<{ id: string } | { error: string }> {
-  const err = validate(input);
+  const err = validate(input) ?? (await categoryListError(pool, input.categories));
   if (err) return { error: err };
   const client = await pool.connect();
   try {
@@ -283,7 +279,7 @@ export async function updateRequest(
   id: string,
   input: RequestInput,
 ): Promise<{ ok: true } | { error: string; status: number }> {
-  const err = validate(input);
+  const err = validate(input) ?? (await categoryListError(pool, input.categories));
   if (err) return { error: err, status: 422 };
   const client = await pool.connect();
   try {

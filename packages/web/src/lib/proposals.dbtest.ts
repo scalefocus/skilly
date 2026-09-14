@@ -686,6 +686,44 @@ test("reviseFileFreezeError: pointer files frozen mid-review, hosted bundle repl
   assert.match(reviseFileFreezeError(reusePayload, { ...reusePayload, artifactObjectKey: "uploads/u/x" }, false) ?? "", /pointer proposal/);
 });
 
+test("categories: reserved `general` and slug collisions are 422s at submit; slugs are stored immutably (§10)", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const { ns, user: submitter } = await seed(client, "catslug");
+    const base = { skillSlug: "cat-skill", title: "Cat Skill", description: "d", toolHarness: "generic", visibility: "org" as const, usageExamples: null };
+
+    // Reserved: any spelling that slugs to `general`, with the explanatory message.
+    const reserved = await verifySubmissionPayload(client, submitter, { metadata: { ...base, categories: ["docs", " General "] } }, {});
+    assert.ok(reserved && /reserved/.test(reserved) && /without a category/.test(reserved), `expected the reserved message, got: ${reserved}`);
+
+    // Materialize a skill naming a brand-new category: its slug is derived once and stored.
+    await materializeVersion(client, {
+      targetNamespaceId: ns, targetSkillId: null, semver: "1.0.0", submittedBy: submitter,
+      payload: { metadata: { ...base, categories: ["AI & ML"] }, artifactObjectKey: "uploads/x/cat1.bundle", artifactSha256: "c1" },
+    });
+    const row = (await client.query<{ name: string; slug: string }>(`select name, slug from categories where slug = 'ai-ml'`)).rows[0];
+    assert.ok(row, "category created with a derived slug");
+    assert.equal(row!.name, "ai & ml", "names are stored lowercase");
+
+    // A different name that would slug identically is refused, naming the winner.
+    const clash = await verifySubmissionPayload(client, submitter, { metadata: { ...base, categories: ["ai ml"] } }, {});
+    assert.ok(clash && clash.includes("`ai-ml`") && clash.includes("“ai & ml”"), `expected the collision message, got: ${clash}`);
+    // The same name (any case) is the same category — no error.
+    assert.equal(await verifySubmissionPayload(client, submitter, { metadata: { ...base, categories: ["AI & ML"] } }, {}), null);
+
+    // The DB backstops the app rule: a direct insert of a reserved or duplicate slug is rejected.
+    await client.query("savepoint sp");
+    await assert.rejects(client.query(`insert into categories (name, slug) values ('genny', 'general')`), /categories_slug_not_reserved/);
+    await client.query("rollback to savepoint sp");
+    await assert.rejects(client.query(`insert into categories (name, slug) values ('ai ml', 'ai-ml')`), /categories_slug_key/);
+    await client.query("rollback to savepoint sp");
+  } finally {
+    await client.query("rollback");
+    client.release();
+  }
+});
+
 test("tool/harness carve-out: unchanged legacy value passes, changed must be closed-list (§8)", { skip: !enabled }, async () => {
   const client = await pool.connect();
   try {

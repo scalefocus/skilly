@@ -20,6 +20,7 @@ interface Row {
   displayName: string;
   name: string;
   skillCount: number;
+  pluginCount: number;
   syncedAt: string | null;
   contact: DirectoryContact;
   added: AddedState;
@@ -226,7 +227,7 @@ function MarketplacesInner() {
                     {/* The count is the marketplace PAYLOAD, not the namespace's catalog size — the verb
                         is there because the bare number would be misread (§30.6). */}
                     <div className="muted mono" style={{ fontSize: 11.5 }}>
-                      {r.name} · publishes {r.skillCount} skill{r.skillCount === 1 ? "" : "s"} · {syncedLabel(r.syncedAt)}
+                      {r.name} · publishes {r.skillCount} skill{r.skillCount === 1 ? "" : "s"} in {r.pluginCount} plugin{r.pluginCount === 1 ? "" : "s"} · {syncedLabel(r.syncedAt)}
                     </div>
                     <div className="muted" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{contactLine}</div>
                   </div>

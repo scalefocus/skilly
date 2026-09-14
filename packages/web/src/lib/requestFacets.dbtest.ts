@@ -35,7 +35,7 @@ async function mkRequest(
   )).rows[0]!.id;
   for (const name of opts.categories ?? []) {
     const cat = (await pool.query<{ id: string }>(
-      `insert into categories (name) values ($1) on conflict (name) do update set name = excluded.name returning id`,
+      `insert into categories (name, slug) values ($1, $1) on conflict (name) do update set name = excluded.name returning id`, // fixture names are already slug-shaped (§10)
       [name],
     )).rows[0]!.id;
     await pool.query(

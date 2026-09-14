@@ -112,6 +112,7 @@ test("marketplace directory: row set, counts, contacts, added state, and the cat
 
   const on = seen.find((r) => r.namespaceSlug === `${P}-on`)!;
   assert.equal(on.skillCount, 1, "payload count: one published namespace-visibility skill, not the 4-skill catalog");
+  assert.equal(on.pluginCount, 1, "one skill ⇒ one plugin (its category, or general) — §30.3 grouping rule");
   assert.equal(on.name, `skilly-${P}-on`);
   assert.equal(on.displayName, `NS ${P}-on`);
   assert.equal(on.syncedAt, "2026-09-03T10:00:00.000Z", "freshness stamp round-trips as ISO");
@@ -121,6 +122,7 @@ test("marketplace directory: row set, counts, contacts, added state, and the cat
   const list = seen.find((r) => r.namespaceSlug === `${P}-list`)!;
   assert.deepEqual(list.contact, { kind: "email", email: `${P}-team@org` }, "an address nobody holds → email state");
   assert.equal(list.skillCount, 0, "zero-skill marketplaces are listed");
+  assert.equal(list.pluginCount, 0, "no skills ⇒ no plugins, not even general");
   assert.equal(list.syncedAt, null, "never swept → null");
   assert.equal(list.added, "none");
 

@@ -113,16 +113,22 @@ before(async () => {
     manifest: { prefix: "skilly", scope: { kind: "public" }, ownerName: "skilly.test", version: "v1" },
     plugins: [
       {
-        skillSlug: "pdf",
-        title: "PDF",
-        description: "pdf things",
-        version: "2.0.0",
-        files: [
-          { path: "SKILL.md", bytes: enc("# pdf v2\n") },
-          { path: "hooks.json", bytes: enc("{}\n") },
+        // One plugin per CATEGORY (§30.3): `pdf` sits in `docs`; public dirs are <ns>-<slug>.
+        entry: { slug: "docs", displayName: "docs", description: "1 skill in docs from skilly.test", version: "1.0.1", category: "docs" },
+        members: [
+          {
+            namespaceSlug: "team-a",
+            skillSlug: "pdf",
+            skillDir: "team-a-pdf",
+            files: [
+              { path: "SKILL.md", bytes: enc("# pdf v2\n") },
+              { path: "hooks.json", bytes: enc("{}\n") },
+            ],
+          },
         ],
       },
     ],
+    served: [{ namespaceSlug: "team-a", skillSlug: "pdf", semver: "2.0.0" }],
     change: { added: ["pdf"], updated: [], removed: [] },
     date: "2026-01-01T00:00:00Z",
   });
@@ -130,8 +136,12 @@ before(async () => {
     bareRepoPath: marketplaceRepoDir(deps.repoRoot!, { kind: "namespace", namespaceSlug: "team-a" }),
     manifest: { prefix: "skilly", scope: { kind: "namespace", namespaceSlug: "team-a" }, ownerName: "Team A", version: "v1" },
     plugins: [
-      { skillSlug: "secret", title: "Secret", description: null, version: "1.0.0", files: [{ path: "SKILL.md", bytes: enc("# top secret\n") }] },
+      {
+        entry: { slug: "general", displayName: "general", description: null, version: "1.0.1" },
+        members: [{ namespaceSlug: "team-a", skillSlug: "secret", skillDir: "secret", files: [{ path: "SKILL.md", bytes: enc("# top secret\n") }] }],
+      },
     ],
+    served: [{ namespaceSlug: "team-a", skillSlug: "secret", semver: "1.0.0" }],
     change: { added: ["secret"], updated: [], removed: [] },
     date: "2026-01-01T00:00:00Z",
   });
@@ -252,17 +262,19 @@ test("marketplace: a tokened clone serves the manifest and the embedded plugin l
   const manifest = JSON.parse((await exec("git", ["-C", dest, "show", "main:.claude-plugin/marketplace.json"])).stdout);
   assert.equal(manifest.name, "skilly-public");
   assert.equal(manifest.metadata.pluginRoot, "./plugins");
-  assert.equal(manifest.plugins[0].source, "./plugins/pdf");
-  assert.equal(manifest.plugins[0].version, "2.0.0");
+  assert.equal(manifest.plugins[0].name, "docs", "plugin = category, no prefix (§30.3)");
+  assert.equal(manifest.plugins[0].source, "./plugins/docs");
+  assert.equal(manifest.plugins[0].version, "1.0.1");
 
-  // The skill lands under skills/<slug>/, and a bundle-root hooks.json is HOISTED to the plugin
-  // root (under skills/<slug>/ Claude Code would never read it) and wired into plugin.json. §30.3
-  const skillMd = (await exec("git", ["-C", dest, "show", "main:plugins/pdf/skills/pdf/SKILL.md"])).stdout;
+  // The skill lands under skills/<ns>-<slug>/ (public marketplace), and a bundle-root hooks.json
+  // is HOISTED to the plugin root (under skills/ Claude Code would never read it) and wired into
+  // plugin.json. §30.3
+  const skillMd = (await exec("git", ["-C", dest, "show", "main:plugins/docs/skills/team-a-pdf/SKILL.md"])).stdout;
   assert.match(skillMd, /pdf v2/);
-  const pluginJson = JSON.parse((await exec("git", ["-C", dest, "show", "main:plugins/pdf/.claude-plugin/plugin.json"])).stdout);
+  const pluginJson = JSON.parse((await exec("git", ["-C", dest, "show", "main:plugins/docs/.claude-plugin/plugin.json"])).stdout);
   assert.deepEqual(pluginJson.skills, ["./skills/"]);
   assert.equal(pluginJson.hooks, "./hooks.json");
-  await exec("git", ["-C", dest, "show", "main:plugins/pdf/hooks.json"]);
+  await exec("git", ["-C", dest, "show", "main:plugins/docs/hooks.json"]);
 });
 
 test("marketplace: a marketplace repo carries no version tags (§30.3)", async () => {
