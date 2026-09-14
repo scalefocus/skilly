@@ -820,9 +820,26 @@ function stampWhatsNewSeen(): void {
 /** The floating "What's new in X" card (§23). Polite live region: it announces itself but never
  *  steals focus; the ✕ is a real button reached by Tab. Excerpt = changelog lines newer than the
  *  user's marker (cap 3, overflow folded into the link); a null marker shows only the running
- *  version's line. */
+ *  version's line. The card is height-capped (60vh, CSS) and the excerpt list is its only scrolling
+ *  child: when the list actually overflows (measured, re-checked on resize) it gets a Tab stop and
+ *  a name so keyboard users can scroll it; a list that fits has no Tab stop. */
 function UpdateNotice({ since, hidden, onClose, onFollow }: { since: string | null; hidden: boolean; onClose: () => void; onFollow: () => void }) {
   const { entries, overflow } = selectWhatsNewExcerpt(CHANGELOG, since, APP_VERSION);
+  const listRef = useRef<HTMLUListElement>(null);
+  const [listOverflows, setListOverflows] = useState(false);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const measure = () => setListOverflows(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hidden, entries.length]);
   return (
     <div className={`update-notice${hidden ? " update-notice-hidden" : ""}`} role="status" data-testid="whats-new-notice">
       <div className="update-notice-head">
@@ -836,7 +853,13 @@ function UpdateNotice({ since, hidden, onClose, onFollow }: { since: string | nu
         </button>
       </div>
       {entries.length > 0 && (
-        <ul className="update-notice-list" data-testid="whats-new-notice-excerpt">
+        <ul
+          ref={listRef}
+          className="update-notice-list"
+          data-testid="whats-new-notice-excerpt"
+          tabIndex={listOverflows ? 0 : undefined}
+          aria-label={listOverflows ? "Release notes" : undefined}
+        >
           {entries.map((e) => (
             <li key={e.version}>{e.summary}</li>
           ))}

@@ -2,7 +2,11 @@
 //
 // MAINTENANCE (see CLAUDE.md "What's new / changelog"): add one entry here in the SAME commit as
 // every APP_VERSION bump, derived from that commit's message, BEFORE committing & pushing. Keep it
-// user-facing and one line per version. Dates are the commit date (UTC, YYYY-MM-DD).
+// user-facing and one entry per version. Dates are the commit date (UTC, YYYY-MM-DD).
+// LENGTH (soft guideline, SKILLY_SPEC.md §23): aim for 2–3 sentences (≈ 350 characters) — what
+// changed, in plain language, plus any action the user must take; a breaking change may run longer.
+// The update notice scrolls long entries rather than truncating them, but that is a safety net,
+// not a licence to write paragraphs.
 export interface ChangelogEntry {
   version: string;
   date: string; // YYYY-MM-DD
@@ -10,6 +14,11 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: "2.0.1",
+    date: "2026-09-14",
+    summary: "The \"What's new in …\" update notice no longer runs off the bottom of the screen when release notes are long: the card is capped at about 60% of the window height and the release-notes list inside it scrolls, with the heading, the ✕ and the See what's new link always in view. Keyboard users can Tab to the list and scroll it with the arrow keys.",
+  },
   {
     version: "2.0.0",
     date: "2026-09-14",
