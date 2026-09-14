@@ -90,7 +90,6 @@ export interface CatalogEntry {
   visibility: "org" | "namespace";
   toolHarness: string;
   categories: string[];
-  tags: string[];
   installCount: number;
   ratingAvg: number; // raw average (0 when unrated)
   ratingCount: number;
@@ -118,7 +117,7 @@ export async function listAllCategories(): Promise<string[]> {
 }
 
 /**
- * Append the shared free-text predicate (substring ILIKE over title/slug/description/usage/tags)
+ * Append the shared free-text predicate (substring ILIKE over title/slug/description/usage)
  * to `where`, pushing the escaped `%term%` onto `params`. Returns a SQL expression that is true
  * when the match is on the NAME (title or slug) — used to sort name matches first (§10). LIKE
  * metacharacters in `q` are escaped so "%"/"_" can't widen the match or scan-bomb. Shared by the
@@ -131,15 +130,14 @@ function ilikeSearch(params: unknown[], q: string, where: string[]): string {
   where.push(
     `(s.title ilike $${t} escape '\\' or s.slug ilike $${t} escape '\\'` +
       ` or s.description ilike $${t} escape '\\'` +
-      ` or coalesce(s.usage_search, '') ilike $${t} escape '\\'` +
-      ` or array_to_string(s.tags, ' ') ilike $${t} escape '\\')`,
+      ` or coalesce(s.usage_search, '') ilike $${t} escape '\\')`,
   );
   return `(s.title ilike $${t} escape '\\' or s.slug ilike $${t} escape '\\')`;
 }
 
 /**
  * Visibility-filtered catalog search. INVARIANT (#3): restricted skills never appear for
- * users outside their namespace. Substring ILIKE over title/slug/description/usage/tags when
+ * users outside their namespace. Substring ILIKE over title/slug/description/usage when
  * `q` is set (name matches ranked first; §10).
  */
 export async function searchSkills(
@@ -261,12 +259,12 @@ export async function searchSkills(
   const { rows } = await pool.query<{
     namespace_slug: string; skill_slug: string; title: string; description: string;
     type: "hosted" | "pointer"; visibility: "org" | "namespace"; tool_harness: string;
-    categories: string[] | null; tags: string[]; install_count: string;
+    categories: string[] | null; install_count: string;
     rating_sum: string; rating_count: string; watcher_count: string; status: "active" | "archived";
     created_at: string; updated_at: string; versions: string[] | null; official: boolean;
   }>(
     `select n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
-            s.visibility, s.tool_harness, s.tags, s.install_count::text as install_count,
+            s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
             (s.official_at is not null) as official,
             s.created_at as created_at,
@@ -280,7 +278,7 @@ export async function searchSkills(
        join namespaces n on n.id = s.namespace_id
        left join skill_versions sv on sv.skill_id = s.id
       where ${where.join(" and ")}
-      group by n.slug, s.slug, s.title, s.description, s.type, s.visibility, s.tool_harness, s.tags, s.install_count, s.status, s.id
+      group by n.slug, s.slug, s.title, s.description, s.type, s.visibility, s.tool_harness, s.install_count, s.status, s.id
       order by ${orderBy}
       limit $${limitIdx}`,
     params,
@@ -300,7 +298,6 @@ export async function searchSkills(
       visibility: r.visibility,
       toolHarness: r.tool_harness,
       categories: r.categories ?? [],
-      tags: r.tags ?? [],
       installCount: Number(r.install_count),
       ratingAvg: ratingCount ? Number(r.rating_sum) / ratingCount : 0,
       ratingCount,
@@ -363,12 +360,12 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
   const { rows } = await pool.query<{
     namespace_slug: string; skill_slug: string; title: string; description: string;
     type: "hosted" | "pointer"; visibility: "org" | "namespace"; tool_harness: string;
-    categories: string[] | null; tags: string[]; install_count: string;
+    categories: string[] | null; install_count: string;
     rating_sum: string; rating_count: string; watcher_count: string; status: "active" | "archived";
     created_at: string; updated_at: string; versions: string[] | null; official: boolean; installed: boolean;
   }>(
     `select n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
-            s.visibility, s.tool_harness, s.tags, s.install_count::text as install_count,
+            s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
             (s.official_at is not null) as official, s.created_at as created_at,
             coalesce(max(sv.created_at), s.created_at) as updated_at,
@@ -398,7 +395,6 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
       visibility: r.visibility,
       toolHarness: r.tool_harness,
       categories: r.categories ?? [],
-      tags: r.tags ?? [],
       installCount: Number(r.install_count),
       ratingAvg: ratingCount ? Number(r.rating_sum) / ratingCount : 0,
       ratingCount,
@@ -614,7 +610,6 @@ export interface SkillFormDefaults {
   title: string;
   description: string;
   toolHarness: string;
-  tags: string[];
   categories: string[];
   type: "hosted" | "pointer";
 }
@@ -622,10 +617,10 @@ export interface SkillFormDefaults {
 /** Skill-level metadata used to pre-fill the "propose new version" form (locked fields). */
 export async function skillFormDefaults(skillId: string): Promise<SkillFormDefaults | null> {
   const { rows } = await pool.query<{
-    title: string; description: string; tool_harness: string; tags: string[] | null;
+    title: string; description: string; tool_harness: string;
     type: "hosted" | "pointer"; categories: string[] | null;
   }>(
-    `select s.title, s.description, s.tool_harness, s.tags, s.type,
+    `select s.title, s.description, s.tool_harness, s.type,
             coalesce((select array_agg(c.name order by c.name)
                         from skill_categories sc join categories c on c.id = sc.category_id
                        where sc.skill_id = s.id), '{}') as categories
@@ -634,5 +629,5 @@ export async function skillFormDefaults(skillId: string): Promise<SkillFormDefau
   );
   const r = rows[0];
   if (!r) return null;
-  return { title: r.title, description: r.description, toolHarness: r.tool_harness, tags: r.tags ?? [], categories: r.categories ?? [], type: r.type };
+  return { title: r.title, description: r.description, toolHarness: r.tool_harness, categories: r.categories ?? [], type: r.type };
 }

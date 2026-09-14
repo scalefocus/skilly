@@ -45,7 +45,7 @@ test.describe.serial("proposer mid-review revise + revision-pinned accept (§8)"
       data: {
         namespaceSlug: "global",
         semver: "1.0.0",
-        metadata: { skillSlug: slug, title: "Revise E2E", description: "d", toolHarness: "generic", visibility: "org", categories: [], tags: [] },
+        metadata: { skillSlug: slug, title: "Revise E2E", description: "d", toolHarness: "generic", visibility: "org", categories: [] },
         ...up1,
       },
     });

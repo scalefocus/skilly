@@ -47,10 +47,12 @@ interface SkillRow {
   slug: string;
   title: string;
   description: string | null;
-  tags: string[] | null;
   artifact_object_key: string | null;
   semver: string;
+  /** Primary category name (alphabetically first), or null. */
   category: string | null;
+  /** Every category name, sorted — the manifest's `keywords` (§30.3) and part of the hash. */
+  categories: string[] | null;
   ns_slug: string;
 }
 
@@ -81,7 +83,7 @@ function contentHash(rows: readonly SkillRow[]): string {
     // Fields and rows are delimited by distinct separators: a single shared separator
     // would let ("a b", "c") and ("a", "b c") hash identically, so an edit that merely
     // moved a word between two fields could go unrebuilt.
-    h.update([r.slug, r.title, r.description ?? "", (r.tags ?? []).join(","), r.category ?? "", r.semver, r.artifact_object_key ?? ""].join("\u001f"));
+    h.update([r.slug, r.title, r.description ?? "", (r.categories ?? []).join(","), r.semver, r.artifact_object_key ?? ""].join("\u001f"));
     h.update("\u001e");
   }
   return h.digest("hex").slice(0, 16);
@@ -122,9 +124,12 @@ function diffChange(prev: Map<string, string> | null, next: readonly SkillRow[])
  */
 async function qualifyingSkills(pool: Pool, scope: MarketplaceScope, namespaceId: string | null): Promise<SkillRow[]> {
   const { rows } = await pool.query<SkillRow & { semvers: string[] }>(
-    `select s.id as skill_id, s.slug, s.title, s.description, s.tags, n.slug as ns_slug,
+    `select s.id as skill_id, s.slug, s.title, s.description, n.slug as ns_slug,
             (select c.name from skill_categories sc join categories c on c.id = sc.category_id
               where sc.skill_id = s.id order by c.name limit 1) as category,
+            coalesce((select array_agg(c.name order by c.name) from skill_categories sc
+                        join categories c on c.id = sc.category_id
+                       where sc.skill_id = s.id), '{}') as categories,
             array_agg(sv.semver order by sv.created_at) as semvers
        from skills s
        join namespaces n on n.id = s.namespace_id
@@ -214,7 +219,7 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
           title: s.title,
           description: s.description,
           version: s.semver,
-          tags: s.tags ?? [],
+          categories: s.categories ?? [],
           category: s.category,
           homepage: registryBase ? `${registryBase.replace(/\/+$/, "")}/skills/${s.ns_slug}/${s.slug}` : null,
           files: await extractBundle(targz, cap),
