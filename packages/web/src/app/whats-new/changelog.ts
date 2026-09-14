@@ -11,6 +11,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.0.0",
+    date: "2026-09-14",
+    summary: "Claude Code marketplaces now publish one plugin per category instead of one per skill: a skill in the productivity and docs categories ships in both the productivity and docs plugins, a skill with no category goes into the general plugin, and you install a whole group with one command (e.g. productivity@skilly-team-a). Plugin versions are now 1.0.<n> counters that move only when a plugin's delivered files change. This is a breaking change for anyone who already added a marketplace: plugins installed under the old per-skill names keep working but silently stop updating — run /plugin uninstall <skill-slug>@<marketplace> for each and install the category plugins instead; skill invocation names change from /<skill>:<skill> to /<category>:<skill> (public marketplace: /<category>:<namespace>-<skill>). Because categories now name plugins, every category gets a permanent slug, the name general is reserved, and two names that would produce the same slug are refused with an explanation. The Categories field on the propose form and the proposal page has an ⓘ bubble explaining the grouping, the catalog accepts ?category= links, and the marketplace pages show skills and plugins side by side.",
+  },
+  {
     version: "1.152.0",
     date: "2026-09-14",
     summary: "Free-form tags are gone. They were never shown in the catalog or on skill pages and never worked as a filter, so the Tags field has been removed from the propose form and the proposal review page, and categories are now the single way to classify a skill. Search matches title, slug, description and usage as before (tags are no longer a hidden match term), and a plugin marketplace's keywords now come from the skill's categories instead. Existing tags were dropped, not converted into categories.",

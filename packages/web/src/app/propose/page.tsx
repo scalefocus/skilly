@@ -11,6 +11,8 @@ import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposa
 import { Pill, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
+import { InfoTip } from "../../components/ui";
+import { checkCategoryNames } from "@skilly/shared/category";
 import { MarkdownField } from "../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../components/ToolHarnessPicker";
 import { fmtSize, bundleUploadError } from "../../lib/uploadError";
@@ -125,7 +127,10 @@ function ProposeForm() {
     externalSubdir: "",
   });
   const [categories, setCategories] = useState<string[]>([]);
-  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<{ name: string; slug: string }[]>([]);
+  // §10 *Category slugs*: the same shared check the server runs at submit — reserved `general`,
+  // a name with no slug, or a slug another category already owns — flagged inline as you type.
+  const categoryError = checkCategoryNames(categories, categoryOptions);
   // Namespaces the user can file into (global + their namespaces) — feeds the namespace combobox.
   const [namespaceOptions, setNamespaceOptions] = useState<{ slug: string; displayName: string }[]>([]);
   // Pointer (external git) is the first tab and the default for a NEW proposal; new-version mode
@@ -595,6 +600,7 @@ function ProposeForm() {
   async function submit(mode: "review" | "direct") {
     setErr(null);
     setScan(null);
+    if (categoryError) { setErr(categoryError); return; } // §10 — the server would 422 with the same text
     setBusy(true);
     try {
       const metadata = {
@@ -715,6 +721,7 @@ function ProposeForm() {
     // Validate before locking so an empty field never flashes the read-only scrim.
     if (!f.title.trim()) { setErr("Give the request a title."); flashIssue(); return; }
     if (!f.description.trim()) { setErr("Describe the skill you want."); flashIssue(); return; }
+    if (categoryError) { setErr(categoryError); flashIssue(); return; } // §10
     // §26: the form goes read-only (scrim) while a network call is in flight. `busy` is cleared
     // only when control must return to the user — the similar-check warning branch and errors.
     // On a successful post we intentionally leave it set so the form stays locked through the
@@ -1096,9 +1103,18 @@ function ProposeForm() {
           {lock && <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Editing the title renames the skill when this version is accepted (the slug never changes).</p>}
         </div>
         <div>
-          <label style={label}>Categories</label>
+          <label style={label}>
+            Categories
+            {/* ⓘ bubble (§10): categories also decide the marketplace plugin(s) carrying the skill (§30.3). */}
+            <InfoTip label="Categories also group skills into marketplace plugins">
+              Categories classify this skill in the catalog and its filters. They also decide which plugin carries it in the
+              Claude Code marketplaces: every category becomes a plugin named after it (e.g. <code>productivity@skilly-team-a</code>),
+              a skill with several categories ships in each of them, and a skill with none goes into the <code>general</code> plugin.
+            </InfoTip>
+          </label>
           {/* Editable in new-version mode too — synced to the skill on accept (§8). */}
-          <TagInput value={categories} onChange={setCategories} suggestions={categoryOptions} placeholder="Search or create categories…" />
+          <TagInput value={categories} onChange={setCategories} suggestions={categoryOptions.map((c) => c.name)} placeholder="Search or create categories…" />
+          {categoryError && <p role="alert" style={{ fontSize: 12.5, marginTop: 7, color: "var(--danger, #c0392b)" }}>{categoryError}</p>}
           <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
             {lock
               ? "Pre-filled with the skill's current categories. Editing them updates the skill's categories when this version is accepted."

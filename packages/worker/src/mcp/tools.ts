@@ -75,7 +75,7 @@ const METADATA_SCHEMA = {
     description: str("What the skill does, for the catalog (10–2000 chars)."),
     toolHarness: str("The coding agent this skill targets. Use get_registry_metadata for the allowed values; 'generic' if it isn't agent-specific."),
     visibility: { type: "string", enum: ["org", "namespace"], description: "'org' = visible to everyone; 'namespace' = only to the namespace's members. Cannot be 'namespace' in the global namespace." },
-    categories: strArr("Category labels (created on the fly, max 12)."),
+    categories: strArr("Category labels (created on the fly, max 12). Categories also decide which plugin carries the skill in the Claude Code marketplaces: one plugin per category, named after it; a skill with none goes into the reserved `general` plugin — so `general` cannot be a category."),
     usageExamples: str("Optional worked examples shown on the detail page and matched by search."),
     whatChanged: str("Required for a NEW VERSION of an existing skill: what changed, in plain text."),
   },
@@ -161,7 +161,7 @@ export function toolDefinitions(): ToolDefinition[] {
       title: "Registry metadata",
       readOnly: true,
       description:
-        "The categories, tool/harness vocabulary, namespaces you can see (and which ones you can review), and the limits that apply to proposals. Call this before proposing a skill so you fill the fields with values the registry accepts.",
+        "The categories (name + slug — the slug is the category's marketplace plugin name), tool/harness vocabulary, namespaces you can see (and which ones you can review), and the limits that apply to proposals. Call this before proposing a skill so you fill the fields with values the registry accepts.",
       inputSchema: { type: "object", properties: {} },
     },
 

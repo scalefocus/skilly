@@ -136,6 +136,29 @@ export async function revokeNamespaceMarketplaceTokens(namespaceId: string): Pro
 
 /** How many skills a marketplace currently publishes — shown next to the toggle (§30.6).
  *  Mirrors the worker's qualifying-skill rule so the count never disagrees with the repo. */
+/**
+ * How many PLUGINS a marketplace currently publishes (§30.3 grouping rule, mirrored from the
+ * worker): distinct category slugs among the qualifying skills, +1 for `general` when any
+ * qualifying skill has no category. Shown beside the skill count as "N skills in M plugins" (§30.6).
+ */
+export async function marketplacePluginCount(scope: MarketplaceScope, namespaceId: string | null): Promise<number> {
+  const { rows } = await pool.query<{ n: string }>(
+    `with q as (
+       select distinct s.id
+         from skills s
+         join skill_versions sv on sv.skill_id = s.id and sv.status = 'active' and sv.git_published
+        where s.status = 'active'
+          and ${scope.kind === "public" ? `s.visibility = 'org'` : `s.visibility = 'namespace' and s.namespace_id = $1`}
+     )
+     select (select count(distinct c.slug)
+               from q join skill_categories sc on sc.skill_id = q.id
+                      join categories c on c.id = sc.category_id)
+          + (case when exists (select 1 from q where not exists (select 1 from skill_categories sc where sc.skill_id = q.id)) then 1 else 0 end) as n`,
+    scope.kind === "public" ? [] : [namespaceId],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 export async function marketplaceSkillCount(scope: MarketplaceScope, namespaceId: string | null): Promise<number> {
   const { rows } = await pool.query<{ n: string }>(
     `select count(distinct s.id) as n

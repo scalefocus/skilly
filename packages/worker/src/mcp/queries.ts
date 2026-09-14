@@ -347,18 +347,19 @@ export async function registryMetadata(
   pool: Pool,
   access: EffectiveAccess,
 ): Promise<{
-  categories: string[];
+  /** name + slug — the slug is the category's marketplace plugin name (§30.3). */
+  categories: { name: string; slug: string }[];
   namespaces: Array<{ slug: string; name: string; requiresReview: boolean; canPropose: boolean; canReview: boolean }>;
   toolHarnesses: string[];
 }> {
   const [cats, namespaces] = await Promise.all([
-    pool.query<{ name: string }>(`select name from categories order by name asc`),
+    pool.query<{ name: string; slug: string }>(`select name, slug from categories order by name asc`),
     pool.query<{ id: string; slug: string; display_name: string; require_review: boolean }>(
       `select id, slug, display_name, require_review from namespaces order by slug asc`,
     ),
   ]);
   return {
-    categories: cats.rows.map((r) => r.name),
+    categories: cats.rows.map((r) => ({ name: r.name, slug: r.slug })),
     // Every authenticated user may propose (§4 implicit capability) — the namespace list is about
     // where a proposal LANDS and who will review it, not about gating the tool.
     namespaces: namespaces.rows.map((n) => ({

@@ -40,6 +40,13 @@ test.describe("new-version proposal: editable metadata + keep current files (@gl
     // Categories input + harness picker are present and enabled. (The TagInput placeholder only
     // shows when empty — the seeded skill has categories — so assert via the new-version hint.)
     await expect(page.getByText("Pre-filled with the skill's current categories", { exact: false })).toBeVisible();
+    // The Categories label carries the ⓘ info bubble (§10): opens on click, explains the plugin grouping, closes on Escape.
+    const tip = page.getByRole("button", { name: "Categories also group skills into marketplace plugins" });
+    await expect(tip).toBeVisible();
+    await tip.click();
+    await expect(page.getByRole("dialog", { name: "Categories also group skills into marketplace plugins" })).toContainText("every category becomes a plugin");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Categories also group skills into marketplace plugins" })).toHaveCount(0);
     // Free-form tags were removed (§10): no Tags field anywhere on the form.
     await expect(page.getByText("Pre-filled with the skill's current tags", { exact: false })).toHaveCount(0);
     await expect(page.getByPlaceholder("Add tags…")).toHaveCount(0);

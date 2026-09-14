@@ -27,6 +27,14 @@ import {
   buildMarketplaceJson,
   buildPluginJson,
   planPluginLayout,
+  groupSkillsIntoPlugins,
+  memberSkillDir,
+  mergeComponentJson,
+  pluginDescription,
+  pluginHomepage,
+  pluginKeywords,
+  pluginVersion,
+  isComponentPath,
   marketplaceRepoPath,
   type MarketplaceScope,
 } from "./plugin-marketplace.js";
@@ -170,7 +178,7 @@ test("add routes: fixed order, Terminal default, untrusted values narrowed", () 
   assert.equal(parseMarketplaceAddRoute(undefined), null);
 });
 
-test("marketplace.json carries pluginRoot and relative plugin sources", () => {
+test("marketplace.json carries pluginRoot and relative plugin sources — one plugin per category (§30.3)", () => {
   const json = buildMarketplaceJson({
     prefix: DEFAULT_MARKETPLACE_NAME_PREFIX,
     scope: NS,
@@ -179,13 +187,13 @@ test("marketplace.json carries pluginRoot and relative plugin sources", () => {
     version: "abc123",
     plugins: [
       {
-        skillSlug: "pdf-tools",
-        title: "PDF Tools",
-        description: "Work with PDFs",
-        version: "1.2.0",
-        categories: ["docs", "productivity"],
+        slug: "productivity",
+        displayName: "productivity",
+        description: "2 skills in productivity from Team A",
+        version: "1.0.3",
+        keywords: ["PDF Tools", "pdf-tools", "Lint Fixer", "lint-fixer"],
         category: "productivity",
-        homepage: "https://skilly.example.com/skills/team-a/pdf-tools",
+        homepage: "https://skilly.example.com/catalog?ns=team-a&category=productivity",
       },
     ],
   });
@@ -195,12 +203,13 @@ test("marketplace.json carries pluginRoot and relative plugin sources", () => {
   assert.equal(json.version, "abc123");
   assert.equal(json.plugins.length, 1);
   const p = json.plugins[0]!;
-  assert.equal(p.name, "pdf-tools");
-  assert.equal(p.source, "./plugins/pdf-tools");
-  assert.equal(p.displayName, "PDF Tools");
-  assert.equal(p.version, "1.2.0");
-  assert.deepEqual(p.keywords, ["docs", "productivity"], "keywords are the category names (tags were removed, §10)");
+  assert.equal(p.name, "productivity", "plugin name = category slug, no prefix");
+  assert.equal(p.source, "./plugins/productivity");
+  assert.equal(p.displayName, "productivity");
+  assert.equal(p.version, "1.0.3");
+  assert.deepEqual(p.keywords, ["PDF Tools", "pdf-tools", "Lint Fixer", "lint-fixer"], "keywords = member titles + slugs");
   assert.equal(p.category, "productivity");
+  assert.equal(p.homepage, "https://skilly.example.com/catalog?ns=team-a&category=productivity");
 });
 
 test("marketplace.json omits optional fields rather than emitting nulls", () => {
@@ -210,7 +219,7 @@ test("marketplace.json omits optional fields rather than emitting nulls", () => 
     ownerName: "skilly.example.com",
     ownerEmail: null,
     version: "0",
-    plugins: [{ skillSlug: "a", title: "A", description: null, version: "1.0.0" }],
+    plugins: [{ slug: "general", displayName: "general", description: null, version: "1.0.1" }],
   });
   assert.equal(json.name, "skilly-public");
   assert.equal("email" in json.owner, false);
@@ -228,18 +237,18 @@ test("an empty marketplace still produces a valid manifest", () => {
 });
 
 test("plugin.json always points at ./skills/ and wires only present components", () => {
-  const bare = buildPluginJson({ skillSlug: "pdf-tools", title: "PDF Tools", description: "d", version: "1.0.0" });
+  const bare = buildPluginJson({ slug: "productivity", displayName: "productivity", description: "d", version: "1.0.1" });
   assert.deepEqual(bare.skills, ["./skills/"]);
-  assert.equal(bare.name, "pdf-tools");
-  assert.equal(bare.version, "1.0.0");
+  assert.equal(bare.name, "productivity");
+  assert.equal(bare.version, "1.0.1");
   assert.equal("hooks" in bare, false);
   assert.equal("mcpServers" in bare, false);
 
   const full = buildPluginJson({
-    skillSlug: "x",
-    title: "X",
+    slug: "x",
+    displayName: "x",
     description: null,
-    version: "2.0.0",
+    version: "1.0.2",
     components: { hooks: true, mcpServers: true, lspServers: true, commands: true, agents: true },
   });
   assert.equal(full.hooks, "./hooks.json");
@@ -296,4 +305,94 @@ test("planPluginLayout tolerates leading ./ and skips empty paths", () => {
 test("marketplaceRepoPath places a plugin file under plugins/<slug>/", () => {
   assert.equal(marketplaceRepoPath("pdf-tools", "skills/pdf-tools/SKILL.md"), "plugins/pdf-tools/skills/pdf-tools/SKILL.md");
   assert.equal(marketplaceRepoPath("pdf-tools", ".claude-plugin/plugin.json"), "plugins/pdf-tools/.claude-plugin/plugin.json");
+});
+
+// ---------------------------------------------------------------------------
+// Grouping (§30.3 membership rules) + component merging
+// ---------------------------------------------------------------------------
+
+const CATS = [
+  { slug: "productivity", name: "productivity", description: null },
+  { slug: "docs", name: "docs", description: "Writing and documents" },
+];
+const sk = (ns: string, slug: string, cats: string[], title = slug) => ({ namespaceSlug: ns, skillSlug: slug, title, categorySlugs: cats });
+
+test("groupSkillsIntoPlugins: N categories → N plugins, none → general, empty categories → no plugin", () => {
+  const { plugins, collisions } = groupSkillsIntoPlugins(NS, [
+    sk("team-a", "pdf", ["productivity", "docs"]),
+    sk("team-a", "lint", ["productivity"]),
+    sk("team-a", "misc", []),
+  ], CATS);
+  assert.deepEqual(collisions, []);
+  assert.deepEqual(plugins.map((p) => p.slug), ["docs", "productivity", "general"], "sorted by slug, general last");
+  const by = new Map(plugins.map((p) => [p.slug, p]));
+  assert.deepEqual(by.get("productivity")!.members.map((m) => m.skillDir), ["lint", "pdf"], "member order = (ns, slug); namespace dirs are bare slugs");
+  assert.deepEqual(by.get("docs")!.members.map((m) => m.skillDir), ["pdf"]);
+  assert.deepEqual(by.get("general")!.members.map((m) => m.skillDir), ["misc"], "uncategorized → general only");
+  assert.equal(by.get("general")!.displayName, "general");
+  assert.equal(by.get("docs")!.displayName, "docs");
+  assert.equal(by.get("docs")!.categoryDescription, "Writing and documents");
+});
+
+test("groupSkillsIntoPlugins: general is omitted when every skill has a category; unknown slugs are ignored", () => {
+  const { plugins } = groupSkillsIntoPlugins(NS, [sk("team-a", "pdf", ["docs", "ghost-category"])], CATS);
+  assert.deepEqual(plugins.map((p) => p.slug), ["docs"]);
+  const none = groupSkillsIntoPlugins(NS, [], CATS);
+  assert.deepEqual(none.plugins, []);
+});
+
+test("groupSkillsIntoPlugins: public marketplace prefixes the namespace; directory collisions keep the first and are reported", () => {
+  assert.equal(memberSkillDir(PUBLIC_SCOPE, "team-a", "deploy"), "team-a-deploy");
+  assert.equal(memberSkillDir(NS, "team-a", "deploy"), "deploy");
+  const { plugins, collisions } = groupSkillsIntoPlugins(PUBLIC_SCOPE, [
+    sk("team-a", "deploy", ["productivity"]),
+    sk("team", "a-deploy", ["productivity"]), // also → team-a-deploy
+  ], CATS);
+  assert.equal(plugins.length, 1);
+  assert.deepEqual(plugins[0]!.members.map((m) => `${m.namespaceSlug}/${m.skillSlug}`), ["team/a-deploy"], "first by (ns, slug) wins");
+  assert.equal(collisions.length, 1);
+  assert.equal(collisions[0]!.skillDir, "team-a-deploy");
+  assert.equal(collisions[0]!.skipped.skillSlug, "deploy");
+  assert.equal(collisions[0]!.winner.skillSlug, "a-deploy");
+});
+
+test("pluginDescription / pluginKeywords / pluginHomepage / pluginVersion follow §30.3", () => {
+  const g = { slug: "productivity", displayName: "productivity", categoryDescription: null, members: [sk("team-a", "pdf", [], "PDF Tools"), sk("team-a", "lint", [], "Lint Fixer")] };
+  assert.equal(pluginDescription(g, "Team A"), "2 skills in productivity from Team A");
+  assert.equal(pluginDescription({ ...g, categoryDescription: " Own text " }, "Team A"), "Own text");
+  assert.equal(pluginDescription({ slug: "general", displayName: "general", categoryDescription: null, members: [1] }, "skilly.example.com"), "1 skill without a category from skilly.example.com");
+  assert.deepEqual(pluginKeywords(g.members), ["PDF Tools", "pdf", "Lint Fixer", "lint"]);
+  assert.deepEqual(pluginKeywords([sk("a", "x", [], "x")]), ["x"], "title equal to slug is not duplicated");
+  assert.equal(pluginHomepage("https://skilly.example.com", PUBLIC_SCOPE, g), "https://skilly.example.com/catalog?category=productivity");
+  assert.equal(pluginHomepage("https://skilly.example.com/", NS, g, "Team A"), "https://skilly.example.com/catalog?ns=team-a&nsName=Team+A&category=productivity");
+  assert.equal(pluginHomepage("https://skilly.example.com", NS, { slug: "general", displayName: "general" }, "Team A"), "https://skilly.example.com/catalog?ns=team-a&nsName=Team+A");
+  assert.equal(pluginHomepage("", PUBLIC_SCOPE, g), null);
+  assert.equal(pluginVersion(7), "1.0.7");
+});
+
+test("mergeComponentJson: entries merge by name, array entries concatenate, duplicates keep the first and are reported", () => {
+  const a = { mcpServers: { db: { command: "a" }, web: { command: "w" } } };
+  const b = { mcpServers: { db: { command: "b" }, cache: { command: "c" } }, lspServers: { ts: {} } };
+  const r1 = mergeComponentJson(null, a);
+  assert.deepEqual(r1, { merged: a, skipped: [] });
+  const r2 = mergeComponentJson(r1.merged, b);
+  assert.deepEqual(r2.skipped, ["mcpServers.db"]);
+  assert.deepEqual(r2.merged, { mcpServers: { db: { command: "a" }, web: { command: "w" }, cache: { command: "c" } }, lspServers: { ts: {} } });
+
+  const h1 = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [1] }] } };
+  const h2 = { hooks: { PreToolUse: [{ matcher: "Edit", hooks: [2] }], PostToolUse: [{ matcher: "*", hooks: [3] }] } };
+  const h = mergeComponentJson(h1, h2);
+  assert.deepEqual(h.skipped, []);
+  assert.deepEqual(h.merged, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [1] }, { matcher: "Edit", hooks: [2] }], PostToolUse: [{ matcher: "*", hooks: [3] }] } });
+
+  // A non-object root, or a scalar top-level clash, keeps the first and reports it.
+  assert.deepEqual(mergeComponentJson({ a: 1 }, [1]).skipped, ["<root>"]);
+  assert.deepEqual(mergeComponentJson({ version: 1 }, { version: 2 }).skipped, ["version"]);
+});
+
+test("isComponentPath recognizes hoisted files and directory members only", () => {
+  assert.equal(isComponentPath("hooks.json"), true);
+  assert.equal(isComponentPath("commands/review.md"), true);
+  assert.equal(isComponentPath("skills/x/hooks.json"), false);
+  assert.equal(isComponentPath("commands"), false);
 });

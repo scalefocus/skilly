@@ -500,3 +500,60 @@ export function EmptyState({ icon = "✦", title, hint }: { icon?: string; title
     </div>
   );
 }
+
+/**
+ * ⓘ info bubble (SKILLY_SPEC.md §10 *The Categories field carries an ⓘ info bubble*). A small
+ * button after a field label that opens an anchored popover explaining a consequence the form
+ * cannot otherwise show. Click / tap / Enter / Space toggle it; Escape, an outside click, or the
+ * button again close it, and focus returns to the button. Hover shows the native `title` too, but
+ * hover is never the only way in. One component serves every surface so the copy cannot drift.
+ */
+export function InfoTip({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const id = useRef(`infotip-${Math.random().toString(36).slice(2, 9)}`);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        btn.current?.focus();
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <span className="infotip" ref={wrap}>
+      <button
+        ref={btn}
+        type="button"
+        className="infotip-btn"
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={open ? id.current : undefined}
+        title={label}
+        onClick={(e) => {
+          e.preventDefault();
+          setOpen((o) => !o);
+        }}
+      >
+        i
+      </button>
+      {open && (
+        <span role="dialog" aria-labelledby={`${id.current}-label`} id={id.current} className="infotip-bubble">
+          <span id={`${id.current}-label`} className="infotip-title">{label}</span>
+          <span className="infotip-body">{children}</span>
+        </span>
+      )}
+    </span>
+  );
+}

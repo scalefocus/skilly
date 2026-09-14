@@ -184,7 +184,28 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`marketplace` tokens** (§30.4) are the same handle for a **plugin marketplace** rather than a skill: `skill_id` is NULL and the scope is carried by **`marketplace_scope`** (`public` | `namespace`) + **`namespace_id`** (FK → `namespaces`, `ON DELETE CASCADE`; set **iff** scope = `namespace`). `skill_id` is therefore **nullable**, and a CHECK enforces the discriminant: `install` ⇒ `skill_id` NOT NULL ∧ `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL ∧ `marketplace_scope` NOT NULL ∧ (`namespace_id` NOT NULL ⇔ scope = `namespace`). **`last_served_commit`** (TEXT, nullable) is the per-token attribution cursor of §30.7. Same TTL, reuse, reactivate and hard-delete-on-remove semantics as `install`; **`is_system` is never set** — system marketplaces are deferred (§30.4).
 
 ### `categories`
-- Controlled vocabulary, admin-managed: `id`, `name`, `description`.
+- `id`, `name` (UNIQUE, stored **lowercase**), `description` (nullable), **`slug`** (TEXT UNIQUE NOT
+  NULL, migration **0069**) — the category's **immutable kebab-case identity**, derived from `name`
+  once at creation (§10 *Category slugs*) and never rewritten. It names the category's **plugin**
+  in every Claude plugin marketplace (§30.3), so it must stay put even if a name were ever edited.
+  The vocabulary is **created on the fly by proposers** (a proposal, a request, or the MCP `propose`
+  tool may name a category that does not exist yet — §8); there is **no admin CRUD**, so "curated"
+  means curated by convention. `general` is a **reserved** slug (§10) and can never be a row.
+- **Backfill (0069).** Every existing row gets `slug = categorySlug(name)`. Two names that slug
+  identically (e.g. `ai & ml` / `ai ml`) make the migration **fail loudly**, naming the pairs — the
+  operator merges them by hand (re-point `skill_categories` / `skill_request_categories`, delete
+  the duplicate) and re-runs. A silent auto-suffix (`ai-ml-2`) would bake an arbitrary plugin name
+  into consumers' installs, which is worse than a blocked deploy.
+
+### `marketplace_plugins` (migration 0069)
+- The per-plugin **version counter** behind §30.3's `1.0.<n>`: `marketplace_key TEXT` (`public`, or
+  `ns:<namespace uuid>`), `plugin_slug TEXT` (a category slug or `general`), `version_n INTEGER NOT
+  NULL DEFAULT 1`, `fingerprint TEXT NOT NULL` (§30.5), `updated_at TIMESTAMPTZ`. PK
+  `(marketplace_key, plugin_slug)`. Rows are **never decremented or deleted by the sweep** — a
+  plugin that vanishes (its category lost its last skill) and later reappears **continues** its
+  count, so a consumer who kept the old install never sees the version go backwards. Rows for a
+  namespace that no longer exists are swept as self-heal (the key is text, not an FK, so a
+  deleted namespace does not cascade).
 
 ### `notifications`
 - `id`, `user_id`, `type`, `payload`, `read_at`, `created_at`, plus delivery bookkeeping (migration 0006): `delivered_at`, `delivery_attempts`, `delivery_error` (drive the leader-only email/webhook delivery sweep, §12).
@@ -914,6 +935,13 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Clear affordance (`✕`) — universal, all five modes.** The shared top-bar box carries a **clear control on its right edge, in the same slot as the `CTRL+K` hint**: the hint shows when the box is **empty**, and the moment the box holds **any** text the hint is **replaced by a small `✕` button** — only ever one of the two visible at a time, toggling instantly as the box goes empty/non-empty. The trigger is purely **"box is non-empty"**, so it is **independent** of the 2-char query floor, of whether the typeahead dropdown or the "Nothing found" bubble is showing, and of which of the five behaviors is active — including on the four **live-filter pages when the box is seeded from `?q=` on arrival** (a shared `/catalog?q=foo`-style link shows the `✕`, not the hint, on load). **Clicking `✕` or pressing `Escape`** (while the box is focused) **clears the box in one action** and **keeps keyboard focus in it**, ready to retype — it never blurs or navigates. `Escape` therefore **always clears** now, **superseding** its former job of merely closing the typeahead dropdown (emptying the query closes any open dropdown and dismisses the "Nothing found" bubble as a consequence). On a **live-filter page** (catalog / installed / usage / requests) clearing **drops `?q=` immediately** via `router.replace` — **not** waiting for the ~250ms live-filter debounce — so the full unfiltered list snaps back at once. The `✕` is a real **`type="button"`** labelled **"Clear search"** (keyboard-focusable, Tab-reachable, non-submitting), rendered as a **thin-stroke glyph** matching the box's search magnifier and the rest of the topbar icon set (not an emoji or heavy character). `Ctrl`/`Cmd+K` is **unchanged** (focus + select the box); if it selects pre-existing text the box is still non-empty, so the `✕` remains shown.
 - **Strictly visibility-filtered, auth-required.** A restricted skill must **never** appear in search, autocomplete, or counts for users outside its namespace. **No anonymous browsing.**
 - **Facets (implemented):** category, tool/harness, hosted-vs-pointer. The hosted-vs-pointer facet is labelled **"Source"** in the catalog UI with options **"Hosted"** and **"External"** — "External" being the one user-facing name for pointer skills, matching the `external` pill on catalog cards and the "External source" panel on the detail page (never "Mirrored"; mirroring is the internal mechanism, not the user-facing name). (Namespace, channel/stable-vs-beta, and scan-status facets are **deferred** — not computed or surfaced in v1.)
+- **`?category=<name>` arrival parameter.** The catalog accepts a category **name** in the URL
+  (alongside the existing `?q=`, `?ns=`/`?nsName=` and `?maintainer=`/`?by=`): on arrival it
+  **selects that category chip** exactly as a click would — it overrides the browser-remembered
+  category for this visit and is then persisted like any chip click — and composes with `?ns=`
+  (a namespace view narrowed to one category). It exists so a marketplace plugin's `homepage`
+  (§30.3) can land on precisely the skills that plugin carries. An unknown name selects nothing
+  and shows the full list; the parameter is never written back into the URL by chip clicks.
 - **Collapsible Category facet row (collapsed by default).** The category vocabulary is unbounded and admin-managed, so its chip row is the one facet that can wrap to several ragged lines and push the results grid below the fold. It is therefore **collapsible, and starts collapsed** — the same "collapsed by default, remembered per browser" pattern already used by the admin cards (§5) and the discussion card (§24). **Only the Category row collapses:** `Harness`, `Source`, `My Skills`, `✓ Official`, `Archived` and `✕ clear filters` are fixed, short, and stay exactly as they are.
   - **Collapsed state shows a header only — no chips.** The row renders as **`Category · <n> ▸`**, where `<n>` is the **total number of categories the viewer can see** (`facets.categories.length`). The count is deliberately part of the header: a bare label gives the viewer no way to judge whether expanding is worth a click. It is **honest and stable** because `GET /api/skills/facets` takes no filter params — the catalog's category vocabulary does **not** shrink as other filters are applied, so the number never wobbles. Per-chip counts are unchanged when expanded.
   - **Always collapsible — no chip-count threshold.** The toggle appears whenever the row appears, even for a handful of categories: one code path, one predictable affordance. The row is still **not rendered at all** when the viewer can see **no** categories (unchanged).
@@ -957,12 +985,47 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   which would flood the agent and turn every list call into a filtered catalog scan), so **search is the
   only discovery path** there. The visibility predicate itself is extracted into `@skilly/shared` and
   shared by both processes — invariant #3 has exactly one implementation (§29).
-- **Taxonomy:** `category` = controlled vocabulary (admin-managed, multi-select per skill); `tool/harness` = controlled enum. **There are no free-form tags** (removed in **migration 0068**, which drops `skills.tags` and rewrites the FTS trigger without weight C):
-  - **Why.** Tags were never rendered on catalog cards or skill pages and were never a filter; their only reach was the substring-search predicate and the marketplace manifest's `keywords` (§30.3). Two overlapping taxonomies with one of them invisible was pure friction on the propose form. Categories are the single taxonomy now, and §30 will lean on them further (plugin grouping — a separate, later change).
+- **Category slugs (migration 0069).** Every category carries an immutable `slug` (§3), derived
+  once from its name by the shared **`categorySlug(name)`** (`@skilly/shared/category`): lowercase →
+  NFKD, diacritics stripped → every run of non-`[a-z0-9]` becomes one `-` → leading/trailing `-`
+  trimmed → capped at 64 chars; the result must match `^[a-z0-9][a-z0-9-]*$`. A name that reduces
+  to nothing (`"&&&"`) is rejected **422** *"a category name needs at least one letter or digit"*.
+  Because names are stored lowercase, most slugs equal their name; `ai & ml` → `ai-ml`. The slug is
+  the category's **plugin name** in every Claude plugin marketplace (§30.3) — the reason it is
+  immutable and unique.
+  - **Slug collision on create** — a new name whose slug already belongs to another category — is
+    rejected **422** with a message that names the winner: *"‘ai ml’ would share the plugin name
+    `ai-ml` with the existing category ‘ai & ml’ — pick that category instead."* Enforced by the
+    UNIQUE index and surfaced, with that message, on every creation path: proposal submit /
+    revise / resubmit / reviewer edit (`verifySubmissionPayload`, §8), direct publish, request
+    create/edit (§26), and the MCP `propose` / `update_proposal` / `create_request` tools (§29).
+    The check runs **at submit time**, so the proposer sees it, not the reviewer at accept.
+  - **`general` is reserved.** A category whose slug would be `general` (`general`, `General`,
+    `GENERAL `, `géneral`…) is rejected **422** on the same paths with an explanation, not a bare
+    error: *"‘general’ is reserved — it names the marketplace plugin that collects skills without a
+    category. Choose a more specific category for this skill."* The browser runs the same shared
+    check as the user types, so the propose form flags it inline before submit.
+- **The Categories field carries an ⓘ info bubble — everywhere it is edited.** Categories now do
+  two jobs (catalog filtering *and* marketplace plugin grouping, §30.3), and the second is invisible
+  from the form, so the field explains itself: a small **ⓘ button** sits right after the
+  **Categories** label; click, tap, or keyboard-activate (Enter/Space) opens an **info bubble**
+  (a popover anchored to the button, `role="dialog"` with `aria-labelledby`, the button carrying
+  `aria-expanded`); Escape, clicking outside, or activating the button again closes it, and focus
+  returns to the button. The bubble reads: *"Categories classify this skill in the catalog and its
+  filters. They also decide which plugin carries it in the Claude Code marketplaces: every category
+  becomes a plugin named after it (e.g. `productivity@skilly-team-a`), a skill with several
+  categories ships in each of them, and a skill with none goes into the `general` plugin."* One
+  shared component, **`InfoTip` (`components/ui.tsx`)**, serves every surface so the copy cannot
+  drift: the **propose form** in **both** modes (*I have a skill* and *I want a skill* — the
+  request's categories pre-fill the fulfilling proposal, so the grouping consequence applies), and
+  the **proposal page's metadata-edit panel** (§8). The existing helper line beneath the field is
+  unchanged. Hover shows the browser's native `title` too, but hover is never the only way in.
+- **Taxonomy:** `category` = the curated-by-convention vocabulary above (created on the fly, multi-select per skill, each with an immutable slug); `tool/harness` = controlled enum. **There are no free-form tags** (removed in **migration 0068**, which drops `skills.tags` and rewrites the FTS trigger without weight C):
+  - **Why.** Tags were never rendered on catalog cards or skill pages and were never a filter; their only reach was the substring-search predicate and the marketplace manifest's `keywords` (§30.3). Two overlapping taxonomies with one of them invisible was pure friction on the propose form. Categories are the single taxonomy now, and §30.3 leans on them further: they group skills into marketplace plugins.
   - **Existing data is dropped, not converted.** Tags stored before the migration are discarded with the column; **no categories are auto-created** from them — the category vocabulary stays admin-curated.
   - **Surfaces removed:** the *Tags* input on the propose form (new-skill and new-version modes), the *Tags* row of the proposal review page (both the read view and the metadata-edit panel, §8), the old/new *Tags* diff row, and the `tags` field of MCP skill-search results (§29). The accept-time metadata sync (§8) and the no-op guard (§8) compare title/description/categories/tool-harness/usage only.
   - **API compatibility.** `POST /api/proposals`, `POST /api/publish`, proposer `revise`/`resubmit`, and the reviewer metadata edit **silently ignore** a `tags` field in the request body (no 400) — no consumer other than skilly's own UI ever sent it, and a hard reject would only punish a stale browser tab mid-deploy.
-  - **Marketplace manifest.** The per-plugin `keywords` array is now the skill's **category names** (omitted when the skill has none) instead of its tags, so `/plugin` search still has topical terms (§30.3). The §30.5 content hash drops tags accordingly.
+  - **Marketplace manifest.** Tags used to fill the per-plugin `keywords` array; with plugins grouped by category (§30.3) it now carries the member skills' titles and slugs, and the §30.5 content hash covers category slugs instead of tags.
 - **Ranking:** with a query active, **name matches first** — a skill whose **title or slug** contains the term sorts ahead of one matched only in its description/usage — then popularity (`install_count`), then the **Bayesian-smoothed rating (§18)** as the final tiebreaker. This is the **"Relevance"** sort (the default); with no query, popularity leads. A dedicated **"Top rated"** sort orders by the smoothed rating directly, **"Latest"** by most-recent version. A star value is never a match term.
 - **"Skills you might like" (related skills):** the skill **detail page** ends with a *"Skills you might like"* section — up to **3** other skills **most often installed together** with this one (pure **co-install** signal, no content similarity). Computed **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the per-`(user, skill)` adoption ledger `skill_installs` (§21): two skills are related when the same users adopted both; `shared_count` = number of shared adopters. Stored in **`related_skills`** (migration 0046) as a wider top-N candidate list per skill so the read path (`relatedSkills` → `GET /api/skills/:ns/:slug/related`) can **visibility-filter per viewer** (invariant #3 — restricted skills never surface to outsiders) and still fill the **top 3 the viewer can see** **and hasn't adopted yet**, ranked by shared adopters then `install_count`. Active skills only. **Already-installed exclusion:** a neighbour the viewer has adopted (a `skill_installs` row — git install **or** first download, uninstall-agnostic) is dropped. **Empty-state:** if there were visible neighbours but the viewer has installed **all** of them, the section shows *"You have all related skills."*; if there were **no** visible neighbours to begin with (a new/low-adoption skill, or all its neighbours restricted-invisible), the section is **hidden** entirely. (`relatedSkills` returns `{ related, allInstalled }` to tell those two empty cases apart; the nightly rebuild means a brand-new skill won't appear as a neighbour until the next run.)
 - **On-demand rebuild (Administration → Maintenance):** a **platform admin** can trigger the recompute without waiting for the nightly run, via a **"Rebuild now"** button in a **Maintenance / background jobs** card. Because the batch job lives on the worker, the button doesn't run it inline — it **signals** the worker: the route (`POST /api/admin/jobs/related-rebuild`, platform-admin only, **audited** as `job.related_rebuild_requested`) sets `platform_settings.related_rebuild_requested_at`; the worker's short **signal poll** (leader-only) picks it up, runs `recomputeRelatedSkills`, and **clears** the flag. The recompute takes a **Postgres advisory lock** so a manual run and the nightly sweep never collide (the second caller skips). Both runs stamp `related_last_run_at` + `related_last_run_count` into `platform_settings`, which the card shows ("last rebuilt … · N links"); `GET /api/admin/jobs/related-rebuild` returns that status and whether a run is in flight, and the button polls it (idle → *Rebuilding…* → done).
@@ -3235,7 +3298,7 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 | `get_skill_content` | Raw `SKILL.md` for a version (default: latest stable). The tool twin of the resource read, with identical counting (§29 *Adoption*). |
 | `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
 | `get_skill_file` | One file from a version's bundle. Text inline; binary as a base64 blob; over `mcp_max_resource_bytes` → a clear error naming the `download` route. |
-| `get_registry_metadata` | Categories, tool/harness enum, the namespaces the caller can see, and the platform limits an agent needs before proposing (max bundle bytes, inline upload cap, `require_review` per namespace). |
+| `get_registry_metadata` | Categories (**name + slug**, the slug being the marketplace plugin name — §30.3), tool/harness enum, the namespaces the caller can see, and the platform limits an agent needs before proposing (max bundle bytes, inline upload cap, `require_review` per namespace). |
 
 **Install (4)**
 | Tool | Behavior |
@@ -3525,8 +3588,10 @@ invariant #4 (the gateway is the only path to bytes) is unchanged.
 - **The two sets are disjoint.** An `org`-visible skill owned by `team-a` appears in the
   **public** marketplace and **never** in `skilly-team-a` — the namespace marketplace is
   precisely "the restricted work of this team", the public one is "everything anyone may
-  see". No skill is listed twice, and a team member who adds both gets the complete
-  picture with no duplicates.
+  see". No skill is listed in two **marketplaces**, and a team member who adds both gets the
+  complete picture with no cross-marketplace duplicates. (Within **one** marketplace a skill
+  with several categories is carried by several **plugins** — §30.3; that is grouping, not
+  double-listing, and is deliberate.)
 - **The two toggles are independent.** `team-a` disabling its marketplace removes
   `skilly-team-a`; team-a's `org`-visible skills stay in the public marketplace, which is
   governed solely by the platform-admin switch. One switch, one repo.
@@ -3559,37 +3624,78 @@ The public-facing `name` in `marketplace.json` is **`<prefix>-<ns>`** for a name
   marketplace) is invisible to the admin otherwise.
 - `name` must be kebab-case; namespace slugs already are.
 
-### 30.3 Repo shape — plugins are embedded
+### 30.3 Repo shape — plugins are embedded, one plugin per category
 
 Each marketplace is a **self-contained** repo: the skill bytes live inside it, so **one
-credential is enough** and the per-skill repos of §9 are untouched.
+credential is enough** and the per-skill repos of §9 are untouched. **Plugins are category
+buckets, not skills**: a marketplace has one plugin per category represented among its
+qualifying skills, plus a `general` plugin for skills with no category.
 
 ```
 <marketplace repo>/
 ├── .claude-plugin/
 │   └── marketplace.json
 └── plugins/
-    └── <skill-slug>/
-        ├── .claude-plugin/
-        │   └── plugin.json
-        └── skills/
-            └── <skill-slug>/
-                ├── SKILL.md
-                └── …every other file from the version bundle
+    ├── <category-slug>/                 # one per category present, e.g. productivity/
+    │   ├── .claude-plugin/
+    │   │   └── plugin.json
+    │   ├── hooks.json | .mcp.json | …   # merged plugin components (below), only if any
+    │   └── skills/
+    │       ├── <skill-dir>/             # one per member skill
+    │       │   ├── SKILL.md
+    │       │   └── …every other file from the version bundle
+    │       └── <skill-dir>/
+    └── general/                         # skills with no category — omitted when empty
+        └── …same shape
 ```
 
-- **One plugin per skill**, sourced by **relative path** (`"source": "./plugins/<slug>"`,
-  with `metadata.pluginRoot = "./plugins"`) — the best-supported source type and the only
-  one that needs no second credential.
-- **The listed version is the skill's latest *stable* semver** (yanked and prerelease
-  excluded), materialized as the plugin entry's `version` and `plugin.json`'s `version`.
-  Because Claude Code only updates a plugin when that field changes, a marketplace resync
-  that touches nothing else is inert for consumers.
+**Membership rules (exact):**
+- A qualifying skill (§30.5: active, latest **stable** version git-published) with **N ≥ 1**
+  categories is a member of **each** of those N plugins and is **never** in `general`.
+- A qualifying skill with **zero** categories is a member of **`general` only**.
+- `general` is emitted **only when it has at least one member**. A category with **no**
+  qualifying skill in this marketplace produces **no** plugin. A marketplace with zero
+  qualifying skills is still served with `"plugins": []` (unchanged).
+- Membership is computed **per marketplace**: the public marketplace groups `org`-visible skills
+  **across all namespaces** by category; a namespace marketplace groups that namespace's
+  `namespace`-visible skills. A category present in both produces a `productivity` plugin in each
+  — `productivity@skilly-public` and `productivity@skilly-team-a` are distinct installs.
+
+**Plugin naming — no prefix.** The plugin `name` (and its directory under `plugins/`) is the
+**category slug** (§3/§10) or the literal **`general`**. Consumers install it as
+**`<category-slug>@<marketplace name>`** (`productivity@skilly-team-a`); the marketplace name
+already carries the instance prefix (§30.2), so a prefix on the plugin would only repeat it.
+Category slugs are immutable and `general` is a reserved slug (§10), so a plugin's name can
+neither change under a consumer nor collide with a real category.
+
+**Skill directory names inside a plugin.** Claude Code addresses a plugin's skills as
+`<plugin>:<skill-dir>`, so the directory is the consumer-visible skill name:
+- **Namespace marketplaces:** `skills/<skill-slug>/` — slugs are unique within a namespace.
+  → `/productivity:deploy`.
+- **Public marketplace:** `skills/<ns-slug>-<skill-slug>/` — slugs are unique only **per
+  namespace**, and the public marketplace spans them all. → `/productivity:team-a-deploy`.
+- **Collision guard.** Two members of one plugin that resolve to the same directory (possible in
+  the public form because `-` is legal inside slugs: `team-a`+`deploy` vs `team`+`a-deploy`) are
+  resolved deterministically: members are ordered by `(namespace slug, skill slug)`, the **first
+  wins**, the later one is **skipped from that plugin** and a **`system_event`** (§25,
+  `source='worker'`, `error_code='marketplace_skill_dir_collision'`, payload naming the
+  marketplace, plugin, and both skills) is recorded. Never silent.
+
+**The listed `version` is a per-plugin counter, `1.0.<n>`.** A plugin now aggregates several
+skills, so no single skill semver describes it. Claude Code updates an installed plugin **only
+when this field changes**, so the counter must move exactly when the delivered bytes would:
+- Each sweep computes a plugin **fingerprint** over its members, sorted by directory name:
+  `(skill-dir, skill id, latest-stable semver, bundle content_sha256)` per member, plus the
+  sorted list of merged component files. Fingerprint unchanged ⇒ `version_n` unchanged.
+  Changed ⇒ `version_n += 1`. A brand-new plugin starts at `1` (`1.0.1`). Persisted in
+  `marketplace_plugins` (§3); rows are never decremented or removed by the sweep.
+- Adding or removing a member, a member's new stable version, and a member's bundle change
+  all bump; a **regrouping without content change** (a skill leaves this plugin for another) bumps
+  **only the two plugins whose membership changed**. Title/description edits do **not** change a
+  plugin's fingerprint (they are not delivered bytes) — they still rebuild the manifest via the
+  marketplace-level hash (§30.5), which is inert for installed plugins, as intended.
 - **Only the default branch (`main`) matters.** Marketplace repos carry **no tags** —
   pinning a skill version is the `npx skills add` path (§9), not this one.
-- An enabled marketplace with **zero** qualifying skills is still synthesized and served,
-  with `"plugins": []`, so `/plugin marketplace add` succeeds and starts working the moment
-  a skill qualifies.
 
 **`marketplace.json`** (generated; fields beyond these are not emitted):
 
@@ -3602,47 +3708,101 @@ credential is enough** and the per-skill repos of §9 are untouched.
   "metadata": { "pluginRoot": "./plugins" },
   "plugins": [
     {
-      "name": "<skill-slug>",
-      "source": "./plugins/<skill-slug>",
-      "displayName": "<skill title>",
-      "description": "<skill description>",
-      "version": "<latest stable semver>",
-      "keywords": ["<category names…>"],
-      "category": "<primary category slug>",
-      "homepage": "<registry base>/skills/<ns>/<slug>"
+      "name": "<category-slug | general>",
+      "source": "./plugins/<category-slug | general>",
+      "displayName": "<category name | general>",
+      "description": "<category description, or the fallback below>",
+      "version": "1.0.<n>",
+      "keywords": ["<member skill titles and slugs…>"],
+      "category": "<category-slug>",
+      "homepage": "<registry base>/catalog?category=<category name>"
     }
   ]
 }
 ```
 
-`keywords` is the skill's category **names** and is omitted when the skill has none (it carried the free-form tags until those were removed — §10). `owner.email` is omitted when the namespace has no `maintainer_contact`; when present it is **guaranteed email-shaped** by the write-side validation (§30.6), which is the reason that validation exists — a free-text value here emitted a manifest with an invalid `owner.email`. The public
-marketplace's `owner` is the platform (`display_name` = the registry host, no email).
+- `displayName` is the category **name** as stored (lowercase — §3), or `general`.
+- `description` is the category's `description` when set; otherwise the fallback **"N skills in
+  <category name> from <owner name>"** (`general`: **"N skills without a category from <owner
+  name>"**), `owner name` being the namespace `display_name` or, for the public marketplace, the
+  registry host. Nothing sets `categories.description` today, so the fallback is the norm.
+- `keywords` is the **union of member skill titles and slugs** (de-duplicated, member order),
+  so `/plugin` search by a skill's name still finds the plugin that carries it. Free-form tags
+  used to fill this field; they were removed (§10).
+- `category` is the plugin's own category slug; **omitted** for `general`.
+- `homepage` lands on **exactly the skills the plugin carries** via the catalog's `?category=`
+  arrival parameter (§10): public → `<base>/catalog?category=<name>`; namespace →
+  `<base>/catalog?ns=<ns>&nsName=<display_name>&category=<name>`. `general` links to the same
+  catalog view **without** `category`. Omitted when no registry base is configured.
+- **Per-skill homepages are gone from the manifest** — an accepted loss; the plugin homepage is
+  one click from each member.
 
-**`plugin.json`** (generated per skill):
+`owner.email` is omitted when the namespace has no `maintainer_contact`; when present it is
+**guaranteed email-shaped** by the write-side validation (§30.6), which is the reason that
+validation exists — a free-text value here emitted a manifest with an invalid `owner.email`. The
+public marketplace's `owner` is the platform (`display_name` = the registry host, no email).
+
+**`plugin.json`** (generated per plugin):
 
 ```json
 {
-  "name": "<skill-slug>",
-  "description": "<skill description>",
-  "version": "<latest stable semver>",
+  "name": "<category-slug | general>",
+  "description": "<same as the manifest entry>",
+  "version": "1.0.<n>",
   "skills": ["./skills/"]
 }
 ```
 
-#### Plugin-component pass-through
+`"skills": ["./skills/"]` already enumerates every subdirectory, so a multi-skill plugin needs
+no per-skill listing.
+
+#### Plugin-component pass-through — merged per plugin
 A skilly skill bundle is `SKILL.md` + arbitrary files. Claude Code plugins additionally
-recognize `hooks.json`, `mcp.json`, `lsp.json`, `commands/` and `agents/`. **These are
-passed through, not stripped**: when a bundle carries any of them **at its root**, synthesis
-**hoists** them from `skills/<slug>/` to the **plugin root** and references them from
-`plugin.json` (`"hooks": "./hooks.json"`, `"mcpServers": "./mcp.json"`,
-`"lspServers": "./lsp.json"`, `"commands": ["./commands/"]`, `"agents": ["./agents/"]`).
-Everything else stays under `skills/<slug>/`.
+recognize `hooks.json`, `mcp.json`, `lsp.json`, `commands/` and `agents/`. **These are passed
+through, not stripped**: when a member bundle carries any of them **at its root**, synthesis
+**hoists** them from `skills/<skill-dir>/` to the **plugin root** and references them from
+`plugin.json` (`"hooks": "./hooks.json"`, `"mcpServers": "./mcp.json"`, `"lspServers":
+"./lsp.json"`, `"commands": ["./commands/"]`, `"agents": ["./agents/"]`). Everything else stays
+under `skills/<skill-dir>/`.
+
+Because a plugin now holds several skills, hoisted components are **merged**, deterministically,
+in member order (`(namespace slug, skill slug)`):
+- **JSON components** (`hooks.json`, `mcp.json`, `lsp.json`) are merged **key-wise at the top
+  level**: an **object-valued** key (`mcpServers`, `lspServers`, `hooks`) merges its entries by
+  name; an **array-valued** entry (a hook event's matcher list) **concatenates**. An entry name
+  claimed by two members (two skills each defining an MCP server called `db`) keeps the **first**
+  and **skips** the second.
+- **Directory components** (`commands/`, `agents/`) merge **by file name**; a file name claimed
+  twice keeps the **first** and skips the second.
+- Every skip records a **`system_event`** (§25, `source='worker'`,
+  `error_code='marketplace_component_collision'`, payload naming the marketplace, plugin,
+  component, key or file, the winner and the skipped skill). Never silent — a maintainer whose
+  hook was dropped must be able to find out why.
+- The merged files are part of the plugin **fingerprint** (above), so a component change bumps
+  the version like a bundle change does.
 
 > **Security note (§22).** Hooks and MCP servers are **code that executes on the consumer's
 > machine** at session start, which `SKILL.md` alone is not. Pass-through is a deliberate,
-> accepted decision — it makes skilly a distributor of executable configuration. The
-> existing ClamAV scan of the bundle (§3, §6) is the control; no additional gate is added.
-> Revisit if a skill is ever published whose hooks are hostile.
+> accepted decision — it makes skilly a distributor of executable configuration. The existing
+> ClamAV scan of the bundle (§3, §6) is the control; no additional gate is added. **Grouping adds
+> one more accepted consequence:** a skill carried by two plugins (two categories) that a consumer
+> installs both of will have its MCP server started, and its hooks registered, **twice** — once per
+> plugin. Claude Code offers no cross-plugin dedup and skilly cannot know which plugins a consumer
+> chose. Stated, not hidden; revisit if a duplicated hook ever proves harmful rather than noisy.
+
+#### Migration from per-skill plugins (breaking — v2.0.0)
+The previous layout was **one plugin per skill**, named by the skill slug. This change **replaces**
+it, and the marketplace contract's pin note in `plugin-marketplace.ts` is updated accordingly.
+Consequences for consumers, stated plainly:
+- Plugins already installed under their **old skill-slug names** stop appearing in the manifest.
+  Claude Code **does not uninstall them** — they stay on disk, keep working, and **silently stop
+  updating**. Consumers remove them with `/plugin uninstall <skill-slug>@<marketplace>` and
+  install the category plugins instead.
+- Skill invocation names change from `/<skill-slug>:<skill-slug>` to
+  `/<category-slug>:<skill-dir>` (namespace) or `/<category-slug>:<ns>-<slug>` (public).
+- The **What's new** entry for the release carries these two instructions verbatim — that is the
+  whole consumer communication (no banner, no email); §30.7's install credits are unaffected
+  because they are keyed on skills, not plugins.
 
 ### 30.4 Serving & auth — the `marketplace` token
 
@@ -3735,13 +3895,31 @@ panel's default tab changes — the fallback is already specced and implemented.
   skill appears in its marketplace within the interval, not instantly. This is deliberate —
   synthesis rewrites a whole repo and must not sit in the publish path.
 - Each sweep computes, per enabled marketplace, a **content hash** over its qualifying
-  skills (slug, title, description, categories, latest-stable semver, bundle
-  `content_sha256`). Unchanged ⇒ no commit. Changed ⇒ the repo is rebuilt and **one commit**
-  is written to `main` whose message enumerates the added/updated/removed skill slugs — that
-  message is the attribution ledger §30.7 reads.
+  skills (namespace slug, slug, title, description, the sorted **category slugs**, latest-stable
+  semver, bundle `content_sha256`) plus the sorted list of merged component files per plugin.
+  Unchanged ⇒ no commit. Changed ⇒ the repo is rebuilt and **one commit** is written to `main`
+  whose message enumerates the added/updated/removed **skill** slugs — that message is the
+  attribution ledger §30.7 reads and it **stays skill-level**: plugins are a delivery grouping,
+  installs are credited to skills. The body may additionally list plugins added/removed/bumped
+  (`productivity 1.0.3 → 1.0.4`) for operators; §30.7 never parses the body.
+- **Per-plugin fingerprints and `1.0.<n>` counters** (§30.3) are computed in the same sweep and
+  written to `marketplace_plugins` in the same transaction as the commit, so a rebuilt manifest
+  never advertises a version the table does not hold.
+- **Served-skill sidecar.** Because the manifest now lists plugins, not skills, each rebuild also
+  writes a machine-readable **`.skilly/skills.json`** (`{ skills: [{ namespaceSlug, skillSlug,
+  semver }] }`, sorted) at the repo root. It is what the next sweep diffs against to compute
+  added/updated/removed, and what §30.7 intersects credits with ("the skills the marketplace
+  still lists"). Claude Code ignores it. A repo written before this layout has no sidecar; its old
+  manifest listed one plugin per skill named by the skill slug, so that plugin list is read as the
+  served set instead — the upgrade sweep therefore credits only real version changes, not a
+  phantom "everything added".
 - **Triggers to re-evaluate** (all naturally caught by the hash): publish, new version, yank,
   archive/restore, delete, visibility change, namespace reassignment, title/description/
-  category edits, marketplace enable.
+  category edits, marketplace enable — and, because categories now define plugins, **adding or
+  removing a category on a skill** (moves it between plugins) and a category losing its last
+  member (its plugin disappears; the orphaned skills, if any, surface in `general` on that same
+  sweep). Category *deletion* has no UI today; if a row is ever deleted by hand the same rule
+  applies on the next sweep.
 - **Self-heal**: a missing or ref-less marketplace repo for an enabled marketplace is
   re-synthesized from scratch, matching `repoProvisioned`'s existing rule (§6).
 - **Freshness stamp.** For every enabled marketplace it evaluates, the sweep stamps the run time
@@ -3773,7 +3951,7 @@ generally**, not a single-toggle page:
 
 - **Claude plugin marketplace** — an **on/off switch** (the shared `Switch`, below), the
   computed marketplace name, the **shared add-command panel** (Page 3, below — same three route
-  tabs, same remembered choice) once enabled, and a live count of the skills it publishes. Switching **off** goes through the disable confirm dialog above; switching on
+  tabs, same remembered choice) once enabled, and a live count of what it publishes — **"N skills in M plugins"** (`marketplaceSkillCount` / `marketplacePluginCount`, the same qualifying + grouping rule the worker uses, §30.3). Switching **off** goes through the disable confirm dialog above; switching on
   saves immediately.
 - **`require_review`** — an **on/off switch** labelled **"Require review for submissions"**
   (label left, switch right). Switching **on** saves immediately. Switching **off** first asks
@@ -3929,8 +4107,11 @@ per marketplace, a bubble for the namespace's contact, and per-row actions. Avai
   - the **skill count — the marketplace payload, not the namespace's catalog size.** It is
     `marketplaceSkillCount` (§30.6), the same live qualifying-skill rule the worker uses, so a
     namespace with 40 catalog skills of which 3 are `namespace`-visible reads **"publishes 3
-    skills"** — the label carries the verb precisely because the bare number would be
-    misread. Beneath it, freshness: **"synced N min ago"** from `marketplace_synced_at` (below),
+    skills in 2 plugins"** — the label carries the verb precisely because the bare number would
+    be misread, and the plugin count (`pluginCount`, computed by the same grouping rule as the
+    worker — §30.3: distinct category slugs among the qualifying skills, +1 for `general` when any
+    qualifying skill has no category) tells the consumer how many `/plugin install`s the
+    marketplace amounts to. Beneath it, freshness: **"synced N min ago"** from `marketplace_synced_at` (below),
     or **"not synced yet"** when NULL — marketplaces are eventually consistent (§30.5), and
     without this line a maintainer who just published sees a count the clone does not yet
     deliver and files a bug;
@@ -4035,7 +4216,10 @@ as **real installs of the individual skills**, via a commit cursor:
   - **NULL / unreachable** (first clone, or the repo was rebuilt from scratch after a
     re-enable) ⇒ credit **+1 install to every skill** the marketplace currently lists.
   - **Behind** ⇒ credit **+1 install to each skill added or version-changed** in the commit
-    range, read from the §30.5 commit messages. Removals credit nothing.
+    range, read from the §30.5 commit messages. Removals credit nothing. **A regrouping credits
+    nothing either**: a skill that moved between plugins (a category added or removed) without a
+    new version is neither "added" nor "version-changed" in the ledger, even though its plugin's
+    `1.0.<n>` bumped — the consumer received bytes they already had.
   - **Equal** ⇒ credit nothing (a no-op poll).
 - Each credit goes through the **same `record_git_access` path as a direct install**, so a
   marketplace install is indistinguishable from an `npx skills add` one in every downstream
@@ -4083,6 +4267,8 @@ as **real installs of the individual skills**, via a commit cursor:
 **Data model** (§3):
 - `namespaces` gains `marketplace_enabled BOOLEAN NOT NULL DEFAULT false`, and — in the
   later Marketplaces-page migration — `marketplace_synced_at TIMESTAMPTZ` (nullable).
+- **Migration 0069** (category plugins): `categories.slug TEXT UNIQUE NOT NULL` (backfilled,
+  fails on collision — §3), and the new **`marketplace_plugins`** counter table (§3).
 - `tokens`: `type` gains `'marketplace'`; `skill_id` becomes **nullable**; new
   `marketplace_scope TEXT` (`public` | `namespace`), `namespace_id UUID` (FK → `namespaces`,
   `ON DELETE CASCADE`), `last_served_commit TEXT`. CHECK constraint: `install` ⇒ `skill_id`
@@ -4123,6 +4309,22 @@ as **real installs of the individual skills**, via a commit cursor:
 - `PATCH /api/admin/namespaces/:id` also accepts `marketplaceEnabled`, delegating to the same
   writer as the namespace-admin page so the dual surface can't diverge on revocation or audit.
 - `GET|PATCH /api/admin/settings` gains the three settings above.
+- `GET /api/marketplaces/directory` rows and `GET /api/namespaces/administered` entries gain
+  **`pluginCount`** / **`marketplacePluginCount`** beside the skill count (§30.6).
+- `GET /api/categories` returns `{ name, slug }` per category (was name-only), so the browser's
+  inline reserved-name / collision check and the MCP `get_registry_metadata` tool share one shape.
+- `GET /api/skills?category=<name>` is unchanged server-side; the **catalog page** now also reads
+  `?category=` on arrival (§10).
+
+**System events** (§25), both `source='worker'`, recorded by the synthesis sweep, never silent:
+- `marketplace_skill_dir_collision` — two members of one plugin resolved to the same skill
+  directory; payload: marketplace, plugin, winner, skipped skill (§30.3).
+- `marketplace_component_collision` — a merged component key or file was claimed twice; payload:
+  marketplace, plugin, component, key/file, winner, skipped skill (§30.3).
+
+**Version.** This is a **breaking change to the marketplace contract** (plugin names, skill
+invocation names, plugin versions) → **major bump (2.0.0)** and a What's new entry carrying the
+consumer migration steps (§30.3 *Migration from per-skill plugins*).
 
 ### 30.9 Build placement
 Lands after the current tiers as its own increment: **worker** (synthesis sweep + marketplace

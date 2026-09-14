@@ -19,6 +19,7 @@ interface NamespaceRow {
   marketplaceEnabled: boolean;
   marketplaceName: string;
   marketplaceSkillCount: number;
+  marketplacePluginCount: number;
 }
 
 // `watch` / `flash`: the last-watched card behavior (§30.6) — any pointer press or keyboard focus
@@ -152,8 +153,9 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
           <span className="mono muted" style={{ fontSize: 11.5 }}>{ns.marketplaceName}</span>
         </div>
         <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
-          Publishes this namespace’s {ns.marketplaceSkillCount} restricted skill{ns.marketplaceSkillCount === 1 ? "" : "s"} as
-          Claude Code plugins. Org-visible skills are not here — they live in the public marketplace.
+          Publishes this namespace’s {ns.marketplaceSkillCount} restricted skill{ns.marketplaceSkillCount === 1 ? "" : "s"} in{" "}
+          {ns.marketplacePluginCount} Claude Code plugin{ns.marketplacePluginCount === 1 ? "" : "s"} — one per category, plus{" "}
+          <span className="mono">general</span> for uncategorized skills (§30.3). Org-visible skills are not here — they live in the public marketplace.
         </div>
 
         {ns.marketplaceEnabled && (

@@ -111,9 +111,11 @@ export interface CatalogEntry {
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
-export async function listAllCategories(): Promise<string[]> {
-  const { rows } = await pool.query<{ name: string }>(`select name from categories order by name asc`);
-  return rows.map((r) => r.name);
+export async function listAllCategories(): Promise<{ name: string; slug: string }[]> {
+  // name + slug: the slug is the category's marketplace plugin name (§30.3), and the browser's
+  // inline reserved-name / collision check needs it (§10 *Category slugs*).
+  const { rows } = await pool.query<{ name: string; slug: string }>(`select name, slug from categories order by name asc`);
+  return rows;
 }
 
 /**

@@ -9,7 +9,7 @@
 // no repo, no URL, and a mint would 404, so a row would have no working action.
 import { PUBLIC_SCOPE, marketplaceName, type EffectiveAccess } from "@skilly/shared";
 import { pool } from "./db";
-import { marketplaceSkillCount } from "./marketplaces";
+import { marketplacePluginCount, marketplaceSkillCount } from "./marketplaces";
 import { addedState, resolveContact, type AddedState, type DirectoryContact } from "./marketplaceDirectoryFilter";
 
 export interface DirectoryRow {
@@ -22,6 +22,8 @@ export interface DirectoryRow {
   name: string;
   /** The marketplace PAYLOAD — the skills it publishes (§30.1) — not the namespace's catalog size. */
   skillCount: number;
+  /** Plugins the marketplace publishes — one per category present, plus `general` (§30.3). */
+  pluginCount: number;
   /** When the sweep last evaluated this marketplace; null = not since it was enabled (§30.5). */
   syncedAt: string | null;
   contact: DirectoryContact;
@@ -104,8 +106,9 @@ export async function listMarketplaceDirectory(
   const out: DirectoryRow[] = [];
 
   if (publicEnabled) {
-    const [skillCount, stamp] = await Promise.all([
+    const [skillCount, pluginCount, stamp] = await Promise.all([
       marketplaceSkillCount(PUBLIC_SCOPE, null),
+      marketplacePluginCount(PUBLIC_SCOPE, null),
       pool.query<{ value: unknown }>(`select value from platform_settings where key = 'marketplace_public_synced_at'`),
     ]);
     const raw = stamp.rows[0]?.value;
@@ -115,6 +118,7 @@ export async function listMarketplaceDirectory(
       displayName: "Public marketplace",
       name: marketplaceName(prefix, PUBLIC_SCOPE),
       skillCount,
+      pluginCount,
       syncedAt: typeof raw === "string" ? toIso(raw) : null,
       contact: { kind: "none" }, // the platform owns it — no person to reach (§30.3)
       added: addedState(used.get("public") ?? []),
@@ -128,6 +132,7 @@ export async function listMarketplaceDirectory(
       displayName: n.display_name,
       name: marketplaceName(prefix, { kind: "namespace", namespaceSlug: n.slug }),
       skillCount: counts.get(n.id) ?? 0,
+      pluginCount: await marketplacePluginCount({ kind: "namespace", namespaceSlug: n.slug }, n.id),
       syncedAt: toIso(n.marketplace_synced_at),
       contact: resolveContact(
         n.maintainer_contact,
