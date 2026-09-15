@@ -50,8 +50,12 @@ INSERT INTO role_mappings (group_id, namespace_id, role)
    WHERE g.entra_object_id = 'g-team-a-members' AND n.slug = 'team-a'
 ON CONFLICT DO NOTHING;
 
-INSERT INTO categories (name, description) VALUES
-  ('documents', 'Document tooling'), ('devtools', 'Developer tooling'), ('data', 'Data & scraping')
+-- `slug` is NOT NULL since migration 0069 (it is the category's plugin name in every marketplace),
+-- so seed it explicitly rather than relying on a derivation that only runs in that one backfill.
+INSERT INTO categories (name, slug, description) VALUES
+  ('documents', 'documents', 'Document tooling'),
+  ('devtools',  'devtools',  'Developer tooling'),
+  ('data',      'data',      'Data & scraping')
 ON CONFLICT (name) DO NOTHING;
 
 -- Skills
