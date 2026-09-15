@@ -3,13 +3,17 @@
 // cast ::text, and since Postgres binds bare ORDER BY names to output aliases first, the board
 // sorted lexicographically — "9" ranked above "12". Seeds two users whose credit counts (9 vs 12)
 // diverge under text ordering and asserts numeric descending order on the primary sort and on the
-// tie-breaker path.
-import { test } from "node:test";
+// tie-breaker path. A second test covers the "skills requested" stat (§26).
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { getLeaderboard, LEADERBOARD_LIMIT } from "./leaderboard";
 import { pool } from "./db";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
+
+after(async () => {
+  if (enabled) await pool.end();
+});
 
 test("leaderboard: ranks by installs numerically (9 vs 12), not lexicographically", { skip: !enabled }, async () => {
   try {
@@ -75,6 +79,52 @@ test("leaderboard: ranks by installs numerically (9 vs 12), not lexicographicall
     await pool.query(`delete from access_log where skill_id = $1`, [skill]);
     await pool.query(`delete from skills where id = $1`, [skill]);
   } finally {
-    await pool.end();
+    /* pool closed in after() */
+  }
+});
+
+test("leaderboard: 'skills requested' counts open + fulfilled by requester, windowed on created_at (§26)", { skip: !enabled }, async () => {
+  const mkUser = async (oid: string) => (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ($1,$2,$3)
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+    [oid, `${oid}@org`, oid],
+  )).rows[0]!.id;
+  // Alphabetically the 3-request user sorts LAST so a degenerate name-asc order can't pass.
+  const one = await mkUser("lbrq-a-one");
+  const three = await mkUser("lbrq-b-three");
+  const mkReq = (requester: string, title: string, state: "open" | "fulfilled", ageDays: number) => pool.query(
+    `insert into skill_requests (requester_user_id, title, description, state, created_at)
+     values ($1, $2, 'd', $3, now() - ($4::int * interval '1 day'))`,
+    [requester, title, state, ageDays],
+  );
+  await pool.query(`delete from skill_requests where title like 'lbrq %'`);
+  try {
+    // three: two recent (one open, one fulfilled) + one 40 days old → 3 all-time, 2 in 30d.
+    await mkReq(three, "lbrq t1", "open", 1);
+    await mkReq(three, "lbrq t2", "fulfilled", 2);
+    await mkReq(three, "lbrq t3", "open", 40);
+    // one: a single 40-day-old request → 1 all-time, 0 in 30d (drops off the 30d board entirely).
+    await mkReq(one, "lbrq o1", "open", 40);
+
+    const all = await getLeaderboard("all", "requested", { bypassCache: true });
+    const mine = all.filter((e) => e.userId === one || e.userId === three);
+    assert.deepEqual(mine.map((e) => [e.userId, e.skillsRequested]), [[three, 3], [one, 1]],
+      "pure requesters appear on the board; open AND fulfilled count; ranked desc");
+    for (const e of mine) {
+      assert.equal(typeof e.skillsRequested, "number");
+      assert.equal(e.installs, 0, "no install credit — this person only asks");
+    }
+
+    const recent = await getLeaderboard("30d", "requested", { bypassCache: true });
+    const threeRecent = recent.find((e) => e.userId === three);
+    assert.equal(threeRecent?.skillsRequested, 2, "30d window keys on the request's created_at");
+    assert.equal(recent.find((e) => e.userId === one), undefined, "nothing in the window → not on the 30d board");
+
+    // Hard-deleting a request (withdraw/remove, §26) drops the count immediately — no snapshot.
+    await pool.query(`delete from skill_requests where title = 'lbrq t1'`);
+    const afterDelete = await getLeaderboard("all", "requested", { bypassCache: true });
+    assert.equal(afterDelete.find((e) => e.userId === three)?.skillsRequested, 2);
+  } finally {
+    await pool.query(`delete from skill_requests where title like 'lbrq %'`);
   }
 });

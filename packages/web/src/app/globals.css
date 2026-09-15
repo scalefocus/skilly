@@ -27,6 +27,7 @@
   --warn-soft: #ffedd9;
   --danger: #e5343d;
   --danger-soft: #ffe1e3;
+  --violet: #7c3aed;
   --shadow-sm: 0 1px 2px rgba(8, 39, 115, 0.06);
   --shadow: 0 1px 2px rgba(8, 39, 115, 0.05), 0 14px 34px -18px rgba(8, 39, 115, 0.25);
   --shadow-lg: 0 2px 4px rgba(8, 39, 115, 0.06), 0 36px 60px -28px rgba(8, 39, 115, 0.35);
@@ -69,6 +70,7 @@
   --warn-soft: #2e2214;
   --danger: #ff5961;
   --danger-soft: #331518;
+  --violet: #a78bfa;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow: 0 2px 6px rgba(0, 0, 0, 0.5), 0 18px 44px -20px rgba(0, 0, 0, 0.8);
   --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.55), 0 44px 80px -30px rgba(0, 0, 0, 0.9);

@@ -14,6 +14,9 @@ test.describe("leaderboard (§21)", () => {
     // The ranking controls are always present regardless of data.
     await expect(page.getByRole("button", { name: "Installs" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Skills adopted" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Requests fulfilled" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Watched" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Requested", exact: true })).toBeVisible();
 
     // Either seeded contributor rows or a clean empty state — the data region rendered without error.
     await expect(
