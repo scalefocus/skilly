@@ -184,34 +184,46 @@ test("achievements: original-proposer rule + GDPR erasure sweep", { skip: !enabl
     `insert into namespaces (slug, display_name, require_review) values ('ach-ns','ach-ns',false)
      on conflict (slug) do update set display_name = excluded.display_name returning id`,
   )).rows[0]!.id;
+  // A FRESH skill per run. Published versions are immutable (invariant #2) and the DB guard blocks
+  // DELETE, so a fixed slug would keep the first run's versions — and with them the first run's
+  // `created_by` — forever, which is exactly how this test used to fail on its second run against
+  // a persistent database. A hermetic skill costs one tiny row and never goes stale.
+  const slug = `ach-origin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const skill = (await pool.query<{ id: string }>(
     `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility)
-     values ($1,'ach-origin','Origin','d','claude','hosted','org')
-     on conflict (namespace_id, slug) do update set title = excluded.title returning id`,
-    [ns],
+     values ($1,$2,'Origin','d','claude','hosted','org') returning id`,
+    [ns, slug],
   )).rows[0]!.id;
-  await pool.query(`delete from skill_versions where skill_id = $1`, [skill]);
+  // Two versions, different authors: the rule is "the creator of the EARLIEST version", not
+  // "anyone who ever published here", so the later author must not qualify.
   await pool.query(
-    `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by)
-     values ($1, '1.0.0', false, 'active', 'ach/origin/1.0.0.tgz', 'sha', $2)`,
-    [skill, proposer],
+    `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by, created_at)
+     values ($1, '1.0.0', false, 'active', $2 || '/1.0.0.tgz', 'sha', $3, now() - interval '2 days'),
+            ($1, '1.1.0', false, 'active', $2 || '/1.1.0.tgz', 'sha', $4, now() - interval '1 day')`,
+    [skill, slug, proposer, other],
   );
   assert.equal(await isOriginalProposer(pool, skill, proposer), true);
-  assert.equal(await isOriginalProposer(pool, skill, other), false);
+  assert.equal(await isOriginalProposer(pool, skill, other), false, "a later version's author is not the original proposer");
 
-  // Erasure deletes the rows and resets the two preference/zone columns.
-  await awardAchievement(pool, proposer, "first_published", { backfill: true });
-  await pool.query(`update users set achievements_hidden = true where id = $1`, [proposer]);
-  assert.equal((await heldKeys(proposer)).length, 1);
-  await eraseUser(admin, proposer, null);
-  assert.deepEqual(await heldKeys(proposer), []);
-  const row = (await pool.query<{ achievements_hidden: boolean; time_zone: string | null }>(
-    `select achievements_hidden, time_zone from users where id = $1`, [proposer],
+  // Erasure is exercised on its OWN user, never on `proposer`: erasure detaches the Entra object
+  // id, so erasing the person who created the immutable version above would leave the next run's
+  // freshly-created `ach-proposer` pointing at nothing — and the version, which cannot be deleted,
+  // still credited to the old tombstone. That is exactly how this test used to fail on its second
+  // run against a persistent database.
+  const victim = await mkUser("ach-erase-victim", "UTC");
+  await awardAchievement(pool, victim, "first_published", { backfill: true });
+  await pool.query(`update users set achievements_hidden = true where id = $1`, [victim]);
+  assert.equal((await heldKeys(victim)).length, 1);
+  await eraseUser(admin, victim, null);
+  assert.deepEqual(await heldKeys(victim), []);
+  const row = (await pool.query<{ achievements_hidden: boolean; time_zone: string | null; hero_at: Date | null }>(
+    `select achievements_hidden, time_zone, hero_at from users where id = $1`, [victim],
   )).rows[0]!;
   assert.equal(row.achievements_hidden, false);
   assert.equal(row.time_zone, null);
+  assert.equal(row.hero_at, null);
   // A tombstone has no hall.
-  assert.equal(await getAchievements(proposer, other), null);
+  assert.equal(await getAchievements(victim, other), null);
 });
 
 // --------------------------------------------------------------------------------------------
