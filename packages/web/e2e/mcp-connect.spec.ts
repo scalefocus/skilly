@@ -131,7 +131,10 @@ test.describe("MCP connect flow (§29)", () => {
 
   test("approving mints a code and lists the connection; revoking removes it", async ({ page }) => {
     await devSignIn(page);
-    const client = await registerClient(page, "Approve Then Revoke Client");
+    // Unique per run: a grant survives a failed attempt, so a retry (CI runs with retries:1) would
+    // otherwise find TWO connections under the same name and trip strict mode on the listing below.
+    const name = `Approve Then Revoke ${Date.now()}`;
+    const client = await registerClient(page, name);
     await page.goto(authorizeUrl(client.client_id));
 
     // The loopback redirect won't resolve — that's fine, we only need the URL the browser was sent to.
@@ -148,13 +151,18 @@ test.describe("MCP connect flow (§29)", () => {
     // The grant now shows on the MCP page, and can be revoked from there.
     const list = await (await page.request.get("/api/mcp/connections")).json();
     const conn = (list.connections as Array<{ grantId: string; clientName: string }>).find(
-      (c) => c.clientName === "Approve Then Revoke Client",
+      (c) => c.clientName === name,
     );
     expect(conn, JSON.stringify(list)).toBeTruthy();
 
+    // The browser really does follow the 303 now, and the loopback callback refuses the connection.
+    // Let that navigation finish failing before we navigate away, or this goto races it and is
+    // interrupted ("interrupted by another navigation to chrome-error://chromewebdata/").
+    await page.waitForURL((u) => !u.toString().includes("/oauth/authorize"), { timeout: 15_000 }).catch(() => {});
+
     await page.goto("/mcp");
     await expect(page.getByRole("heading", { name: "MCP server" })).toBeVisible();
-    await expect(page.getByText("Approve Then Revoke Client")).toBeVisible();
+    await expect(page.getByText(name)).toBeVisible();
     // No credential is ever shown in a connect snippet — that's the point of the OAuth flow.
     await expect(page.getByText("x-access-token")).toHaveCount(0);
 
@@ -168,7 +176,8 @@ test.describe("MCP connect flow (§29)", () => {
 
   test("declining sends access_denied back to the client and creates no connection", async ({ page }) => {
     await devSignIn(page);
-    const client = await registerClient(page, "Declining Client");
+    const name = `Declining ${Date.now()}`;
+    const client = await registerClient(page, name);
     await page.goto(authorizeUrl(client.client_id));
 
     const [nav] = await Promise.all([
@@ -179,7 +188,7 @@ test.describe("MCP connect flow (§29)", () => {
 
     const list = await (await page.request.get("/api/mcp/connections")).json();
     expect(
-      (list.connections as Array<{ clientName: string }>).some((c) => c.clientName === "Declining Client"),
+      (list.connections as Array<{ clientName: string }>).some((c) => c.clientName === name),
     ).toBeFalsy();
   });
 

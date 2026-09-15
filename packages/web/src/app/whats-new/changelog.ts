@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.5.1",
+    date: "2026-09-15",
+    summary:
+      "Connecting an MCP client now completes: approving on the consent screen was being blocked by the registry's own content-security policy, which stopped the browser handing the authorization code back to your client. The consent screen — and only that page — now permits the hand-back, to exactly the loopback and https addresses a client may register. No action needed beyond retrying any connection that silently failed.",
+  },
+  {
     version: "2.5.0",
     date: "2026-09-15",
     summary:

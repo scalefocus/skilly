@@ -1890,6 +1890,30 @@ substantive tightening over the June-2026 audit CSP; the other directives are un
   style injection is low-risk and can't be nonced without breaking them), as do `img-src 'self' data:`
   (data-URI avatars, §5/§19), `connect-src 'self'`, `font-src 'self'` (self-hosted fonts), `object-src
   'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, `form-action 'self'`.
+- **`form-action` is widened on exactly one document: `/oauth/authorize`** (§29 consent screen),
+  to **`form-action 'self' http://127.0.0.1:* http://localhost:* https:`**. Every other response
+  keeps `form-action 'self'`.
+  - **Why it is required, not a convenience.** The consent screen is a form POST whose handler
+    answers `303` to the MCP client's registered `redirect_uri` — a different origin by definition.
+    Browsers enforce `form-action` **across redirects**, so under `'self'` the navigation is aborted
+    before the request is made and the authorization code never reaches the client: the §29 connect
+    flow cannot complete in any enforcing browser. The failure is silent (`net::ERR_ABORTED`, no
+    CSP report on the *redirect* leg in some engines), which is why it survived review.
+  - **Why this widening is safe.** The allowed set is exactly the shapes Dynamic Client Registration
+    already accepts (§29 *Redirect URIs*): loopback with any port, or `https`. It is a **superset
+    filter, not the control** — the actual redirect target is still validated byte-for-byte against
+    that client's registered URIs before any code is minted, and an unverifiable one renders the
+    error page rather than redirecting. CSP here is defence-in-depth against a form on this page
+    being repointed, not the thing that decides where a user may be sent.
+  - **Why not widen it globally.** `form-action` is the directive that stops an injected or
+    rewritten form on any OTHER page from posting a user's input off-origin. `/oauth/authorize` is
+    the only document in the product that legitimately submits across origins, so it is the only one
+    that relaxes. A custom app scheme (native clients, §29) is **not** added: those are handled by
+    the OS handler, not a browser navigation.
+  - Emitted by the same middleware that builds the policy, keyed on the request path — no per-client
+    lookup (the middleware has no DB access), so the header is identical for every authorize request
+    regardless of which client is being consented to. That also means it leaks nothing about the
+    client's registration.
 - **`CSP_MODE` env toggle** (§13; default **`enforce`**): `enforce` sends `Content-Security-Policy`;
   `report-only` sends the identical policy as `Content-Security-Policy-Report-Only` (nothing blocked —
   a shakedown mode so an operator can validate their own edge proxy / customizations before committing);
@@ -3399,6 +3423,14 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   entry points and are not guaranteed to share a process — they do not under `next dev`'s per-route
   bundling, and they would not across web replicas. An in-memory handoff makes consent unusable in
   both cases.)*
+- **The consent screen's own CSP must permit the cross-origin submit.** Approving or declining is a
+  form POST answered with a `303` to the client's registered `redirect_uri` — necessarily a different
+  origin — and browsers enforce `form-action` across redirects. The registry's default
+  `form-action 'self'` therefore aborts the navigation and the authorization code never reaches the
+  client, silently. `/oauth/authorize` is served with a widened `form-action` covering exactly the
+  redirect shapes DCR accepts (loopback any port, or `https`); see §22 *Content-Security-Policy*.
+  The redirect target is still validated against the client's registration — the CSP is a superset
+  filter, not the control.
 - **A request parameter supplied more than once is rejected.** Per OAuth 2.1 the authorization
   endpoint MUST NOT accept a repeated parameter; skilly fails closed with the non-redirecting error
   page rather than silently resolving to the first (or last) occurrence. This is checked **before**

@@ -31,6 +31,7 @@ export function middleware(request: NextRequest): NextResponse {
     isDev: process.env.NODE_ENV !== "production",
     isApi: request.nextUrl.pathname.startsWith("/api"),
     nonce: generateNonce(),
+    pathname: request.nextUrl.pathname,
   });
 
   let response: NextResponse;
