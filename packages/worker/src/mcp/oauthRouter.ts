@@ -286,7 +286,7 @@ export function mcpOAuthRouter(pool: Pool): Router {
  * registrations that never produced a grant — the bound on open DCR growth. Rotation lineage is
  * kept for the refresh window so reuse detection still works, then pruned with the rest.
  */
-export async function mcpHousekeeping(pool: Pool): Promise<{ tokens: number; clients: number }> {
+export async function mcpHousekeeping(pool: Pool): Promise<{ tokens: number; clients: number; pending: number }> {
   const settings = await getMcpSettings(pool);
   const tokens = await pool.query(
     `delete from oauth_tokens
@@ -301,5 +301,12 @@ export async function mcpHousekeeping(pool: Pool): Promise<{ tokens: number; cli
         and created_at < now() - interval '7 days'
         and not exists (select 1 from oauth_grants g where g.client_id = oauth_clients.id)`,
   );
-  return { tokens: tokens.rowCount ?? 0, clients: clients.rowCount ?? 0 };
+  // Consent handoffs (§29): single-use and 10-minute TTL'd, so anything consumed or older than the
+  // TTL is dead weight. They carry no secret — the PKCE challenge is a public value.
+  const pending = await pool.query(
+    `delete from oauth_pending_authorizations
+      where consumed_at is not null
+         or created_at <= now() - interval '10 minutes'`,
+  );
+  return { tokens: tokens.rowCount ?? 0, clients: clients.rowCount ?? 0, pending: pending.rowCount ?? 0 };
 }

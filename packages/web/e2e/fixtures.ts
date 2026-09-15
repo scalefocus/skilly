@@ -19,6 +19,13 @@ export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean } = 
     form: { csrfToken: csrf.csrfToken, json: "true" },
   });
   expect(res.ok(), await res.text()).toBeTruthy();
+  // next-auth answers 200 with `{ url }` even when the credentials provider REJECTS — the failure
+  // is encoded as an `?error=` in that url, so res.ok() alone cannot see it. Without this check a
+  // refused sign-in stays silent here and resurfaces much later as an inscrutable "element not
+  // found" against a page that quietly rendered its signed-out shell.
+  const landing = (await res.json().catch(() => null)) as { url?: string } | null;
+  expect(landing?.url ?? "", `dev sign-in was rejected: ${landing?.url ?? "(no url in response)"}`)
+    .not.toMatch(/[?&]error=/);
   // Pre-stamp the What's new marker at the running version so the once-per-release update notice
   // (§23) never appears mid-spec and steals a click or a screenshot. whats-new-notice.spec.ts opts
   // out to exercise the notice itself. Forward-only, so this never hides a notice a spec seeded.

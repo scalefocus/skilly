@@ -235,6 +235,24 @@ pipeline {
           done
           docker exec "${CI_E2E_MINIO_CONTAINER}" mc mb -p local/skilly-artifacts >/dev/null 2>&1 || true
 
+          # Provision the seeded skills' serving git repos. The seed deliberately creates HOSTED
+          # versions with git_published=false whose artifact keys have NO bytes; seed-bundles
+          # uploads a minimal valid bundle for each, and the publish sweep (normally the worker
+          # daemon's job — it does not run in this stage) synthesizes the repo/tags and flips the
+          # flag. Skip this and every hosted skill sits on the detail page's "Publishing this
+          # skill…" placeholder: the Install panel never renders and every spec driving it fails.
+          # publish-once exits non-zero if anything is still unpublished, so the gap fails HERE
+          # rather than as a confusing suite-wide failure. SKILLY_SPEC.md §6/§9, roadmap item 18.
+          export GIT_REPO_ROOT="${WORKSPACE}/.ci-e2e-git"
+          rm -rf "${GIT_REPO_ROOT}" && mkdir -p "${GIT_REPO_ROOT}"
+          ( cd packages/worker
+            export DATABASE_URL="${CI_E2E_DATABASE_URL}"
+            export S3_ENDPOINT="http://127.0.0.1:${CI_E2E_MINIO_PORT}"
+            export S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts
+            node scripts/seed-bundles.mjs
+            node scripts/publish-once.mjs
+          )
+
           # Fetch the Chromium browser (+ its OS deps).
           pnpm --filter @skilly/web exec playwright install --with-deps chromium
 

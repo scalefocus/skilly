@@ -38,7 +38,9 @@ test.describe("access gating", () => {
     await expect(sidebar.locator(".user-trigger")).toBeVisible();
 
     // Platform-admin-only destinations — their presence also asserts the dev user's role.
-    await expect(sidebar.getByRole("link", { name: "Administration" })).toBeVisible();
+    // `exact` matters: the sidebar also carries "Namespace administration", which a substring
+    // match would pick up as a second hit (a strict-mode violation, not a pass).
+    await expect(sidebar.getByRole("link", { name: "Administration", exact: true })).toBeVisible();
     await expect(sidebar.getByRole("link", { name: "System log" })).toBeVisible();
 
     // The version colophon renders on every authed page (used as the "shell is up" signal

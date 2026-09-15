@@ -31,7 +31,7 @@ export async function POST(req: Request) {
 
   // Single-use, TTL'd, and bound to the user it was stashed for — an expired or foreign id fails
   // closed rather than authorizing something.
-  const pending = takeAuthorizeRequest(requestId, access.userId);
+  const pending = await takeAuthorizeRequest(requestId, access.userId);
   if (!pending) {
     return Response.json(
       { error: "this consent request expired or was already used — start the connection again from your client" },

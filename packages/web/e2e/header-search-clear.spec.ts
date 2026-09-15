@@ -9,6 +9,11 @@ import { test, expect, devSignIn, type Page } from "./fixtures";
 const searchBox = (page: Page) => page.getByRole("textbox", { name: "Search skills" });
 const kbdHint = (page: Page) => page.locator(".search kbd");
 const clearBtn = (page: Page) => page.getByRole("button", { name: "Clear search" });
+// The typeahead dropdown itself (suggestion list or the "Nothing found" bubble). Asserted by
+// element, NOT by its footer copy: this spec runs on /whats-new, whose release notes quote the
+// phrase "See all results in catalog" verbatim (the v1.83.2 entry), so a page-wide text match
+// finds the prose and never reaches zero however correctly the dropdown closes.
+const suggestionDropdown = (page: Page) => page.locator(".search-ac");
 
 test.describe("header search clear (✕) affordance (§10)", () => {
   test("live-filter page: ✕ replaces CTRL+K, clears the box, and drops ?q= instantly", async ({ page }) => {
@@ -70,7 +75,7 @@ test.describe("header search clear (✕) affordance (§10)", () => {
     await expect(clearBtn(page)).toBeVisible();
     await clearBtn(page).click();
     await expect(box).toHaveValue("");
-    await expect(page.getByText(/See all results in catalog/i)).toHaveCount(0);
+    await expect(suggestionDropdown(page)).toHaveCount(0);
     await expect(kbdHint(page)).toBeVisible();
 
     // Escape does the same from the keyboard.
@@ -78,7 +83,7 @@ test.describe("header search clear (✕) affordance (§10)", () => {
     await expect(clearBtn(page)).toBeVisible();
     await box.press("Escape");
     await expect(box).toHaveValue("");
-    await expect(page.getByText(/See all results in catalog/i)).toHaveCount(0);
+    await expect(suggestionDropdown(page)).toHaveCount(0);
     await expect(kbdHint(page)).toBeVisible();
     // A typeahead page never jumps to the catalog on clear — still on /whats-new.
     await expect(page).toHaveURL(/\/whats-new(\?|$)/);

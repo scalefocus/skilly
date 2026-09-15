@@ -172,8 +172,25 @@ jobs:
             sleep 2
           done
           docker exec minio mc mb -p local/skilly-artifacts || true
-      # shared must build so the web dev server can resolve @skilly/shared.
+      # shared must build so the web dev server can resolve @skilly/shared; worker must build
+      # because the repo-provisioning step below runs against its compiled dist.
       - run: pnpm --filter @skilly/shared build
+      - run: pnpm --filter @skilly/worker build
+      - name: Provision the seeded skills' git repos
+        # The seed deliberately creates HOSTED versions with git_published=false whose artifact keys
+        # have NO bytes. seed-bundles uploads a minimal valid bundle for each; the publish sweep
+        # (normally the worker daemon's job — it doesn't run here) synthesizes the repo/tags and
+        # flips the flag. Without this every hosted skill sits on the detail page's "Publishing this
+        # skill…" placeholder, so the Install panel never renders and every spec that drives it
+        # fails. publish-once exits non-zero if anything is left unpublished, failing HERE rather
+        # than as a confusing suite-wide failure. SKILLY_SPEC.md §6/§9, roadmap item 18.
+        env:
+          GIT_REPO_ROOT: ${{ github.workspace }}/.ci-e2e-git
+        run: |
+          mkdir -p "$GIT_REPO_ROOT"
+          cd packages/worker
+          node scripts/seed-bundles.mjs
+          node scripts/publish-once.mjs
       - name: Install the Playwright browser
         run: pnpm --filter @skilly/web exec playwright install --with-deps chromium
       - name: Run the e2e suite

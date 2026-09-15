@@ -256,15 +256,20 @@ test("revocation always answers 200 — no probing oracle — and takes the gran
 
 // ── Housekeeping ───────────────────────────────────────────────────────────────────────────────
 
-test("housekeeping prunes dead tokens and never-used client registrations", async () => {
+test("housekeeping prunes dead tokens, never-used client registrations and spent consent handoffs", async () => {
   const fp = base();
   fp.on("delete from oauth_tokens", [{}, {}]);
   fp.on("delete from oauth_clients", [{}]);
+  fp.on("delete from oauth_pending_authorizations", [{}, {}, {}]);
   const out = await mcpHousekeeping(fp.pool);
-  assert.deepEqual(out, { tokens: 2, clients: 1 });
+  assert.deepEqual(out, { tokens: 2, clients: 1, pending: 3 });
   const clients = fp.matching("delete from oauth_clients")[0]!;
   // Only registrations that never produced a grant, and only after the 7-day window.
   assert.match(clients.sql, /last_used_at is null/);
   assert.match(clients.sql, /7 days/);
   assert.match(clients.sql, /not exists \(select 1 from oauth_grants/);
+  // Consent handoffs (§29) are single-use and 10-minute TTL'd: consumed OR expired both go.
+  const pending = fp.matching("delete from oauth_pending_authorizations")[0]!;
+  assert.match(pending.sql, /consumed_at is not null/);
+  assert.match(pending.sql, /10 minutes/);
 });

@@ -297,9 +297,9 @@ async function leaderLoops(): Promise<void> {
   const mcpSweep = async () => {
     if (!isLeader) return;
     try {
-      const { tokens, clients } = await mcpHousekeeping(pool);
-      if (tokens || clients) {
-        console.log(JSON.stringify({ level: "info", msg: "mcp housekeeping", tokens, clients }));
+      const { tokens, clients, pending } = await mcpHousekeeping(pool);
+      if (tokens || clients || pending) {
+        console.log(JSON.stringify({ level: "info", msg: "mcp housekeeping", tokens, clients, pending }));
       }
     } catch (err) {
       console.error(JSON.stringify({ level: "error", msg: "mcp housekeeping failed", err: String(err) }));

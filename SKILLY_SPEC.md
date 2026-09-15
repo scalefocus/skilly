@@ -1560,6 +1560,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 16. ~~**Personal Access Token management** (`/tokens`)~~ **SUPERSEDED** — PATs and the CI-token UI were removed and replaced by the reusable, owner-revocable **install-token** model and the Installed Skills page (`/installed`, §23). `/tokens` now redirects to `/profile`.
 17. **Install analytics:** `skills.install_count` is incremented from the authenticated git-fetch access log (`worker/git/pgDeps.logAccess`, once per clone) **and from each user's first detail-page download** (deduped per `(skill, user)` via `skill_downloads`; §10), and surfaced in the catalog. **DONE.**
 18. **UI e2e (Playwright):** scaffolded in `packages/web/e2e/` (smoke specs + config), run opt-in against a live stack; the gated publish e2e now also covers a **.zip** hosted bundle and the **pointer-refresh** path. Broader journeys TODO.
+    - **The e2e stack MUST provision the seeded skills' git repos before the suite runs.** `db/seed.dev.sql` deliberately inserts hosted versions with `git_published=false` (their artifact keys have no bytes), so a stack that only applies the seed leaves every hosted skill stuck on the detail page's "Publishing this skill…" placeholder — the Install panel never renders, and every spec that drives it fails. After seeding, CI must run **`packages/worker/scripts/seed-bundles.mjs`** (uploads a minimal valid bundle per key) and then let the **worker's publish sweep** synthesize the repos and flip `git_published`. Seeding `git_published=true` directly is **not** the fix — that is the old behavior, and it leaves the versions stuck as "repository not provisioned" instead.
 
 **Tier 4 — strategic / infra**
 19. **Helm / Kubernetes:** chart at `deploy/helm/skilly` — stateless web (Deployment + Service + **HPA**), leader-locked worker (Deployment + git PVC), migrations Job (pre-install/upgrade hook over a `skilly-migrations` ConfigMap), Ingress (routes `/scim` + `*.git` → worker, else web), Secret/values, and bundled Postgres/MinIO/ClamAV gated by `enabled` flags (point at managed services to disable). `helm lint` + both value sets render in CI. **DONE.**
@@ -3387,6 +3388,22 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   granted in plain language ("read the catalog you can already see; create proposals, ratings and
   comments as you; mint install commands for skills you can access"), and that the grant is
   revocable from the `/mcp` page. Approving writes an `oauth_grants` row.
+- **The validated request is handed from the consent screen to its submit target in the database,
+  never in process memory.** Rendering `/oauth/authorize` persists the already-validated request to
+  `oauth_pending_authorizations` and puts only its opaque id in the form; `POST /oauth/consent`
+  consumes that id. The handler therefore trusts **nothing** from the form except the id and the
+  approve/deny decision — a `redirect_uri` or `client_id` edited between render and submit is not
+  merely ignored, it is never read. The row is **single-use, TTL'd (10 minutes) and bound to the
+  user it was stashed for**; an expired, foreign or already-consumed id fails closed with `400`.
+  *(Durable rather than in-process by requirement: the render and the submit are separate server
+  entry points and are not guaranteed to share a process — they do not under `next dev`'s per-route
+  bundling, and they would not across web replicas. An in-memory handoff makes consent unusable in
+  both cases.)*
+- **A request parameter supplied more than once is rejected.** Per OAuth 2.1 the authorization
+  endpoint MUST NOT accept a repeated parameter; skilly fails closed with the non-redirecting error
+  page rather than silently resolving to the first (or last) occurrence. This is checked **before**
+  `client_id` and `redirect_uri` are read, so a duplicated `redirect_uri` can never be collapsed to
+  the registered value and treated as verified.
 - **Scope is a single opaque `mcp` scope**, bound to the caller's own RBAC. There are deliberately
   **no capability scopes** in v1: the boundary is the user's role, re-resolved per call, not a string
   in a token. *(Granular scopes are a future spec change, not an implementation detail.)*
@@ -3443,6 +3460,20 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   pruned).
 - Separate from **`tokens`** (§3), whose semantics are now install-only. No enum is widened, no
   column is reused; the two regimes never share a row.
+
+#### `oauth_pending_authorizations` (migration 0073)
+- `id` (uuid PK — the opaque handle the consent form carries), `user_id` (FK → `users`,
+  `ON DELETE CASCADE`), `client_id` (FK → `oauth_clients`, `ON DELETE CASCADE`), `request` (jsonb —
+  the **already-validated** authorize request: `redirect_uri`, `code_challenge`,
+  `code_challenge_method`, `state`, `resource`), `created_at`, `consumed_at` (nullable).
+- **Single-use and TTL'd (10 minutes).** Consuming a row sets `consumed_at` in the same statement
+  that reads it (`update … where id = $1 and user_id = $2 and consumed_at is null and created_at >
+  now() - interval '10 minutes' returning …`), so a double-submit cannot mint two codes.
+- Bound to the user it was stashed for: a row consumed by a **different** session fails closed.
+- Swept by the worker's housekeeping sweep alongside the other `oauth_*` expiries. Rows are
+  short-lived and carry no secret — the PKCE challenge is a public value and no token exists yet.
+- It is **not** a fourth `kind` on `oauth_tokens`: nothing here is a credential, it never leaves the
+  server, and it dies at consent time rather than participating in the rotation lineage.
 
 #### `audit_source` (migration 0064)
 - The enum gains **`mcp`**, so a governance row written from the MCP surface is queryable as such in

@@ -8,7 +8,6 @@
 //
 // All policy (PKCE, redirect matching, resource indicators, TTLs) comes from @skilly/shared/oauth
 // so the two halves cannot drift.
-import { randomUUID } from "node:crypto";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import {
@@ -132,6 +131,15 @@ export type AuthorizeCheck =
  * redirect is verified, protocol errors go back to the client the normal way.
  */
 export async function checkAuthorizeRequest(params: URLSearchParams): Promise<AuthorizeCheck> {
+  // OAuth 2.1: a request parameter MUST NOT be supplied more than once. Fail closed on the error
+  // page BEFORE reading client_id/redirect_uri — collapsing duplicates to the first (or last)
+  // occurrence would let `?redirect_uri=<registered>&redirect_uri=<attacker>` resolve to the
+  // registered value and be treated as verified. §29.
+  const duplicated = [...new Set(params.keys())].find((k) => params.getAll(k).length > 1);
+  if (duplicated) {
+    return { ok: false, error: `the ${duplicated} parameter was supplied more than once` };
+  }
+
   const clientId = params.get("client_id") ?? "";
   const redirectUri = params.get("redirect_uri") ?? "";
   if (!clientId) return { ok: false, error: "missing client_id" };
@@ -242,28 +250,55 @@ export function denyAuthorization(request: AuthorizeRequest): { redirect: string
 // re-validating everything and trusting hidden fields. Instead the validated request is stashed
 // server-side under an opaque id and the form carries only that id.
 
-const PENDING_TTL_MS = 10 * 60 * 1000;
-const pending = new Map<string, { at: number; clientId: string; request: AuthorizeRequest; userId: string }>();
+/** How long a rendered consent screen stays submittable (§29). */
+const PENDING_TTL = "10 minutes";
 
-export function stashAuthorizeRequest(userId: string, client: RegisteredClient, request: AuthorizeRequest): string {
-  const now = Date.now();
-  for (const [k, v] of pending) if (now - v.at > PENDING_TTL_MS) pending.delete(k);
-  const id = randomUUID();
-  pending.set(id, { at: now, clientId: client.clientId, request, userId });
-  return id;
+/**
+ * Persist an ALREADY-VALIDATED authorize request and return the opaque id the consent form carries.
+ *
+ * Deliberately in the database, not a process-local Map: the render (`/oauth/authorize`, a Server
+ * Component) and the submit (`POST /oauth/consent`, a Route Handler) are separate server entry
+ * points with no guarantee of sharing a process — they do not under `next dev`'s per-route
+ * bundling, and they do not across the 2-6 web replicas the HPA runs. §29.
+ */
+export async function stashAuthorizeRequest(
+  userId: string,
+  client: RegisteredClient,
+  request: AuthorizeRequest,
+): Promise<string> {
+  const { rows } = await pool.query<{ id: string }>(
+    `insert into oauth_pending_authorizations (user_id, client_id, request)
+       values ($1, $2, $3::jsonb) returning id`,
+    [userId, client.id, JSON.stringify(request)],
+  );
+  return rows[0]!.id;
 }
 
-export function takeAuthorizeRequest(
+/**
+ * Consume a stashed request. Single-use, TTL'd and bound to the user it was stashed for: the read
+ * and the consume are ONE statement, so a double-submit cannot mint two codes. An expired, foreign
+ * or already-consumed id returns null and the caller fails closed.
+ */
+export async function takeAuthorizeRequest(
   id: string,
   userId: string,
-): { clientId: string; request: AuthorizeRequest } | null {
-  const entry = pending.get(id);
-  if (!entry) return null;
-  pending.delete(id);
-  if (Date.now() - entry.at > PENDING_TTL_MS) return null;
-  // The consent must be given by the SAME user the request was stashed for.
-  if (entry.userId !== userId) return null;
-  return { clientId: entry.clientId, request: entry.request };
+): Promise<{ clientId: string; request: AuthorizeRequest } | null> {
+  // A malformed id would make Postgres throw on the uuid cast — treat it as simply not found.
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const { rows } = await pool.query<{ client_id: string; request: AuthorizeRequest }>(
+    `update oauth_pending_authorizations p
+        set consumed_at = now()
+       from oauth_clients c
+      where p.id = $1
+        and p.user_id = $2
+        and p.consumed_at is null
+        and p.created_at > now() - interval '${PENDING_TTL}'
+        and c.id = p.client_id
+      returning c.client_id, p.request`,
+    [id, userId],
+  );
+  const row = rows[0];
+  return row ? { clientId: row.client_id, request: row.request } : null;
 }
 
 // ── Connections (the /mcp page) ─────────────────────────────────────────────────────────────────
