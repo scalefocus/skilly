@@ -2144,8 +2144,10 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   **consumer journey**: an unnumbered **"If you're new to the AI skill
   game"** prerequisites section (below) → **1** find a skill → **2** open it → **3** install it →
   **4** two more ways to connect your agent (marketplaces + MCP, below) → **5** manage installed
-  skills → **6** stay in the loop, plus a "want to contribute?" pointer and a closing CTA. Reached
-  any time from the **account menu, above What's new** (the menu's first item). The intro's
+  skills → **6** stay in the loop → an unnumbered **"Collect the badges as you go"** achievements
+  card (below; the only card on the page that hides itself when a platform toggle is off), plus a
+  "want to contribute?" pointer and a closing CTA.
+  Reached any time from the **account menu, above What's new** (the menu's first item). The intro's
   one-line promise names all three consumption routes ("find a skill, install it into your agent
   — or add a whole marketplace, or connect over MCP — and keep it up to date").
 - **"If you're new to the AI skill game"** (fixed, unnumbered — sits right after the intro, before
@@ -2170,12 +2172,22 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   peers of `npx skills add`, each in its own short paragraph, in this order:
   - **Claude plugin marketplaces (§30)** — for **Claude Code** users: instead of installing skills
     one by one, add a whole slice of the catalog as a plugin marketplace with one command. One
-    sentence on topology: *one public marketplace, plus one per team you belong to*. The
-    **Marketplaces** page lists every marketplace the user may add and hands out the add command in
-    three flavours (Terminal, Claude CLI, Settings file — §30.6); the key in it is personal, and
+    sentence on topology: *one public marketplace, plus one per team you belong to*. **What you add
+    from it is a category plugin, not a single skill** (§30, since v2.0.0): a marketplace publishes
+    **one plugin per category** — `productivity@<marketplace>`, `docs@<marketplace>`, and a
+    reserved `general` plugin for uncategorised skills — so one command brings a whole group, and a
+    skill is then invoked as **`/<category>:<skill>`** (public marketplace:
+    `/<category>:<namespace>-<skill>`). The **Marketplaces** page lists every marketplace the user
+    may add, shows its skills and plugins side by side, and hands out the add command in three
+    flavours (Terminal, Claude CLI, Settings file — §30.6); the key in it is personal, and
     everything added shows up under **My marketplaces** in the account menu (the Added
     marketplaces page — mentioned in prose only, no button). Step 5 likewise names the menu
     entry **My skills** as the way to the Installed skills page.
+    - **Why this correction ships with the Achievements card:** the paragraph was written at
+      v1.149.0, *before* v2.0.0 replaced per-skill plugins with per-category plugins and renamed
+      skill invocation. It was therefore not merely incomplete but **wrong about a breaking
+      change**, on the one page every brand-new user is forced through. Corrected here rather than
+      deferred to its own cycle.
   - **MCP server (§29)** — connect **Claude Code, Claude Desktop, or VS Code** to skilly directly.
     No credential goes into any config file: the user signs in once in the browser, after which the
     agent can search the catalog, read skills, install them, and propose new ones on the user's
@@ -2191,11 +2203,74 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     **MCP server →** `/mcp`. The content module gains an **`internalLinks`** field for these,
     kept separate from `links` so the two link kinds cannot be confused.
   - **Screenshot**: `/quickstart/connect.png` — a capture of the Marketplaces directory page
-    (captured with at least one marketplace enabled so the rows show).
+    (captured with at least one marketplace enabled so the rows show). **Re-captured** in the same
+    run as the Achievements screenshot below: the shipped file predates v2.0.0 and shows the old
+    per-skill marketplace page, so it is replaced by a capture of the current page, which lists
+    skills and plugins side by side.
+- **Achievements card — "Collect the badges as you go"** (**unnumbered**; sits after Step 6 and
+  **before** the "want to contribute?" card). A new `kind: "achievements"` in the content module, a
+  sibling of the existing `prereq` / `contribute` kinds, so it never joins the numbered spine — the
+  numbered steps stay exactly **1–6** and `content.test.ts`'s step-sequence assertion is unchanged.
+  - **Framing is the nudge, not the mechanic** — §31's own stated purpose is exploration nudging,
+    so the card says that skilly quietly records which parts of it you have tried, and that the
+    **locked** badges name the parts you have not. Placed here deliberately: by this point the
+    reader has met every part of skilly the badges refer back to, so the card reads as a checklist
+    of the tour they have just finished, at the moment they are deciding what to do next.
+  - **The Quick start badge is named, tenselessly.** The copy states that **completing this Quick
+    start earns one of them** — `onboarded` / *Read the Manual* (§31.1), already awarded by this
+    page's own `POST /api/me/onboarded` on mount. Phrased as a standing fact, **never** as *"you
+    just earned…"*: the same sentence has to stay true for a returning user who reopens the page
+    from the account menu months later, and for whom the badge is old news.
+  - **Named badges are limited to the ones this tour teaches** — installing a skill, adding a
+    marketplace, connecting over MCP, asking for a skill, proposing one — each echoing a step the
+    reader has just read. The catalog is **not** enumerated here; the full shelf lives on the
+    profile card, and the Quick start card is a sample that points at it.
+  - **Habits badges are deliberately omitted.** `night_shift` and `weekend_warrior` are **not**
+    named in the copy. They stay fully discoverable on the profile card; an onboarding tour on an
+    employer-hosted registry does not advertise working at midnight or at the weekend. A recorded
+    exclusion, not an oversight — revisit only with a deliberate decision.
+  - **The duplication is guarded by a test.** The card names badges in hand-authored prose rather
+    than rendering `ACHIEVEMENTS` live, consistent with the rest of this page being a static
+    content module. To stop the copy drifting from the catalog, `content.test.ts` gains an
+    assertion that **every badge name quoted in the Quick start copy still exists in
+    `@skilly/shared/achievements`** (matched on `name`), so renaming a badge fails the build
+    instead of silently falsifying onboarding. Adding a *new* badge to the catalog does **not**
+    fail the test — the card is a sample, not an index.
+  - **Sharing is disclosed at onboarding.** One clause states that earned badges form a **hall any
+    signed-in colleague can open**, and that Profile carries a switch to hide it
+    (`achievements_hidden`, §31.5). Visibility is on by default, so the honest place to say so is
+    the tour, not the moment of discovery.
+  - **One sentence separating the two badge systems** (§31 vs §21): achievements are personal and
+    permanent; the small badges under people's avatars are the competitive leaderboard ones. They
+    share a visual language and would otherwise be conflated on first sight.
+  - **One internal link button** — **My achievements →** `/profile#achievements` (an
+    `internalLinks` entry, same-tab, exactly like Step 4's two). It points at the **profile card,
+    not the hall**: a new user's own hall is nearly empty, and it is reachable from the card via
+    *"View as others see it"*. The **closing CTA row is unchanged** — it already carries five
+    buttons and a sixth crowds it.
+  - **Screenshot**: `/quickstart/achievements.png` — a capture of the profile **Achievements** card
+    with **earned and locked tiles visible together**, since the locked how-to-earn hints are the
+    entire point of the nudge. This has a real capture cost: the `QUICKSTART` map in `e2e/shots.mjs`
+    gains the entry, and the capture account must **already hold several badges**, which the plain
+    dev sign-in user does not by default.
+  - **Conditional — the only card on this page that consults a platform setting.** It renders only
+    when `achievementsEnabled` is true and is omitted entirely (card, button and screenshot) when
+    the toggle is off. This **departs from Step 4's static precedent deliberately**, because the
+    precedent's own justification does not hold here: a platform with marketplaces or MCP disabled
+    still serves a page that explains itself, whereas `achievements_enabled = false` makes the
+    profile **Achievements card vanish** (§31.7) — a static Quick start card would then describe a
+    feature the reader cannot find and link to an anchor that is not there. The flag already rides
+    the `GET /api/me` payload (§31.5) and this page already touches that endpoint on mount, so the
+    check costs one read through the shared client-side GET cache. While the value is still unknown
+    (pre-load) the card is **not** rendered, so it never flashes in and then out on a platform that
+    has the feature switched off.
 - **Closing CTA row** carries **Marketplaces** and **MCP server** alongside the existing What's new
   and Installed skills buttons (the primary "go to the catalog" button is unchanged).
-- **No re-onboarding.** Adding the step does **not** reset anyone's `onboarded_at`; existing users
-  learn about it from What's new and can reopen Quick start from the account menu.
+- **No re-onboarding.** Adding a step or a card does **not** reset anyone's `onboarded_at`; existing
+  users learn about it from What's new and can reopen Quick start from the account menu. **The
+  Achievements card is no exception** — a user who onboarded before it existed meets it only by
+  reopening the page, and their `onboarded` badge was already awarded (or backfilled, §31.6) long
+  before the card described it.
 - **Content** is a hand-authored module (`app/quick-start/content.ts`) rendered by the page.
   **Screenshots** are served from `packages/web/public/quickstart/` (Next only serves images from
   `public/`); they are a curated subset of the screenshots captured by **`e2e/shots.mjs`** (which
@@ -4651,6 +4726,15 @@ sign-in redirect** like every page):
 `achievements_hidden`, or when the platform toggle is off. Served as `achievementCount`
 (`number | null`) on the existing `GET /api/users/:id/card` payload (one indexed count; `null`
 means "don't show").
+
+**Quick start (§23):** the unnumbered **"Collect the badges as you go"** card — the feature's
+**discovery entry point for new users**. The account menu carries no achievements item, so the only
+other routes in are the profile anchor and the earned-badge toast, neither of which reaches a user
+who has earned nothing yet. The card names a sample of badges, states that completing Quick start
+earns `onboarded`, discloses that the hall is visible to any signed-in colleague, and links to
+`/profile#achievements`. It renders **no badge tiles of its own** — a static screenshot stands in —
+and is the one Quick start card that **hides itself when `achievements_enabled` is off**. Copy rules
+in §23.
 
 **Not rendered:** under avatar bubbles (that slot stays for the competitive leader badges, §21),
 on leaderboard rows, on catalog cards, or anywhere else.

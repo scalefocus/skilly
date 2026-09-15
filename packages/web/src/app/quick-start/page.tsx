@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 // Subpath import: client-safe pure constant (the root barrel pulls node:crypto).
 import { APP_VERSION } from "@skilly/shared/version";
-import { ScrollToTop, invalidateApi } from "../../components/ui";
+import { ScrollToTop, invalidateApi, useApi } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { QUICK_START, type QuickStartStep } from "./content";
 
@@ -107,6 +107,13 @@ function Card({ step }: { step: QuickStartStep }) {
 
 function QuickStart() {
   const router = useRouter();
+  // §23 — the Achievements card is the ONE card on this page that consults a platform setting.
+  // With `achievements_enabled` off the profile card it points at does not exist (§31.7), so a
+  // static card would describe a missing feature and link to a dead anchor. Rendered only on a
+  // definite `true`: while the value is unknown (pre-load) the card stays out, so it never flashes
+  // in and then back out on a platform that has the feature switched off.
+  const { data: me } = useApi<{ achievementsEnabled?: boolean }>("/api/me");
+  const achievementsOn = me?.achievementsEnabled === true;
 
   // Mark the user onboarded the moment they land here — this releases AppShell's first-login
   // redirect gate (via the event) so navigating away never loops back, and persists it so later
@@ -128,7 +135,9 @@ function QuickStart() {
   }, []);
 
   const intro = QUICK_START.find((s) => s.kind === "intro");
-  const body = QUICK_START.filter((s) => s.kind !== "intro" && s.kind !== "closing");
+  const body = QUICK_START.filter(
+    (s) => s.kind !== "intro" && s.kind !== "closing" && (s.kind !== "achievements" || achievementsOn),
+  );
   const closing = QUICK_START.find((s) => s.kind === "closing");
 
   return (

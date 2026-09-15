@@ -1,6 +1,12 @@
 // One-off screenshot capture for the user manual. Signs in via the dev credentials
 // provider (SKILLY_DEV_AUTH=1), then visits each surface and writes a PNG.
 // Run from packages/web: node e2e/shots.mjs
+//
+// Seeding note for `18-achievements` (the Quick start achievements card, §23): the shot is only
+// useful when the signed-in account holds SOME but not ALL badges, so earned and locked tiles
+// appear together. A freshly seeded dev account holds just `onboarded`; before capturing, give it
+// a few more (install a skill, post a request, rate and watch something, or insert the rows
+// directly) or the card will photograph as a near-empty shelf.
 import { chromium } from "@playwright/test";
 import { APP_VERSION } from "@skilly/shared/version";
 import fs from "node:fs";
@@ -32,10 +38,14 @@ async function prep(page) {
   await page.waitForTimeout(400);
 }
 
-async function shot(page, name, { full = false } = {}) {
+// `el` clips the capture to one element instead of the viewport (Playwright scrolls it into view
+// first) — used for the Quick start achievements card, which sits well below the profile fold.
+async function shot(page, name, { full = false, el = null } = {}) {
   await prep(page);
-  await page.screenshot({ path: path.join(OUT, name + ".png"), animations: "disabled", fullPage: full });
-  console.log("shot:", name, full ? "(full)" : "");
+  const target = el ? page.locator(el).first() : page;
+  const opts = { path: path.join(OUT, name + ".png"), animations: "disabled" };
+  await (el ? target.screenshot(opts) : target.screenshot({ ...opts, fullPage: full }));
+  console.log("shot:", name, el ? `(element ${el})` : full ? "(full)" : "");
 }
 
 const log = [];
@@ -89,8 +99,12 @@ async function go(page, url, waitSel) {
   // is what flips the token to "used" (see worker/src/git/server.ts markInstallUsed).
   const installRes = await ctx.request.post(BASE + "/api/skills/global/pdf-tools/install", { data: {} });
   console.log("install mint status:", installRes.status());
-  const { command } = await installRes.json();
-  const m = command.match(/^npx skills add (\S+)/);
+  // A failed mint (401/404 against a DB that has no global/pdf-tools, say) used to throw here and
+  // abort the whole run before a single page was captured. It is a nice-to-have for one shot, so
+  // degrade to the empty state and carry on.
+  const command = installRes.ok() ? (await installRes.json().catch(() => ({})))?.command : null;
+  const m = typeof command === "string" ? command.match(/^npx skills add (\S+)/) : null;
+  if (!m) console.log("install mint unusable — 07-installed will show the empty state");
   if (m) {
     const gitUrl = new URL(m[1]);
     const auth = Buffer.from(`${decodeURIComponent(gitUrl.username)}:${decodeURIComponent(gitUrl.password)}`).toString("base64");
@@ -119,9 +133,14 @@ async function go(page, url, waitSel) {
     ["/leaderboard", "15-leaderboard", "main", false],
     ["/catalog/marketplaces", "16-marketplaces", "main", false],
     ["/mcp", "17-mcp", "main", false],
+    // Quick start's achievements card (§23): the Achievements section on the profile page, framed
+    // so EARNED and LOCKED tiles are visible together — the locked how-to-earn hints are the whole
+    // point of the nudge, so a capture of an empty (or a full) shelf would miss it. The capture
+    // account must already hold several badges; see the seeding note in the header of this file.
+    ["/profile", "18-achievements", '[data-testid="achievements-card"]', false, '[data-testid="achievements-card"]'],
   ];
 
-  for (const [url, name, wait, full] of steps) {
+  for (const [url, name, wait, full, el] of steps) {
     await go(page, url, wait);
 
     // Special interactions per page.
@@ -132,6 +151,16 @@ async function go(page, url, waitSel) {
       }
       await page.waitForTimeout(500);
     }
+    // The sticky topbar floats above the page and paints over whatever an element-clipped shot
+    // has scrolled under it — here, the card's progress line and its Share row. Drop it for this
+    // capture only; the shot is of the card, not the chrome.
+    if (name === "18-achievements") {
+      // Hide, don't remove: the topbar is fixed, so hiding it reflows nothing and the clipped
+      // element stays still. Removing it (and its spacer) reflowed the page enough that
+      // locator.screenshot() never saw a stable box and timed out.
+      await page.addStyleTag({ content: "header.topbar{visibility:hidden!important}" }).catch(() => {});
+      await page.waitForTimeout(300);
+    }
     if (name === "05-propose-hosted") {
       for (const sel of ['button:has-text("Hosted upload")', 'button:has-text("Hosted")', '[role="tab"]:has-text("Hosted")']) {
         const el = page.locator(sel).first();
@@ -140,7 +169,7 @@ async function go(page, url, waitSel) {
       await page.waitForTimeout(500);
     }
 
-    try { await shot(page, name, { full }); log.push(name + " OK"); }
+    try { await shot(page, name, { full, el }); log.push(name + " OK"); }
     catch (e) { log.push(name + " FAIL " + e.message); }
   }
 
@@ -153,6 +182,7 @@ async function go(page, url, waitSel) {
     "09-notifications": "notifications",
     "05-propose-hosted": "propose",
     "16-marketplaces": "connect",
+    "18-achievements": "achievements",
   };
   const PUB = path.resolve(process.cwd(), "public/quickstart");
   fs.mkdirSync(PUB, { recursive: true });
