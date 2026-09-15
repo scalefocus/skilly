@@ -44,6 +44,7 @@ import { s3ArtifactStore } from "../storage/objectStore.js";
 import { extractBundle } from "../git/bundle.js";
 import { getMaxBundleBytesSetting } from "./settings.js";
 import { M } from "../metrics.js";
+import { awardAchievement, tryAward } from "../achievements.js";
 
 export type WriteFailure = { ok: false; error: string };
 export const fail = (error: string): WriteFailure => ({ ok: false, error });
@@ -212,6 +213,11 @@ async function insertMcpMessage(
   clientName: string,
   opts: { contextSemver?: string | null; trackParticipant?: boolean; mentions?: PreparedMention[] },
 ): Promise<{ id: string; createdAt: string }> {
+  // §31 Conversationalist needs the thread's opener BEFORE this message lands.
+  const { rows: openerRows } = await pool.query<{ author_id: string }>(
+    `select author_id from messages where conversation_id = $1 order by created_at, id limit 1`,
+    [conversationId],
+  );
   const { rows } = await pool.query<{ id: string; created_at: string }>(
     `insert into messages (conversation_id, author_id, body, context_semver, via_mcp_client)
      values ($1,$2,$3,$4,$5) returning id, created_at`,
@@ -220,6 +226,10 @@ async function insertMcpMessage(
   const msg = rows[0]!;
   if (opts.mentions?.length) await insertMentionRows(pool, msg.id, opts.mentions);
   await pool.query(`update conversations set updated_at = now() where id = $1`, [conversationId]);
+  // §31 Icebreaker / Conversationalist / Name Dropper — mirrors web's insertMessage.
+  await tryAward(pool, authorId, "first_message");
+  if (openerRows[0] && openerRows[0].author_id !== authorId) await tryAward(pool, authorId, "first_reply", { noHabits: true });
+  if (opts.mentions?.length) await tryAward(pool, authorId, "first_mention", { noHabits: true });
   if (opts.trackParticipant !== false) {
     await pool.query(
       `insert into conversation_participants (conversation_id, user_id, last_read_at) values ($1,$2,now())
@@ -264,6 +274,7 @@ export async function rateSkill(
                      via_mcp_client = excluded.via_mcp_client, updated_at = now()`,
     [userId, skillId, stars, rows[0]?.semver ?? null, clientName],
   );
+  await tryAward(pool, userId, "first_rating"); // §31 Critic
   M.mcpWrites.inc({ kind: "rating" });
   return { ok: true, stars };
 }
@@ -513,6 +524,7 @@ export async function createSkillRequest(
       after: { title, toolHarness: harness, categories },
       clientName,
     });
+    await awardAchievement(client, userId, "first_request"); // §31 Wishful Thinker
     await client.query("commit");
     M.mcpWrites.inc({ kind: "request" });
     return { ok: true, id };
@@ -764,6 +776,9 @@ export async function createMcpProposal(
       skillSlug: payload.metadata.skillSlug,
       semver: proposedSemver,
     });
+    // §31 Homegrown / Finger Pointer — same artifact-shape rule as the web tier and migration 0071.
+    const proposedPointer = !!payload.pointer; // MCP proposals never carry a Keep-current-files reuse
+    await awardAchievement(client, userId, proposedPointer ? "first_pointer_proposal" : "first_hosted_proposal");
     await client.query("commit");
     M.mcpWrites.inc({ kind: "proposal" });
     return {

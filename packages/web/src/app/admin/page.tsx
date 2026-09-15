@@ -44,7 +44,7 @@ interface Mapping { id: string; role: Role; namespaceId: string | null; groupId:
 interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -64,6 +64,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
   "systembanner", "mcp", "email", "scim", "platformadmins", "maintenance", "deleteuser", "online", "namespaces", "marketplaces",
+  "achievements",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -253,6 +254,37 @@ function InstallTtlSetting({ value, busy, call, open, onToggle }: { value: numbe
         <span className="muted" style={{ fontSize: 13.5 }}>months</span>
         <button className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave()}>Save</button>
       </div>
+    </CollapsibleCard>
+  );
+}
+
+// Achievements (§31.7). OFF hides the profile card, the hall, the hover-card count and mutes the
+// notifications/toasts — but awards keep recording, so nothing is lost by switching it back on.
+function AchievementsSettings({
+  enabled, busy, call, open, onToggle,
+}: {
+  enabled: boolean;
+  busy: boolean;
+  call: (input: RequestInfo, init: RequestInit) => Promise<boolean>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const patch = (body: Record<string, unknown>) =>
+    call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return (
+    <CollapsibleCard cardId="achievements" title="Achievements" summary={enabled ? "on" : "off"} open={open} onToggle={onToggle}>
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
+        Badges people earn for trying each part of skilly for the first time (installing a skill, adding a marketplace,
+        connecting over MCP, asking for or proposing a skill, joining a discussion…), shown on their profile and in a
+        shareable hall. Switching this off hides every badge surface and stops the &ldquo;badge earned&rdquo;
+        notifications, but badges keep being recorded quietly — switch it back on and nothing is lost.
+      </p>
+      <Switch
+        label="Show achievements"
+        checked={enabled}
+        disabled={busy}
+        onChange={(next) => void patch({ achievementsEnabled: next })}
+      />
     </CollapsibleCard>
   );
 }
@@ -688,6 +720,9 @@ export default function AdminPage() {
 
       {/* Email notifications (§12) — collapsible like every card */}
       <McpCard open={cards.open.mcp} onToggle={() => cards.toggle("mcp")} />
+
+      {/* Achievements (§31) — the dormant-not-destructive on/off */}
+      <AchievementsSettings enabled={data.settings.achievementsEnabled} busy={busy} call={call} open={cards.open.achievements} onToggle={() => cards.toggle("achievements")} />
 
       <EmailCard open={cards.open.email} onToggle={() => cards.toggle("email")} />
 

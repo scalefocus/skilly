@@ -11,6 +11,7 @@ import { lookup } from "node:dns/promises";
 import { create } from "tar";
 import { validateBundle, validatePointerUrl, validateGitRef, validateSubdir, isSkillsHubUrl, isBlockedIp, contentDigest, bundleContentCap, type BundleEntry } from "@skilly/shared";
 import { getMaxBundleBytes } from "../settings.js";
+import { tryAward } from "../achievements.js";
 import type { Pool } from "pg";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { runScanPipeline } from "../scan/pipeline.js";
@@ -265,6 +266,8 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
   const findings = await runScanPipeline(files);
   await writeArtifactScanReport(pool, artifactKey, findings);
 
+  // §31: was this the skill's first version? (read before the insert — Shipped It vs Sequel)
+  const priorVersions = Number((await pool.query<{ n: string }>(`select count(*)::text as n from skill_versions where skill_id = $1`, [input.skillId])).rows[0]?.n ?? 0);
   const { rows } = await pool.query<{ id: string }>(
     `insert into skill_versions
        (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, content_sha256,
@@ -273,5 +276,9 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
      returning id`,
     [input.skillId, input.semver, input.isPrerelease, artifactKey, sha, contentSha, input.ref, input.externalUrl, input.subdir?.trim() || null, input.whatChanged ?? null, input.createdBy],
   );
+  if (input.createdBy) {
+    await tryAward(pool, input.createdBy, "first_published");
+    if (priorVersions > 0) await tryAward(pool, input.createdBy, "first_new_version", { noHabits: true });
+  }
   return { versionId: rows[0]!.id, artifactKey };
 }

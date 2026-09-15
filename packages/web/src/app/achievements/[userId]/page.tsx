@@ -1,0 +1,92 @@
+"use client";
+// The achievements hall (SKILLY_SPEC.md §31.5): a person's earned badges, shareable by URL with any
+// signed-in colleague. Others see earned badges only; the owner also sees the locked ones with
+// their hints (the same content as the profile card). `?badge=<key>` spotlights one tile.
+import { useParams, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { useApi, EmptyState, ScrollToTop, ShareButton } from "../../../components/ui";
+import { RequireAuth } from "../../../components/RequireAuth";
+import { UserBubble } from "../../../components/UserBubble";
+import { AchievementGrid, type AchievementsView } from "../../../components/AchievementGrid";
+import { usePageLabelOverride } from "../../../components/PageLabelOverride";
+
+interface CardData { jobTitle: string | null; officeLocation: string | null; department: string | null }
+
+function HallInner() {
+  const { userId } = useParams<{ userId: string }>();
+  const params = useSearchParams();
+  const spotlight = params.get("badge");
+  const { data: me } = useApi<{ userId: string | null }>("/api/me");
+  const { data, loading, error } = useApi<AchievementsView | { disabled: true }>(userId ? `/api/users/${userId}/achievements` : null);
+  const view = data && !("disabled" in data) ? data : null;
+  // The directory block exactly as the hover card would show it (honours the person's opt-out).
+  const { data: card } = useApi<CardData>(view ? `/api/users/${userId}/card` : null);
+  usePageLabelOverride(view ? `Achievements: ${view.displayName}` : null);
+
+  if (error) return <EmptyState icon="🏆" title="No such hall" hint="This person doesn't exist here, or their account is no longer active." />;
+  if (loading || !data) return <div className="skeleton" style={{ height: 260, borderRadius: "var(--radius)" }} />;
+
+  if ("disabled" in data) {
+    return (
+      <div className="reveal" style={{ maxWidth: 760 }}>
+        <div className="card reveal" style={{ padding: 16, borderColor: "var(--warn-line, var(--line))" }}>
+          <strong style={{ fontSize: 14 }}>Achievements are switched off</strong>
+          <p style={{ fontSize: 13, color: "var(--muted)", margin: "6px 0 0", lineHeight: 1.6 }}>
+            A platform administrator has disabled them for this registry. Badges keep being recorded quietly and
+            everything reappears if they are switched back on.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const isSelf = !!me?.userId && me.userId === data.userId;
+  const dirLines = card
+    ? ([["Title", card.jobTitle], ["Department", card.department], ["Office", card.officeLocation]] as const).filter(([, v]) => !!v)
+    : [];
+
+  return (
+    <div className="reveal" style={{ maxWidth: 860 }}>
+      <ScrollToTop />
+      <div className="page-head">
+        <div className="eyebrow">Achievements</div>
+        <h1 className="page-title">{isSelf ? "Your hall." : `${data.displayName}'s hall.`}</h1>
+      </div>
+
+      <section className="card card-pad reveal" style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
+        <UserBubble name={data.displayName} avatar={data.avatar} userId={data.userId} size={52} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{data.displayName}</div>
+          {dirLines.length > 0 && (
+            <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+              {dirLines.map(([, v]) => v).join(" · ")}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <ShareButton label="Share" title="Copy a link to this hall" />
+          {isSelf && <Link href="/profile#achievements" className="btn-ghost mono" style={{ fontSize: 12 }}>Manage →</Link>}
+        </div>
+      </section>
+
+      {data.hidden ? (
+        <p className="muted" data-testid="hall-private" style={{ fontSize: 14 }}>{data.displayName} keeps their trophies private.</p>
+      ) : (
+        <section className="card card-pad reveal">
+          <AchievementGrid earned={data.earned} showLocked={isSelf} spotlight={spotlight} recentFirst={!isSelf} />
+          <p className="muted mono" style={{ fontSize: 11.5, marginTop: 16 }} data-testid="hall-count">
+            {data.earned.length} of {data.total}
+          </p>
+        </section>
+      )}
+    </div>
+  );
+}
+
+export default function AchievementsHallPage() {
+  return (
+    <RequireAuth>
+      <HallInner />
+    </RequireAuth>
+  );
+}

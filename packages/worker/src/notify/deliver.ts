@@ -216,6 +216,19 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
+  // achievement.earned (§31.4) — in-app only; the sweep never sends it (see below), but render it
+  // humanly anyway so nothing ever falls through to the generic line.
+  if (n.type === "achievement.earned") {
+    const name = typeof p.name === "string" ? p.name : "a badge";
+    const blurb = typeof p.blurb === "string" ? p.blurb : "";
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `You earned a badge: ${name}.${blurb ? ` ${blurb}` : ""} ${cta("See your achievements", "/profile#achievements")}`,
+      webhook: { event: n.type, title: s, badge: name, url: abs("/profile#achievements") },
+    };
+  }
+
   // Generic fallback — ALWAYS human, NEVER JSON (§12): any unknown/new type gets a sane email
   // instead of leaking its payload to the recipient.
   const s = subj("Notification");
@@ -269,7 +282,8 @@ export async function deliverPendingNotifications(pool: Pool, channels: Delivery
   let failed = 0;
 
   for (const row of rows) {
-    if (!hasExternal) {
+    // §31.4: achievements never ride the email/webhook channels — in-app is the delivery.
+    if (!hasExternal || row.type === "achievement.earned") {
       // In-app only: nothing to send, just record that the queue handled it.
       await pool.query(`update notifications set delivered_at = now() where id = $1`, [row.id]);
       delivered++;

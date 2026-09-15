@@ -6,6 +6,7 @@ import type { PoolClient } from "pg";
 import type { EffectiveAccess } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { awardAchievement, tryAward, isOriginalProposer } from "./achievements";
 import { userLabel } from "./userLabel";
 
 export interface MaintainerSkill {
@@ -102,6 +103,9 @@ export async function addMaintainer(actorUserId: string, skill: MaintainerSkill,
     [skill.id, userId, actorUserId],
   );
   await appendAudit(pool, { actorUserId, action: "skill.maintainer_added", targetType: "skill", targetId: skill.id, namespaceId: skill.namespaceId, after: { userId } });
+  // §31 Adopted: a maintainer of a skill they did not originally propose. Being added is not the
+  // user's own action, so no Habits evaluation.
+  if (!(await isOriginalProposer(pool, skill.id, userId))) await tryAward(pool, userId, "maintainer_added", { noHabits: true });
   return null;
 }
 
@@ -198,4 +202,6 @@ export async function autoAddSubmitterOnNewVersion(client: PoolClient, skill: Ma
     namespaceId: skill.namespaceId,
     after: { userId },
   });
+  // §31 Adopted (same rule as a manual add; the version publish already counted the Habits event).
+  if (!(await isOriginalProposer(client, skill.id, userId))) await awardAchievement(client, userId, "maintainer_added", { noHabits: true });
 }

@@ -14,8 +14,11 @@ import {
   setUserNewVersionNotifications,
   setUserDiscussionNotifications,
   setUserDirectoryHidden,
+  setUserAchievementsHidden,
 } from "../../../lib/settings";
 import { invalidateLeaderboard } from "../../../lib/leaderboard";
+import { setUserTimeZone } from "../../../lib/achievements";
+import { validateTimeZone } from "@skilly/shared/achievements";
 
 export const dynamic = "force-dynamic";
 
@@ -48,10 +51,12 @@ export async function GET() {
             new_version_notifications: boolean;
             discussion_notifications: boolean;
             directory_hidden: boolean;
+            achievements_hidden: boolean;
+            time_zone: string | null;
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, achievements_hidden, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -93,6 +98,13 @@ export async function GET() {
     discussionNotifications: prefs?.discussion_notifications ?? true,
     // §28 directory opt-out: hide job title / office / department from other people's hover cards.
     directoryHidden: prefs?.directory_hidden ?? false,
+    // §31 achievements opt-out: hide earned badges from other people (the hall + hover card).
+    achievementsHidden: prefs?.achievements_hidden ?? false,
+    // §31.3 the browser-reported IANA zone (null until the web UI reports one). The app shell
+    // compares it with the browser's own zone and PATCHes when they differ.
+    timeZone: prefs?.time_zone ?? null,
+    // §31.7 platform toggle — the profile hides its Achievements card while off.
+    achievementsEnabled: settings.achievementsEnabled,
     // Max uploaded hosted-bundle size (bytes) — surfaced on the propose form so the limit is
     // explicit and a too-large bundle is rejected client-side before upload. §6.
     maxBundleBytes: settings.maxBundleBytes,
@@ -129,6 +141,8 @@ export async function PATCH(req: Request) {
     newVersionNotifications?: boolean;
     discussionNotifications?: boolean;
     directoryHidden?: boolean;
+    achievementsHidden?: boolean;
+    timeZone?: string;
   };
   if ("dateFormat" in body) {
     const v = body.dateFormat;
@@ -157,6 +171,15 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.directoryHidden === "boolean") {
     await setUserDirectoryHidden(access.userId, body.directoryHidden);
+  }
+  if (typeof body.achievementsHidden === "boolean") {
+    await setUserAchievementsHidden(access.userId, body.achievementsHidden);
+  }
+  // §31.3 timezone capture: validated as a real IANA zone; an invalid value is ignored, never an
+  // error. The FIRST capture also runs the deferred Night Shift / Weekend Warrior backfill.
+  if (body.timeZone !== undefined) {
+    const tz = validateTimeZone(body.timeZone);
+    if (tz) await setUserTimeZone(access.userId, tz);
   }
   return Response.json({ ok: true });
 }

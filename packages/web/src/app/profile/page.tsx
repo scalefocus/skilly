@@ -1,9 +1,11 @@
 "use client";
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { useApi, ScrollToTop } from "../../components/ui";
+import Link from "next/link";
+import { useApi, ScrollToTop, ShareButton } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
+import { AchievementGrid, type AchievementsView } from "../../components/AchievementGrid";
 
 interface Me {
   userId: string | null;
@@ -16,6 +18,8 @@ interface Me {
   newVersionNotifications: boolean;
   discussionNotifications: boolean;
   directoryHidden: boolean;
+  achievementsHidden: boolean;
+  achievementsEnabled: boolean;
 }
 
 const FORMAT_HINT: Record<"eu" | "us", string> = { eu: "dd/mm/yyyy · 24h", us: "mm/dd/yyyy · AM/PM" };
@@ -286,6 +290,81 @@ function MaintainerNotificationsPref() {
   );
 }
 
+// §31.5 — the owner's Achievements card: every badge in catalog order, earned ones dated, locked
+// ones greyed with their how-to-earn hint (the exploration nudge), a progress line, Share, and a
+// link to the hall as others see it. Hidden entirely while the platform toggle is off.
+function AchievementsCard() {
+  const { data: me } = useApi<Me>("/api/me");
+  const { data } = useApi<AchievementsView | { disabled: true }>(me?.userId ? `/api/users/${me.userId}/achievements` : null);
+  if (!me || me.achievementsEnabled === false) return null;
+  if (!data) return <div className="skeleton" style={{ height: 120, borderRadius: "var(--radius)", marginBottom: 30 }} />;
+  if ("disabled" in data) return null;
+  const hallUrl = typeof window !== "undefined" ? `${window.location.origin}/achievements/${data.userId}` : `/achievements/${data.userId}`;
+  return (
+    <section id="achievements" className="card card-pad reveal" style={{ marginBottom: 30 }} data-testid="achievements-card">
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 2 }}>Achievements</h2>
+          <p className="page-sub" style={{ margin: 0 }} data-testid="achievements-progress">
+            <strong>{data.earned.length}</strong> of {data.total} earned
+            {data.earned.length < data.total ? " — greyed badges tell you how to get them." : " — you have them all."}
+          </p>
+        </div>
+        <ShareButton url={hallUrl} label="Share" title="Copy a link to your achievements" />
+        <Link href={`/achievements/${data.userId}`} className="btn-ghost mono" style={{ fontSize: 12 }}>View as others see it →</Link>
+      </div>
+      <AchievementGrid earned={data.earned} showLocked shareBase={hallUrl} />
+    </section>
+  );
+}
+
+// §31.5 — Shown/Hidden: whether other people can open your hall / see the hover-card count.
+function AchievementsPref() {
+  const { data, reload } = useApi<Me>("/api/me");
+  const [busy, setBusy] = useState(false);
+  if (!data) return <div className="skeleton" style={{ height: 70, borderRadius: "var(--radius)" }} />;
+  if (data.achievementsEnabled === false) return null;
+  const choose = async (hidden: boolean) => {
+    if (hidden === data.achievementsHidden) return;
+    setBusy(true);
+    try {
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ achievementsHidden: hidden }) });
+      reload();
+    } finally { setBusy(false); }
+  };
+  const opts: { label: string; hint: string; hidden: boolean }[] = [
+    { label: "Shown", hint: "others can open your hall", hidden: false },
+    { label: "Hidden", hint: "keep your trophies private", hidden: true },
+  ];
+  return (
+    <section className="reveal" style={{ marginBottom: 30 }}>
+      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Achievements visibility</h2>
+      <p className="page-sub">Whether other signed-in people can see the badges you have earned — on your shared hall and as a count on your hover card. You always see your own.</p>
+      <div className="sort-toggle" role="group" aria-label="Achievements visibility">
+        {opts.map((o) => {
+          const on = o.hidden === data.achievementsHidden;
+          return (
+            <button
+              key={o.label}
+              type="button"
+              className={`sort-opt${on ? " sort-on" : ""}`}
+              aria-pressed={on}
+              disabled={busy}
+              title={o.hint}
+              onClick={() => void choose(o.hidden)}
+            >
+              {o.label} <span className="muted mono" style={{ fontSize: 11 }}>{o.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        {data.achievementsHidden ? "Your hall shows others only that you keep your trophies private." : "Anyone signed in can open your hall from your hover card or a shared link."}
+      </p>
+    </section>
+  );
+}
+
 function ProfileInner() {
   const { data: session } = useSession();
   const { data: me } = useApi<Me>("/api/me");
@@ -309,9 +388,12 @@ function ProfileInner() {
         </div>
       </section>
 
+      <AchievementsCard />
+
       <DateFormatPref />
       <DirectoryPref />
       <LeaderboardPref />
+      <AchievementsPref />
       <EmailNotificationsPref />
       <MaintainerNotificationsPref />
     </div>

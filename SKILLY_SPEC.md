@@ -108,7 +108,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -227,7 +227,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -261,6 +261,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`oauth_clients`** — `id`, `client_id` (unique), `client_name`, `client_uri`, `logo_uri`, `redirect_uris` (text[]), `token_endpoint_auth_method` (`none` — public clients only in v1), `software_id`, `software_version`, `registered_ip`, `created_at`, `last_used_at`, `blocked_at` (admin block). Written by open **Dynamic Client Registration**; unused registrations are pruned after 7 days.
 - **`oauth_grants`** — `id`, `user_id` (FK → `users`, CASCADE), `client_id` (FK → `oauth_clients`, CASCADE), `scope`, `created_at`, `last_used_at`, `revoked_at`, `revoked_by_user_id` (FK, SET NULL). **Partial unique on `(user_id, client_id)` where `revoked_at IS NULL`** — one live grant per user×client. This row **is** the "connection" listed and revoked on `/mcp`.
 - **`oauth_tokens`** — `id`, `grant_id` (FK → `oauth_grants`, CASCADE), `kind` (`code` | `access` | `refresh`), `hashed_token`, `expires_at`, `used_at`, `rotated_from_id` (self-FK — the rotation lineage behind refresh-reuse detection), `code_challenge`, `redirect_uri`, `resource` (last three are `kind='code'` only), `created_at`. One table, three kinds; swept by the worker's housekeeping sweep.
+
+### `user_achievements` (migration 0071, detailed in §31)
+- `user_id` (FK → `users`, CASCADE), `key` (text — a catalog key from `@skilly/shared/achievements`), `earned_at` (timestamptz); **PK `(user_id, key)`**. One row per badge a user has earned; **no subject identity** (no skill/proposal/message reference — invariant #3 by construction). Written inline by `awardAchievement()` (`INSERT … ON CONFLICT DO NOTHING`) in the same transaction as the triggering write; seeded once by the migration's history backfill (§31.6). Deleted on GDPR erasure (§4).
 
 ---
 
@@ -351,7 +354,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Delete user info (GDPR erasure)
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), between **Platform admins** and **Currently online**. Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
-- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, `notifications`, `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
+- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false` and `time_zone = null`), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
@@ -1043,6 +1046,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
+  - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
 - **Retention:** configurable, **default indefinite**. **SIEM export via syslog/stdout** (structured JSON).
 - **Hash-chaining deferred.**
@@ -1090,6 +1094,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
+  - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
 - **Deferred:** —
@@ -1513,7 +1518,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, and **`directoryHidden`**, §28), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
@@ -1570,6 +1575,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Phase 7 — Integrated MCP server**
 25. **MCP server + skilly as an OAuth 2.1 AS (§29):** a first-party Model Context Protocol server on the worker (Streamable HTTP, not leader-gated) exposing **24 curated tools** (core read / install / propose / social) and **resource templates only**; skilly becomes its own **authorization server** (open DCR, authorization-code + mandatory PKCE, resource indicators, rotating refresh tokens with reuse detection, opaque sha256-hashed tokens in the `Authorization` header) delegating login to the existing Entra session via `/oauth/authorize` in web; a `/mcp` user page (connect snippets + revocable Connections) and an Administration card with an **on/off toggle, default on, dormant-not-revoking**; “via MCP” attribution surfaced wherever a human reads agent-created content; first-`SKILL.md`-read counted as adoption through the shared `skill_installs` ledger; migrations 0063 (`oauth_clients` / `oauth_grants` / `oauth_tokens`, the `via_mcp_client` attribution columns, `record_mcp_read()`) + 0064 (the `mcp` audit source). **Prerequisite refactor (done):** the **visibility predicate**, **role resolution** and the **`git ls-remote` ref discovery** now live in `@skilly/shared` so invariants #1/#3 and the SSRF guards have one implementation across web and worker. **DONE.**
+26. **Achievements (§31):** 20 one-time, non-competitive badges (`@skilly/shared/achievements` catalog) awarded inline in the write path (`awardAchievement()`, `user_achievements`, migration 0071 with a history backfill), browser-reported `users.time_zone` behind the Night Shift / Weekend Warrior badges (deferred per-user backfill on first capture), an in-app-only `achievement.earned` notification + toast, the profile-page Achievements card (locked badges with how-to-earn hints, progress, Share), the shareable hall at `/achievements/[userId]` (earned-only for others, `?badge=` spotlight, `achievements_hidden` opt-out), a hover-card count, erasure sweep, and the `achievements_enabled` platform toggle (dormant-not-destructive). *(Spec'd 2026-09-15; not yet built.)*
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -3008,7 +3014,7 @@ skill that **already** satisfies it.
   so no self-credit rule applies and **no minimum threshold** gates the badge. The accepted check on
   gaming is that requests are org-visible: junk is obvious, and a platform admin's **remove** hard-deletes
   the row and the credit with it. Supported by an index on `skill_requests (requester_user_id, created_at)`
-  (migration 0070). Rendered in the row's stat line as `N skill(s) requested`, after "skills watched",
+  (migration 0071). Rendered in the row's stat line as `N skill(s) requested`, after "skills watched",
   and — like the other stats — only when > 0.
 - A **sort toggle** above the board: **Installs** (default) / **Skills adopted** / **Requests
   fulfilled** / **Watched** / **Requested** — re-ranks rows by the chosen stat (ties broken by the other
@@ -3147,7 +3153,11 @@ Top to bottom, in a fixed max-width (~260px) card:
 3. **Email** — a real `mailto:` link (omitted for an erased tombstone, whose `email` is `''`).
 4. **Directory block** — **job title**, **department**, **office**, each line omitted when that
    field is null/empty.
-5. **Leader badges** — every badge the person currently holds, spelled out with its icon and full
+5. **Achievements count** — *"🏆 N achievements"*, linking to the person's hall
+   (`/achievements/[userId]`, §31.5). Omitted when N = 0, when the person has opted out
+   (`achievements_hidden`), or when `achievements_enabled` is off — all three arrive as
+   `achievementCount: null` on the card payload.
+6. **Leader badges** — every badge the person currently holds, spelled out with its icon and full
    label (§21). Absent for the overwhelming majority of users, who hold none.
 
 - **"No directory information."** When **all three** directory fields are empty the block collapses
@@ -3160,7 +3170,7 @@ Top to bottom, in a fixed max-width (~260px) card:
 
 ### Data & delivery
 - `GET /api/users/:id/card` → `{ userId, displayName, email, jobTitle, officeLocation, department,
-  lastSeen, online }`. **Any signed-in user** may call it for **any** user id (there is no per-user
+  lastSeen, online, achievementCount }` (§31.5 — `number | null`). **Any signed-in user** may call it for **any** user id (there is no per-user
   visibility model — invariant #7 governs *skills*); **401** unauthenticated, **404** for an unknown
   id. `online` is computed server-side against the fixed 5-minute window so the client never has to
   know the rule.
@@ -4439,3 +4449,289 @@ non-member never receives a restricted namespace; disabled marketplaces and a di
 marketplace are absent; `added` state from the caller's tokens only) and the `?ns=` filter's
 visibility scoping; e2e for the page rendering its rows and the inline Install panel minting a
 command.
+
+---
+
+## 31. Achievements (badges + the shareable hall)
+
+A set of **one-time, additive, non-competitive badges** that reward a user for trying each part
+of the system for the first time — install a skill, add a marketplace, connect over MCP, ask for a
+skill, propose one, say something in a thread. The point is **exploration nudging**: every user
+can eventually earn every badge, the locked ones are shown with a hint on how to earn them, and
+the earned ones live in a **hall** the user can share with any other signed-in person.
+
+Deliberately distinct from the **leader badges (§21)**: those are *competitive* (tied-for-first on
+a metric, gained and lost as the board moves) and render under avatar bubbles everywhere.
+Achievements are *personal milestones* — once earned, never lost — and render only on the profile
+page, the hall page, and as a count on the directory hover card. **Nothing in RBAC, visibility,
+governance or metrics reads them.**
+
+### 31.1 The catalog
+
+The catalog is a **code constant** in `@skilly/shared` (`achievements.ts`, exported client-safe
+as `@skilly/shared/achievements`): `{ key, name, blurb, howToEarn, glyph, group }` per badge. Names
+are workplace-safe humour; the `howToEarn` line is the exploration hint shown on locked badges.
+Keys are stable identifiers — **renaming a badge never changes its key**.
+
+| Key | Name | Earned when (the event) | Group |
+|---|---|---|---|
+| `first_install` | **Hello, Skill** | First skill **adopted** — a first row in the `skill_installs` ledger (git clone, first download or first MCP `SKILL.md` read; three doors, one fact — §21). Minting an unused install token earns nothing. | Consume |
+| `first_marketplace` | **Bulk Buyer** | First **git fetch** served with a personal `marketplace` token (§30.7's `/info/refs` credit path). Minting the key alone earns nothing. | Consume |
+| `first_mcp` | **Ghost in the Machine** | First **MCP tool call** made under one of the user's grants (§29). Completing consent alone earns nothing. | Consume |
+| `triple_threat` | **Three Doors Down** | Holds all three of `first_install`, `first_marketplace`, `first_mcp`. Awarded by whichever of the three completes the set. | Consume |
+| `first_request` | **Wishful Thinker** | Posted a first skill request (§26 `request.created`). | Ask |
+| `request_fulfilled` | **Wish Granted** | One of the user's requests was fulfilled **by someone else** (`fulfilled_by_user_id ≠ requester`; either fulfilment path, §26). | Ask |
+| `first_fulfilment` | **Genie** | Fulfilled **someone else's** request (either path; no self-fulfilment credit, matching §26's leaderboard rule). | Contribute |
+| `first_hosted_proposal` | **Homegrown** | Submitted a first proposal whose artifact type is **hosted** (web form or MCP `propose_*` tool alike). | Contribute |
+| `first_pointer_proposal` | **Finger Pointer** | Submitted a first proposal whose artifact type is **pointer**. | Contribute |
+| `first_published` | **Shipped It** | A version the user submitted was **published** (review acceptance, or direct publish in a no-review namespace). | Contribute |
+| `first_new_version` | **Sequel** | A version the user submitted was published to a skill that **already had a published version**. | Contribute |
+| `maintainer_added` | **Adopted** | Added as an **explicit maintainer** of a skill whose original proposer — the creator of the skill's **earliest version** — is **not** the user (§19). A brand-new skill's own submitter is never "adopted". | Contribute |
+| `first_message` | **Icebreaker** | Sent a first message in **any** messaging context (direct, proposal review, request discussion, skill discussion — §24). | Talk |
+| `first_reply` | **Conversationalist** | Posted in a conversation whose **first message was authored by someone else**. | Talk |
+| `first_mention` | **Name Dropper** | A message of theirs carried a first `@person` or `#skill` mention (`message_mentions`, §24). | Talk |
+| `first_watch` | **Stalker, but Nicely** | Watched a first skill (`skill_watches`). | Explore |
+| `first_rating` | **Critic** | Rated a first skill (`skill_ratings`, §18). | Explore |
+| `onboarded` | **Read the Manual** | Completed Quick start (`users.onboarded_at`, §23). | Explore |
+| `night_shift` | **Night Shift** | Any achievement event (below) at **00:00–04:59 in the user's own timezone** (§31.3). | Habits |
+| `weekend_warrior` | **Weekend Warrior** | Any achievement event on a **Saturday or Sunday in the user's own timezone** (§31.3). | Habits |
+
+- **Self-actions count.** Installing, watching or rating a skill the user maintains **does** earn
+  the badge — achievements measure *trying the feature*, not contribution, so the leaderboard's
+  no-self-credit rules (§21/§26) deliberately do **not** apply, with the two exceptions stated in
+  the table (`request_fulfilled` / `first_fulfilment` require two distinct people, because the
+  event itself is defined as one person helping another).
+- **No role-gated badges** (reviewing, enabling a marketplace, etc.): most users could never earn
+  them, which defeats "collect them all". **No count tiers** in v1 (no "10 installs"); the
+  `key` scheme leaves room for `installs_10`-style keys later without touching existing rows.
+- **MCP-originated actions count** exactly like web ones — a proposal submitted through the MCP
+  `propose_*` tools is a proposal (§29 attribution) and earns `first_hosted_proposal` /
+  `first_pointer_proposal`; an install minted and cloned by an agent earns `first_install`.
+- **System installations (§23) earn nothing** — no user.
+
+### 31.2 Data & awarding
+
+- **`user_achievements`** (migration 0071): `user_id` (FK → `users`, CASCADE), `key` (text),
+  `earned_at` (timestamptz), **PK `(user_id, key)`**. Nothing else — **no skill, proposal,
+  message or subject identity is stored** (invariant #3 is then trivially safe, matching the
+  leaderboard's aggregate-only stance; the cost, accepted, is that the hall can never say *"earned
+  on skill X"*). `key` is validated against the catalog at insert time; an unknown key is a
+  programming error (500), never a silent row.
+- **`users.achievements_hidden`** (BOOLEAN NOT NULL DEFAULT false) — the §31.5 opt-out, same
+  pattern as `leaderboard_hidden` / `directory_hidden`.
+- **`users.time_zone`** (TEXT NULL) — the browser-reported IANA zone behind the two Habits
+  badges (§31.3).
+- **`platform_settings.achievements_enabled`** (default `true`) — the §31.7 platform toggle.
+- **Awarding is inline in the write path, never a sweep.** A single helper,
+  `awardAchievement(db, userId, key, opts)` in `lib/achievements.ts` (web) — `INSERT … ON CONFLICT DO
+  NOTHING RETURNING` — is called from each hook point. **Where the triggering write already runs
+  in a transaction** (request creation, both fulfilment paths, proposal creation, version
+  materialisation, the marketplace credit path) **the award joins that transaction**, so the badge
+  can never exist without its event or vice-versa. **Where the existing write is a bare statement**
+  (downloads, git clones, MCP reads and tool calls, messages, watches, ratings, manual maintainer
+  adds, the onboarding stamp, pointer mirroring) the award **follows the write immediately and is
+  best-effort** (`tryAward`): a failure is logged and never breaks the user's action, and the badge
+  is simply picked up by the next qualifying event. A repeat action at any hook is still a Habits
+  event. When the insert
+  actually lands (a genuinely new badge), the helper (a) re-evaluates the combo badge
+  (`triple_threat`) and the two Habits badges for the same event, and (b) creates the
+  `achievement.earned` notification (§31.4) — unless the platform toggle is off (§31.7) or the
+  call is a backfill (§31.6). Concurrency is handled by the PK: two racing hooks produce one row
+  and one notification. **The worker mirrors the helper** (the same single statement, kept in sync
+  like `eraseUserByExternalId` mirrors `lib/eraseUser.ts`, §5) for the hooks that live there: the
+  MCP tool dispatcher (`first_mcp`), the publish sweep (`first_published`, `first_new_version`)
+  and any other worker-side write that already exists.
+- **Hook points (where each key fires):** the adoption ledger's fresh-adoption branch in the
+  callers of `record_git_access()` / `record_skill_download()` / `record_mcp_read()`
+  (`first_install`); the marketplace `/info/refs` credit path (`first_marketplace`); the MCP tool
+  dispatcher, once per tool call, before dispatch (`first_mcp`); `POST /api/requests`
+  (`first_request`); both fulfilment paths — proposal acceptance and "fulfil with existing skill"
+  (`request_fulfilled` to the requester, `first_fulfilment` to the fulfiller); proposal creation,
+  web and MCP (`first_hosted_proposal` / `first_pointer_proposal` by artifact type); version
+  publish (`first_published`, plus `first_new_version` when the skill already had a published
+  version); `skill_maintainers` insert (`maintainer_added`, when the skill's original proposer is
+  someone else); message insert (`first_message`; `first_reply` when the conversation's earliest
+  message has another author; `first_mention` when the message wrote any `message_mentions` row);
+  watch insert (`first_watch`); rating insert (`first_rating`); `POST /api/me/onboarded`
+  (`onboarded`). **Every one of these hook points is also a Habits event** (§31.3), whether or not
+  it awards its own key — a tenth install at 02:00 still earns Night Shift.
+- **Failure isolation.** The helper never throws into its caller's success path: a failure
+  inside awarding rolls the transaction back exactly like any other failure would (it *is* in the
+  transaction), but the helper does no I/O beyond its inserts — no network, no rendering — so the
+  realistic failure mode is a DB error the caller would have hit anyway.
+
+### 31.3 Timezone capture (the Habits badges)
+
+The server never guesses a timezone. The browser reports it:
+
+- **Capture.** On every app-shell mount the client reads
+  `Intl.DateTimeFormat().resolvedOptions().timeZone` and, when it differs from the `timeZone`
+  value `GET /api/me` returned (or that is `null`), sends `PATCH /api/me { timeZone }`. The server
+  **validates** the string as a real IANA zone (constructing an `Intl.DateTimeFormat` with it must
+  succeed; length-capped) and stores it in `users.time_zone`; an invalid value is ignored, never
+  an error. A user who never opens the web UI after this ships has `null`.
+- **Evaluation.** Every hook point evaluates the two Habits badges against the user's **stored**
+  `time_zone` at event time — this deliberately covers channels with no browser at all (a git
+  clone at 01:00, an MCP tool call on a Sunday). `night_shift` = the event's local hour is 0–4
+  (00:00:00 through 04:59:59); `weekend_warrior` = the event's local weekday is Saturday or
+  Sunday. **`time_zone` NULL ⇒ neither badge can fire** (no UTC fallback — a wrong zone would
+  award a lie). Conversions use the standard library (`Intl` in Node), never a hand-rolled
+  offset table, so DST is handled.
+- **Deferred backfill.** The two Habits badges cannot be seeded by the migration (no zone is
+  known yet — §31.6). Instead, the **first time** a user's `time_zone` transitions from `null` to
+  a value (the `PATCH` above), the server runs the user's **history once** through the same
+  night/weekend rules — the same source queries the migration uses for the other keys (installs,
+  requests, proposals, versions, messages, watches, ratings, maintainer additions, MCP grants) —
+  and awards whichever apply with `earned_at` = the earliest qualifying event. This runs inline
+  in the `PATCH` (a handful of indexed per-user queries) and, being a backfill, sends **no
+  notification**. A later zone change (travel, relocation) does **not** re-run history — the
+  badges are already earned or not; the accepted approximation is that history is judged by the
+  zone the user first reported.
+
+### 31.4 Notification & toast
+
+- **`achievement.earned`** — a new in-app notification type. Subject: *"You earned a badge:
+  &lt;name&gt;"*; body: the badge's blurb plus its `howToEarn` line phrased in the past tense;
+  **CTA → `/profile#achievements`** (the user's own Achievements card, §31.5), so the notification
+  itself is the way into the hall. One row per badge, never coalesced (a user earns each at most
+  once). **In-app only** — it never rides the email or webhook channels, regardless of
+  `email_notifications`; there is no per-type opt-out (one-time, ≤ 20 rows per lifetime).
+- **Toast.** The existing notification poll surfaces any **unread** `achievement.earned` row it has
+  not toasted yet in this browser session (tracked by notification id in `sessionStorage`) as a
+  small celebratory toast — glyph, *"Badge earned — Hello, Skill"*, a link to
+  `/profile#achievements` — shown once, **top-right under the header** (it never overlaps the
+  bottom-right What's new notice), auto-dismissing after ~7 s; one badge per poll tick. The bell
+  row remains the durable copy.
+- **Backfilled badges (§31.6) create no notification and no toast.**
+
+### 31.5 Surfaces
+
+**Profile page (`/profile`) — the "Achievements" card** (anchor `#achievements`), placed above
+the preference cards:
+- Header: a **progress line** *"N of M earned"*, a **Share** button, and a **"View as others see
+  it"** link to the user's own hall URL.
+- The grid renders **the full catalog in catalog order, grouped** (Consume / Ask / Contribute /
+  Talk / Explore / Habits). **Earned** badges show the glyph in a coloured circle (the leader-badge
+  visual language, §21), the name, and *"Earned &lt;date&gt;"* via `useDateFmt()`. **Locked**
+  badges are greyed with the same glyph and show the `howToEarn` hint — this is the exploration
+  nudge, so it is never hidden from the owner.
+- **Share** copies the hall URL to the clipboard with the shared copy-toast (*"✓ Copied"*, §23/§29).
+  Every badge tile also has its own small share affordance that copies the URL with
+  **`?badge=<key>`** (spotlight, below).
+- A new preference block **"Achievements"** — *Shown* (default) / *Hidden* — toggles
+  `users.achievements_hidden` (`GET|PATCH /api/me`, `achievementsHidden`; same control as the
+  Leaderboard / Directory-details blocks). While hidden, the owner still sees their full card.
+
+**The hall — `/achievements/[userId]`** (new page, any signed-in user; **unauthenticated →
+sign-in redirect** like every page):
+- **Stable per-user URL by user id**, not a share token: any signed-in user can already open
+  anyone's hover card (§28), so a guessable URL leaks nothing new, and a stable link keeps
+  working when re-shared.
+- **Header:** the person's `UserBubble` (with their leader badges, §21, and the hover card), display
+  name, and the directory block **exactly as the hover card would show it** (honouring
+  `directory_hidden`, §28). **No leaderboard numbers** — those have their own page.
+- **Body:** **earned badges only**, most recent first, each with name, blurb and earned date; a
+  footer line *"N of M"* (M = catalog size). **Locked badges are not shown to others** — the hints
+  are for the owner.
+- **Own hall:** visiting your own id renders the same page **plus** the locked badges with hints
+  (identical content to the profile card) and the Share button — so "View as others see it"
+  is honest about layout while still useful.
+- **Share** button (same copy-toast), for anyone viewing — sharing someone else's hall is fine;
+  it is the same URL.
+- **`?badge=<key>` spotlight:** when present and the badge is earned, that tile is scrolled into
+  view and briefly highlighted (the leaderboard's "flash" treatment); an unknown or unearned key is
+  ignored silently.
+- **Hidden (`achievements_hidden`) and not the viewer:** the header renders normally and the body
+  is a single muted line — *"&lt;name&gt; keeps their trophies private."* — no count, no badges.
+- **404:** unknown id, an erased tombstone, or a **`status='inactive'`** user (consistent with the
+  leaderboard hiding deprovisioned users, §21). Re-enabling restores the page.
+
+**Directory hover card (§28):** a new line between the directory block and the leader badges —
+*"🏆 N achievements"* — linking to the person's hall. **Omitted** when N = 0, when the person has
+`achievements_hidden`, or when the platform toggle is off. Served as `achievementCount`
+(`number | null`) on the existing `GET /api/users/:id/card` payload (one indexed count; `null`
+means "don't show").
+
+**Not rendered:** under avatar bubbles (that slot stays for the competitive leader badges, §21),
+on leaderboard rows, on catalog cards, or anywhere else.
+
+### 31.6 Backfill (migration 0071)
+
+Long-standing users must open the card to a full shelf, not an empty one, so the creating
+migration **seeds every key that history can prove**, once, for users with `erased_at IS NULL`,
+`earned_at` = the **original event's timestamp**, and **no notifications** (the migration writes
+rows; the notification is created only by the runtime helper). Sources:
+
+| Key | Backfill source (`earned_at`) |
+|---|---|
+| `first_install` | `min(skill_installs.first_at)` per user |
+| `first_marketplace` | `tokens` with `kind='marketplace'` and `last_served_commit IS NOT NULL` → `min(created_at)` *(approximation, stated: the first fetch time itself is not recorded; the key's mint time is the closest durable signal)* |
+| `first_mcp` | `oauth_grants` with `last_used_at IS NOT NULL` → `min(created_at)` *(same approximation: a used grant proves at least one call)* |
+| `triple_threat` | derived — `max(earned_at)` of the three, when all three were seeded |
+| `first_request` | `min(skill_requests.created_at)` by `requester_user_id` |
+| `request_fulfilled` | `skill_requests` `state='fulfilled'`, `fulfilled_by_user_id ≠ requester_user_id` → `min(fulfilled_at)` by requester |
+| `first_fulfilment` | same rows → `min(fulfilled_at)` by `fulfilled_by_user_id` |
+| `first_hosted_proposal` / `first_pointer_proposal` | `min(proposals.created_at)` by `submitted_by`, split by artifact type |
+| `first_published` | `min(skill_versions.created_at)` by `created_by` |
+| `first_new_version` | `min(skill_versions.created_at)` by `created_by` over versions that are **not** the earliest version of their skill |
+| `maintainer_added` | `min(skill_maintainers.created_at)` by `user_id` where the skill's original proposer (the `created_by` of its earliest `skill_versions` row) is a different user |
+| `first_message` | `min(messages.created_at)` by `author_id` |
+| `first_reply` | `min(messages.created_at)` by `author_id` over messages in conversations whose earliest message has a different `author_id` |
+| `first_mention` | `min(messages.created_at)` by `author_id` over messages with a `message_mentions` row |
+| `first_watch` | `min(skill_watches.created_at)` |
+| `first_rating` | `min(skill_ratings.created_at)` |
+| `onboarded` | `users.onboarded_at` |
+| `night_shift` / `weekend_warrior` | **not seeded here** — deferred to first timezone capture (§31.3) |
+
+The migration is idempotent (`ON CONFLICT DO NOTHING`) and self-contained plain SQL, like
+migration 0041's credit backfill.
+
+### 31.7 Lifecycle, privacy, governance
+
+- **GDPR erasure (§4, both the admin and SCIM paths):** `user_achievements` rows are **deleted**
+  (personal data, like watches and ratings); `achievements_hidden` is reset to `false` and
+  `time_zone` to `null`. A re-provisioned account starts empty. The hall 404s (tombstone).
+- **Deprovision (`status='inactive'`):** rows are kept; the hall 404s while inactive; re-enabling
+  restores everything.
+- **Subject deletion:** a badge outlives the skill, proposal, request, message or watch that
+  earned it (no subject reference is stored, so nothing cascades).
+- **Platform toggle — `achievements_enabled`** (Administration page, a card with the shared
+  `Switch`, default **on**; `settings.updated` audit like every setting). **Off** hides the
+  profile card and the preference block, makes `/achievements/[userId]` render the same
+  *"disabled by your administrator"* notice pattern as `/mcp` (§29), drops the hover-card line
+  (`achievementCount: null`), and **stops creating notifications and toasts**. **Awards keep
+  recording while off** (dormant-not-destructive, the §29 toggle's stance) so switching back on
+  loses no history — a user then finds every badge earned in the meantime, silently.
+- **Invariant #3.** No row references a skill, so no surface can enumerate or imply a restricted
+  skill. `first_hosted_proposal` on a restricted namespace tells a viewer only that the person
+  proposed *something*, *somewhere* — the same thing the leaderboard already discloses.
+- **Not audited.** Awards are personal, mechanical and high-volume relative to governance events —
+  the same rule that keeps personal install tokens out of `audit_log` (§11). The toggle is audited
+  as a setting.
+- **No admin surface** in v1 beyond the toggle: no revoke, no per-badge statistics, no manual
+  grant.
+
+### 31.8 API surface
+
+- `GET /api/users/:id/achievements` → `{ userId, displayName, avatar, hidden, earned: [{ key,
+  earnedAt }], total }` — any signed-in user; `total` = catalog size; for a hidden non-self target
+  `hidden: true, earned: []`; **404** for unknown / erased / inactive; **404-shaped disabled
+  notice** (`{ disabled: true }` with 200, mirroring `/api/mcp`'s pattern) when the toggle is off.
+  The catalog itself (names, blurbs, hints, glyphs, groups) is **not** served — the client imports
+  it from `@skilly/shared/achievements`.
+- `GET|PATCH /api/me` gains `achievementsHidden` and `timeZone` (§31.3's write path); `GET` additionally
+  returns `achievementsEnabled` so the profile can hide its card while the toggle is off.
+- `GET /api/users/:id/card` gains `achievementCount` (§31.5).
+- `GET /api/admin/settings` / the settings `PATCH` gain `achievementsEnabled`.
+
+### 31.9 Testing
+
+Unit: the catalog module (unique keys, every key has all fields), the Habits evaluators
+(`night_shift` / `weekend_warrior` across DST boundaries and the `null`-zone case), and the
+`triple_threat` combo rule. Integration: each hook point awards exactly once under repetition
+(idempotency), the no-self-credit exceptions for the two fulfilment keys, the erasure sweep, the
+hidden / inactive / erased / disabled responses of the achievements endpoint, the first-zone
+deferred backfill (awards, no notification), and the migration backfill against a seeded history.
+E2e: earn `first_watch` from the skill page → toast → bell row → profile card shows it earned with
+the rest locked → Share copies the hall URL → a second user opens the hall and sees only the
+earned badge → owner hides achievements → the second user sees the private line.

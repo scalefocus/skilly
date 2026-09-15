@@ -15,6 +15,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.2.0",
+    date: "2026-09-15",
+    summary: "Achievements: 20 badges for trying each part of skilly for the first time — install a skill, add a marketplace, connect over MCP, ask for or propose a skill, get published, join a discussion, watch, rate, and two habits badges (Night Shift, Weekend Warrior) judged in your own timezone. Your profile shows every badge with hints on how to earn the locked ones and a Share button; the link opens your hall for any signed-in colleague (hide it under Profile → Achievements visibility). Badges you already earned in the past are there from day one; new ones announce themselves with a toast and a bell notification. Administrators can switch the feature off under Administration → Achievements.",
+  },
+  {
     version: "2.1.0",
     date: "2026-09-15",
     summary: "The leaderboard now recognises the people who ask for skills: a new Requested ranking counts the skill requests each person has posted (open or fulfilled), a Request leader badge (💡, violet) marks whoever tops it all-time and over the last 30 days, and every row gains a Requests action that opens that person's requests on the Requested skills page under a \"Requested by\" banner.",

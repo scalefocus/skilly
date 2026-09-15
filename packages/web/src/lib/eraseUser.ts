@@ -116,7 +116,9 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // `oauth_grants` (§29) goes with the rest: unlike a §23 install token — a durable artifact a
     // reinstated user might want back — a live delegation to a third-party MCP client must never
     // survive the person leaving. oauth_tokens cascade with the grant.
-    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens", "oauth_grants"]) {
+    // `user_achievements` (§31) is personal data like watches and ratings; a re-provisioned account
+    // starts with an empty shelf.
+    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens", "oauth_grants", "user_achievements"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [targetUserId]);
     }
 
@@ -131,6 +133,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     await client.query(
       `update users set display_name = $2, email = '', avatar = null,
               job_title = null, office_location = null, department = null, directory_hidden = false,
+              achievements_hidden = false, time_zone = null,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [targetUserId, deletedLabel],

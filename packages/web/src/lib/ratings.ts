@@ -2,6 +2,7 @@
 // Ordinary mutable rows — NEVER audit. The skills.rating_sum/rating_count aggregate is kept
 // in sync by the DB trigger trg_skill_rating_rollup; we only read it here.
 import { pool } from "./db";
+import { tryAward } from "./achievements";
 
 export interface RatingSummary {
   avg: number; // raw average (sum/count), 0 when no ratings
@@ -55,6 +56,7 @@ export async function setRating(userId: string, skillId: string, stars: number, 
                      via_mcp_client = null, updated_at = now()`,
     [userId, skillId, stars, ratedSemver],
   );
+  await tryAward(pool, userId, "first_rating"); // §31 Critic
 }
 
 /** Revoke the caller's rating. The rollup trigger decrements the aggregate. */

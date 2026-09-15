@@ -255,3 +255,17 @@ test("sweep: a non-429 send failure retries per-row without stopping the batch",
   assert.equal(r.delivered, 1);
   assert.equal(r.failed, 1);
 });
+
+test("renderNotification: achievement.earned — badge name + CTA to the profile card (§31.4)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const r = renderNotification({
+    type: "achievement.earned",
+    payload: { key: "first_watch", name: "Stalker, but Nicely", blurb: "You are keeping an eye on a skill." },
+  });
+  assert.equal(r.subject, "Skilly - Badge earned");
+  assert.match(r.text, /You earned a badge: Stalker, but Nicely\. You are keeping an eye on a skill\./);
+  assert.match(r.text, /\[See your achievements\]\(https:\/\/skilly\.test\/profile#achievements\)/);
+  assert.equal(r.webhook.event, "achievement.earned");
+  assert.equal(r.webhook.badge, "Stalker, but Nicely");
+  assert.doesNotMatch(r.text, /\{|\}/);
+});

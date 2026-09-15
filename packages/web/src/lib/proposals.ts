@@ -31,6 +31,7 @@ import {
   type ProposalState,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
+import { awardAchievement } from "./achievements";
 import { categoryListError, upsertCategory } from "./categories";
 import { normalizeCategoryNames } from "@skilly/shared";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
@@ -460,6 +461,10 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
       skillSlug: input.payload.metadata.skillSlug,
       semver: input.proposedSemver,
     });
+    // §31: Homegrown / Finger Pointer by the initial revision's artifact shape (the same rule the
+    // migration-0071 backfill uses: a pointer source or a pointer Keep-current-files reuse).
+    const proposedPointer = !!input.payload.pointer || !!input.payload.reuse?.external;
+    await awardAchievement(client, input.submittedByUserId, proposedPointer ? "first_pointer_proposal" : "first_hosted_proposal");
     await client.query("commit");
     M.proposalsCreated.inc();
     return { id: proposalId };
@@ -1005,6 +1010,12 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
       input.submittedBy,
     ],
   );
+  // §31: Shipped It for the submitter; Sequel when the skill already had a version. (`existing`
+  // was read before this insert.) A pointer version is awarded by the worker at mirror time.
+  if (input.submittedBy) {
+    await awardAchievement(client, input.submittedBy, "first_published");
+    if (existing.length > 0) await awardAchievement(client, input.submittedBy, "first_new_version", { noHabits: true });
+  }
   return { skillId, versionId: vrows[0]!.id };
 }
 

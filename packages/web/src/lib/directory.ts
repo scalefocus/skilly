@@ -21,6 +21,8 @@ export interface UserCard {
   lastSeen: string | null;
   /** `last_seen` within the FIXED 5-minute window — never the admin-selected one (§4). */
   online: boolean;
+  /** §31.5 badges earned, or null when the line must not show (none, opted out, or achievements off). */
+  achievementCount: number | null;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -46,10 +48,16 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     erased_at: Date | null;
     last_seen: Date | null;
     online: boolean;
+    achievements_hidden: boolean;
+    achievement_count: string;
+    achievements_enabled: boolean;
   }>(
     `select id, display_name, email, job_title, office_location, department, directory_hidden,
             erased_at, last_seen,
-            (last_seen is not null and last_seen > now() - make_interval(mins => $2::int)) as online
+            (last_seen is not null and last_seen > now() - make_interval(mins => $2::int)) as online,
+            achievements_hidden,
+            (select count(*) from user_achievements ua where ua.user_id = users.id) as achievement_count,
+            coalesce((select value from platform_settings where key = 'achievements_enabled') <> 'false'::jsonb, true) as achievements_enabled
        from users where id = $1`,
     [userId, ONLINE_WINDOW_MINUTES],
   );
@@ -68,6 +76,10 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     department: hidden ? null : r.department,
     lastSeen: r.last_seen ? new Date(r.last_seen).toISOString() : null,
     online: r.online === true,
+    achievementCount:
+      r.achievements_enabled && !r.achievements_hidden && r.erased_at === null && Number(r.achievement_count) > 0
+        ? Number(r.achievement_count)
+        : null,
   };
 }
 

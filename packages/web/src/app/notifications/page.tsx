@@ -146,6 +146,8 @@ export default function NotificationsPage() {
             const skillName = n.skillTitle ?? skSlug;
             const semver = typeof n.payload.semver === "string" ? n.payload.semver : null;
             const isSystemLog = n.type === "system.error";
+            // §31.4 achievement.earned: the badge name, and a CTA into the owner's Achievements card.
+            const badgeName = n.type === "achievement.earned" && typeof n.payload.name === "string" ? n.payload.name : null;
             const eventCount = typeof n.payload.count === "number" ? n.payload.count : null;
             return (
               <div className="row" key={n.id} style={{ alignItems: "flex-start", gap: 12, opacity: n.readAt ? 0.62 : 1 }}>
@@ -159,6 +161,7 @@ export default function NotificationsPage() {
                         {semver && <span className="muted mono" style={{ fontWeight: 400, fontSize: 11.5 }}> v{semver}</span>}
                       </span>
                     )}
+                    {badgeName && <span style={{ fontSize: 14, fontWeight: 600 }}>{badgeName}</span>}
                     {isSystemLog && eventCount != null && (
                       <span style={{ fontSize: 14, fontWeight: 600 }}>{eventCount} new event{eventCount === 1 ? "" : "s"}</span>
                     )}
@@ -183,6 +186,11 @@ export default function NotificationsPage() {
                   {conversationHref && (
                     <Link href={conversationHref} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                       view message →
+                    </Link>
+                  )}
+                  {badgeName && (
+                    <Link href="/profile#achievements" className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                      view badges →
                     </Link>
                   )}
                   {isSystemLog && (

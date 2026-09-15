@@ -70,6 +70,10 @@
     "./whats-new": {
       "types": "./dist/whats-new.d.ts",
       "default": "./dist/whats-new.js"
+    },
+    "./achievements": {
+      "types": "./dist/achievements.d.ts",
+      "default": "./dist/achievements.js"
     }
   },
   "scripts": {
