@@ -15,6 +15,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.0.2",
+    date: "2026-09-15",
+    summary: "The header bar (search, messages, notifications and the theme toggle) now casts a small soft shadow over the page once you scroll under it, and sits flat at the top; in the light theme the shadow replaces the old hairline divider. The dark theme keeps its divider line and never shows a shadow, and on phones the header is unchanged.",
+  },
+  {
     version: "2.0.1",
     date: "2026-09-14",
     summary: "The \"What's new in …\" update notice no longer runs off the bottom of the screen when release notes are long: the card is capped at about 60% of the window height and the release-notes list inside it scrolls, with the heading, the ✕ and the See what's new link always in view. Keyboard users can Tab to the list and scroll it with the arrow keys.",
