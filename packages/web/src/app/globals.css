@@ -30,6 +30,9 @@
   --shadow-sm: 0 1px 2px rgba(8, 39, 115, 0.06);
   --shadow: 0 1px 2px rgba(8, 39, 115, 0.05), 0 14px 34px -18px rgba(8, 39, 115, 0.25);
   --shadow-lg: 0 2px 4px rgba(8, 39, 115, 0.06), 0 36px 60px -28px rgba(8, 39, 115, 0.35);
+  /* §14 Topbar elevation — the ONLY shadow the sticky header may cast, and only once the page has
+     scrolled under it. Dedicated token (not --shadow-sm) so tuning the header never moves cards. */
+  --shadow-topbar: 0 4px 16px -8px rgba(8, 39, 115, 0.18);
   --radius: 14px;
   --radius-sm: 9px;
   --radius-lg: 22px;
@@ -69,6 +72,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow: 0 2px 6px rgba(0, 0, 0, 0.5), 0 18px 44px -20px rgba(0, 0, 0, 0.8);
   --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.55), 0 44px 80px -30px rgba(0, 0, 0, 0.9);
+  --shadow-topbar: none; /* §14: the dark header never casts a shadow — its 1px border divides. */
   --grid: rgba(237, 237, 237, 0.04);
   color-scheme: dark;
 }
@@ -341,10 +345,23 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .topbar {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 16px; padding: 14px 34px;
-  border-bottom: 1px solid var(--line);
+  /* §14 Topbar elevation. Light theme: NO border — the scroll-aware shadow is the only divider, and
+     at rest the translucent bar blends into the page. The border is kept as `transparent` (not
+     removed) so the header's height is identical in every theme/state. Dark theme + mobile turn the
+     border colour back on below; shadow and border are never stacked. */
+  border-bottom: 1px solid transparent;
   background: color-mix(in oklab, var(--paper) 82%, transparent);
   backdrop-filter: blur(10px);
+  box-shadow: none;
+  transition: box-shadow 0.2s ease;
 }
+/* `data-scrolled` is toggled by the AppShell sentinel observer the moment the page scrolls under
+   the header (any offset > 0) — see AppShell.tsx. In dark the token is `none`, so this is a no-op. */
+.topbar[data-scrolled] { box-shadow: var(--shadow-topbar); }
+[data-theme="dark"] .topbar { border-bottom-color: var(--line); }
+/* Zero-height marker above the sticky header; `.main` is a flex column so it takes no space. */
+.topbar-sentinel { height: 0; flex: 0 0 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .topbar { transition: none; } }
 .search {
   position: relative;
   flex: 1; max-width: 460px; display: flex; align-items: center; gap: 9px;
@@ -1172,6 +1189,9 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   /* Topbar reflows: controls on the first row, full-width search on the second, and the
      system-banner pill (when present) on its own full-width third row below search. */
   .topbar { flex-wrap: wrap; gap: 10px; padding: 12px 18px; }
+  /* §14: no header shadow on mobile in either theme or scroll state — the wrapped two/three-row
+     bar keeps the 1px border (in BOTH themes) as its only separator instead. */
+  .topbar, .topbar[data-scrolled] { box-shadow: none; border-bottom-color: var(--line); }
   .topbar .nav-toggle { order: 0; }
   .topbar-spacer { order: 1; }
   .msg-menu { order: 2; flex-shrink: 0; }

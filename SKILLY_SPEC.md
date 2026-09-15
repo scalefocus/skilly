@@ -1307,6 +1307,39 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       unbreakable long category name.
     - **Rendered markdown breaks long words.** Message and description bodies (`.md`) break an
       over-long unbroken run (a bare URL, a long identifier) rather than overflowing their column.
+  - **Topbar elevation — a scroll-aware shadow, light theme, desktop only.** The sticky app-shell
+    header (`.topbar`: search box, system banner, messages button, bell, theme toggle, account
+    controls) casts a **small soft shadow over the page content only once the page has scrolled
+    under it**; at the top of the page it sits **flat**. The shadow is a single dedicated token,
+    **`--shadow-topbar`** — `0 4px 16px -8px rgba(8, 39, 115, 0.18)` in the light theme (the same
+    navy tint as the card shadows, but lower and tighter) and **`none` in the dark theme**, where
+    the header shows **no shadow in any state**. It is deliberately **not** a reuse of
+    `--shadow-sm`/`--shadow`, so tuning the header never moves cards, buttons or menus.
+    - **Divider.** In the **light theme the header's 1px bottom border is removed** — the shadow is
+      the only separator, and at rest (unscrolled) the translucent header simply blends into the
+      page. In the **dark theme the 1px `--line` border stays, in every state**, as the sole
+      divider. Shadow and border are therefore mutually exclusive per theme, never stacked.
+    - **Scroll detection.** The app shell renders a **zero-height sentinel as the first child of
+      the `.main` column, above the header**; an **`IntersectionObserver`** on it toggles a
+      **`data-scrolled`** attribute on the header the moment the sentinel leaves the viewport
+      (any scroll offset > 0) and clears it when it returns. Because the sentinel sits above the
+      sticky header, detection is **independent of the header's height** (desktop single row or
+      the wrapped mobile rows). The state is **computed on mount**, so a reload mid-page shows the
+      shadow immediately rather than after the first scroll event. The observer is a
+      view-only concern: no fetch, no persistence, no analytics. In a browser without
+      `IntersectionObserver` the header simply stays flat.
+    - **Motion.** `box-shadow` transitions over **0.2s ease** on both edges (appear/disappear);
+      under `prefers-reduced-motion: reduce` the toggle is instant (the shadow still appears, only
+      the fade is dropped).
+    - **Mobile (≤880px — the topbar reflow).** **No shadow in either theme, in any scroll state.**
+      The wrapped two/three-row header keeps its **1px bottom border in both themes** there (the
+      pre-change look), since with no shadow the border is the only separator. The sentinel and
+      `data-scrolled` still toggle (they are theme/width-agnostic); the mobile rule just never
+      paints a shadow for them.
+    - **Scope.** Header only. The **sidebar keeps its border-only treatment** (no matching
+      shadow), and the popover menus anchored in the header (search typeahead, messages, account)
+      keep their own `--shadow` and z-index — the header shadow sits beneath them and never
+      changes their stacking.
   - **Form controls — one canonical `.input`.** Every text input and `select` in the app is
     styled by **one CSS class in `globals.css`**, not by a per-page inline style object. Before this
     rule **five files** each declared their own `field`/`label` const with **four divergent value

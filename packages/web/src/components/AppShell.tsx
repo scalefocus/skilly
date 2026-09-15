@@ -78,6 +78,25 @@ export function AppShell({ children }: { children: ReactNode }) {
   // at the bottom so it's obvious there's more below (and hide it once scrolled to the end).
   const sidebarRef = useRef<HTMLElement>(null);
   const [moreBelow, setMoreBelow] = useState(false);
+  // §14 Topbar elevation: a zero-height sentinel ABOVE the sticky header (first child of .main)
+  // leaves the viewport the moment the window scrolls by 1px, so an IntersectionObserver on it
+  // tells us "the page is under the header" independently of the header's own height (desktop
+  // single row or the wrapped mobile rows). Drives the header's `data-scrolled` attribute, which
+  // the CSS turns into the light-theme shadow. View-only: no fetch, no persistence.
+  const topbarSentinelRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const el = topbarSentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return; // no observer → header stays flat
+    // The callback fires once on observe() with the current state, so a mid-page reload shows the
+    // shadow immediately rather than after the first scroll event.
+    const io = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setScrolled(!entry.isIntersecting);
+    }, { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
   // Header search autocomplete: suggestions appear once 2+ chars are typed (debounced).
   const [suggestions, setSuggestions] = useState<{ namespaceSlug: string; skillSlug: string; title: string; official?: boolean }[]>([]);
   const [acOpen, setAcOpen] = useState(false);
@@ -618,7 +637,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="main">
-        <header className="topbar">
+        <div ref={topbarSentinelRef} className="topbar-sentinel" aria-hidden />
+        <header className="topbar" data-scrolled={scrolled ? "" : undefined}>
           <button className="nav-toggle" aria-label="Open menu" aria-expanded={navOpen} onClick={() => setNavOpen(true)}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
               <path d="M4 6h16M4 12h16M4 18h16" />
