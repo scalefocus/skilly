@@ -1,7 +1,7 @@
 // Leader-badge vocabulary (SKILLY_SPEC.md §21) — shared by the badge icons under the avatar
 // (UserBubble) and the spelled-out list inside the directory hover card (DirectoryCard, §28).
 // Lives in its own module so those two don't have to import each other.
-export type LeaderMetric = "installs" | "skills" | "requests" | "watched";
+export type LeaderMetric = "installs" | "skills" | "requests" | "watched" | "requested";
 export interface LeaderBadgeInfo { metric: LeaderMetric; window: "all" | "30d" }
 
 export const BADGE_META: Record<LeaderMetric, { icon: string; color: string; label: string }> = {
@@ -9,6 +9,8 @@ export const BADGE_META: Record<LeaderMetric, { icon: string; color: string; lab
   skills: { icon: "📝", color: "var(--accent-2)", label: "Adoption leader" },
   requests: { icon: "🎁", color: "var(--ok)", label: "Fulfillment leader" },
   watched: { icon: "👁", color: "var(--warn)", label: "Watch leader" },
+  // Violet is the one hue the other four don't use, so it stays distinguishable at badge size (§21).
+  requested: { icon: "💡", color: "var(--violet)", label: "Request leader" },
 };
 
 /** "Installs leader — all time" / "… — last 30 days". The badge's aria-label, and the line the

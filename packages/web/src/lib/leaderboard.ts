@@ -18,6 +18,12 @@
 // counts for the other maintainer). Implicit namespace-admin maintainership earns nothing here
 // either, consistent with install-credit attribution.
 //
+// skillsRequested (§26) is the one metric a person generates entirely by themselves: the count of
+// their own skill_requests rows in any persisting state (open/fulfilled — withdrawn/removed
+// hard-delete, so a withdrawal or an admin removal drops the count at once), windowed on the
+// request's created_at. No self-credit rule applies (there is no other party to exclude) and no
+// threshold gates it; the check on gaming is that requests are org-visible and admin-removable.
+//
 // The board exposes only per-person AGGREGATES (display name, total installs, skill count) —
 // never skill identities, slugs, or namespaces — so it can't be used to enumerate or identify
 // restricted skills (the concern behind invariant #3). It is therefore identical for every
@@ -27,8 +33,8 @@ import { pool } from "./db";
 import { createTtlCache } from "./ttlCache";
 
 export type LeaderboardWindow = "all" | "30d";
-/** Ranking metric (§26): installs credited (default) / distinct skills / skill requests fulfilled / skills watched. */
-export type LeaderboardSort = "installs" | "skills" | "requests" | "watched";
+/** Ranking metric (§26): installs credited (default) / distinct skills / skill requests fulfilled / skills watched / skills requested. */
+export type LeaderboardSort = "installs" | "skills" | "requests" | "watched" | "requested";
 
 export interface LeaderboardEntry {
   userId: string;
@@ -42,6 +48,8 @@ export interface LeaderboardEntry {
   /** Distinct skills this user explicitly maintains that are watched by someone OTHER than
    *  themselves (per-maintainer self-watch exclusion — a co-maintainer's watch still counts). §26. */
   skillsWatched: number;
+  /** Skill requests this user posted, in any persisting state (open/fulfilled), by created_at. §26. */
+  skillsRequested: number;
 }
 
 // The board is viewer-independent and runs a heavy 3-CTE aggregate over proposals + access_log,
@@ -79,22 +87,26 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
   const sinceInstalls = window === "30d" ? "and al.created_at >= now() - interval '30 days'" : "";
   const sinceFulfilled = window === "30d" ? "and fulfilled_at >= now() - interval '30 days'" : "";
   const sinceWatched = window === "30d" ? "and sw.created_at >= now() - interval '30 days'" : "";
+  const sinceRequested = window === "30d" ? "and created_at >= now() - interval '30 days'" : "";
   // A user appears with ANY kind of credit, so a pure request-fulfiller or a maintainer whose only
   // credit is a watched skill still ranks when sorting by that metric. Ties break by the other
   // metrics, then name (§26). NOTE: these bare names bind to the SELECT output aliases (Postgres
   // resolves ORDER BY names against output columns first), so every metric column must stay
   // numeric — a text-typed alias would sort lexicographically ("9" above "80").
+  // Every chain ends with skills_requested desc as the last numeric tie-breaker before name (§26).
   const orderBy =
     sort === "requests"
-      ? "requests_fulfilled desc, installs desc, skill_count desc, skills_watched desc, display_name asc"
+      ? "requests_fulfilled desc, installs desc, skill_count desc, skills_watched desc, skills_requested desc, display_name asc"
       : sort === "skills"
-        ? "skill_count desc, installs desc, requests_fulfilled desc, skills_watched desc, display_name asc"
+        ? "skill_count desc, installs desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, display_name asc"
         : sort === "watched"
-          ? "skills_watched desc, installs desc, skill_count desc, requests_fulfilled desc, display_name asc"
-          : "installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, display_name asc";
+          ? "skills_watched desc, installs desc, skill_count desc, requests_fulfilled desc, skills_requested desc, display_name asc"
+          : sort === "requested"
+            ? "skills_requested desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, display_name asc"
+            : "installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, display_name asc";
   const { rows } = await pool.query<{
     user_id: string; display_name: string; email: string; avatar: string | null;
-    skill_count: number; installs: number; requests_fulfilled: number; skills_watched: number;
+    skill_count: number; installs: number; requests_fulfilled: number; skills_watched: number; skills_requested: number;
   }>(
     // Each install_credits row = one credited install; skillCount = distinct skills behind them.
     // requests_fulfilled = fulfilled skill_requests where this user built the skill and the
@@ -102,7 +114,8 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
     // EXPLICITLY maintains (skill_maintainers — implicit namespace-admin maintainership earns
     // nothing, same rule as install credits) that have a watcher other than that maintainer;
     // the self-watch exclusion is per-maintainer, so a co-maintainer's own watch still counts
-    // toward the OTHER maintainer's total.
+    // toward the OTHER maintainer's total. skills_requested = the user's own skill_requests rows in
+    // any persisting state, by created_at (§26) — no self-credit rule, nothing to exclude.
     `with credits as (
        select ic.user_id, count(*) as installs, count(distinct al.skill_id) as skill_count
          from install_credits ic
@@ -119,18 +132,25 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
          from skill_maintainers sm
          join skill_watches sw on sw.skill_id = sm.skill_id and sw.user_id <> sm.user_id ${sinceWatched}
         group by sm.user_id
+     ), requested as (
+       select requester_user_id as user_id, count(*) as skills_requested
+         from skill_requests
+        where state in ('open', 'fulfilled') ${sinceRequested}
+        group by requester_user_id
      )
      select u.id as user_id, u.display_name, u.email, u.avatar,
             coalesce(c.skill_count, 0)::int as skill_count,
             coalesce(c.installs, 0)::int as installs,
             coalesce(f.requests_fulfilled, 0)::int as requests_fulfilled,
-            coalesce(w.skills_watched, 0)::int as skills_watched
+            coalesce(w.skills_watched, 0)::int as skills_watched,
+            coalesce(rq.skills_requested, 0)::int as skills_requested
        from users u
        left join credits c on c.user_id = u.id
        left join fulfilled f on f.user_id = u.id
        left join watched w on w.user_id = u.id
+       left join requested rq on rq.user_id = u.id
       where u.status = 'active' and u.leaderboard_hidden = false
-        and (c.user_id is not null or f.user_id is not null or w.user_id is not null)
+        and (c.user_id is not null or f.user_id is not null or w.user_id is not null or rq.user_id is not null)
       order by ${orderBy}
       limit $1`,
     [LEADERBOARD_LIMIT],
@@ -144,5 +164,6 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
     installs: r.installs,
     requestsFulfilled: r.requests_fulfilled,
     skillsWatched: r.skills_watched,
+    skillsRequested: r.skills_requested,
   }));
 }

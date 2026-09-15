@@ -40,8 +40,8 @@ export interface RequestEntry {
   isNew?: boolean;
 }
 
-/** State pill shown only in "Mine" mode (§26) — the org-wide open list is always "open", so the
- *  pill would be redundant noise there. */
+/** State pill shown in "Mine" mode and the Requested-by view (§26) — the org-wide open list is
+ *  always "open", so the pill would be redundant noise there. */
 function StatePill({ state }: { state: RequestEntry["state"] }) {
   return state === "fulfilled" ? <Pill tone="muted">fulfilled</Pill> : <Pill tone="ok">open</Pill>;
 }
@@ -115,6 +115,15 @@ function RequestsInner() {
   useEnterKey(() => window.dispatchEvent(new Event("skilly:focus-search")));
   const params = useSearchParams();
   const submitted = params.get("q") ?? "";
+  // Requested-by view (from the leaderboard's Requests action, §21/§26): one person's requests in any
+  // persisting state under a dismissible banner. On arrival it ignores the viewer's saved filters
+  // (category/tool/Mine/state) so the list matches the board's "skills requested" count exactly;
+  // search/category/tool still apply within the view once touched. `by` carries the display name
+  // for the banner (no extra lookup). Nothing is persisted while the view is active.
+  const requester = params.get("requester");
+  const requesterName = params.get("by") ?? "";
+  // `?mine=1` (your own leaderboard row's Requests action) lands directly in Mine mode.
+  const mineParam = params.get("mine") === "1";
   const [category, setCategory] = useState<string | null>(null);
   const [tool, setTool] = useState<string | null>(null);
   const [view, setView] = useState<"cards" | "list">("cards");
@@ -141,37 +150,52 @@ function RequestsInner() {
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
         const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; mine: boolean; stateFilter: "open" | "fulfilled" | "all"; view: "cards" | "list"; categoryOpen: boolean }>;
-        if ("category" in p) setCategory(p.category ?? null);
-        if ("tool" in p) setTool(p.tool ?? null);
-        if (typeof p.mine === "boolean") setMine(p.mine);
-        if (p.stateFilter === "open" || p.stateFilter === "fulfilled" || p.stateFilter === "all") setStateFilter(p.stateFilter);
+        // The Requested-by view ignores the saved FILTERS on arrival (§26) but keeps the
+        // presentation prefs (view, Category collapse) — those are how the viewer likes to look
+        // at any list, not what they were looking at.
+        if (requester) {
+          setCategory(null); setTool(null); setMine(false); setStateFilter("open");
+        } else {
+          if ("category" in p) setCategory(p.category ?? null);
+          if ("tool" in p) setTool(p.tool ?? null);
+          if (typeof p.mine === "boolean") setMine(p.mine);
+          if (p.stateFilter === "open" || p.stateFilter === "fulfilled" || p.stateFilter === "all") setStateFilter(p.stateFilter);
+        }
         if (p.view === "cards" || p.view === "list") setView(p.view);
         setCategoryOpenPref(storedFacetRowOpen(p.categoryOpen));
         // Auto-expand (effective state only) so a restored category filter is never invisible.
-        setCategoryOpen(initialFacetRowOpen(p.categoryOpen, p.category));
+        setCategoryOpen(initialFacetRowOpen(p.categoryOpen, requester ? null : p.category));
       }
     } catch { /* private mode / bad JSON — fall back to defaults */ }
     setPrefsLoaded(true);
-  }, []);
+    // Re-runs when the view is dismissed (requester → null) so the saved filters come back.
+  }, [requester]);
+  // A `?mine=1` arrival wins over the stored preference (runs after the restore above in the
+  // same commit, so the later set is the one that sticks — and is then persisted as usual).
   useEffect(() => {
-    if (!prefsLoaded) return;
+    if (mineParam) setMine(true);
+  }, [mineParam]);
+  useEffect(() => {
+    // Never persist from inside the Requested-by view — its in-view filters are transient (§26).
+    if (!prefsLoaded || requester) return;
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, mine, stateFilter, view, categoryOpen: categoryOpenPref }));
     } catch { /* private mode etc. */ }
-  }, [prefsLoaded, category, tool, mine, stateFilter, view, categoryOpenPref]);
+  }, [prefsLoaded, requester, category, tool, mine, stateFilter, view, categoryOpenPref]);
 
   const qs = new URLSearchParams();
   if (submitted) qs.set("q", submitted);
   if (category) qs.set("category", category);
   if (tool) qs.set("tool", tool);
-  if (mine) qs.set("mine", "1");
+  if (requester) qs.set("requester", requester); // Requested-by view: any persisting state, no mine/state (§26)
+  else if (mine) qs.set("mine", "1");
   else if (stateFilter !== "open") qs.set("state", stateFilter);
   const { data, loading, error } = useApi<{ requests: RequestEntry[]; facets?: RequestFacets; isAdmin?: boolean }>(`/api/requests${qs.toString() ? `?${qs}` : ""}`);
   const requests = data?.requests ?? [];
   const isAdmin = data?.isAdmin ?? false;
   // Show the per-row state pill whenever the list can contain non-open rows: your own list (Mine),
-  // or the admin viewing Fulfilled/All.
-  const showState = mine || stateFilter !== "open";
+  // the Requested-by view, or the admin viewing Fulfilled/All.
+  const showState = !!requester || mine || stateFilter !== "open";
 
   // Facets come from the SERVER now (§26), not from the returned rows: scope-aware (they honour
   // Mine / the state filter) but blind to q/category/tool, so selecting a category can't shrink the
@@ -191,13 +215,27 @@ function RequestsInner() {
         </p>
       </div>
 
+      {/* Requested-by banner (from the leaderboard Requests action, §21/§26): names whose requests
+          these are and offers a one-click return to the org-wide open list. */}
+      {requester && (
+        <div className="reveal requested-by-banner" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 20, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
+          <span>Requested by <strong>{requesterName || "this person"}</strong> — open and fulfilled.</span>
+          <span style={{ flex: 1 }} />
+          <Link href="/requests" className="btn-ghost mono" style={{ fontSize: 12 }}>✕ clear</Link>
+        </div>
+      )}
+
       <div className="reveal" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
-        <button type="button" className={`facet${mine ? " facet-on" : ""}`} onClick={() => setMine((m) => !m)} title="Show only your own requests, in any state">
-          👤 Mine
-        </button>
+        {/* Mine and the admin state selector are meaningless inside the Requested-by view (it already
+            spans every persisting state for one fixed person), so both hide there. */}
+        {!requester && (
+          <button type="button" className={`facet${mine ? " facet-on" : ""}`} onClick={() => setMine((m) => !m)} title="Show only your own requests, in any state">
+            👤 Mine
+          </button>
+        )}
         {/* Platform-admin state filter (§26): the org-wide list is OPEN only for everyone; an admin
             can also see fulfilled requests. Hidden in Mine mode (that already spans every state). */}
-        {isAdmin && !mine && (
+        {isAdmin && !mine && !requester && (
           <div className="sort-toggle" role="group" aria-label="Request state">
             {(["open", "fulfilled", "all"] as const).map((s) => (
               <button
@@ -257,6 +295,8 @@ function RequestsInner() {
           title={
             submitted || category || tool
               ? "No requests match your filters"
+              : requester
+                ? `${requesterName || "This person"} hasn’t asked for anything yet`
               : mine
                 ? "You haven’t asked for anything yet"
                 : stateFilter === "fulfilled"
@@ -268,6 +308,8 @@ function RequestsInner() {
           hint={
             submitted || category || tool
               ? "Try a different search or clear filters."
+              : requester
+                ? "Requests they post will show up here."
               : mine
                 ? "Propose a skill → “I want a skill” to post one."
                 : stateFilter !== "open"

@@ -1,5 +1,5 @@
 // Contributor leaderboard — any signed-in user. ?window=all (default) | 30d;
-// ?sort=installs (default) | skills | requests | watched (§21/§26).
+// ?sort=installs (default) | skills | requests | watched | requested (§21/§26).
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { getLeaderboard, type LeaderboardSort } from "../../../lib/leaderboard";
@@ -15,7 +15,7 @@ export const GET = withSystemLog("/api/leaderboard", async function GET(req: Req
   const window = url.searchParams.get("window") === "30d" ? "30d" : "all";
   const sortParam = url.searchParams.get("sort");
   const sort: LeaderboardSort =
-    sortParam === "skills" || sortParam === "requests" || sortParam === "watched" ? sortParam : "installs";
+    sortParam === "skills" || sortParam === "requests" || sortParam === "watched" || sortParam === "requested" ? sortParam : "installs";
   const entries = await getLeaderboard(window, sort);
   // No browser caching: the heavy aggregate is already cached server-side (per window+sort), and a
   // per-URL browser cache could otherwise show one variant stale across an opt in/out toggle.

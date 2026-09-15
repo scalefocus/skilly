@@ -14,14 +14,15 @@ interface Entry {
   installs: number;
   requestsFulfilled: number;
   skillsWatched: number;
+  skillsRequested: number;
 }
 
 function Leaderboard() {
   const [window, setWindow] = useState<"all" | "30d">("all");
-  // Ranking metric (§26): installs credited (default) / skills adopted / skill requests fulfilled / skills watched.
-  const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched">("installs");
+  // Ranking metric (§26): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested.
+  const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested">("installs");
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
-  // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills).
+  // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills and "Requests" to Mine).
   const { data: me } = useApi<{ userId: string | null }>("/api/me");
   const entries = data?.entries ?? [];
 
@@ -56,6 +57,7 @@ function Leaderboard() {
           <button type="button" className={`sort-opt${sort === "skills" ? " sort-on" : ""}`} onClick={() => setSort("skills")}>Skills adopted</button>
           <button type="button" className={`sort-opt${sort === "requests" ? " sort-on" : ""}`} onClick={() => setSort("requests")}>Requests fulfilled</button>
           <button type="button" className={`sort-opt${sort === "watched" ? " sort-on" : ""}`} onClick={() => setSort("watched")}>Watched</button>
+          <button type="button" className={`sort-opt${sort === "requested" ? " sort-on" : ""}`} onClick={() => setSort("requested")}>Requested</button>
         </div>
         <div className="sort-toggle" role="group" aria-label="Leaderboard window">
           <button type="button" className={`sort-opt${window === "all" ? " sort-on" : ""}`} onClick={() => setWindow("all")}>All time</button>
@@ -76,6 +78,9 @@ function Leaderboard() {
             // Your own row → the catalog's "My Skills" filter; anyone else → the maintained-by view
             // (banner shows their name). Both list only skills the viewer can see (§19/§21).
             const skillsHref = isSelf ? "/catalog?mine=1" : `/catalog?maintainer=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
+            // Your own row → the requests page's "Mine" toggle; anyone else → the requested-by view
+            // (banner shows their name). Requests have no namespace, so nothing to visibility-filter (§21/§26).
+            const requestsHref = isSelf ? "/requests?mine=1" : `/requests?requester=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
             return (
             <div className="row lb-row" key={e.userId} style={{ alignItems: "center", gap: 12 }}>
               <span className="mono" style={{ fontSize: 14, fontWeight: 600, color: i < 3 ? "var(--accent-2)" : "var(--faint)", minWidth: 28, textAlign: "right" }}>
@@ -88,18 +93,20 @@ function Leaderboard() {
                   {e.skillCount} skill{e.skillCount === 1 ? "" : "s"} adopted
                   {e.requestsFulfilled > 0 && <> · {e.requestsFulfilled} request{e.requestsFulfilled === 1 ? "" : "s"} fulfilled</>}
                   {e.skillsWatched > 0 && <> · {e.skillsWatched} skill{e.skillsWatched === 1 ? "" : "s"} watched</>}
+                  {e.skillsRequested > 0 && <> · {e.skillsRequested} skill{e.skillsRequested === 1 ? "" : "s"} requested</>}
                 </div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 600 }}>
-                  {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : e.installs)}
+                  {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : sort === "requested" ? e.skillsRequested : e.installs)}
                 </div>
                 <div className="muted mono" style={{ fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : "installs"}
+                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : sort === "requested" ? "requested" : "installs"}
                 </div>
               </div>
               <div className="lb-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                 <Link href={skillsHref} className="btn btn-sm" title={isSelf ? "Your maintained skills" : `Skills maintained by ${e.displayName}`}>Skills</Link>
+                <Link href={requestsHref} className="btn btn-sm" title={isSelf ? "Your skill requests" : `Skills requested by ${e.displayName}`}>Requests</Link>
                 {!isSelf && (
                   <button type="button" className="btn btn-sm" disabled={reaching === e.userId} onClick={() => reachOut(e.userId)} title={`Message ${e.displayName}`}>
                     {reaching === e.userId ? "…" : "Reach out"}

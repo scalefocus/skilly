@@ -11,6 +11,10 @@ import { withSystemLog } from "../../../lib/apiLog";
 
 export const dynamic = "force-dynamic";
 
+// `?requester=<uuid>` (the Requested-by view, §26) is validated before it reaches SQL: a malformed
+// id is a 400, never a Postgres cast error. Same shape as /api/skills' `?maintainer=` check.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const GET = withSystemLog("/api/requests", async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   const oid = (session as { oid?: string } | null)?.oid;
@@ -37,6 +41,23 @@ export const GET = withSystemLog("/api/requests", async function GET(req: Reques
         tool: url.searchParams.get("tool") ?? undefined,
       }),
       listRequestFacets({ requesterUserId: access.userId }),
+    ]);
+    return Response.json({ requests, facets, isAdmin });
+  }
+  // Requested-by view (§26): an arbitrary person's requests in any persisting state — the
+  // leaderboard's per-row Requests action. Same list + facet functions as Mine, keyed on that
+  // user instead of the caller; `mine` wins when both are passed (handled above). Requests have
+  // no namespace, so there is no visibility filter to apply. No "new" flags (someone else's posts).
+  const requester = url.searchParams.get("requester");
+  if (requester) {
+    if (!UUID_RE.test(requester)) return Response.json({ error: "requester must be a UUID" }, { status: 400 });
+    const [requests, facets] = await Promise.all([
+      listMyRequests(requester, {
+        q: url.searchParams.get("q")?.slice(0, 200) ?? undefined,
+        category: url.searchParams.get("category") ?? undefined,
+        tool: url.searchParams.get("tool") ?? undefined,
+      }),
+      listRequestFacets({ requesterUserId: requester }),
     ]);
     return Response.json({ requests, facets, isAdmin });
   }

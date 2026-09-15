@@ -355,7 +355,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
-- **Leaderboard credit transfer (same optional target):** with a "Replace maintainer to" target, the erased user's `install_credits` rows are **reassigned to the target** instead of deleted, so their contributor-leaderboard standing (installs + "skills adopted", §21) is retained under the successor. Two classes of row are **excepted and deleted** (as plain erasure would): **would-be self-credits** — credits for installs the *target* performed themselves; the no-self-credit rule (§21) holds even through transfer — and **duplicates** — the target already holds a credit for the same install (they co-maintained the skill); one install never counts twice for one person. Credit transfer is **independent of the maintainer-transfer eligibility check**: **all** remaining credits move, including those on restricted skills the target can't see — no leak, because the board exposes only per-person aggregates and never skill identities (invariant #3 holds); the target's "skills adopted" may therefore count skills their leaderboard "Skills" catalog link won't show (that link visibility-filters independently). Reassigned rows keep their original `access_log` timestamps, so both windows stay faithful (the target's 30d numbers may jump). **"Requests fulfilled" is deliberately NOT transferred** — `fulfilled_by_user_id` records who actually did the work, and rewriting it would misattribute history on the request record itself; it stays on the tombstone, hidden from the board as today. **"Skills watched" needs no transfer** — it derives from *current* explicit maintainership, so it already follows the maintainer transfer for eligible skills. With **no target** (including the SCIM erasure path, which never has one), credits are deleted exactly as before (§21 "Erasure removes credit").
+- **Leaderboard credit transfer (same optional target):** with a "Replace maintainer to" target, the erased user's `install_credits` rows are **reassigned to the target** instead of deleted, so their contributor-leaderboard standing (installs + "skills adopted", §21) is retained under the successor. Two classes of row are **excepted and deleted** (as plain erasure would): **would-be self-credits** — credits for installs the *target* performed themselves; the no-self-credit rule (§21) holds even through transfer — and **duplicates** — the target already holds a credit for the same install (they co-maintained the skill); one install never counts twice for one person. Credit transfer is **independent of the maintainer-transfer eligibility check**: **all** remaining credits move, including those on restricted skills the target can't see — no leak, because the board exposes only per-person aggregates and never skill identities (invariant #3 holds); the target's "skills adopted" may therefore count skills their leaderboard "Skills" catalog link won't show (that link visibility-filters independently). Reassigned rows keep their original `access_log` timestamps, so both windows stay faithful (the target's 30d numbers may jump). **"Requests fulfilled" and "skills requested" are deliberately NOT transferred** — `fulfilled_by_user_id` / `requester_user_id` record who actually did the work / actually asked, and rewriting either would misattribute history on the request record itself (and change who appears as the requester in threads and detail pages); both stay on the tombstone, hidden from the board as today. **"Skills watched" needs no transfer** — it derives from *current* explicit maintainership, so it already follows the maintainer transfer for eligible skills. With **no target** (including the SCIM erasure path, which never has one), credits are deleted exactly as before (§21 "Erasure removes credit").
 - **Re-access:** because the Entra link is **detached** (not blocked), if the erased person still exists in Entra they are re-provisioned as a **brand-new, empty account** (a fresh `users` row) on the next sign-in / SCIM sync — with **no link** to the erased history (which stays "`<email> - Deleted`"). So a deleted user can use the system again later; erasure is best applied to already-offboarded users but is correct either way. `entra_object_id` is made **nullable** to allow the detach (its unique index permits many NULLs).
 - **Endpoints:** `GET /api/admin/users/search?q=` (≥3 chars, excludes already-erased tombstones) → `{ users: [{ userId, displayName, email, status, avatar }] }`; `POST /api/admin/users/[id]/erase` `{ transferTo? }` → `{ ok, transferred, skipped, creditsTransferred, creditsSkipped }` (`creditsTransferred` = install-credit rows reassigned to `transferTo`; `creditsSkipped` = self-credit/duplicate rows deleted instead; both `0` with no `transferTo`), all in one transaction. The `user.erased` audit row's `after` carries the same credit counts alongside the maintainer-transfer summary. Guards: platform-admin; not self; `transferTo` ≠ the target; not already erased.
 
@@ -1709,9 +1709,10 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 - **Metrics.** Both displayed numbers derive from `install_credits` (so they are always mutually consistent): `installs` = count of the user's credit rows in the window; `skillCount` = distinct skills among them — displayed as **"skills adopted"**, deliberately not "skills proposed": a skill this user proposed/maintains with zero credited installs in the window (too new, or only ever self-installed) contributes zero, even though they proposed or maintain it. That's intentional — the metric stays adoption-weighted for the anti-gaming reasons above — but the label must say what the number actually measures, so it never reads as "skills submitted/published by this user." Windows are **all-time** and **30d** (by the install's `access_log.created_at`). Because each install fans out to every maintainer, the board's summed installs **exceed** the real clone count — the number is "installs credited to you", not a global clone total.
 - **Erasure removes credit — unless transferred.** GDPR erasure (§4, both the admin and SCIM paths) **deletes the erased user's `install_credits`** — credits-only: the shared `access_log` row, `skills.install_count`, and co-maintainers' credit are untouched (the install still happened and still counts for everyone else). **Exception:** the admin erasure path with a "Replace maintainer to" target **reassigns** the credits to that target instead of deleting them (§4 — would-be self-credits and duplicates excepted; those are deleted as usual), so the standing survives on the board under the successor. Either way, a deleted user holds zero credits and never appears. A reversible **deprovision** (leaver → `status='inactive'`) does **not** delete credits — the board's `status='active'` filter hides them, and re-enabling restores their standing.
 - **Privacy (invariant #3).** The board exposes only per-person aggregates (display name, avatar, total installs, skill count) — **never skill identities, slugs, or namespaces** — so it cannot enumerate or identify restricted skills, and is identical for every viewer. Users may opt out via `leaderboard_hidden` (§13).
-- **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other three metrics descending, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
-- **Row actions.** Each row offers two actions: **Skills** and **Reach out**.
+- **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other four metrics descending, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
+- **Row actions.** Each row offers three actions, on every row and under every sort: **Skills**, **Requests**, and **Reach out**.
   - **Skills** links to the catalog scoped to the skills that person **maintains** — `/catalog?maintainer=<userId>&by=<name>` for another person (the catalog shows a dismissible "Skills maintained by &lt;name&gt;" banner), or `/catalog?mine=1` for **your own** row (reuses the "My Skills" filter). This does **not** break invariant #3: the catalog independently visibility-filters to what the *viewer* may see (`searchSkills`), so it only ever lists skills the viewer could already browse — the leaderboard itself still reveals no skill identities. On arrival the maintainer view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) and shows everything by that maintainer the viewer can see.
+  - **Requests** links to the Requested-skills page scoped to the requests that person **posted** — `/requests?requester=<userId>&by=<name>` for another person (the page shows a dismissible "Requested by &lt;name&gt;" banner, §26), or `/requests?mine=1` for **your own** row (reuses the "Mine" toggle). Requests have no namespace and are org-visible, so there is no visibility concern; the link is shown even when the person's requested count is 0 (consistent with **Skills**, which shows at 0 adopted).
   - **Reach out** opens a 1:1 direct chat (`POST /api/messages/direct` → `skilly:open-conversation`), the same mechanism as the skill-detail maintainer list and the admin online-users list. It is **hidden on the viewer's own row** (you can't message yourself).
 
 ### Leader badges
@@ -1719,9 +1720,10 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 A small marker under a user's avatar bubble — **everywhere one appears** — showing they currently
 top a leaderboard metric. Purely derived from the leaderboard's own data; no new user action.
 
-- **Four metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
-  leader (skills adopted), Fulfillment leader (requests fulfilled), Watch leader (skills watched)
-  — each in **two windows**, all-time and last-30-days, for up to 8 badges per user.
+- **Five metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
+  leader (skills adopted), Fulfillment leader (requests fulfilled), Watch leader (skills watched),
+  Request leader (skills requested, §26) — each in **two windows**, all-time and last-30-days,
+  for up to 10 badges per user.
 - **Who's a leader:** whoever is **tied for the single highest value** of a metric in a window. A
   tie is a tie — everyone at the top value gets the badge, not just one canonical winner. A metric
   with nobody above zero in that window has **no leader** (nobody gets it). Computed in
@@ -1730,14 +1732,16 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   prefix matching the top row's value) — no new SQL, no new heavy aggregate.
 - **Visual:** each badge is a small colored circle with a glyph, sized proportionally to the avatar
   it sits under (floored so it stays legible on the smallest bubbles): 📥 installs (accent), 📝
-  adoption (accent-2), 🎁 fulfillment (ok/green), 👁 watched (warn/orange). The **all-time**
+  adoption (accent-2), 🎁 fulfillment (ok/green), 👁 watched (warn/orange), 💡 requested
+  (violet — the one hue the other four don't use, so it stays distinguishable at badge size). The **all-time**
   variant is the identical icon with a small crown overlaid on top; the **30-day** variant has no
   crown. **Every badge a user currently holds renders** (no cap, wrapping if needed) — most users
   have zero; a dominant contributor may show several.
 - **Placement:** directly **below** the avatar bubble, never beside it — the bubble+badges stack is
   one visual unit. The icons stay exactly where they are; the **directory hover card (§28)
   additionally lists every badge the person holds, spelled out** (icon + `"Installs leader — all
-  time"`), so the at-a-glance signal and the explanation now live in two complementary places.
+  time"`, `"Request leader — last 30 days"`), so the at-a-glance signal and the explanation now live
+  in two complementary places.
 - **Labels:** the `aria-label` on each badge stays (`"<Metric> leader — all time"` /
   `"… — last 30 days"`), but the native **`title=` tooltip is removed** — with §28 shipped, a
   browser tooltip would race and overlap the hover card on the very same element. Sighted users
@@ -1754,7 +1758,8 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   this map (via the shared client-side GET cache, so every bubble on a page dedupes onto one
   request); omitting `userId` renders the bubble with no badges and no extra request, unchanged
   from before this feature. The map itself is cached for ~30s server-side, layered on top of the
-  leaderboard's own 60s per-(window,sort) cache.
+  leaderboard's own 60s per-(window,sort) cache. `metric` is one of `installs` | `skills` |
+  `requests` | `watched` | `requested`.
 
 ---
 
@@ -2846,6 +2851,20 @@ the requester is notified, and the fulfiller earns leaderboard credit.
   either mode. In "Mine" mode each card/row also shows a **state pill** (open / fulfilled) — the
   pill is hidden in the org-wide list, where every result is always `open`. No "new" badges in
   "Mine" mode (these are the caller's own posts). `GET /api/requests?mine=1`.
+- **Requested-by view** (`?requester=<userId>&by=<name>`): the same any-persisting-state list for an
+  **arbitrary** person — used by the leaderboard's per-row **Requests** action (§21). Shows that
+  person's `open` **and** `fulfilled` requests with the same **state pill** as "Mine", under a
+  **dismissible "Requested by &lt;name&gt;" banner** (the name is carried in the URL, no extra lookup;
+  dismissing returns to the org-wide open list). On arrival the view **ignores the viewer's saved
+  filters** (category/tool/Mine/state) so it always shows everything by that requester — the
+  count matches the leaderboard's "skills requested" number exactly (both count the same persisting
+  rows). Search/category/tool still apply *within* the view once the user touches them; facets are
+  scoped to the requester (same rule as "Mine"). No "new" badges (they are someone else's posts, but the
+  point of the view is the person, not novelty). `GET /api/requests?requester=<uuid>`: the value is
+  validated as a UUID (400 otherwise), `requester` and `mine` are mutually exclusive (`mine` wins),
+  and the admin `state` selector is not shown (the view already spans every persisting state).
+  Requests have no namespace, so there is no visibility filter to apply. Presence's route label stays
+  "Requests".
 - **State filter (platform admins only).** The org-wide list shows **open** requests to everyone.
   A **platform admin** additionally gets a state selector beside the "Mine" toggle — **Open**
   (default) · **Fulfilled** · **All** — so admins can review requests in any state, e.g. see what's
@@ -2979,13 +2998,32 @@ skill that **already** satisfies it.
   installs). The all/30d window filters on the watch's `created_at` (a skill watched more than
   30 days ago and not since drops out of the 30d view, consistent with how the other three stats
   window on their own event timestamp).
+- A fifth stat per row: **"skills requested"** — the number of `skill_requests` rows where
+  `requester_user_id` = the user, in **any persisting state** (`open` or `fulfilled`; withdrawn/removed
+  requests are hard-deleted, so a withdrawal or an admin removal drops the count immediately). Requests
+  created through the MCP `request_skill` tool count exactly like UI-created ones (same row). The
+  all/30d window filters on the request's `created_at` (when it was asked, not when or whether it was
+  fulfilled); a fulfilled request whose skill was later deleted still counts (the row persists). This is
+  the **one metric a person generates entirely by themselves** — there is no other party to exclude,
+  so no self-credit rule applies and **no minimum threshold** gates the badge. The accepted check on
+  gaming is that requests are org-visible: junk is obvious, and a platform admin's **remove** hard-deletes
+  the row and the credit with it. Supported by an index on `skill_requests (requester_user_id, created_at)`
+  (migration 0070). Rendered in the row's stat line as `N skill(s) requested`, after "skills watched",
+  and — like the other stats — only when > 0.
 - A **sort toggle** above the board: **Installs** (default) / **Skills adopted** / **Requests
-  fulfilled** / **Watched** — re-ranks rows by the chosen stat (ties broken by the other stats,
-  then name). All four stats stay visible on every row regardless of sort.
+  fulfilled** / **Watched** / **Requested** — re-ranks rows by the chosen stat (ties broken by the other
+  stats, then name; for the **Requested** sort the chain is requested desc, installs desc, skills adopted
+  desc, requests fulfilled desc, skills watched desc, name asc; the four existing sorts append requested
+  desc as their last numeric tie-breaker before name). All five stats stay visible on every row
+  regardless of sort. A user whose only activity is posting requests appears on the board (with 0 in the
+  other columns), exactly as a pure request-fulfiller does today. Erased users vanish through the
+  `status = 'active'` filter; **"skills requested" is never transferred** to a "Replace maintainer to"
+  target (§4 — it records who actually asked).
 
 ### API surface (indicative)
 - `POST /api/requests` (create; text-only — rejects file parts) · `GET /api/requests` (open list;
-  `q`/`category`/`tool`; add `mine=1` for the caller's own requests in any state; response carries
+  `q`/`category`/`tool`; add `mine=1` for the caller's own requests in any state, or
+  `requester=<uuid>` for an arbitrary person's requests in any state (the Requested-by view); response carries
   `facets: { categories, tools }` — scope-aware, filter-independent, see *Facet vocabulary* above) ·
   `GET /api/requests/[id]` · `PATCH /api/requests/[id]` (requester edit)
   · `DELETE /api/requests/[id]` (requester withdraw / platform-admin remove) — all auth-required.

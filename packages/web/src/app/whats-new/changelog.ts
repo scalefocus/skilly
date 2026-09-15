@@ -15,6 +15,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.1.0",
+    date: "2026-09-15",
+    summary: "The leaderboard now recognises the people who ask for skills: a new Requested ranking counts the skill requests each person has posted (open or fulfilled), a Request leader badge (💡, violet) marks whoever tops it all-time and over the last 30 days, and every row gains a Requests action that opens that person's requests on the Requested skills page under a \"Requested by\" banner.",
+  },
+  {
     version: "2.0.2",
     date: "2026-09-15",
     summary: "The header bar (search, messages, notifications and the theme toggle) now casts a small soft shadow over the page once you scroll under it, and sits flat at the top; in the light theme the shadow replaces the old hairline divider. The dark theme keeps its divider line and never shows a shadow, and on phones the header is unchanged.",
