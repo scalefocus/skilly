@@ -6,6 +6,7 @@ import { useApi, ScrollToTop, ShareButton } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
 import { AchievementGrid, type AchievementsView } from "../../components/AchievementGrid";
+import { LevelBar } from "../../components/LevelBar";
 
 interface Me {
   userId: string | null;
@@ -291,8 +292,9 @@ function MaintainerNotificationsPref() {
 }
 
 // §31.5 — the owner's Achievements card: every badge in catalog order, earned ones dated, locked
-// ones greyed with their how-to-earn hint (the exploration nudge), a progress line, Share, and a
-// link to the hall as others see it. Hidden entirely while the platform toggle is off.
+// ones greyed with their how-to-earn hint (the exploration nudge), the level bar (§31.10, in place
+// of the old "N of M earned" text line), Share, and a link to the hall as others see it. Hidden
+// entirely while the platform toggle is off.
 function AchievementsCard() {
   const { data: me } = useApi<Me>("/api/me");
   const { data } = useApi<AchievementsView | { disabled: true }>(me?.userId ? `/api/users/${me.userId}/achievements` : null);
@@ -302,16 +304,20 @@ function AchievementsCard() {
   const hallUrl = typeof window !== "undefined" ? `${window.location.origin}/achievements/${data.userId}` : `/achievements/${data.userId}`;
   return (
     <section id="achievements" className="card card-pad reveal" style={{ marginBottom: 30 }} data-testid="achievements-card">
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 2 }}>Achievements</h2>
-          <p className="page-sub" style={{ margin: 0 }} data-testid="achievements-progress">
-            <strong>{data.earned.length}</strong> of {data.total} earned
-            {data.earned.length < data.total ? " — greyed badges tell you how to get them." : " — you have them all."}
-          </p>
-        </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        {/* A basis, not `flex: 1` — "Achievements" is a single unbreakable word, so a shrink-to-zero
+            item lets the buttons ride over it at phone widths instead of wrapping below it. */}
+        <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, flex: "1 1 180px", minWidth: 0 }}>Achievements</h2>
         <ShareButton url={hallUrl} label="Share" title="Copy a link to your achievements" />
         <Link href={`/achievements/${data.userId}`} className="btn-ghost mono" style={{ fontSize: 12 }}>View as others see it →</Link>
+      </div>
+      {/* The bar IS the progress line now — it states the same fact better (§31.10). Its own
+          full-width row, not a flex sibling of the buttons: a bar squeezed into a shared row
+          collapses to a stub at phone widths. It renders at level 0 too — the locked badges and
+          their hints sit right underneath it, and that pairing is the exploration nudge the whole
+          feature exists for. */}
+      <div data-testid="achievements-progress" style={{ marginBottom: 16 }}>
+        <LevelBar level={data.earned.length} total={data.total} heroAt={data.heroAt} />
       </div>
       <AchievementGrid earned={data.earned} showLocked shareBase={hallUrl} />
     </section>
@@ -339,7 +345,7 @@ function AchievementsPref() {
   return (
     <section className="reveal" style={{ marginBottom: 30 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Achievements visibility</h2>
-      <p className="page-sub">Whether other signed-in people can see the badges you have earned — on your shared hall and as a count on your hover card. You always see your own.</p>
+      <p className="page-sub">Whether other signed-in people can see the badges you have earned — on your shared hall, as your level on your hover card, and as the ring around your avatar. You always see your own.</p>
       <div className="sort-toggle" role="group" aria-label="Achievements visibility">
         {opts.map((o) => {
           const on = o.hidden === data.achievementsHidden;
@@ -359,7 +365,7 @@ function AchievementsPref() {
         })}
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-        {data.achievementsHidden ? "Your hall shows others only that you keep your trophies private." : "Anyone signed in can open your hall from your hover card or a shared link."}
+        {data.achievementsHidden ? "Your hall shows others only that you keep your trophies private, and your level ring is hidden from them." : "Anyone signed in can open your hall from your hover card or a shared link."}
       </p>
     </section>
   );

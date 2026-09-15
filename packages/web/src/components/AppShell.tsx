@@ -64,7 +64,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const whatsNewHandled = useRef(false);
   // §31: timezone beacon sent once per mount; the transient "badge earned" toast.
   const tzReported = useRef(false);
-  const [badgeToast, setBadgeToast] = useState<{ id: string; name: string; glyph: string } | null>(null);
+  const [badgeToast, setBadgeToast] = useState<{ id: string; name: string; glyph: string; level: string | null } | null>(null);
   const [unread, setUnread] = useState(0);
   // "New since you last looked" counts for the Catalog / Review queue / Requested skills nav items.
   const [navBadges, setNavBadges] = useState<{ catalog: number; review: number; systemLog: number; requests: number }>({ catalog: 0, review: 0, systemLog: 0, requests: 0 });
@@ -335,12 +335,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           setUnread(Number(j.unread ?? 0));
           // Badge toast (§31.4): the first unread achievement.earned row not yet toasted in this
           // browser session. One at a time; the bell row is the durable copy.
-          const items = Array.isArray(j.items) ? (j.items as { id: string; type: string; readAt: string | null; payload: { key?: string; name?: string } }[]) : [];
+          const items = Array.isArray(j.items)
+            ? (j.items as { id: string; type: string; readAt: string | null; payload: { key?: string; name?: string; level?: number; hero?: boolean } }[])
+            : [];
           const fresh = items.find((n) => n.type === "achievement.earned" && !n.readAt && !badgeToasted(n.id));
           if (fresh) {
             markBadgeToasted(fresh.id);
             const def = fresh.payload?.key ? achievementDef(fresh.payload.key) : undefined;
-            setBadgeToast({ id: fresh.id, name: def?.name ?? fresh.payload?.name ?? "a badge", glyph: def?.glyph ?? "🏆" });
+            // §31.10: the level the badge moved them to rides the same toast — no second toast,
+            // no level.reached type. Older rows (pre-levels) simply carry no level line.
+            const lvl = fresh.payload?.hero === true ? "Hero" : typeof fresh.payload?.level === "number" ? `Level ${fresh.payload.level}` : null;
+            setBadgeToast({ id: fresh.id, name: def?.name ?? fresh.payload?.name ?? "a badge", glyph: def?.glyph ?? "🏆", level: lvl });
           }
         })
         .catch(() => {});
@@ -854,6 +859,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="badge-toast-glyph" aria-hidden>{badgeToast.glyph}</span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>Badge earned — {badgeToast.name}</div>
+            {badgeToast.level && (
+              <div className="mono" style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 1 }} data-testid="badge-toast-level">
+                {badgeToast.level}
+              </div>
+            )}
             <Link href="/profile#achievements" className="badge-toast-link" onClick={() => setBadgeToast(null)}>See your achievements →</Link>
           </div>
         </div>,

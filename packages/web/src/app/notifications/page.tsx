@@ -146,8 +146,17 @@ export default function NotificationsPage() {
             const skillName = n.skillTitle ?? skSlug;
             const semver = typeof n.payload.semver === "string" ? n.payload.semver : null;
             const isSystemLog = n.type === "system.error";
-            // §31.4 achievement.earned: the badge name, and a CTA into the owner's Achievements card.
+            // §31.4 achievement.earned: the badge name, the level it moved them to (§31.10), and a
+            // CTA into the owner's Achievements card.
             const badgeName = n.type === "achievement.earned" && typeof n.payload.name === "string" ? n.payload.name : null;
+            const badgeLevel =
+              n.type === "achievement.earned"
+                ? n.payload.hero === true
+                  ? "Hero"
+                  : typeof n.payload.level === "number"
+                    ? `Level ${n.payload.level}`
+                    : null
+                : null;
             const eventCount = typeof n.payload.count === "number" ? n.payload.count : null;
             return (
               <div className="row" key={n.id} style={{ alignItems: "flex-start", gap: 12, opacity: n.readAt ? 0.62 : 1 }}>
@@ -162,6 +171,7 @@ export default function NotificationsPage() {
                       </span>
                     )}
                     {badgeName && <span style={{ fontSize: 14, fontWeight: 600 }}>{badgeName}</span>}
+                    {badgeLevel && <span className="mono muted" style={{ fontSize: 11.5 }}>{badgeLevel}</span>}
                     {isSystemLog && eventCount != null && (
                       <span style={{ fontSize: 14, fontWeight: 600 }}>{eventCount} new event{eventCount === 1 ? "" : "s"}</span>
                     )}

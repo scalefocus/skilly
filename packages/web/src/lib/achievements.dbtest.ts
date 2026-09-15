@@ -6,10 +6,13 @@
 // the user's STORED zone (null zone ⇒ never), the triple_threat combo, backfill awards that never
 // notify, the platform toggle muting notifications while awards keep recording, the hall read model
 // (self / other / hidden / inactive / unknown), the deferred first-timezone backfill, the
-// original-proposer rule, and the GDPR erasure sweep.
+// original-proposer rule, the GDPR erasure sweep, and the §31.10 level model (the hero_at stamp,
+// the migration-0072 backfill shape, and the /api/levels map's visibility rules).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { ACHIEVEMENT_KEYS } from "@skilly/shared/achievements";
 import { awardAchievement, getAchievements, setUserTimeZone, isOriginalProposer, achievementCountForCard } from "./achievements";
+import { getLevelMapFor } from "./levels";
 import { eraseUser } from "./eraseUser";
 import { pool } from "./db";
 
@@ -24,7 +27,7 @@ async function mkUser(oid: string, timeZone: string | null): Promise<string> {
      on conflict (entra_object_id) do update set email = excluded.email, status = 'active', erased_at = null returning id`,
     [oid, `${oid}@org`, oid],
   )).rows[0]!.id;
-  await pool.query(`update users set time_zone = $2, achievements_hidden = false where id = $1`, [id, timeZone]);
+  await pool.query(`update users set time_zone = $2, achievements_hidden = false, hero_at = null where id = $1`, [id, timeZone]);
   await pool.query(`delete from user_achievements where user_id = $1`, [id]);
   await pool.query(`delete from notifications where user_id = $1`, [id]);
   return id;
@@ -34,6 +37,15 @@ const notifCount = async (userId: string) =>
   Number((await pool.query<{ n: string }>(`select count(*)::text as n from notifications where user_id = $1 and type = 'achievement.earned'`, [userId])).rows[0]!.n);
 const heldKeys = async (userId: string) =>
   (await pool.query<{ key: string }>(`select key from user_achievements where user_id = $1 order by key`, [userId])).rows.map((r) => r.key);
+/** The level map is TTL-cached in-process; a test that seeds badges must read its own writes. */
+const FRESH = { bypassCache: true } as const;
+const heroAt = async (userId: string) =>
+  (await pool.query<{ hero_at: Date | null }>(`select hero_at from users where id = $1`, [userId])).rows[0]?.hero_at ?? null;
+
+/** Award every key in the catalog, so the user comes out of it a Hero. */
+async function fullHouse(userId: string, at?: Date): Promise<void> {
+  for (const key of ACHIEVEMENT_KEYS) await awardAchievement(pool, userId, key, { at, backfill: true, noHabits: true });
+}
 
 test("achievements: idempotent awards, Habits by stored zone, combo, backfill + toggle gating", { skip: !enabled }, async () => {
   const sofia = await mkUser("ach-sofia", "Europe/Sofia");
@@ -172,32 +184,168 @@ test("achievements: original-proposer rule + GDPR erasure sweep", { skip: !enabl
     `insert into namespaces (slug, display_name, require_review) values ('ach-ns','ach-ns',false)
      on conflict (slug) do update set display_name = excluded.display_name returning id`,
   )).rows[0]!.id;
+  // A FRESH skill per run. Published versions are immutable (invariant #2) and the DB guard blocks
+  // DELETE, so a fixed slug would keep the first run's versions — and with them the first run's
+  // `created_by` — forever, which is exactly how this test used to fail on its second run against
+  // a persistent database. A hermetic skill costs one tiny row and never goes stale.
+  const slug = `ach-origin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const skill = (await pool.query<{ id: string }>(
     `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility)
-     values ($1,'ach-origin','Origin','d','claude','hosted','org')
-     on conflict (namespace_id, slug) do update set title = excluded.title returning id`,
-    [ns],
+     values ($1,$2,'Origin','d','claude','hosted','org') returning id`,
+    [ns, slug],
   )).rows[0]!.id;
-  await pool.query(`delete from skill_versions where skill_id = $1`, [skill]);
+  // Two versions, different authors: the rule is "the creator of the EARLIEST version", not
+  // "anyone who ever published here", so the later author must not qualify.
   await pool.query(
-    `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by)
-     values ($1, '1.0.0', false, 'active', 'ach/origin/1.0.0.tgz', 'sha', $2)`,
-    [skill, proposer],
+    `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by, created_at)
+     values ($1, '1.0.0', false, 'active', $2 || '/1.0.0.tgz', 'sha', $3, now() - interval '2 days'),
+            ($1, '1.1.0', false, 'active', $2 || '/1.1.0.tgz', 'sha', $4, now() - interval '1 day')`,
+    [skill, slug, proposer, other],
   );
   assert.equal(await isOriginalProposer(pool, skill, proposer), true);
-  assert.equal(await isOriginalProposer(pool, skill, other), false);
+  assert.equal(await isOriginalProposer(pool, skill, other), false, "a later version's author is not the original proposer");
 
-  // Erasure deletes the rows and resets the two preference/zone columns.
-  await awardAchievement(pool, proposer, "first_published", { backfill: true });
-  await pool.query(`update users set achievements_hidden = true where id = $1`, [proposer]);
-  assert.equal((await heldKeys(proposer)).length, 1);
-  await eraseUser(admin, proposer, null);
-  assert.deepEqual(await heldKeys(proposer), []);
-  const row = (await pool.query<{ achievements_hidden: boolean; time_zone: string | null }>(
-    `select achievements_hidden, time_zone from users where id = $1`, [proposer],
+  // Erasure is exercised on its OWN user, never on `proposer`: erasure detaches the Entra object
+  // id, so erasing the person who created the immutable version above would leave the next run's
+  // freshly-created `ach-proposer` pointing at nothing — and the version, which cannot be deleted,
+  // still credited to the old tombstone. That is exactly how this test used to fail on its second
+  // run against a persistent database.
+  const victim = await mkUser("ach-erase-victim", "UTC");
+  await awardAchievement(pool, victim, "first_published", { backfill: true });
+  await pool.query(`update users set achievements_hidden = true where id = $1`, [victim]);
+  assert.equal((await heldKeys(victim)).length, 1);
+  await eraseUser(admin, victim, null);
+  assert.deepEqual(await heldKeys(victim), []);
+  const row = (await pool.query<{ achievements_hidden: boolean; time_zone: string | null; hero_at: Date | null }>(
+    `select achievements_hidden, time_zone, hero_at from users where id = $1`, [victim],
   )).rows[0]!;
   assert.equal(row.achievements_hidden, false);
   assert.equal(row.time_zone, null);
+  assert.equal(row.hero_at, null);
   // A tombstone has no hall.
-  assert.equal(await getAchievements(proposer, other), null);
+  assert.equal(await getAchievements(victim, other), null);
+});
+
+// --------------------------------------------------------------------------------------------
+// Levels (§31.10)
+// --------------------------------------------------------------------------------------------
+
+test("levels: hero_at is stamped once at full house, and never cleared or moved afterwards", { skip: !enabled }, async () => {
+  const u = await mkUser("lvl-hero", null);
+  assert.equal(await heroAt(u), null);
+
+  // One badge short of the set: no stamp, however many awards land.
+  for (const key of ACHIEVEMENT_KEYS.slice(0, -1)) await awardAchievement(pool, u, key, { backfill: true, noHabits: true });
+  assert.equal((await heldKeys(u)).length, ACHIEVEMENT_KEYS.length - 1);
+  assert.equal(await heroAt(u), null, "one badge short is not a Hero");
+
+  // The award that completes the catalog stamps it — and this one is a BACKFILL, which must still
+  // stamp (only the notification is suppressed), so a long-standing full-house user gets a real date.
+  const completedAt = new Date("2025-03-04T08:30:00Z");
+  await awardAchievement(pool, u, ACHIEVEMENT_KEYS[ACHIEVEMENT_KEYS.length - 1]!, { at: completedAt, backfill: true, noHabits: true });
+  const stamped = await heroAt(u);
+  assert.ok(stamped, "completing the catalog stamps hero_at");
+  assert.equal(stamped.toISOString(), completedAt.toISOString());
+  assert.equal(await notifCount(u), 0, "a backfilled award never notifies, not even for Hero");
+
+  // A later award never re-stamps and never clears: the date always means "first full house".
+  await awardAchievement(pool, u, "first_watch", { at: new Date("2026-01-01T00:00:00Z") });
+  assert.equal((await heroAt(u))!.toISOString(), completedAt.toISOString());
+});
+
+test("levels: the notification carries the level the badge moved you to", { skip: !enabled }, async () => {
+  const u = await mkUser("lvl-notify", null);
+  await pool.query(`delete from platform_settings where key = 'achievements_enabled'`);
+  await awardAchievement(pool, u, "first_watch");
+  await awardAchievement(pool, u, "first_rating");
+  const payloads = (await pool.query<{ payload: { key: string; level: number; total: number; hero: boolean } }>(
+    `select payload from notifications where user_id = $1 and type = 'achievement.earned' order by created_at, id`, [u],
+  )).rows.map((r) => r.payload);
+  assert.deepEqual(payloads.map((p) => p.level), [1, 2]);
+  assert.deepEqual(payloads.map((p) => p.hero), [false, false]);
+  assert.equal(payloads[0]!.total, 20);
+});
+
+test("levels: the hall payload carries heroAt, and withholds it from a non-self viewer", { skip: !enabled }, async () => {
+  const owner = await mkUser("lvl-hall", null);
+  const viewer = await mkUser("lvl-hall-viewer", null);
+  await fullHouse(owner, new Date("2025-06-01T12:00:00Z"));
+
+  const asViewer = await getAchievements(owner, viewer);
+  assert.equal(asViewer?.heroAt, "2025-06-01T12:00:00.000Z");
+  assert.equal(asViewer?.earned.length, 20);
+
+  // Opted out: no badges AND no heroAt — the bar would restate the count the opt-out withholds.
+  await pool.query(`update users set achievements_hidden = true where id = $1`, [owner]);
+  const hidden = await getAchievements(owner, viewer);
+  assert.equal(hidden?.hidden, true);
+  assert.equal(hidden?.heroAt, null);
+  assert.equal((await getAchievements(owner, owner))?.heroAt, "2025-06-01T12:00:00.000Z", "the owner still sees their own");
+  await pool.query(`update users set achievements_hidden = false where id = $1`, [owner]);
+});
+
+test("levels: the bulk map omits hidden / inactive / erased / level-0 — but never the caller", { skip: !enabled }, async () => {
+  const me = await mkUser("lvl-me", null);
+  const peer = await mkUser("lvl-peer", null);
+  const zero = await mkUser("lvl-zero", null);
+  const gone = await mkUser("lvl-gone", null);
+  const admin = await mkUser("lvl-admin", null);
+  await awardAchievement(pool, me, "first_watch", { backfill: true, noHabits: true });
+  await fullHouse(peer);
+  await awardAchievement(pool, gone, "first_watch", { backfill: true, noHabits: true });
+
+  const map = await getLevelMapFor(me, true, FRESH);
+  assert.equal(map.levels[me], 1);
+  assert.equal(map.levels[peer], 20);
+  assert.ok(map.heroes.includes(peer), "a full-house user draws the crowned ring");
+  assert.equal(map.levels[zero], undefined, "level 0 renders no ring, so it is not in the map");
+
+  // Opted out ⇒ absent for everyone else. That omission IS the privacy mechanism, not a client check.
+  await pool.query(`update users set achievements_hidden = true where id = $1`, [peer]);
+  assert.equal((await getLevelMapFor(me, true, FRESH)).levels[peer], undefined);
+  // … but the owner still sees the ring on their OWN avatar (§31.5).
+  const own = await getLevelMapFor(peer, true, FRESH);
+  assert.equal(own.levels[peer], 20);
+  assert.ok(own.heroes.includes(peer));
+  await pool.query(`update users set achievements_hidden = false where id = $1`, [peer]);
+
+  // Deprovisioned ⇒ absent; re-enabling restores them.
+  await pool.query(`update users set status = 'inactive' where id = $1`, [peer]);
+  assert.equal((await getLevelMapFor(me, true, FRESH)).levels[peer], undefined);
+  await pool.query(`update users set status = 'active' where id = $1`, [peer]);
+
+  // Erased ⇒ absent, badges deleted, hero stamp cleared.
+  await eraseUser(admin, gone, null);
+  assert.equal((await getLevelMapFor(me, true, FRESH)).levels[gone], undefined);
+  assert.equal(await heroAt(gone), null);
+
+  // The platform toggle empties the map, so the ring disappears with the rest of the feature.
+  assert.deepEqual(await getLevelMapFor(me, false, FRESH), { levels: {}, heroes: [] });
+});
+
+test("levels: the migration-0072 backfill stamps completed sets and leaves everyone else null", { skip: !enabled }, async () => {
+  const complete = await mkUser("lvl-bf-complete", null);
+  const partial = await mkUser("lvl-bf-partial", null);
+  await fullHouse(complete, new Date("2024-11-20T09:00:00Z"));
+  await awardAchievement(pool, partial, "first_watch", { backfill: true, noHabits: true });
+  // Clear the runtime stamp so the migration's own statement is what this exercises.
+  await pool.query(`update users set hero_at = null where id = any($1::uuid[])`, [[complete, partial]]);
+
+  const BACKFILL_SQL = `UPDATE users u
+        SET hero_at = full_house.completed_at
+       FROM (SELECT ua.user_id, max(ua.earned_at) AS completed_at
+               FROM user_achievements ua
+              GROUP BY ua.user_id
+             HAVING count(*) >= 20) AS full_house
+      WHERE full_house.user_id = u.id AND u.erased_at IS NULL AND u.hero_at IS NULL`;
+  await pool.query(BACKFILL_SQL);
+
+  // A completed set is stamped with the instant it was COMPLETED, not now().
+  assert.equal((await heroAt(complete))!.toISOString(), "2024-11-20T09:00:00.000Z");
+  assert.equal(await heroAt(partial), null);
+
+  // Idempotent — the `hero_at IS NULL` guard means a re-run never overwrites an existing stamp.
+  await pool.query(`update users set hero_at = '2020-01-01T00:00:00Z' where id = $1`, [complete]);
+  await pool.query(BACKFILL_SQL);
+  assert.equal((await heroAt(complete))!.toISOString(), "2020-01-01T00:00:00.000Z");
 });

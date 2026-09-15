@@ -3,7 +3,7 @@
 // like `eraseUserByExternalId` mirrors `lib/eraseUser.ts`. The catalog and the pure rules are the
 // shared module's, so the two tiers cannot disagree about what a key means.
 import type { Pool, PoolClient } from "pg";
-import { TRIPLE_THREAT_PARTS, achievementDef, habitKeysFor, isAchievementKey, tripleThreatDue } from "@skilly/shared";
+import { ACHIEVEMENT_TOTAL, TRIPLE_THREAT_PARTS, achievementDef, habitKeysFor, isAchievementKey, tripleThreatDue } from "@skilly/shared";
 
 type Db = Pool | PoolClient;
 
@@ -25,16 +25,20 @@ export async function awardAchievement(db: Db, userId: string, key: string | nul
   if (keys.length === 0) return [];
   const earned = await insertKeys(db, userId, keys, at);
   if (earned.some((k) => (TRIPLE_THREAT_PARTS as readonly string[]).includes(k))) {
-    const { rows } = await db.query<{ key: string }>(`select key from user_achievements where user_id = $1`, [userId]);
-    const held = rows.map((r) => r.key);
+    const held = await heldKeys(db, userId);
     if (tripleThreatDue(held) && !held.includes("triple_threat")) earned.push(...(await insertKeys(db, userId, ["triple_threat"], at)));
   }
-  if (earned.length > 0 && !opts.backfill && (await achievementsEnabledFor(db))) {
+  if (earned.length === 0) return earned;
+  // §31.10 — mirrors web: the level is the count, Hero is stamped once the count covers the
+  // catalog, and the stamp happens even on a backfill (only the notification is suppressed).
+  const level = (await heldKeys(db, userId)).length;
+  const hero = await stampHero(db, userId, level >= ACHIEVEMENT_TOTAL, at);
+  if (!opts.backfill && (await achievementsEnabledFor(db))) {
     for (const k of earned) {
       const def = achievementDef(k)!;
       await db.query(
         `insert into notifications (user_id, type, payload) values ($1, 'achievement.earned', $2::jsonb)`,
-        [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb })],
+        [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
       );
     }
   }
@@ -60,6 +64,22 @@ async function insertKeys(db: Db, userId: string, keys: string[], at: Date): Pro
     [userId, keys, at],
   );
   return rows.map((r) => r.key);
+}
+
+async function heldKeys(db: Db, userId: string): Promise<string[]> {
+  const { rows } = await db.query<{ key: string }>(`select key from user_achievements where user_id = $1`, [userId]);
+  return rows.map((r) => r.key);
+}
+
+/** See web `stampHero` — write-once, never cleared, so a grown catalog cannot un-Hero anyone. */
+async function stampHero(db: Db, userId: string, complete: boolean, at: Date): Promise<boolean> {
+  const { rows } = await db.query<{ hero_at: Date | null }>(
+    `update users set hero_at = case when $2::boolean then coalesce(hero_at, $3) else hero_at end
+      where id = $1
+      returning hero_at`,
+    [userId, complete, at],
+  );
+  return rows[0]?.hero_at != null;
 }
 
 async function achievementsEnabledFor(db: Db): Promise<boolean> {

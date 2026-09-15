@@ -6,7 +6,11 @@
 // the default `pnpm -r test`.
 import { test, expect, devSignIn, type Page } from "./fixtures";
 
-const bubble = (page: Page) => page.getByRole("button", { name: "Dev Admin — profile" });
+// Scoped to <main>: the topbar account menu also renders this person's bubble, and its own
+// trigger button absorbs the nested bubble's label into its accessible name — so an unscoped
+// lookup matches three elements on /profile and trips strict mode. The page's own bubble is the
+// one this spec is about.
+const bubble = (page: Page) => page.getByRole("main").getByRole("button", { name: "Dev Admin — profile" });
 const card = (page: Page) => page.getByRole("dialog", { name: /Dev Admin — profile/ });
 
 test.describe("directory hover card (§28)", () => {

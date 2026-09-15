@@ -17,6 +17,7 @@ import {
   setUserAchievementsHidden,
 } from "../../../lib/settings";
 import { invalidateLeaderboard } from "../../../lib/leaderboard";
+import { invalidateLevels } from "../../../lib/levels";
 import { setUserTimeZone } from "../../../lib/achievements";
 import { validateTimeZone } from "@skilly/shared/achievements";
 
@@ -174,6 +175,9 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.achievementsHidden === "boolean") {
     await setUserAchievementsHidden(access.userId, body.achievementsHidden);
+    // Membership of the level map changed (§31.10) — drop it so the ring disappears from, or
+    // returns to, other people's views on their next page load instead of after the TTL.
+    invalidateLevels();
   }
   // §31.3 timezone capture: validated as a real IANA zone; an invalid value is ignored, never an
   // error. The FIRST capture also runs the deferred Night Shift / Weekend Warrior backfill.

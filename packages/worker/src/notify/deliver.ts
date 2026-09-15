@@ -221,10 +221,14 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
   if (n.type === "achievement.earned") {
     const name = typeof p.name === "string" ? p.name : "a badge";
     const blurb = typeof p.blurb === "string" ? p.blurb : "";
+    // §31.10: the level the award moved them to rides this row — a level only ever changes as the
+    // direct consequence of earning a badge, so there is no separate level notification.
+    const level = typeof p.level === "number" ? p.level : null;
+    const levelLine = p.hero === true ? " You're now a skilly Hero." : level !== null ? ` You're now Level ${level}.` : "";
     const s = subj(title);
     return {
       subject: s,
-      text: `You earned a badge: ${name}.${blurb ? ` ${blurb}` : ""} ${cta("See your achievements", "/profile#achievements")}`,
+      text: `You earned a badge: ${name}.${blurb ? ` ${blurb}` : ""}${levelLine} ${cta("See your achievements", "/profile#achievements")}`,
       webhook: { event: n.type, title: s, badge: name, url: abs("/profile#achievements") },
     };
   }

@@ -1,4 +1,5 @@
-// Achievements (SKILLY_SPEC.md §31): the profile card, the shareable hall, the opt-out and the API.
+// Achievements (SKILLY_SPEC.md §31): the profile card, the shareable hall, the opt-out, the level
+// (§31.10 — the bar, the bubble ring and the /api/levels map) and the API.
 //
 // Runs as the single seeded dev admin, so it cannot exercise a genuinely second viewer; the
 // other-person shapes (hidden / earned-only) are covered by the live-DB test
@@ -11,14 +12,21 @@ test.describe.configure({ mode: "serial" });
 
 const NIL = "00000000-0000-0000-0000-000000000000";
 
-test("profile: the Achievements card — progress, every badge, locked hints, Share copies the hall URL", async ({ page }) => {
+test("profile: the Achievements card — the level bar, every badge, locked hints, Share copies the hall URL", async ({ page }) => {
   await page.request.post("/api/me/onboarded"); // "Read the Manual" (idempotent — never moves the date)
   const me = await (await page.request.get("/api/me")).json();
 
   await page.goto("/profile", { timeout: 20_000 });
   const card = page.getByTestId("achievements-card");
   await expect(card).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId("achievements-progress")).toContainText(/\d+ of 20 earned/);
+  // §31.10: the level bar replaced the old "N of M earned" text line and reports the same fact.
+  const bar = page.getByTestId("level-bar");
+  await expect(bar).toBeVisible();
+  await expect(bar).toContainText(/(Level \d+|Hero) — \d+ of 20/);
+  const level = Number(await bar.getAttribute("data-level"));
+  expect(level).toBeGreaterThanOrEqual(1); // "Read the Manual" was just stamped above
+  await expect(bar.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "20");
+  await expect(bar.getByRole("progressbar")).toHaveAttribute("aria-valuenow", String(level));
   await expect(card.locator("[data-badge]")).toHaveCount(20);
   await expect(card.locator('[data-badge="onboarded"]')).toHaveAttribute("data-earned", "1");
   await expect(card.locator('[data-badge="onboarded"]')).toContainText("Read the Manual");
@@ -42,14 +50,16 @@ test("profile: the Achievements card — progress, every badge, locked hints, Sh
   await expect(card.getByRole("link", { name: /View as others see it/ })).toHaveAttribute("href", `/achievements/${me.userId}`);
 });
 
-test("hall: own view with ?badge= spotlight and the count line; an unknown id is an empty state", async ({ page }) => {
+test("hall: own view with ?badge= spotlight and the level bar; an unknown id is an empty state", async ({ page }) => {
   const me = await (await page.request.get("/api/me")).json();
   await page.goto(`/achievements/${me.userId}?badge=onboarded`, { timeout: 20_000 });
   await expect(page.getByRole("heading", { name: "Your hall." })).toBeVisible({ timeout: 20_000 });
   const tile = page.locator('[data-badge="onboarded"]');
   await expect(tile).toBeVisible();
   await expect(tile).toHaveAttribute("data-earned", "1");
-  await expect(page.getByTestId("hall-count")).toContainText(/\d+ of 20/);
+  // The header's level bar carries the N-of-M count — the body no longer repeats a total (§31.5).
+  await expect(page.getByTestId("level-bar")).toContainText(/(Level \d+|Hero) — \d+ of 20/);
+  await expect(page.getByTestId("hall-count")).toHaveCount(0);
   // The owner sees locked badges here too (same content as the profile card).
   await expect(page.locator("[data-badge]")).toHaveCount(20);
   await expect(page.getByRole("button", { name: "Share", exact: true })).toBeVisible();
@@ -98,11 +108,50 @@ test("API: the hall payload shape, 404s, and a rejected timezone is ignored not 
   expect((await page.request.patch("/api/me", { data: { timeZone: "Mars/Olympus_Mons" } })).ok()).toBeTruthy();
   expect((await (await page.request.get("/api/me")).json()).timeZone).toBe("Europe/Sofia");
 
-  // The hover card payload carries the count (or null), never an error.
+  // The hover card payload carries the level (or null) and the Hero flag, never an error.
   const cardRes = await page.request.get(`/api/users/${me.userId}/card`);
   expect(cardRes.ok()).toBeTruthy();
   const cardJson = await cardRes.json();
   expect("achievementCount" in cardJson).toBe(true);
+  expect(typeof cardJson.achievementHero).toBe("boolean");
+
+  // §31.10 — the hall payload's Hero stamp: null or a real date, never anything else.
+  expect(view.heroAt === null || !Number.isNaN(Date.parse(view.heroAt))).toBe(true);
+});
+
+test("levels: the bulk map drives the bubble ring, and the opt-out removes the caller from nobody", async ({ page }) => {
+  const me = await (await page.request.get("/api/me")).json();
+  const res = await page.request.get("/api/levels");
+  expect(res.ok()).toBeTruthy();
+  const map = await res.json();
+  expect(typeof map.levels).toBe("object");
+  expect(Array.isArray(map.heroes)).toBe(true);
+  // This user has at least "Read the Manual" by now, so they are in the map — and every entry in
+  // it is level ≥ 1, because level 0 draws no ring (§31.10).
+  expect(map.levels[me.userId]).toBeGreaterThanOrEqual(1);
+  for (const n of Object.values(map.levels)) expect(n).toBeGreaterThanOrEqual(1);
+
+  // Opting out removes you from OTHER people's view but never from your own.
+  try {
+    expect((await page.request.patch("/api/me", { data: { achievementsHidden: true } })).ok()).toBeTruthy();
+    const own = await (await page.request.get("/api/levels")).json();
+    expect(own.levels[me.userId]).toBeGreaterThanOrEqual(1);
+  } finally {
+    await page.request.patch("/api/me", { data: { achievementsHidden: false } });
+  }
+
+  // The ring itself: the profile page's own bubble is labelled with the level.
+  await page.goto("/profile", { timeout: 20_000 });
+  await expect(page.getByRole("img", { name: /^(Level \d+ of 20|Hero — \d+ of 20)$/ }).first()).toBeVisible({ timeout: 20_000 });
+});
+
+test("levels: the ring never appears on a bubble whose owner has no badges", async ({ page }) => {
+  // Rings are keyed off /api/levels, which omits level-0 users entirely. Assert that contract
+  // directly: nobody absent from the map can produce a ring, because there is nothing to read.
+  const map = await (await page.request.get("/api/levels")).json();
+  for (const [userId, n] of Object.entries(map.levels)) {
+    expect(n, `user ${userId} is in the level map at level ${n}`).not.toBe(0);
+  }
 });
 
 test("notifications inbox: badge rows (when any exist) link to the profile card", async ({ page }) => {

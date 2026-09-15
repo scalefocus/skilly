@@ -11,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { cachedGet } from "./ui";
 import { BADGE_META, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
+import { levelLabel } from "@skilly/shared/achievements";
 
 /** `GET /api/users/:id/card`. Badges are NOT here — they come from the `/api/leaders` map the
  *  bubble already holds (§28). */
@@ -23,7 +24,10 @@ export interface UserCardData {
   department: string | null;
   lastSeen: string | null;
   online: boolean;
+  /** §31.10 — the person's level (= badges earned), or null when the line must not show. */
   achievementCount?: number | null;
+  /** §31.10 — `hero_at` is stamped. Not derivable from the count once the catalog has grown. */
+  achievementHero?: boolean;
 }
 
 const OPEN_DELAY_MS = 300; // hover intent — a pointer crossing a dense table must not fire cards
@@ -331,10 +335,12 @@ function DirectoryCardBody({
       </div>
 
       {data?.achievementCount ? (
-        // §31.5: a count linking to the person's hall; absent when none, opted out, or disabled.
-        <a className="dircard-achievements" href={`/achievements/${data.userId}`}>
+        // §31.10: the LEVEL, linking to the person's hall — it replaces the old "N achievements"
+        // count, which was the same number said twice. Absent at level 0, opted out, or disabled.
+        // `total` comes from the catalog the client already imports, so the card never ships it.
+        <a className="dircard-achievements" href={`/achievements/${data.userId}`} data-testid="dircard-level">
           <span aria-hidden>🏆</span>
-          <span>{data.achievementCount} achievement{data.achievementCount === 1 ? "" : "s"}</span>
+          <span>{levelLabel(data.achievementCount, data.achievementHero === true)}</span>
         </a>
       ) : null}
 
