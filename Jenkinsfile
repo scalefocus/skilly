@@ -4,6 +4,9 @@
 //
 // AGENT PREREQUISITES (label: linux):
 //   - asdf with nodejs 20+ plugin, Docker Engine + the `docker compose` plugin, git, ssh.
+//   - Ability to pull the CI stack images (Postgres, MinIO). Agents behind a registry proxy that
+//     denies Docker Hub can pin an internal mirror per build via CI_POSTGRES_IMAGE / CI_MINIO_IMAGE;
+//     left blank, each stage falls back to a second public registry before failing.
 //
 // CONFIGURATION — this file carries NO environment-specific values. Everything the deploy needs
 // lives in Jenkins credentials, so nothing host/path/URL-specific is committed to the repo. Each
@@ -39,6 +42,8 @@ pipeline {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
     booleanParam(name: 'RUN_E2E_TESTS', defaultValue: false, description: 'Run the gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser)')
+    string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
+    string(name: 'CI_MINIO_IMAGE', defaultValue: '', description: 'Pin the MinIO image for the gated e2e stack (blank = minio/minio:latest, falling back to quay.io/minio/minio:latest). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'DEPLOY_HOST', defaultValue: '', description: 'SSH target, e.g. user@host. Blank = use the skilly-deploy-host credential; filled = override it for this build.')
     string(name: 'DEPLOY_PATH', defaultValue: '', description: 'Checkout path on the deploy host. Blank = use the skilly-deploy-path credential; filled = override it for this build.')
@@ -60,6 +65,12 @@ pipeline {
     CI_E2E_MINIO_PORT      = '59000'
     CI_E2E_DATABASE_URL    = "postgres://skilly:test@127.0.0.1:55433/skilly"
     CI_E2E_MINIO_PASSWORD  = 'e2e-minio-not-a-secret'
+    // Images for the ephemeral CI stacks, as a space-separated candidate list — the first one the
+    // agent can actually get wins. A build parameter pins a single image (e.g. an internal mirror);
+    // blank falls back to a second public registry, so a Docker Hub pull denial or anonymous-pull
+    // rate limit doesn't take the build down with it.
+    CI_PG_IMAGES    = "${params.CI_POSTGRES_IMAGE?.trim() ?: 'postgres:16-alpine public.ecr.aws/docker/library/postgres:16-alpine'}"
+    CI_MINIO_IMAGES = "${params.CI_MINIO_IMAGE?.trim() ?: 'minio/minio:latest quay.io/minio/minio:latest'}"
     // asdf — must set ASDF_DIR explicitly so asdf.sh can locate itself in a non-interactive shell.
     ASDF_DIR = "${env.HOME}/.asdf"
     PATH     = "${env.HOME}/.asdf/shims:${env.HOME}/.asdf/bin:${env.PATH}"
@@ -116,10 +127,27 @@ pipeline {
           set -eu
           . "${HOME}/.asdf/asdf.sh"
 
+          # Resolve a usable image from the candidate list (first hit wins): local copy, else pull.
+          resolve_image() {
+            for _img in $1; do
+              if docker image inspect "$_img" >/dev/null 2>&1 || docker pull "$_img" >/dev/null; then
+                echo "$_img"
+                return 0
+              fi
+              echo "could not obtain $_img — trying the next candidate" >&2
+            done
+            echo "none of these images are reachable from this agent: $1" >&2
+            echo "set the matching CI_*_IMAGE build parameter to an image this agent can pull." >&2
+            return 1
+          }
+
+          PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
+          echo "postgres image: ${PG_IMAGE}"
+
           # Ephemeral Postgres for the gated suites.
           docker run -d --rm --name "${CI_PG_CONTAINER}" \
             -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
-            -p ${CI_PG_PORT}:5432 postgres:16-alpine
+            -p ${CI_PG_PORT}:5432 "${PG_IMAGE}"
 
           # Wait for readiness.
           for i in $(seq 1 30); do
@@ -158,13 +186,31 @@ pipeline {
           set -eu
           . "${HOME}/.asdf/asdf.sh"
 
+          # Resolve usable images from the candidate lists (first hit wins): local copy, else pull.
+          resolve_image() {
+            for _img in $1; do
+              if docker image inspect "$_img" >/dev/null 2>&1 || docker pull "$_img" >/dev/null; then
+                echo "$_img"
+                return 0
+              fi
+              echo "could not obtain $_img — trying the next candidate" >&2
+            done
+            echo "none of these images are reachable from this agent: $1" >&2
+            echo "set the matching CI_*_IMAGE build parameter to an image this agent can pull." >&2
+            return 1
+          }
+
+          PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
+          MINIO_IMAGE="$(resolve_image "${CI_MINIO_IMAGES}")"
+          echo "postgres image: ${PG_IMAGE} | minio image: ${MINIO_IMAGE}"
+
           # Ephemeral Postgres + MinIO for the live e2e stack.
           docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
             -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
-            -p ${CI_E2E_PG_PORT}:5432 postgres:16-alpine
+            -p ${CI_E2E_PG_PORT}:5432 "${PG_IMAGE}"
           docker run -d --rm --name "${CI_E2E_MINIO_CONTAINER}" \
             -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD="${CI_E2E_MINIO_PASSWORD}" \
-            -p ${CI_E2E_MINIO_PORT}:9000 minio/minio:latest server /data
+            -p ${CI_E2E_MINIO_PORT}:9000 "${MINIO_IMAGE}" server /data
 
           # Wait for Postgres readiness.
           for i in $(seq 1 30); do
