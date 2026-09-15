@@ -11,6 +11,7 @@
 import { pool } from "./db";
 import { resolveUserAccess } from "./access";
 import { appendAudit } from "./audit";
+import { tryAward } from "./achievements";
 import { nameSql, userLabel as label } from "./userLabel";
 import type { RequestState } from "./requests";
 import {
@@ -342,6 +343,11 @@ async function insertMessage(
 ): Promise<MessageView & { contextSemver: string | null }> {
   const contextSemver = opts.contextSemver ?? null;
   const trackParticipant = opts.trackParticipant ?? true;
+  // §31 Conversationalist needs the thread's opener BEFORE this message lands.
+  const { rows: openerRows } = await pool.query<{ author_id: string }>(
+    `select author_id from messages where conversation_id = $1 order by created_at, id limit 1`,
+    [conversationId],
+  );
   const { rows } = await pool.query<{ id: string; created_at: string; display_name: string; avatar: string | null }>(
     `with m as (
        insert into messages (conversation_id, author_id, body, context_semver) values ($1, $2, $3, $4) returning id, created_at, author_id
@@ -352,6 +358,10 @@ async function insertMessage(
   // One message_mentions row per distinct validated mention (§24) — cascades with the message.
   if (opts.mentions?.length) await insertMentionRows(rows[0]!.id, opts.mentions);
   await pool.query(`update conversations set updated_at = now() where id = $1`, [conversationId]);
+  // §31 Icebreaker / Conversationalist / Name Dropper (best-effort — the message is already in).
+  await tryAward(pool, authorId, "first_message");
+  if (openerRows[0] && openerRows[0].author_id !== authorId) await tryAward(pool, authorId, "first_reply", { noHabits: true });
+  if (opts.mentions?.length) await tryAward(pool, authorId, "first_mention", { noHabits: true });
   // The author has implicitly read up to their own message. Skill discussions are open forums
   // with NO participant rows (§24) — skip the upsert so a skill thread never surfaces in the
   // topbar messages menu (which is participant-scoped).

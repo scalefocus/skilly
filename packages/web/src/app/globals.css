@@ -952,6 +952,47 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   animation: toast-in 0.2s ease;
 }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+/* Badge earned toast (§31.4): transient (7s), top-right under the header so it never overlaps the
+   update notice or the copy pill. Same surface language as the update notice. */
+.badge-toast {
+  position: fixed; right: 22px; top: 72px; z-index: 84; width: min(340px, calc(100vw - 44px));
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--ok); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 14px 12px 14px; display: flex; align-items: center; gap: 12px;
+  font-size: 13.5px; line-height: 1.4; animation: update-notice-in 0.24s ease;
+}
+.badge-toast-glyph {
+  width: 38px; height: 38px; border-radius: 50%; background: var(--ok); color: #fff;
+  display: grid; place-items: center; font-size: 20px; flex-shrink: 0;
+}
+.badge-toast-link { font-size: 12.5px; color: var(--accent-2); text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { .badge-toast { animation: none; } }
+
+/* Achievement tiles (§31.5) — the profile card and the hall share one grid. */
+.ach-group { margin-top: 18px; }
+.ach-group:first-child { margin-top: 0; }
+.ach-group-title {
+  font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin: 0 0 8px;
+}
+.ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.ach-tile {
+  position: relative; display: flex; gap: 12px; align-items: flex-start;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 11px 12px;
+  background: var(--surface); min-width: 0;
+}
+.ach-tile-locked { opacity: 0.62; border-style: dashed; }
+.ach-tile-locked .ach-glyph { background: var(--surface-2); color: var(--muted); filter: grayscale(1); }
+.ach-glyph {
+  width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 20px;
+  line-height: 1; color: #fff; flex-shrink: 0;
+}
+.ach-name { font-weight: 650; font-size: 14px; line-height: 1.3; }
+.ach-text { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; overflow-wrap: anywhere; }
+.ach-date { font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-top: 5px; }
+.ach-share { position: absolute; top: 6px; right: 6px; }
+.ach-share .btn { padding: 2px 7px; font-size: 11px; }
+
 /* The What's new update notice (§23): a persistent, accent-edged floating card — bottom-right on
    desktop, a full-width bottom sheet ≤560px. Unlike the transient .toast pill above it has no
    timer and takes pointer events: it stays until its ✕ or its link dismisses it. Stacking: above
@@ -1281,6 +1322,11 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 }
 /* Long Entra job titles wrap onto more lines — never ellipsed (§28). */
 .dircard-val { overflow-wrap: anywhere; }
+.dircard-achievements {
+  display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--accent-2);
+  padding-top: 7px; border-top: 1px dashed var(--line); text-decoration: none;
+}
+.dircard-achievements:hover span:last-child { text-decoration: underline; }
 .dircard-badges { display: flex; flex-direction: column; gap: 5px; padding-top: 7px; border-top: 1px dashed var(--line); }
 .dircard-badge { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
 .dircard-badge-dot {

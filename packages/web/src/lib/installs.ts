@@ -2,6 +2,7 @@
 // reusable, skill-scoped token with an optional pinned version and an optional expiry (null =
 // never). The raw token is shown once (baked into the install URL); only its hash is stored.
 import { pool } from "./db";
+import { tryAward } from "./achievements";
 import { generateToken, hashToken } from "@skilly/shared";
 import { M } from "./metrics";
 
@@ -189,7 +190,10 @@ export async function recordFirstDownload(skillId: string, userId: string): Prom
     `select record_skill_download($1, $2)`,
     [skillId, userId],
   );
-  return rows[0]?.record_skill_download ?? false;
+  const fresh = rows[0]?.record_skill_download ?? false;
+  // §31: a first adoption earns Hello, Skill; every download is a Habits event.
+  await tryAward(pool, userId, fresh ? "first_install" : null);
+  return fresh;
 }
 
 /** Uninstall = hard-delete the token (owner-scoped). The URL is then refused at the gateway. */

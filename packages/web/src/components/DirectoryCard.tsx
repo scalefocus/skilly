@@ -23,6 +23,7 @@ export interface UserCardData {
   department: string | null;
   lastSeen: string | null;
   online: boolean;
+  achievementCount?: number | null;
 }
 
 const OPEN_DELAY_MS = 300; // hover intent — a pointer crossing a dense table must not fire cards
@@ -328,6 +329,14 @@ function DirectoryCardBody({
           <span className="muted">No directory information</span>
         )}
       </div>
+
+      {data?.achievementCount ? (
+        // §31.5: a count linking to the person's hall; absent when none, opted out, or disabled.
+        <a className="dircard-achievements" href={`/achievements/${data.userId}`}>
+          <span aria-hidden>🏆</span>
+          <span>{data.achievementCount} achievement{data.achievementCount === 1 ? "" : "s"}</span>
+        </a>
+      ) : null}
 
       {badges.length > 0 && (
         <div className="dircard-badges">

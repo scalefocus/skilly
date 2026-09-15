@@ -158,9 +158,11 @@ export interface PlatformSettings {
   marketplaceSyncMinutes: number;
   /** instance-discriminating prefix for every marketplace name (§30.2). */
   marketplaceNamePrefix: string;
+  /** §31 achievements on/off. Ships ON; OFF hides the surfaces and mutes notifications but awards keep recording. */
+  achievementsEnabled: boolean;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -186,7 +188,34 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     marketplacePublicEnabled: map.get("marketplace_public_enabled") === true,
     marketplaceSyncMinutes: coerceMarketplaceSyncMinutes(map.get("marketplace_sync_minutes")),
     marketplaceNamePrefix: coerceMarketplacePrefix(map.get("marketplace_name_prefix")),
+    achievementsEnabled: map.get("achievements_enabled") !== false,
   };
+}
+
+/** Are §31 achievements shown? Read by the profile card, the hall, the hover card and the award helper. */
+export async function getAchievementsEnabled(db: Pool = pool): Promise<boolean> {
+  return (await getPlatformSettings(db)).achievementsEnabled;
+}
+
+/**
+ * §31.7 achievements on/off. OFF is dormant-not-destructive: awards keep recording, only the
+ * surfaces, notifications and toasts stop; re-enabling reveals everything earned meanwhile.
+ * Audited as a setting like every other toggle.
+ */
+export async function setAchievementsEnabled(enabled: boolean, actorUserId: string): Promise<void> {
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('achievements_enabled', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(enabled), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "achievements_enabled",
+    after: { achievementsEnabled: enabled },
+  });
 }
 
 /** Is the §29 MCP server enabled? Read on every /oauth and /api/mcp request. */
@@ -329,6 +358,11 @@ export async function getUserLeaderboardHidden(userId: string, db: Pool = pool):
 /** Show/hide the user on the leaderboard. Self-service — no audit. */
 export async function setUserLeaderboardHidden(userId: string, hidden: boolean): Promise<void> {
   await pool.query(`update users set leaderboard_hidden = $2, updated_at = now() where id = $1`, [userId, hidden]);
+}
+
+/** §31.5 show/hide the user's achievements to others (the hall + hover card). Self-service — no audit. */
+export async function setUserAchievementsHidden(userId: string, hidden: boolean): Promise<void> {
+  await pool.query(`update users set achievements_hidden = $2, updated_at = now() where id = $1`, [userId, hidden]);
 }
 
 /** The §12 email-channel opt-out: on = receive notification email (default), off = in-app

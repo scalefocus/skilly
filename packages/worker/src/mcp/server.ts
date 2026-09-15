@@ -38,6 +38,7 @@ import { findVisibleSkill, listVersions, resolveReadVersion } from "./queries.js
 import { readBundleFile, readSkillMd, recordMcpAdoption } from "./content.js";
 import { publicBaseUrl } from "./url.js";
 import { M } from "../metrics.js";
+import { tryAward } from "../achievements.js";
 
 const MCP_PATH = "/mcp";
 
@@ -182,6 +183,8 @@ async function handleRpc(pool: Pool, caller: McpCaller, req: JsonRpcRequest): Pr
         return rpcResult(id, toolError(`rate limit exceeded for ${name} — retry in ${gate.retryAfterSeconds}s`));
       }
       const outcome = MCP_WRITE_TOOLS.has(name) ? "write" : "read";
+      // §31 Ghost in the Machine — the first tool call under a grant (consent alone earns nothing).
+      await tryAward(pool, caller.userId, "first_mcp");
       try {
         const result = await callTool(pool, caller, name, args);
         M.mcpToolCalls.inc({ tool: name, outcome });

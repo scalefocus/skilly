@@ -33,6 +33,7 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "message.mention": { title: "You were mentioned", tone: "warn" },
   "system.error": { title: "System log events", tone: "danger" },
   "request.fulfilled": { title: "Skill request fulfilled", tone: "ok" },
+  "achievement.earned": { title: "Badge earned", tone: "ok" },
 };
 
 /** The subject-line title for a type; a generic fallback so no unknown type ever leaks its key. */

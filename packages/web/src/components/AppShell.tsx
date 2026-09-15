@@ -14,6 +14,7 @@ import { cachedGet, invalidateApi, usePopoverPresence, Pill } from "./ui";
 import { PageLabelOverrideProvider } from "./PageLabelOverride";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
 import { CHANGELOG } from "../app/whats-new/changelog";
+import { achievementDef } from "@skilly/shared/achievements";
 
 const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "review" | "requests" }[] = [
   { href: "/", label: "Overview", icon: "M3 12 12 4l9 8M5 10v9h14v-9" },
@@ -61,6 +62,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // reload before dismissing shows it again. Evaluated once per page load (the ref).
   const [whatsNewNotice, setWhatsNewNotice] = useState<{ since: string | null } | null>(null);
   const whatsNewHandled = useRef(false);
+  // §31: timezone beacon sent once per mount; the transient "badge earned" toast.
+  const tzReported = useRef(false);
+  const [badgeToast, setBadgeToast] = useState<{ id: string; name: string; glyph: string } | null>(null);
   const [unread, setUnread] = useState(0);
   // "New since you last looked" counts for the Catalog / Review queue / Requested skills nav items.
   const [navBadges, setNavBadges] = useState<{ catalog: number; review: number; systemLog: number; requests: number }>({ catalog: 0, review: 0, systemLog: 0, requests: 0 });
@@ -245,7 +249,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null }>("/api/me")
+    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null; timeZone?: string | null }>("/api/me")
       .then((j) => {
         setMyUserId(j.userId ?? null);
         setIsPlatformAdmin(Boolean(j.isPlatformAdmin));
@@ -258,6 +262,19 @@ export function AppShell({ children }: { children: ReactNode }) {
         // forces it once. Tri-state (null = unknown until /api/me resolves) so we never bounce
         // a user before we know their status.
         setOnboarded(j.onboardedAt != null);
+        // Timezone capture (§31.3): report the browser's IANA zone when it differs from the stored
+        // one. Once per shell mount; best-effort; the server validates and ignores junk.
+        if (!tzReported.current) {
+          try {
+            const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            if (tz && tz !== (j.timeZone ?? null)) {
+              tzReported.current = true;
+              fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ timeZone: tz }) })
+                .catch(() => null)
+                .then(() => invalidateApi("/api/me"));
+            }
+          } catch { /* Intl unavailable — no zone, no Habits badges */ }
+        }
         // What's new (§23): compare the stored marker with THIS bundle's APP_VERSION. Not onboarded →
         // nothing (Quick start owns that load and stamps the marker). Minor/major newer → show the
         // update notice WITHOUT stamping (the marker records acknowledgement, not display; it moves
@@ -271,6 +288,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       })
       .catch(() => {});
   }, [status]);
+
+  // Badge toast auto-dismiss (§31.4).
+  useEffect(() => {
+    if (!badgeToast) return;
+    const t = setTimeout(() => setBadgeToast(null), 7000);
+    return () => clearTimeout(t);
+  }, [badgeToast]);
 
   // The /whats-new page is the read receipt (§23): it stamps the marker on mount and fires this
   // event — close the notice without a second stamp.
@@ -306,7 +330,19 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (typeof document !== "undefined" && document.hidden) return;
       fetch("/api/notifications")
         .then((r) => (r.ok ? r.json() : null))
-        .then((j) => live && j && setUnread(Number(j.unread ?? 0)))
+        .then((j) => {
+          if (!live || !j) return;
+          setUnread(Number(j.unread ?? 0));
+          // Badge toast (§31.4): the first unread achievement.earned row not yet toasted in this
+          // browser session. One at a time; the bell row is the durable copy.
+          const items = Array.isArray(j.items) ? (j.items as { id: string; type: string; readAt: string | null; payload: { key?: string; name?: string } }[]) : [];
+          const fresh = items.find((n) => n.type === "achievement.earned" && !n.readAt && !badgeToasted(n.id));
+          if (fresh) {
+            markBadgeToasted(fresh.id);
+            const def = fresh.payload?.key ? achievementDef(fresh.payload.key) : undefined;
+            setBadgeToast({ id: fresh.id, name: def?.name ?? fresh.payload?.name ?? "a badge", glyph: def?.glyph ?? "🏆" });
+          }
+        })
         .catch(() => {});
     };
     tick();
@@ -812,6 +848,17 @@ export function AppShell({ children }: { children: ReactNode }) {
           navigating right after landing doesn't lose it, portaled to <body>. No timer — it stays until
           the ✕ (stamps) or the link (the destination page stamps) dismisses it. Clicking the card body
           does nothing. Hidden, not unmounted, while the mobile nav drawer is open. */}
+      {/* Badge earned toast (§31.4): transient, top-right so it never collides with the update notice. */}
+      {status === "authenticated" && badgeToast && typeof document !== "undefined" && createPortal(
+        <div className="badge-toast" role="status" data-testid="badge-toast">
+          <span className="badge-toast-glyph" aria-hidden>{badgeToast.glyph}</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600 }}>Badge earned — {badgeToast.name}</div>
+            <Link href="/profile#achievements" className="badge-toast-link" onClick={() => setBadgeToast(null)}>See your achievements →</Link>
+          </div>
+        </div>,
+        document.body,
+      )}
       {status === "authenticated" && whatsNewNotice && typeof document !== "undefined" && createPortal(
         <UpdateNotice
           since={whatsNewNotice.since}
@@ -823,6 +870,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
     </div>
   );
+}
+
+// Which achievement.earned rows have already been toasted in THIS browser session (§31.4).
+const BADGE_TOASTED_KEY = "skilly.badge-toasted";
+function badgeToasted(id: string): boolean {
+  try { return (sessionStorage.getItem(BADGE_TOASTED_KEY) ?? "").split(",").includes(id); } catch { return false; }
+}
+function markBadgeToasted(id: string): void {
+  try {
+    const cur = (sessionStorage.getItem(BADGE_TOASTED_KEY) ?? "").split(",").filter(Boolean);
+    sessionStorage.setItem(BADGE_TOASTED_KEY, [...cur.slice(-50), id].join(","));
+  } catch { /* storage blocked — the toast may repeat next session; harmless */ }
 }
 
 /** Acknowledge the running version (§23 stamp endpoint). Best-effort and idempotent server-side: a

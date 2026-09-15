@@ -16,6 +16,7 @@ import { extractBundle } from "../git/bundle.js";
 import type { SkillFile } from "../git/synth.js";
 import { getMaxBundleBytesSetting } from "./settings.js";
 import { M } from "../metrics.js";
+import { tryAward } from "../achievements.js";
 
 /** Extracted bundles are cached by ARTIFACT KEY — versions are immutable (invariant #2), so a
  *  cached entry can never go stale; the TTL is a memory bound, not a correctness one. */
@@ -153,6 +154,8 @@ export function recordMcpAdoption(pool: Pool, skillId: string, userId: string): 
     .then((r) => {
       M.mcpResourceReads.inc();
       if (r.rows[0]?.record_mcp_read) M.mcpAdoptions.inc();
+      // §31 Hello, Skill on a fresh adoption; every read is a Habits event.
+      return tryAward(pool, userId, r.rows[0]?.record_mcp_read ? "first_install" : null);
     })
     .catch((e) => {
       console.error(JSON.stringify({ level: "warn", msg: "record_mcp_read failed", err: String(e instanceof Error ? e.message : e) }));

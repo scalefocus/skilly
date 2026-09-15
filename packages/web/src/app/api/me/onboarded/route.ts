@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
 import { resolveUserAccess } from "../../../../lib/access";
 import { pool } from "../../../../lib/db";
+import { tryAward } from "../../../../lib/achievements";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +21,8 @@ export async function POST() {
     `update users set onboarded_at = coalesce(onboarded_at, now()) where id = $1 returning onboarded_at`,
     [access.userId],
   );
+  // §31 Read the Manual — dated at the (idempotent) onboarding stamp, never at a re-view.
+  const stamped = rows[0]?.onboarded_at ? new Date(rows[0].onboarded_at) : new Date();
+  await tryAward(pool, access.userId, "onboarded", { at: stamped });
   return Response.json({ ok: true, onboardedAt: rows[0]?.onboarded_at ?? null });
 }

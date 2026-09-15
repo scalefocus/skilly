@@ -15,6 +15,7 @@ const STATIC_ROUTES: { prefix: string; label: string; exact?: boolean }[] = [
   { prefix: "/installed", label: "Installed skills" },
   { prefix: "/notifications", label: "Notifications" },
   { prefix: "/profile", label: "Profile" },
+  { prefix: "/achievements", label: "Achievements" },
   { prefix: "/usage", label: "Usage" },
   { prefix: "/audit", label: "Audit log" },
   { prefix: "/system-log", label: "System log" },

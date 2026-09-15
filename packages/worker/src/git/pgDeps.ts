@@ -4,6 +4,7 @@ import { resolveAccess, hashToken, PUBLIC_SCOPE, type RoleMapping, type Effectiv
 import type { GitServerDeps } from "./server.js";
 import type { MarketplaceRef, SkillRef, TokenPrincipal } from "./authorize.js";
 import { M } from "../metrics.js";
+import { awardAchievement, tryAward } from "../achievements.js";
 
 export function pgGitDeps(pool: Pool): GitServerDeps {
   return {
@@ -204,6 +205,9 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
           }
         }
         await client.query(`update tokens set last_served_commit = $2 where id = $1 and type = 'marketplace'`, [tokenId, newCommit]);
+        // §31 Bulk Buyer on the first served fetch; the delivered skills are adoptions (Hello, Skill).
+        await awardAchievement(client, userId, "first_marketplace");
+        if (credited > 0) await awardAchievement(client, userId, "first_install", { noHabits: true });
         await client.query("commit");
         if (credited > 0) M.gitClones.inc();
         return credited;
@@ -243,6 +247,8 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
       // (countInstall) — bumps skills.install_count once. Never logs credentials.
       await pool.query(`select record_git_access($1, $2, $3, $4)`, [skillId, userId, isSystem, countInstall]);
       M.gitClones.inc();
+      // §31 Hello, Skill — a clone is an adoption (idempotent; a repeat clone is a Habits event).
+      if (userId && !isSystem) await tryAward(pool, userId, "first_install");
     },
   };
 }

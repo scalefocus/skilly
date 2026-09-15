@@ -13,6 +13,8 @@ test("resolveStaticPageLabel: prefix match for fixed pages", () => {
   assert.equal(resolveStaticPageLabel("/admin"), "Administration");
   assert.equal(resolveStaticPageLabel("/system-log"), "System log");
   assert.equal(resolveStaticPageLabel("/whats-new"), "What's new");
+  // The achievements hall (§31.5) beacons a generic label; the page overrides it with the person's name.
+  assert.equal(resolveStaticPageLabel("/achievements/123e4567-e89b-12d3-a456-426614174000"), "Achievements");
 });
 
 test("resolveStaticPageLabel: dynamic-title routes fall back to their generic default", () => {

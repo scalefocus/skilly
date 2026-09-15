@@ -1,6 +1,7 @@
 // Watch / follow a skill. Watchers are notified when a new version is published (the worker
 // publish sweep creates the notifications — see worker/git/publish.ts). SKILLY_SPEC.md §12.
 import { pool } from "./db";
+import { tryAward } from "./achievements";
 
 export async function isWatching(userId: string, skillId: string): Promise<boolean> {
   const { rowCount } = await pool.query(`select 1 from skill_watches where user_id = $1 and skill_id = $2`, [userId, skillId]);
@@ -19,6 +20,7 @@ export async function setWatch(userId: string, skillId: string, on: boolean): Pr
       `insert into skill_watches (user_id, skill_id) values ($1, $2) on conflict do nothing`,
       [userId, skillId],
     );
+    await tryAward(pool, userId, "first_watch"); // §31 Stalker, but Nicely
   } else {
     await pool.query(`delete from skill_watches where user_id = $1 and skill_id = $2`, [userId, skillId]);
   }

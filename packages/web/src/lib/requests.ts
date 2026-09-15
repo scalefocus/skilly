@@ -9,6 +9,7 @@ import { categoryListError, upsertCategory } from "./categories";
 import { normalizeCategoryNames } from "@skilly/shared";
 import { createTtlCache } from "./ttlCache";
 import { appendAudit } from "./audit";
+import { awardAchievement } from "./achievements";
 
 export type RequestState = "open" | "fulfilled" | "withdrawn" | "removed";
 
@@ -263,6 +264,7 @@ export async function createRequest(
       targetId: id,
       after: { title: input.title.trim(), toolHarness: input.toolHarness, categories: input.categories },
     });
+    await awardAchievement(client, requesterUserId, "first_request"); // §31 Wishful Thinker
     await client.query("commit");
     return { id };
   } catch (e) {
@@ -400,6 +402,12 @@ export async function fulfilOriginRequest(
     targetId: opts.originRequestId,
     after: { skillId: opts.skillId, fulfilledBy: opts.fulfilledByUserId, via: opts.via },
   });
+  // §31: Genie to the fulfiller, Wish Granted to the requester — two distinct people only. The
+  // requester did nothing themselves, so their award carries no Habits evaluation.
+  if (r.requester_user_id !== opts.fulfilledByUserId) {
+    await awardAchievement(client, opts.fulfilledByUserId, "first_fulfilment");
+    await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true });
+  }
   if (r.requester_user_id !== opts.fulfilledByUserId) {
     const { rows: sk } = await client.query<{ slug: string; ns: string; by_name: string }>(
       `select s.slug, n.slug as ns, (select display_name from users where id = $2) as by_name
@@ -467,6 +475,10 @@ export async function fulfilWithExistingSkill(
       targetId: requestId,
       after: { skillId: sk.id, fulfilledBy: actorUserId, via: "existing_skill", namespaceSlug, skillSlug },
     });
+    if (r.requester_user_id !== actorUserId) {
+      await awardAchievement(client, actorUserId, "first_fulfilment"); // §31 Genie
+      await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true }); // §31 Wish Granted
+    }
     if (r.requester_user_id !== actorUserId) {
       const { rows: byRows } = await client.query<{ display_name: string }>(
         `select display_name from users where id = $1`,
