@@ -4,6 +4,10 @@ import {
   ACHIEVEMENTS,
   ACHIEVEMENT_GROUPS,
   ACHIEVEMENT_KEYS,
+  ACHIEVEMENT_TOTAL,
+  levelAriaLabel,
+  levelFraction,
+  levelLabel,
   achievementDef,
   isAchievementKey,
   tripleThreatDue,
@@ -95,4 +99,40 @@ test("habitKeysFor: both, one, or none", () => {
   // Wednesday noon.
   assert.deepEqual(habitKeysFor(new Date("2026-09-16T09:00:00Z"), "Europe/Sofia"), []);
   assert.deepEqual(habitKeysFor(new Date("2026-09-12T00:00:00Z"), null), []);
+});
+
+// --------------------------------------------------------------------------------------------
+// Level (§31.10)
+// --------------------------------------------------------------------------------------------
+
+test("ACHIEVEMENT_TOTAL is the catalog size — the level's denominator", () => {
+  assert.equal(ACHIEVEMENT_TOTAL, ACHIEVEMENTS.length);
+  assert.equal(ACHIEVEMENT_TOTAL, 20);
+});
+
+test("levelLabel / levelAriaLabel: the level is the count, Hero is the stamp", () => {
+  assert.equal(levelLabel(0, false), "Level 0 — 0 of 20");
+  assert.equal(levelLabel(7, false), "Level 7 — 7 of 20");
+  assert.equal(levelLabel(20, true), "Hero — 20 of 20");
+  assert.equal(levelAriaLabel(7, false), "Level 7 of 20");
+  assert.equal(levelAriaLabel(20, true), "Hero — 20 of 20");
+});
+
+test("a grown catalog never demotes a Hero (§31.10 'never demote')", () => {
+  // The catalog gained five badges since this person completed it. They hold 20 of 25 — and the
+  // stored stamp, not the arithmetic, is what says Hero. The ring stays full, the label stays Hero.
+  assert.equal(levelLabel(20, true, 25), "Hero — 20 of 25");
+  assert.equal(levelFraction(20, true, 25), 1);
+  // Without the stamp the same tally is just a high level, correctly short of the new total.
+  assert.equal(levelLabel(20, false, 25), "Level 20 — 20 of 25");
+  assert.equal(levelFraction(20, false, 25), 0.8);
+});
+
+test("levelFraction: clamped, and safe on a degenerate total", () => {
+  assert.equal(levelFraction(0, false), 0);
+  assert.equal(levelFraction(10, false, 20), 0.5);
+  assert.equal(levelFraction(20, false, 20), 1);
+  assert.equal(levelFraction(99, false, 20), 1); // clamped, never > 1
+  assert.equal(levelFraction(-3, false, 20), 0); // clamped, never < 0
+  assert.equal(levelFraction(5, false, 0), 0); // no divide-by-zero
 });

@@ -8,6 +8,7 @@ import { useApi, EmptyState, ScrollToTop, ShareButton } from "../../../component
 import { RequireAuth } from "../../../components/RequireAuth";
 import { UserBubble } from "../../../components/UserBubble";
 import { AchievementGrid, type AchievementsView } from "../../../components/AchievementGrid";
+import { LevelBar } from "../../../components/LevelBar";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
 
 interface CardData { jobTitle: string | null; officeLocation: string | null; department: string | null }
@@ -55,11 +56,20 @@ function HallInner() {
 
       <section className="card card-pad reveal" style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
         <UserBubble name={data.displayName} avatar={data.avatar} userId={data.userId} size={52} />
-        <div style={{ minWidth: 0, flex: 1 }}>
+        {/* A flex BASIS, not `flex: 1`: at phone widths a shrink-to-zero column squeezes the name,
+            the directory line and the level bar into a stub instead of wrapping the actions below. */}
+        <div style={{ minWidth: 0, flex: "1 1 200px" }}>
           <div style={{ fontSize: 18, fontWeight: 600 }}>{data.displayName}</div>
           {dirLines.length > 0 && (
             <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
               {dirLines.map(([, v]) => v).join(" · ")}
+            </div>
+          )}
+          {/* §31.10 — the level, big, in the header. Suppressed for a hidden person seen by anyone
+              else: the bar would restate the very count the opt-out withholds (§31.5). */}
+          {!data.hidden && (
+            <div style={{ marginTop: 10, maxWidth: 380 }}>
+              <LevelBar level={data.earned.length} total={data.total} heroAt={data.heroAt} large />
             </div>
           )}
         </div>
@@ -73,10 +83,8 @@ function HallInner() {
         <p className="muted" data-testid="hall-private" style={{ fontSize: 14 }}>{data.displayName} keeps their trophies private.</p>
       ) : (
         <section className="card card-pad reveal">
+          {/* No footer total: the header's level bar already carries the N of M count (§31.5). */}
           <AchievementGrid earned={data.earned} showLocked={isSelf} spotlight={spotlight} recentFirst={!isSelf} />
-          <p className="muted mono" style={{ fontSize: 11.5, marginTop: 16 }} data-testid="hall-count">
-            {data.earned.length} of {data.total}
-          </p>
         </section>
       )}
     </div>

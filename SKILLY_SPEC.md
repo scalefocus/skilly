@@ -108,7 +108,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -354,7 +354,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Delete user info (GDPR erasure)
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), between **Platform admins** and **Currently online**. Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
-- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false` and `time_zone = null`), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
+- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
@@ -1577,6 +1577,9 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 25. **MCP server + skilly as an OAuth 2.1 AS (§29):** a first-party Model Context Protocol server on the worker (Streamable HTTP, not leader-gated) exposing **24 curated tools** (core read / install / propose / social) and **resource templates only**; skilly becomes its own **authorization server** (open DCR, authorization-code + mandatory PKCE, resource indicators, rotating refresh tokens with reuse detection, opaque sha256-hashed tokens in the `Authorization` header) delegating login to the existing Entra session via `/oauth/authorize` in web; a `/mcp` user page (connect snippets + revocable Connections) and an Administration card with an **on/off toggle, default on, dormant-not-revoking**; “via MCP” attribution surfaced wherever a human reads agent-created content; first-`SKILL.md`-read counted as adoption through the shared `skill_installs` ledger; migrations 0063 (`oauth_clients` / `oauth_grants` / `oauth_tokens`, the `via_mcp_client` attribution columns, `record_mcp_read()`) + 0064 (the `mcp` audit source). **Prerequisite refactor (done):** the **visibility predicate**, **role resolution** and the **`git ls-remote` ref discovery** now live in `@skilly/shared` so invariants #1/#3 and the SSRF guards have one implementation across web and worker. **DONE.**
 26. **Achievements (§31):** 20 one-time, non-competitive badges (`@skilly/shared/achievements` catalog) awarded inline in the write path (`awardAchievement()`, `user_achievements`, migration 0071 with a history backfill), browser-reported `users.time_zone` behind the Night Shift / Weekend Warrior badges (deferred per-user backfill on first capture), an in-app-only `achievement.earned` notification + toast, the profile-page Achievements card (locked badges with how-to-earn hints, progress, Share), the shareable hall at `/achievements/[userId]` (earned-only for others, `?badge=` spotlight, `achievements_hidden` opt-out), a hover-card count, erasure sweep, and the `achievements_enabled` platform toggle (dormant-not-destructive). *(Spec'd 2026-09-15; not yet built.)*
 
+**Phase 8 — Achievement levels**
+27. **User level + Hero (§31.10):** the badge count (0–20, derived, never stored) worn as a progress ring around every `UserBubble` — omitted at level 0, crowned at Hero, outline-only so it never contends with the §21 badge slot below; a level bar replacing the profile card's *"N of M earned"* line and heading the hall with *"Hero since &lt;date&gt;"*; the §28 hover card's count line restated as a level (`achievementHero` joins `achievementCount`); a permanent `users.hero_at` high-water stamp (migration 0072, backfilled from `max(earned_at)`, cleared on erasure) so a growing catalog can never un-Hero anyone; a bulk `GET /api/levels` map cached like `/api/leaders` (hidden / inactive / erased users absent, the caller's own entry always present, empty while the toggle is off); and the level line folded into the existing `achievement.earned` notification and toast — no new notification type, no level column on the leaderboard. *(Spec'd 2026-09-15; not yet built.)*
+
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
 - **SAML** — identity is anchored on Entra **OIDC** (+ SCIM). A second federation protocol is a large auth surface with no current requirement.
@@ -1744,7 +1747,9 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   crown. **Every badge a user currently holds renders** (no cap, wrapping if needed) — most users
   have zero; a dominant contributor may show several.
 - **Placement:** directly **below** the avatar bubble, never beside it — the bubble+badges stack is
-  one visual unit. The icons stay exactly where they are; the **directory hover card (§28)
+  one visual unit. The §31.10 **level ring** takes the avatar's *outline*, not this slot,
+  so the two systems never compete for space: ring around, badges below, both on the same
+  bubble. The icons stay exactly where they are; the **directory hover card (§28)
   additionally lists every badge the person holds, spelled out** (icon + `"Installs leader — all
   time"`, `"Request leader — last 30 days"`), so the at-a-glance signal and the explanation now live
   in two complementary places.
@@ -3228,10 +3233,15 @@ Top to bottom, in a fixed max-width (~260px) card:
 3. **Email** — a real `mailto:` link (omitted for an erased tombstone, whose `email` is `''`).
 4. **Directory block** — **job title**, **department**, **office**, each line omitted when that
    field is null/empty.
-5. **Achievements count** — *"🏆 N achievements"*, linking to the person's hall
-   (`/achievements/[userId]`, §31.5). Omitted when N = 0, when the person has opted out
-   (`achievements_hidden`), or when `achievements_enabled` is off — all three arrive as
-   `achievementCount: null` on the card payload.
+5. **Level** — *"🏆 Level 7 — 7 of 20"*, or *"🏆 Hero — 20 of 20"* once `hero_at` is
+   stamped (§31.10), linking to the person's hall (`/achievements/[userId]`, §31.5). This
+   **replaces** the former *"N achievements"* count line: the count and the level are the same
+   number, and stating it twice in a ~260px card earns nothing. Omitted when the level is 0,
+   when the person has opted out (`achievements_hidden`), or when `achievements_enabled` is
+   off — all three arrive as `achievementCount: null` on the card payload, alongside an
+   `achievementHero` boolean (the count alone cannot say "Hero" once the catalog has grown
+   past a Hero's tally). The client derives the label against the catalog size it already
+   imports.
 6. **Leader badges** — every badge the person currently holds, spelled out with its icon and full
    label (§21). Absent for the overwhelming majority of users, who hold none.
 
@@ -3245,7 +3255,8 @@ Top to bottom, in a fixed max-width (~260px) card:
 
 ### Data & delivery
 - `GET /api/users/:id/card` → `{ userId, displayName, email, jobTitle, officeLocation, department,
-  lastSeen, online, achievementCount }` (§31.5 — `number | null`). **Any signed-in user** may call it for **any** user id (there is no per-user
+  lastSeen, online, achievementCount, achievementHero }` (§31.5 — `number | null` and
+  `boolean`). **Any signed-in user** may call it for **any** user id (there is no per-user
   visibility model — invariant #7 governs *skills*); **401** unauthenticated, **404** for an unknown
   id. `online` is computed server-side against the fixed 5-minute window so the client never has to
   know the rule.
@@ -4596,6 +4607,8 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
   pattern as `leaderboard_hidden` / `directory_hidden`.
 - **`users.time_zone`** (TEXT NULL) — the browser-reported IANA zone behind the two Habits
   badges (§31.3).
+- **`users.hero_at`** (TIMESTAMPTZ NULL, migration 0072) — the permanent **Hero** high-water
+  stamp behind the level (§31.10). Set once, never cleared.
 - **`platform_settings.achievements_enabled`** (default `true`) — the §31.7 platform toggle.
 - **Awarding is inline in the write path, never a sweep.** A single helper,
   `awardAchievement(db, userId, key, opts)` in `lib/achievements.ts` (web) — `INSERT … ON CONFLICT DO
@@ -4609,7 +4622,10 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
   is simply picked up by the next qualifying event. A repeat action at any hook is still a Habits
   event. When the insert
   actually lands (a genuinely new badge), the helper (a) re-evaluates the combo badge
-  (`triple_threat`) and the two Habits badges for the same event, and (b) creates the
+  (`triple_threat`) and the two Habits badges for the same event, (b) stamps `users.hero_at = now()`
+  when the award leaves the user holding **every** key in the catalog and the stamp is still null
+  (§31.10 — this one *does* run on backfilled awards, so a long-standing full-house user gets a
+  real Hero date rather than none), and (c) creates the
   `achievement.earned` notification (§31.4) — unless the platform toggle is off (§31.7) or the
   call is a backfill (§31.6). Concurrency is handled by the PK: two racing hooks produce one row
   and one notification. **The worker mirrors the helper** (the same single statement, kept in sync
@@ -4666,25 +4682,35 @@ The server never guesses a timezone. The browser reports it:
 ### 31.4 Notification & toast
 
 - **`achievement.earned`** — a new in-app notification type. Subject: *"You earned a badge:
-  &lt;name&gt;"*; body: the badge's blurb plus its `howToEarn` line phrased in the past tense;
+  &lt;name&gt;"*; body: the badge's blurb, its `howToEarn` line phrased in the past tense, and the
+  **level line** the award moved the user to — *"You're now Level 8"*, or *"You're now a skilly Hero"*
+  when the award completed the catalog (§31.10);
   **CTA → `/profile#achievements`** (the user's own Achievements card, §31.5), so the notification
   itself is the way into the hall. One row per badge, never coalesced (a user earns each at most
   once). **In-app only** — it never rides the email or webhook channels, regardless of
   `email_notifications`; there is no per-type opt-out (one-time, ≤ 20 rows per lifetime).
 - **Toast.** The existing notification poll surfaces any **unread** `achievement.earned` row it has
   not toasted yet in this browser session (tracked by notification id in `sessionStorage`) as a
-  small celebratory toast — glyph, *"Badge earned — Hello, Skill"*, a link to
-  `/profile#achievements` — shown once, **top-right under the header** (it never overlaps the
+  small celebratory toast — glyph, *"Badge earned — Hello, Skill"*, the same level
+  line (*"Level 8"* / *"Hero"*), and a link to `/profile#achievements` — shown once,
+  **top-right under the header** (it never overlaps the
   bottom-right What's new notice), auto-dismissing after ~7 s; one badge per poll tick. The bell
   row remains the durable copy.
-- **Backfilled badges (§31.6) create no notification and no toast.**
+- **No separate level notification.** A level only ever changes as the direct consequence of earning
+  a badge, so it rides that badge's row and toast: one event, one notification, one toast. There is
+  no `level.reached` type, and reaching **Hero** is likewise announced by the badge that completed
+  the catalog.
+- **Backfilled badges (§31.6) create no notification and no toast** — including the `hero_at`
+  stamp they may set.
 
 ### 31.5 Surfaces
 
 **Profile page (`/profile`) — the "Achievements" card** (anchor `#achievements`), placed above
 the preference cards:
-- Header: a **progress line** *"N of M earned"*, a **Share** button, and a **"View as others see
-  it"** link to the user's own hall URL.
+- Header: the **level bar** (§31.10) in place of the former *"N of M earned"* text line — it
+  states the same fact better — a **Share** button, and a **"View as others see it"** link to the
+  user's own hall URL. The bar renders **at level 0 too**, with the locked badges and their hints
+  directly beneath it: that pairing is the exploration nudge §31 exists for.
 - The grid renders **the full catalog in catalog order, grouped** (Consume / Ask / Contribute /
   Talk / Explore / Habits). **Earned** badges show the glyph in a coloured circle (the leader-badge
   visual language, §21), the name, and *"Earned &lt;date&gt;"* via `useDateFmt()`. **Locked**
@@ -4702,12 +4728,14 @@ sign-in redirect** like every page):
 - **Stable per-user URL by user id**, not a share token: any signed-in user can already open
   anyone's hover card (§28), so a guessable URL leaks nothing new, and a stable link keeps
   working when re-shared.
-- **Header:** the person's `UserBubble` (with their leader badges, §21, and the hover card), display
-  name, and the directory block **exactly as the hover card would show it** (honouring
-  `directory_hidden`, §28). **No leaderboard numbers** — those have their own page.
-- **Body:** **earned badges only**, most recent first, each with name, blurb and earned date; a
-  footer line *"N of M"* (M = catalog size). **Locked badges are not shown to others** — the hints
-  are for the owner.
+- **Header:** the person's `UserBubble` (with their level ring and leader badges, §31.10/§21, and
+  the hover card), display name, the **level bar** at hall size with *"Hero since &lt;date&gt;"*
+  underneath it when `hero_at` is set (§31.10), and the directory block **exactly as the hover card
+  would show it** (honouring `directory_hidden`, §28). **No leaderboard numbers** — those have their
+  own page.
+- **Body:** **earned badges only**, most recent first, each with name, blurb and earned date. The
+  header's level bar already carries the *N of M* count, so the body repeats no total. **Locked
+  badges are not shown to others** — the hints are for the owner.
 - **Own hall:** visiting your own id renders the same page **plus** the locked badges with hints
   (identical content to the profile card) and the Share button — so "View as others see it"
   is honest about layout while still useful.
@@ -4716,16 +4744,19 @@ sign-in redirect** like every page):
 - **`?badge=<key>` spotlight:** when present and the badge is earned, that tile is scrolled into
   view and briefly highlighted (the leaderboard's "flash" treatment); an unknown or unearned key is
   ignored silently.
-- **Hidden (`achievements_hidden`) and not the viewer:** the header renders normally and the body
-  is a single muted line — *"&lt;name&gt; keeps their trophies private."* — no count, no badges.
+- **Hidden (`achievements_hidden`) and not the viewer:** the header renders **without the level bar,
+  the "Hero since" line, or a ring on the bubble** (the level *is* the count, so leaving it would
+  defeat the opt-out — §31.10's `/api/levels` simply omits the person), and the body is a single
+  muted line — *"&lt;name&gt; keeps their trophies private."* — no count, no badges.
 - **404:** unknown id, an erased tombstone, or a **`status='inactive'`** user (consistent with the
   leaderboard hiding deprovisioned users, §21). Re-enabling restores the page.
 
 **Directory hover card (§28):** a new line between the directory block and the leader badges —
-*"🏆 N achievements"* — linking to the person's hall. **Omitted** when N = 0, when the person has
-`achievements_hidden`, or when the platform toggle is off. Served as `achievementCount`
-(`number | null`) on the existing `GET /api/users/:id/card` payload (one indexed count; `null`
-means "don't show").
+*"🏆 Level 7 — 7 of 20"*, or *"🏆 Hero — 20 of 20"* at full house — linking to the
+person's hall. **Omitted** when the level is 0, when the person has `achievements_hidden`, or when the
+platform toggle is off. Served as `achievementCount` (`number | null`, the level itself) plus
+`achievementHero` (`boolean`) on the existing `GET /api/users/:id/card` payload (one indexed count
+and one column; `null` means "don't show").
 
 **Quick start (§23):** the unnumbered **"Collect the badges as you go"** card — the feature's
 **discovery entry point for new users**. The account menu carries no achievements item, so the only
@@ -4736,8 +4767,95 @@ earns `onboarded`, discloses that the hall is visible to any signed-in colleague
 and is the one Quick start card that **hides itself when `achievements_enabled` is off**. Copy rules
 in §23.
 
-**Not rendered:** under avatar bubbles (that slot stays for the competitive leader badges, §21),
-on leaderboard rows, on catalog cards, or anywhere else.
+**Not rendered:** **individual badges** never appear under avatar bubbles (that slot stays for the
+competitive leader badges, §21), on leaderboard rows, on catalog cards, or anywhere else. The only
+achievement signal outside the profile card, the hall and the hover card is the **level ring**
+around the bubble itself (§31.10) — one number, never which badges earned it.
+
+### 31.10 Level (the badge count, worn on the bubble)
+
+A **level** is nothing more than *how many of the catalog's badges a user has earned* — one number
+from 0 to the catalog size (20 today). It introduces no new event, no new award rule and no new
+disclosure: everything it shows, the §31.5 achievements count already showed. What it adds is
+**reach** — the number travels with the avatar, so progress is legible at a glance instead of only
+on a page someone has to go and open.
+
+- **Derived, never stored.** `level = count(*)` over the user's `user_achievements` rows. There is no
+  level column, so it can never drift from the badges behind it and it needs no backfill. Because
+  badges are never lost (§31), a level never falls.
+- **The denominator is the live catalog size** (`ACHIEVEMENTS.length`), so the bar stays honest as
+  the catalog grows. The level itself is an **absolute count, not a percentage** — adding a 21st badge
+  moves nobody's level, it only lengthens the road.
+- **Hero = the full house, and it is permanent.** `users.hero_at` (TIMESTAMPTZ NULL, migration 0072)
+  is stamped `now()` the first time a user holds **every** key in the catalog, by `awardAchievement()`
+  itself (§31.2) — so the stamp can never exist without the badges, nor they without it. It is
+  **never cleared** by a later catalog addition: a Hero whose bar afterwards reads 20/25 is still a
+  Hero, still crowned. That permanence is the entire reason the stamp exists instead of a
+  `count === ACHIEVEMENTS.length` comparison at render time.
+  - **Backfill (migration 0072):** stamps `hero_at = max(earned_at)` for every user with `erased_at IS
+    NULL` whose existing rows already cover the whole catalog, so a long-standing full-house user
+    gets a real date rather than the migration's own timestamp. Idempotent (`WHERE hero_at IS NULL`).
+  - Earning a badge added *after* the stamp does **not** re-stamp it, so the date always means *"first
+    reached a full house"*.
+- **Purely cosmetic.** Nothing in RBAC, visibility, governance, review, metrics or the leaderboard
+  reads the level. No surface sorts, filters or ranks by it, and there is no admin view of it beyond
+  the §31.7 toggle — the same stance §31 takes on the badges themselves.
+
+**The ring.** `UserBubble` gains a level ring drawn **around** the avatar: an SVG arc on the bubble's
+outline, filled clockwise from twelve o'clock in proportion to `level / catalogSize`, track in
+`--accent-soft`, fill in `--accent` — the platform accent in both themes, no new palette.
+
+- **Sized with the bubble**, like the leader badges: the stroke scales with `size` but is **floored** so
+  it stays legible on the smallest bubbles in use (20px), and the avatar is inset by the stroke so
+  the ring never crops the photo or the initials circle.
+- **Hero variant:** a complete ring carrying the **crown** of §21's all-time leader badges — reusing the
+  vocabulary already established on these exact bubbles, so "topped out" reads the same way in both
+  systems.
+- **Omitted entirely at level 0.** A user with no badges renders the bubble exactly as it renders
+  today — which is what keeps the app's densest surfaces (chat, request lists, admin tables, the
+  user typeahead) from sprouting empty rings around people who have never touched achievements.
+- **It never collides with the leader badges.** The ring is the outline; the badges are the row below
+  (§21). Both render on the same bubble, and a user may hold either, both or neither.
+- **`aria-label="Level 7 of 20"`** (`"Hero — 20 of 20"` at full house) and **no native `title`** —
+  §21's own rule: a browser tooltip on a bubble races the hover card that opens on the same
+  element.
+- **`prefers-reduced-motion`:** the ring never animates; it renders at its value.
+
+**The bar.** The same number as a horizontal progress bar in the platform accent on an `--accent-soft`
+track, with `role="progressbar"`, `aria-valuenow` / `aria-valuemin` / `aria-valuemax` and the ring's label.
+
+- **Profile (`/profile#achievements`):** replaces the card's former *"N of M earned"* line, labelled
+  *"Level 7 — 7 of 20"* (*"Hero — 20 of 20"* at full house). Shown at level 0 as well (§31.5).
+- **Hall (`/achievements/[userId]`):** the same bar at a larger size in the header beside the bubble,
+  with *"Hero since &lt;date&gt;"* underneath it (via `useDateFmt()`, viewer's timezone) when `hero_at`
+  is set.
+- The bar **animates its fill on mount** (~400ms ease-out), except under `prefers-reduced-motion`.
+
+**Delivery — `GET /api/levels`.** One bulk map, deliberately modelled on `/api/leaders` (§21) so a
+page full of bubbles issues a single request:
+
+- Returns `{ levels: { [userId]: number }, heroes: string[] }` — every **active**, non-erased user at
+  **level ≥ 1**, plus the ids whose `hero_at` is set. Level-0 users are absent because they render no
+  ring, which also keeps the map small.
+- **Users with `achievements_hidden` are absent from the map.** That omission, not a client-side
+  check, is what stops the ring leaking an opted-out count. **The caller's own entry is always
+  present**, hidden or not — §31.5's *"while hidden, the owner still sees their full card"*. The ~60s
+  server-side cache therefore holds the **public** map and the caller's own row is merged in per
+  request.
+- **`{ levels: {}, heroes: [] }` while `achievements_enabled` is off**, so the ring vanishes platform-wide
+  with every other achievement surface (§31.7).
+- One grouped `count(*)` over `user_achievements` joined to `users`, cached ~60s server-side and
+  deduped client-side through the shared `cachedGet` — the same two-layer pattern as `/api/leaders`.
+  At the §17 scale target (~low-thousands users) the map is a few tens of KB gzipped; if that ever
+  stops being true the documented upgrade is the leaderboard's own: raise the floor above level 1.
+- `UserBubble` looks its `userId` up in this map exactly as it already does for badges. A bubble
+  rendered **without** a `userId` shows no ring and issues no request, unchanged.
+
+**Where the level does not appear.** Leaderboard rows carry the ring only because they render
+`UserBubble` — there is **no level column, no level sort and no level tiebreak** on the board.
+Achievements are personal milestones and the board is competitive (§31's opening); a level column
+there would invite precisely the ranking §31 refuses. Catalog cards, search results, skill pages and
+the usage dashboard show no level at all.
 
 ### 31.6 Backfill (migration 0071)
 
@@ -4773,17 +4891,19 @@ migration 0041's credit backfill.
 ### 31.7 Lifecycle, privacy, governance
 
 - **GDPR erasure (§4, both the admin and SCIM paths):** `user_achievements` rows are **deleted**
-  (personal data, like watches and ratings); `achievements_hidden` is reset to `false` and
-  `time_zone` to `null`. A re-provisioned account starts empty. The hall 404s (tombstone).
-- **Deprovision (`status='inactive'`):** rows are kept; the hall 404s while inactive; re-enabling
-  restores everything.
+  (personal data, like watches and ratings); `achievements_hidden` is reset to `false`, `time_zone`
+  to `null`, and **`hero_at` to `null`** (§31.10 — a Hero stamp with no badges behind it would be a
+  lie the ring would keep telling). A re-provisioned account starts empty. The hall 404s (tombstone).
+- **Deprovision (`status='inactive'`):** rows and `hero_at` are kept; the hall 404s while inactive
+  and `/api/levels` omits the person (so no ring renders anywhere); re-enabling restores everything.
 - **Subject deletion:** a badge outlives the skill, proposal, request, message or watch that
   earned it (no subject reference is stored, so nothing cascades).
 - **Platform toggle — `achievements_enabled`** (Administration page, a card with the shared
   `Switch`, default **on**; `settings.updated` audit like every setting). **Off** hides the
   profile card and the preference block, makes `/achievements/[userId]` render the same
   *"disabled by your administrator"* notice pattern as `/mcp` (§29), drops the hover-card line
-  (`achievementCount: null`), and **stops creating notifications and toasts**. **Awards keep
+  (`achievementCount: null`), **drops the level ring everywhere** (`GET /api/levels` returns `{}`,
+  §31.10), and **stops creating notifications and toasts**. **Awards and the `hero_at` stamp keep
   recording while off** (dormant-not-destructive, the §29 toggle's stance) so switching back on
   loses no history — a user then finds every badge earned in the meantime, silently.
 - **Invariant #3.** No row references a skill, so no surface can enumerate or imply a restricted
@@ -4798,14 +4918,20 @@ migration 0041's credit backfill.
 ### 31.8 API surface
 
 - `GET /api/users/:id/achievements` → `{ userId, displayName, avatar, hidden, earned: [{ key,
-  earnedAt }], total }` — any signed-in user; `total` = catalog size; for a hidden non-self target
+  earnedAt }], total, heroAt }` — any signed-in user; `total` = catalog size; for a hidden
+  non-self target
   `hidden: true, earned: []`; **404** for unknown / erased / inactive; **404-shaped disabled
   notice** (`{ disabled: true }` with 200, mirroring `/api/mcp`'s pattern) when the toggle is off.
   The catalog itself (names, blurbs, hints, glyphs, groups) is **not** served — the client imports
   it from `@skilly/shared/achievements`.
+- `GET /api/levels` → `{ levels: { [userId]: number }, heroes: string[] }` — the bulk level map
+  behind the bubble ring (§31.10), modelled on `/api/leaders`: any signed-in user, one grouped
+  count, ~60s server cache, deduped client-side. Active, non-erased, non-hidden users at level ≥ 1
+  only, **plus the caller's own entry even when hidden**; `{ levels: {}, heroes: [] }` while the
+  platform toggle is off.
 - `GET|PATCH /api/me` gains `achievementsHidden` and `timeZone` (§31.3's write path); `GET` additionally
   returns `achievementsEnabled` so the profile can hide its card while the toggle is off.
-- `GET /api/users/:id/card` gains `achievementCount` (§31.5).
+- `GET /api/users/:id/card` gains `achievementCount` (the level) and `achievementHero` (§31.5).
 - `GET /api/admin/settings` / the settings `PATCH` gain `achievementsEnabled`.
 
 ### 31.9 Testing
@@ -4816,6 +4942,16 @@ Unit: the catalog module (unique keys, every key has all fields), the Habits eva
 (idempotency), the no-self-credit exceptions for the two fulfilment keys, the erasure sweep, the
 hidden / inactive / erased / disabled responses of the achievements endpoint, the first-zone
 deferred backfill (awards, no notification), and the migration backfill against a seeded history.
-E2e: earn `first_watch` from the skill page → toast → bell row → profile card shows it earned with
-the rest locked → Share copies the hall URL → a second user opens the hall and sees only the
-earned badge → owner hides achievements → the second user sees the private line.
+E2e: earn `first_watch` from the skill page → toast (with its level line) → bell row → profile
+card shows it earned with the rest locked and the level bar advanced → Share copies the hall URL
+→ a second user opens the hall and sees only the earned badge → owner hides achievements → the
+second user sees the private line and no ring on that person's bubble.
+
+**Levels (§31.10).** Unit: level = badge count; the ring's omitted-at-0 rule and its floored stroke
+across the bubble sizes in use (20–52px); the Hero predicate (`hero_at` set, never a live
+`count === catalog.length` comparison, so a grown catalog cannot un-Hero anyone). Integration:
+`awardAchievement()` stamps `hero_at` exactly once at full house and never re-stamps or clears it,
+including on a backfilled award; migration 0072 backfills `hero_at = max(earned_at)` for an existing
+full-house user and leaves everyone else null; `GET /api/levels` omits hidden, inactive and erased
+users, includes the caller's own hidden entry, omits level-0 users, and returns an empty map while
+the toggle is off; the card payload's `achievementHero`; the erasure sweep clears `hero_at`.

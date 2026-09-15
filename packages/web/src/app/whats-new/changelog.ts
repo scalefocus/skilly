@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.4.0",
+    date: "2026-09-15",
+    summary:
+      "Achievement levels: your badge count is now a level (0–20) shown as a progress ring around your avatar everywhere in skilly, a progress bar on your profile and at the top of your hall, and a line on your hover card. Collect every badge and you become a Hero — a crowned ring and a \"Hero since\" date that you keep for good, even when new badges are added later. Nothing to turn on: the ring appears once you have your first badge, and hiding your achievements hides your level with them.",
+  },
+  {
     version: "2.3.0",
     date: "2026-09-15",
     summary:

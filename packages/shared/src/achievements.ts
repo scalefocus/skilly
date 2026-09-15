@@ -60,6 +60,32 @@ export function isAchievementKey(key: unknown): key is string {
   return typeof key === "string" && BY_KEY.has(key);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Level (§31.10) — the badge count, worn on the bubble. Pure: the number is always derived from
+// `user_achievements`; "Hero" is always the stored `users.hero_at` stamp, NEVER a live
+// `level === ACHIEVEMENT_TOTAL` comparison — a grown catalog must not un-Hero anyone.
+// ---------------------------------------------------------------------------------------------
+
+/** The catalog size — the level's denominator. */
+export const ACHIEVEMENT_TOTAL = ACHIEVEMENTS.length;
+
+/** The visible label: `"Level 7 — 7 of 20"`, or `"Hero — 20 of 20"` once `hero_at` is stamped. */
+export function levelLabel(level: number, hero: boolean, total: number = ACHIEVEMENT_TOTAL): string {
+  return `${hero ? "Hero" : `Level ${level}`} — ${level} of ${total}`;
+}
+
+/** The screen-reader label for the ring and the bar (§31.10). */
+export function levelAriaLabel(level: number, hero: boolean, total: number = ACHIEVEMENT_TOTAL): string {
+  return hero ? `Hero — ${level} of ${total}` : `Level ${level} of ${total}`;
+}
+
+/** How full the ring/bar is, clamped to 0..1 — a Hero past a catalog addition still reads full. */
+export function levelFraction(level: number, hero: boolean, total: number = ACHIEVEMENT_TOTAL): number {
+  if (hero) return 1;
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(1, level / total));
+}
+
 /** The three consumption-channel badges whose union earns `triple_threat` (§31.1). */
 export const TRIPLE_THREAT_PARTS = ["first_install", "first_marketplace", "first_mcp"] as const;
 

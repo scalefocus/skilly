@@ -6,6 +6,7 @@ import type { Pool, PoolClient } from "pg";
 import { pool } from "./db";
 import {
   ACHIEVEMENTS,
+  ACHIEVEMENT_TOTAL,
   TRIPLE_THREAT_PARTS,
   achievementDef,
   habitKeysFor,
@@ -28,8 +29,10 @@ export interface AwardOptions {
  * Award `key` (or nothing but the Habits badges when `key` is null — every hook point is a Habits
  * event, §31.2) to `userId`, inside the caller's transaction. Idempotent on the PK: a badge already
  * held is a no-op. Returns the keys that were NEWLY earned by this call. On a genuinely new badge it
- * also re-evaluates `triple_threat` and, unless this is a backfill or the platform toggle is off,
- * writes one `achievement.earned` notification per new key.
+ * also re-evaluates `triple_threat`, stamps `users.hero_at` when the award completes the catalog
+ * (§31.10 — this runs on backfills too, so a long-standing full-house user gets a real Hero date)
+ * and, unless this is a backfill or the platform toggle is off, writes one `achievement.earned`
+ * notification per new key, carrying the level the award moved the user to (§31.4).
  *
  * Never does I/O beyond its own inserts, so the realistic failure mode is a DB error the caller
  * would have hit anyway; a thrown error rolls the caller's transaction back with it.
@@ -48,12 +51,18 @@ export async function awardAchievement(db: Db, userId: string, key: string | nul
     const held = await heldKeys(db, userId);
     if (tripleThreatDue(held) && !held.includes("triple_threat")) earned.push(...(await insertKeys(db, userId, ["triple_threat"], at)));
   }
-  if (earned.length > 0 && !opts.backfill && (await achievementsEnabledFor(db))) {
+  if (earned.length === 0) return earned;
+  // §31.10: the level is just the count, and Hero is stamped the first time it covers the catalog.
+  // Outside the notification guard on purpose — a backfilled award must still stamp Hero, it just
+  // must not announce it.
+  const level = (await heldKeys(db, userId)).length;
+  const hero = await stampHero(db, userId, level >= ACHIEVEMENT_TOTAL, at);
+  if (!opts.backfill && (await achievementsEnabledFor(db))) {
     for (const k of earned) {
       const def = achievementDef(k)!;
       await db.query(
         `insert into notifications (user_id, type, payload) values ($1, 'achievement.earned', $2::jsonb)`,
-        [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb })],
+        [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
       );
     }
   }
@@ -104,6 +113,22 @@ async function heldKeys(db: Db, userId: string): Promise<string[]> {
   return rows.map((r) => r.key);
 }
 
+/**
+ * Stamp `users.hero_at` when `complete` and it is still null, and report whether the user is a Hero
+ * afterwards (§31.10). One statement, so the stamp lands in the caller's transaction with the badge
+ * that earned it. `coalesce` makes it write-once: a later catalog addition never re-stamps, and
+ * nothing here can ever clear it — that permanence is the whole point of the column.
+ */
+async function stampHero(db: Db, userId: string, complete: boolean, at: Date): Promise<boolean> {
+  const { rows } = await db.query<{ hero_at: Date | null }>(
+    `update users set hero_at = case when $2::boolean then coalesce(hero_at, $3) else hero_at end
+      where id = $1
+      returning hero_at`,
+    [userId, complete, at],
+  );
+  return rows[0]?.hero_at != null;
+}
+
 // The toggle is read per award (one tiny indexed query); the admin surfaces read the same row.
 async function achievementsEnabledFor(db: Db): Promise<boolean> {
   const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = 'achievements_enabled'`);
@@ -124,6 +149,9 @@ export interface AchievementsView {
   hidden: boolean;
   earned: EarnedBadge[];
   total: number;
+  /** §31.10 — when they first held the whole catalog, or null. Never derived from `earned.length`
+   *  (a grown catalog must not un-Hero anyone); null while `hidden`, like the badges themselves. */
+  heroAt: string | null;
 }
 
 /**
@@ -131,8 +159,8 @@ export interface AchievementsView {
  * inactive — consistent with the leaderboard hiding deprovisioned users, §31.5).
  */
 export async function getAchievements(targetId: string, viewerId: string, db: Db = pool): Promise<AchievementsView | null> {
-  const { rows } = await db.query<{ id: string; display_name: string; avatar: string | null; hidden: boolean }>(
-    `select id, display_name, avatar, achievements_hidden as hidden
+  const { rows } = await db.query<{ id: string; display_name: string; avatar: string | null; hidden: boolean; hero_at: Date | null }>(
+    `select id, display_name, avatar, achievements_hidden as hidden, hero_at
        from users where id = $1 and erased_at is null and status = 'active'`,
     [targetId],
   );
@@ -149,7 +177,17 @@ export async function getAchievements(targetId: string, viewerId: string, db: Db
       ).rows
         .filter((r) => isAchievementKey(r.key))
         .map((r) => ({ key: r.key, earnedAt: r.earned_at.toISOString() }));
-  return { userId: u.id, displayName: u.display_name, avatar: u.avatar, hidden, earned, total: ACHIEVEMENTS.length };
+  return {
+    userId: u.id,
+    displayName: u.display_name,
+    avatar: u.avatar,
+    hidden,
+    earned,
+    total: ACHIEVEMENTS.length,
+    // Hidden from a non-self viewer means hidden entirely: the level bar and the "Hero since" line
+    // would restate the very count the opt-out exists to withhold (§31.5).
+    heroAt: hidden ? null : (u.hero_at?.toISOString() ?? null),
+  };
 }
 
 /**

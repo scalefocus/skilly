@@ -15,6 +15,8 @@ export interface AchievementsView {
   hidden: boolean;
   earned: EarnedBadge[];
   total: number;
+  /** §31.10 — when they first held the whole catalog, or null. Null while `hidden`. */
+  heroAt: string | null;
 }
 
 const GROUP_COLOR: Record<AchievementGroup, string> = {

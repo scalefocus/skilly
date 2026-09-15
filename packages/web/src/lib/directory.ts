@@ -21,8 +21,12 @@ export interface UserCard {
   lastSeen: string | null;
   /** `last_seen` within the FIXED 5-minute window — never the admin-selected one (§4). */
   online: boolean;
-  /** §31.5 badges earned, or null when the line must not show (none, opted out, or achievements off). */
+  /** §31.10 the person's level = badges earned, or null when the line must not show (level 0,
+   *  opted out, or achievements off). The client renders it against the catalog size it imports. */
   achievementCount: number | null;
+  /** §31.10 — `users.hero_at` is stamped. The count alone cannot say "Hero": once the catalog
+   *  grows past a Hero's tally the level stops equalling the total, and they are still a Hero. */
+  achievementHero: boolean;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -50,6 +54,7 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     online: boolean;
     achievements_hidden: boolean;
     achievement_count: string;
+    achievement_hero: boolean;
     achievements_enabled: boolean;
   }>(
     `select id, display_name, email, job_title, office_location, department, directory_hidden,
@@ -57,6 +62,7 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
             (last_seen is not null and last_seen > now() - make_interval(mins => $2::int)) as online,
             achievements_hidden,
             (select count(*) from user_achievements ua where ua.user_id = users.id) as achievement_count,
+            (hero_at is not null) as achievement_hero,
             coalesce((select value from platform_settings where key = 'achievements_enabled') <> 'false'::jsonb, true) as achievements_enabled
        from users where id = $1`,
     [userId, ONLINE_WINDOW_MINUTES],
@@ -67,6 +73,10 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
   // Opted out, or a GDPR tombstone (whose columns are already scrubbed — belt and braces): the
   // card falls back to its "No directory information" state.
   const hidden = r.directory_hidden || r.erased_at !== null;
+  // The level line shows only when the feature is on, the person hasn't opted out, they aren't a
+  // tombstone, and they have at least one badge — level 0 says nothing worth a line (§31.10).
+  const achievementsVisible =
+    r.achievements_enabled && !r.achievements_hidden && r.erased_at === null && Number(r.achievement_count) > 0;
   return {
     userId: r.id,
     displayName: userLabel(r.display_name, r.email),
@@ -76,10 +86,8 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     department: hidden ? null : r.department,
     lastSeen: r.last_seen ? new Date(r.last_seen).toISOString() : null,
     online: r.online === true,
-    achievementCount:
-      r.achievements_enabled && !r.achievements_hidden && r.erased_at === null && Number(r.achievement_count) > 0
-        ? Number(r.achievement_count)
-        : null,
+    achievementCount: achievementsVisible ? Number(r.achievement_count) : null,
+    achievementHero: achievementsVisible && r.achievement_hero === true,
   };
 }
 

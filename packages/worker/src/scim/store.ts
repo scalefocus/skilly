@@ -296,11 +296,12 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";
     // The directory profile (§28) is personal data and is scrubbed exactly like the avatar;
-    // directory_hidden resets so a returning person's fresh account starts at the default.
+    // directory_hidden resets so a returning person's fresh account starts at the default, and
+    // hero_at is cleared with the badges behind it (§31.10) — mirrors web's eraseUser.
     await client.query(
       `update users set display_name = $2, email = '', avatar = null,
               job_title = null, office_location = null, department = null, directory_hidden = false,
-              achievements_hidden = false, time_zone = null,
+              achievements_hidden = false, time_zone = null, hero_at = null,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [userId, deletedLabel],

@@ -269,3 +269,17 @@ test("renderNotification: achievement.earned — badge name + CTA to the profile
   assert.equal(r.webhook.badge, "Stalker, but Nicely");
   assert.doesNotMatch(r.text, /\{|\}/);
 });
+
+test("renderNotification: achievement.earned carries the level it moved you to (§31.10)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const at = (payload: Record<string, unknown>) => renderNotification({ type: "achievement.earned", payload }).text;
+
+  // A level line rides the badge's own row — there is no separate level notification.
+  assert.match(at({ key: "first_watch", name: "Stalker, but Nicely", blurb: "b.", level: 8, total: 20 }), /You're now Level 8\./);
+  // Hero wins over the number once the stamp is set.
+  assert.match(at({ key: "first_watch", name: "Stalker, but Nicely", blurb: "b.", level: 20, total: 20, hero: true }), /You're now a skilly Hero\./);
+  // Rows written before levels shipped carry no level and simply say nothing about one.
+  const legacy = at({ key: "first_watch", name: "Stalker, but Nicely", blurb: "b." });
+  assert.doesNotMatch(legacy, /Level|Hero/);
+  assert.match(legacy, /You earned a badge: Stalker, but Nicely\./);
+});

@@ -6,6 +6,7 @@ import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { userLabel } from "./userLabel";
 import { invalidateLeaderboard } from "./leaderboard";
+import { invalidateLevels } from "./levels";
 
 export interface UserSearchResult { userId: string; displayName: string; email: string; status: "active" | "inactive"; avatar: string | null }
 
@@ -130,10 +131,12 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // The directory profile (job title / office / department, §28) is personal data and is
     // scrubbed exactly like the avatar, so a tombstone's hover card always reads "No directory
     // information"; directory_hidden resets to the default for any future re-provisioned account.
+    // hero_at goes too (§31.10): the badges behind it are deleted below, and a Hero stamp with no
+    // badges behind it is a lie the ring would keep telling.
     await client.query(
       `update users set display_name = $2, email = '', avatar = null,
               job_title = null, office_location = null, department = null, directory_hidden = false,
-              achievements_hidden = false, time_zone = null,
+              achievements_hidden = false, time_zone = null, hero_at = null,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [targetUserId, deletedLabel],
@@ -152,6 +155,9 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // drop the cached boards so the change shows immediately rather than after the TTL
     // (best-effort, this web process only).
     invalidateLeaderboard();
+    // Their badges and hero stamp are gone too — drop the cached level map so no ring survives
+    // them on someone else's screen (§31.10).
+    invalidateLevels();
     return { ok: true, transferred, skipped, creditsTransferred, creditsSkipped };
   } catch (e) {
     await client.query("rollback").catch(() => {});
