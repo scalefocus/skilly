@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.3.0",
+    date: "2026-09-15",
+    summary:
+      "Quick start now ends with an Achievements card: completing the guide earns Read the Manual, and the card explains that every locked badge on your profile tells you how to earn it, that your badges form a hall colleagues can open unless you hide it, and that these differ from the competitive badges under people's avatars. It is the one card that disappears when an administrator switches achievements off. Also corrected: the marketplace step still described the old one-plugin-per-skill layout, and now says a marketplace ships one plugin per category and that skills are invoked as /<category>:<skill>.",
+  },
+  {
     version: "2.2.0",
     date: "2026-09-15",
     summary: "Achievements: 20 badges for trying each part of skilly for the first time — install a skill, add a marketplace, connect over MCP, ask for or propose a skill, get published, join a discussion, watch, rate, and two habits badges (Night Shift, Weekend Warrior) judged in your own timezone. Your profile shows every badge with hints on how to earn the locked ones and a Share button; the link opens your hall for any signed-in colleague (hide it under Profile → Achievements visibility). Badges you already earned in the past are there from day one; new ones announce themselves with a toast and a bell notification. Administrators can switch the feature off under Administration → Achievements.",

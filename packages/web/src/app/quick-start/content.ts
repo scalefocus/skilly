@@ -3,7 +3,9 @@
 // this repo). Screenshots are served from packages/web/public/quickstart/ (captured and synced
 // by e2e/shots.mjs). SKILLY_SPEC.md §8.
 export interface QuickStartStep {
-  kind: "intro" | "step" | "prereq" | "contribute" | "closing";
+  /** `achievements` is the one conditional card: the page drops it while the platform toggle
+   *  `achievementsEnabled` is off or still unknown (§23 / §31.5). Every other kind is static. */
+  kind: "intro" | "step" | "prereq" | "contribute" | "achievements" | "closing";
   /** Step number shown in the rail (steps only). */
   n?: number;
   title: string;
@@ -98,6 +100,7 @@ export const QUICK_START: QuickStartStep[] = [
     lead:
       "Installing skills one at a time isn't the only route. If you use Claude Code, add a whole slice of the catalog as a plugin marketplace with a single command — there's one public marketplace, plus one for each team you belong to. The Marketplaces page lists every marketplace you can add and gives you the add command three ways (Terminal, Claude CLI, or a Settings file entry); the key in it is personal, and everything you've added is listed under My marketplaces in the account menu.",
     points: [
+      "What you add is a group, not a single skill: a marketplace publishes one plugin per category — productivity, docs, and a general plugin for anything uncategorised — so one command brings the whole group at once. A skill from it is then invoked as /<category>:<skill> (on the public marketplace, /<category>:<namespace>-<skill>).",
       "Or connect your agent over MCP: Claude Code, Claude Desktop, and VS Code can talk to skilly directly. No credential goes into any config file — you sign in once in the browser, and from then on the agent can search the catalog, read skills, install them, and propose new ones for you. Revoke a connection any time from the MCP server page.",
       "Marketplaces need Claude Code; MCP needs an MCP-capable agent. Your administrator decides whether these are enabled for your registry.",
     ],
@@ -125,6 +128,26 @@ export const QUICK_START: QuickStartStep[] = [
       "skilly tells you when something you care about changes. The bell shows notifications — for example when a new version of a skill you maintain or installed ships — and What's new lists every product change, newest first.",
     image: "/quickstart/notifications.png",
     alt: "The notifications page in skilly",
+  },
+  {
+    // §23 / §31.5 — the exploration nudge, deliberately unnumbered so the consumer spine stays 1–6,
+    // and deliberately placed here: the reader has now met every part of skilly a badge refers to.
+    // The Quick start badge is named tenselessly ("Completing this Quick start earns…") so the line
+    // stays true for someone reopening the page months later. Habits badges (Night Shift, Weekend
+    // Warrior) are deliberately NOT named here — see the spec. Names quoted below are guarded by
+    // content.test.ts against the shared catalog, so a rename fails the build.
+    kind: "achievements",
+    title: "Collect the badges as you go",
+    lead:
+      "skilly quietly keeps track of which parts of it you have actually tried, and turns each first time into a badge. Completing this Quick start earns one of them: Read the Manual. Everything else starts locked, and every locked badge on your profile spells out how to earn it — so the list doubles as a map of what there is to try.",
+    points: [
+      "The badges follow the steps you have just read: Hello, Skill for your first install, Bulk Buyer for your first marketplace, Ghost in the Machine once an agent talks to skilly over MCP, Wishful Thinker for asking the org for a skill nobody has built yet, and Homegrown for proposing one of your own.",
+      "Your earned badges form a hall that any signed-in colleague can open. There is a switch on your Profile if you would rather keep it to yourself.",
+      "These are personal and permanent — once earned, never lost. The small badges under people's avatars are a different thing: those are the competitive leaderboard ones, and they change hands as the board moves.",
+    ],
+    internalLinks: [{ label: "My achievements →", href: "/profile#achievements" }],
+    image: "/quickstart/achievements.png",
+    alt: "The Achievements card on the profile page, showing earned badges alongside locked ones with hints on how to earn them",
   },
   {
     kind: "contribute",

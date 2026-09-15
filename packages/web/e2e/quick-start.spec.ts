@@ -31,6 +31,33 @@ test.describe("Quick start — connect step (§23)", () => {
     await expect(cta.getByRole("link", { name: "MCP server" })).toHaveAttribute("href", "/mcp");
   });
 
+  // §23 / §31.5 — the achievements card: unnumbered, sits between the last step and the contribute
+  // card, and carries the single in-app button into the profile's Achievements card.
+  test("the achievements card renders after the last step, before contribute", async ({ page }) => {
+    await page.goto("/quick-start", { waitUntil: "domcontentloaded" });
+    const headings = page.locator("main section h2");
+    await expect(headings.filter({ hasText: "Collect the badges as you go" })).toBeVisible({ timeout: 25_000 });
+    const titles = await headings.allTextContents();
+    const i = titles.indexOf("Collect the badges as you go");
+    expect(titles[i - 1]).toBe("Stay in the loop");
+    expect(titles[i + 1]).toBe("Want to contribute a skill?");
+
+    const card = page.locator("main section", { hasText: "Collect the badges as you go" });
+    const link = card.getByRole("link", { name: /^My achievements/ });
+    await expect(link).toHaveAttribute("href", "/profile#achievements");
+    await expect(link).not.toHaveAttribute("target", "_blank");
+    await expect(card.locator("img")).toHaveAttribute("src", "/quickstart/achievements.png");
+  });
+
+  test("the My achievements button lands on the profile's Achievements card", async ({ page }) => {
+    await page.goto("/quick-start", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".colophon-version")).toBeVisible({ timeout: 25_000 });
+    const card = page.locator("main section", { hasText: "Collect the badges as you go" });
+    await card.getByRole("link", { name: /^My achievements/ }).click({ timeout: 25_000 });
+    await expect(page).toHaveURL(/\/profile#achievements$/, { timeout: 25_000 });
+    await expect(page.getByTestId("achievements-card")).toBeVisible({ timeout: 25_000 });
+  });
+
   test("the Marketplaces button lands on the directory", async ({ page }) => {
     await page.goto("/quick-start", { waitUntil: "domcontentloaded" });
     // Wait for the shell to hydrate before clicking: a click that races a dev-server recompile /
