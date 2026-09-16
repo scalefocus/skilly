@@ -4,7 +4,13 @@
 // mailto link is clickable; and the profile opt-out collapses it to "No directory information".
 // Runs against the dev stack (SKILLY_DEV_AUTH=1) using the seeded dev admin. Opt-in, not part of
 // the default `pnpm -r test`.
+//
+// Hardening (helpers/ready.ts): every interaction waits for the hydrated shell first — the card's
+// hover-intent timer and lazy fetch are React handlers, and a hover delivered to server markup
+// does nothing. The opening hover is paired with the card's own GET so the assertion runs after
+// the data, not after a guess.
 import { test, expect, devSignIn, type Page } from "./fixtures";
+import { clickAndAwait, gotoReady } from "./helpers/ready";
 
 // Scoped to <main>: the topbar account menu also renders this person's bubble, and its own
 // trigger button absorbs the nested bubble's label into its accessible name — so an unscoped
@@ -12,18 +18,20 @@ import { test, expect, devSignIn, type Page } from "./fixtures";
 // one this spec is about.
 const bubble = (page: Page) => page.getByRole("main").getByRole("button", { name: "Dev Admin — profile" });
 const card = (page: Page) => page.getByRole("dialog", { name: /Dev Admin — profile/ });
+// The card's data is fetched lazily on the first open (`GET /api/users/:id/card`, DirectoryCard.tsx).
+const CARD_API = /\/api\/users\/[^/]+\/card/;
 
 test.describe("directory hover card (§28)", () => {
   test("hovering an avatar shows title, department, office and a mailto link", async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/profile");
+    await gotoReady(page, "/profile");
 
     const b = bubble(page);
-    // First navigation on a dev server pays the on-demand route compile — allow generous time.
-    await expect(b).toBeVisible({ timeout: 20_000 });
+    await expect(b).toBeVisible();
     await expect(card(page)).toHaveCount(0); // nothing until hovered — the fetch is lazy
 
-    await b.hover();
+    // Hover intent (300 ms) then the lazy GET — wait for the round-trip, not a timer.
+    await clickAndAwait(page, () => b.hover(), CARD_API);
     const c = card(page);
     await expect(c).toBeVisible();
     await expect(c.getByText("Platform Engineer")).toBeVisible();
@@ -35,22 +43,25 @@ test.describe("directory hover card (§28)", () => {
     await c.hover();
     await expect(c).toBeVisible();
 
-    // Moving away closes it.
+    // Moving away closes it. Park the pointer on the page's own heading — a stable, non-interactive
+    // element that is neither the bubble nor the card.
     await page.getByRole("heading", { name: "Profile." }).hover();
     await expect(c).toHaveCount(0);
   });
 
   test("keyboard: focus opens the card, Escape closes it", async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/profile");
+    await gotoReady(page, "/profile");
 
     const b = bubble(page);
-    await expect(b).toBeVisible({ timeout: 20_000 });
+    await expect(b).toBeVisible();
 
-    await b.focus(); // the bubble is a tab stop — no pointer needed
+    await clickAndAwait(page, () => b.focus(), CARD_API); // the bubble is a tab stop — no pointer needed
     await expect(card(page)).toBeVisible();
 
-    await page.keyboard.press("Escape");
+    // Escape is handled by the TRIGGER's keydown (DirectoryCard.tsx) - deliver it there, whatever
+    // element holds focus once the card has rendered.
+    await b.press("Escape");
     await expect(card(page)).toHaveCount(0);
     await expect(b).toBeFocused(); // focus returns to the bubble, not to the top of the page
   });
@@ -62,11 +73,11 @@ test.describe("directory hover card (§28)", () => {
 
     try {
       await patch(true);
-      await page.goto("/profile");
+      await gotoReady(page, "/profile");
       const b = bubble(page);
-      await expect(b).toBeVisible({ timeout: 20_000 });
+      await expect(b).toBeVisible();
 
-      await b.hover();
+      await clickAndAwait(page, () => b.hover(), CARD_API);
       const c = card(page);
       await expect(c).toBeVisible();
       await expect(c.getByText("No directory information")).toBeVisible();

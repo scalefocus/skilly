@@ -259,6 +259,7 @@ pipeline {
           # Run the suite. Playwright's webServer starts `next dev` (SKILLY_DEV_AUTH=1 is forbidden in
           # a production build), inheriting the env below; CI=1 makes it start a fresh server.
           SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
+          SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
           DATABASE_URL="${CI_E2E_DATABASE_URL}" \
           NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL=http://localhost:3000 \
           SKILLY_REGISTRY_URL=http://localhost:3000 \
@@ -270,6 +271,12 @@ pipeline {
       post {
         always {
           junit testResults: 'packages/web/**/junit.xml', allowEmptyResults: true
+          // Keep Playwright's own failure evidence. `error-context.md` (a full a11y snapshot of
+          // the page at the moment of failure) and the first-retry trace are what make a red run
+          // diagnosable afterwards; without them the console log's "element(s) not found" is all
+          // anyone gets, and the only way forward is to re-run the whole 25-minute stage.
+          archiveArtifacts artifacts: 'packages/web/test-results/**, packages/web/e2e/test-results/**',
+                           allowEmptyArchive: true, onlyIfSuccessful: false
           sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_MINIO_CONTAINER}" >/dev/null 2>&1 || true'
         }
       }

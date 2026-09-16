@@ -135,6 +135,10 @@ jobs:
       SKILLY_DEV_AUTH: "1"
       SKILLY_DEV_OID: dev-admin-oid
       NEXTAUTH_SECRET: ci-e2e-not-a-secret
+      # Keep every warmed route compiled for the whole run (see next.config.mjs onDemandEntries).
+      SKILLY_DEV_KEEP_ROUTES: "1"
+      # Read-your-writes for specs that create a fixture and read it back through a cached board.
+      LEADERBOARD_CACHE_TTL_MS: "0"
       NEXTAUTH_URL: http://localhost:3000
       SKILLY_REGISTRY_URL: http://localhost:3000
       S3_ENDPOINT: http://127.0.0.1:9000

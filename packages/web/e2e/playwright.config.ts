@@ -21,6 +21,9 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 export default defineConfig({
   testDir: ".",
   testMatch: /.*\.spec\.ts/,
+  // Warm every route once before the first spec (see global-setup.ts): `next dev` compiles a
+  // route on first hit, and paying that inside a spec's own budget was the suite's main flake.
+  globalSetup: "./global-setup.ts",
   // `next dev` (webpack) compiles each route on first hit; that compile can be slow, so give CI a
   // generous per-test budget. Locally (warm dev server) the tighter default is fine.
   timeout: process.env.CI ? 90_000 : 30_000,
@@ -36,6 +39,10 @@ export default defineConfig({
   reporter: process.env.CI
     ? [["list"], ["junit", { outputFile: "results/junit.xml" }]]
     : "html",
+  // Per-assertion budget. Specs gate on the hydrated shell (helpers/ready.ts) and pair every
+  // mutation with its response, so assertions rarely wait long — but a loaded CI agent still
+  // needs more than the 5s default for a client-side navigation or a thread refetch.
+  expect: { timeout: process.env.CI ? 15_000 : 5_000 },
   use: {
     baseURL,
     trace: "on-first-retry",
@@ -45,6 +52,11 @@ export default defineConfig({
   // SKILLY_DEV_AUTH=1 (instrumentation.ts), and dev auth is what the suite signs in with.
   webServer: {
     command: "pnpm --filter @skilly/web dev",
+    // Keep every route the warm-up compiles alive for the whole run (next.config.mjs).
+    // LEADERBOARD_CACHE_TTL_MS=0: the shared per-(window,sort) board cache (lib/leaderboard.ts) is
+    // primed by /api/leaders on EVERY page load, so a spec that creates a request and then reads
+    // the board through the UI would see a board computed before its own fixture for up to 60s.
+    env: { SKILLY_DEV_KEEP_ROUTES: "1", LEADERBOARD_CACHE_TTL_MS: "0" },
     url: baseURL,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,

@@ -9,6 +9,7 @@
 // The mint creates a real token in the ephemeral CI DB; disabling the marketplace afterwards
 // revokes it, so the test leaves nothing behind when the marketplace started out disabled.
 import { test, expect, devSignIn } from "./fixtures";
+import { NAV_TIMEOUT, gotoLoaded } from "./helpers/ready";
 
 interface NsRow { id: string; slug: string; displayName: string; marketplaceEnabled: boolean }
 
@@ -99,12 +100,16 @@ test.describe.serial("marketplaces directory (§30.6 Page 3)", () => {
 
   test("the catalog namespace view shows its banner and clears back to the full catalog", async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/catalog?ns=team-a&nsName=Team%20A");
+    // Hydrated shell + the namespace-filtered catalog fetch in before anything is asserted.
+    await gotoLoaded(page, "/catalog?ns=team-a&nsName=Team%20A", /\/api\/skills\?/);
     const banner = page.locator(".ns-view-banner");
-    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await expect(banner).toBeVisible();
     await expect(banner).toContainText("Skills in Team A");
-    await banner.getByRole("link", { name: /clear/ }).click();
-    await expect(page).toHaveURL(/\/catalog$/);
+    // The clear control is a client-side <Link>: pair the click with the URL it must reach.
+    await Promise.all([
+      page.waitForURL(/\/catalog$/, { timeout: NAV_TIMEOUT }),
+      banner.getByRole("link", { name: /clear/ }).click(),
+    ]);
     await expect(page.locator(".ns-view-banner")).toHaveCount(0);
   });
 });
