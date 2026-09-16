@@ -37,7 +37,10 @@ export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean } = 
 /** `authedTest` — a `test` whose `page` is already signed in as the dev admin. Use it for specs
  *  that only ever act authenticated. Specs that also assert the signed-out state should import the
  *  plain `test` and call `devSignIn` explicitly at the point they want to be signed in. */
-export const authedTest = base.extend<Record<string, never>>({
+// No type argument: this only OVERRIDES the built-in `page` fixture and declares no new ones.
+// `extend<Record<string, never>>` typed every fixture value as `never`, which made the `page`
+// override itself a type error (`Page` is not assignable to `never`).
+export const authedTest = base.extend({
   page: async ({ page }, use) => {
     await devSignIn(page);
     await use(page);

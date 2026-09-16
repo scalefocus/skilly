@@ -3,6 +3,15 @@ const nextConfig = {
   // Self-hosted standalone Node server. NEVER Vercel. (SKILLY_SPEC.md §2)
   output: "standalone",
   reactStrictMode: true,
+  // DEV-SERVER ONLY (`next dev`; `next build` ignores it). The e2e suite pre-compiles every route
+  // (packages/web/e2e/global-setup.ts), but the dev server keeps just 5 on-demand entries and
+  // disposes the rest after 60s idle - so with ~115 routes the warm-up was undone within a
+  // minute and every "first hit" compile came back mid-run as an 11-25s stall that failed the
+  // spec holding it. Opt-in via env so day-to-day dev keeps the default memory profile; the CI
+  // e2e stages and the Playwright webServer set it.
+  ...(process.env.SKILLY_DEV_KEEP_ROUTES === "1"
+    ? { onDemandEntries: { maxInactiveAge: 24 * 60 * 60 * 1000, pagesBufferLength: 500 } }
+    : {}),
   transpilePackages: ["@skilly/shared"],
   experimental: {
     // keep server actions on; used for proposal/review flows

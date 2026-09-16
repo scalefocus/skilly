@@ -5,7 +5,12 @@
 // heading) is the exact case the former onBlur handler missed. Runs against the dev stack
 // (SKILLY_DEV_AUTH=1) using the seeded `global/pdf-tools` (hosted) and `global/web-scraper`
 // (pointer) skills; opt-in, not part of the default `pnpm -r test`.
+//
+// Hardening (helpers/ready.ts): the dismiss handler is a document-level `mousedown` listener that
+// React attaches in an effect — a click delivered before hydration neither opens nor closes
+// anything. Each test starts from the hydrated shell with the skill's detail JSON already loaded.
 import { test, expect, devSignIn, type Page } from "./fixtures";
+import { gotoLoaded } from "./helpers/ready";
 
 // A non-focusable element outside both dropdowns — clicking it must still dismiss an open menu.
 const outside = (page: Page) => page.getByRole("heading", { name: "Install", exact: true });
@@ -14,23 +19,25 @@ test.describe("install version split-button dismissal (@global/pdf-tools)", () =
   // The version menu is the role=menu containing the "Install latest" option (distinct from the
   // Pointer download menu, whose options are .skill / .tar.gz).
   const versionMenu = (page: Page) => page.getByRole("menu").filter({ hasText: "Install latest" });
+  const caret = (page: Page) => page.getByRole("button", { name: "Choose a version" });
 
   test.beforeEach(async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/skills/global/pdf-tools");
-    // The install form (and its version split-button) renders once the skill loads.
-    await expect(page.getByRole("button", { name: "Choose a version" })).toBeVisible();
+    // The install form (and its version split-button) renders from the detail JSON.
+    await gotoLoaded(page, "/skills/global/pdf-tools", /\/api\/skills\/global\/pdf-tools$/);
+    await expect(caret(page)).toBeVisible();
+    await expect(outside(page)).toBeVisible();
   });
 
   test("an outside click closes the version dropdown", async ({ page }) => {
-    await page.getByRole("button", { name: "Choose a version" }).click();
+    await caret(page).click();
     await expect(versionMenu(page)).toBeVisible();
     await outside(page).click();
     await expect(versionMenu(page)).toHaveCount(0);
   });
 
   test("Escape closes the version dropdown", async ({ page }) => {
-    await page.getByRole("button", { name: "Choose a version" }).click();
+    await caret(page).click();
     await expect(versionMenu(page)).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(versionMenu(page)).toHaveCount(0);
@@ -40,22 +47,24 @@ test.describe("install version split-button dismissal (@global/pdf-tools)", () =
 test.describe("pointer download-format split-button dismissal (@global/web-scraper)", () => {
   // The download menu is the role=menu containing the .tar.gz option.
   const downloadMenu = (page: Page) => page.getByRole("menu").filter({ hasText: ".tar.gz" });
+  const caret = (page: Page) => page.getByRole("button", { name: "Choose a download format" });
 
   test.beforeEach(async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/skills/global/web-scraper");
-    await expect(page.getByRole("button", { name: "Choose a download format" })).toBeVisible();
+    await gotoLoaded(page, "/skills/global/web-scraper", /\/api\/skills\/global\/web-scraper$/);
+    await expect(caret(page)).toBeVisible();
+    await expect(outside(page)).toBeVisible();
   });
 
   test("an outside click closes the download-format dropdown", async ({ page }) => {
-    await page.getByRole("button", { name: "Choose a download format" }).click();
+    await caret(page).click();
     await expect(downloadMenu(page)).toBeVisible();
     await outside(page).click();
     await expect(downloadMenu(page)).toHaveCount(0);
   });
 
   test("Escape closes the download-format dropdown", async ({ page }) => {
-    await page.getByRole("button", { name: "Choose a download format" }).click();
+    await caret(page).click();
     await expect(downloadMenu(page)).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(downloadMenu(page)).toHaveCount(0);

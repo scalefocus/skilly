@@ -9,7 +9,11 @@
 // scope here. So this spec asserts the mint command + the (seeded) Installed list read-only; it
 // does not click uninstall (that would mutate the seed) nor drive a real clone. The one token it
 // mints is never surfaced and is harmless in the ephemeral CI DB.
+//
+// Hardening (helpers/ready.ts): the Installed list is a client fetch (`GET /api/installs`); the
+// rows are asserted after that response, not against the page's loading skeleton.
 import { test, expect, devSignIn } from "./fixtures";
+import { gotoLoaded } from "./helpers/ready";
 
 test.describe("install command + installed list (§9, §23)", () => {
   test("minting global/web-scraper yields an authenticated npx skills add command", async ({ page }) => {
@@ -29,16 +33,16 @@ test.describe("install command + installed list (§9, §23)", () => {
     expect(body.expiresAt).toBeNull(); // omitted/null expiry ⇒ never expires (§23)
 
     // The detail page surfaces the Install affordance (proves the skill is installable in the UI).
-    await page.goto("/skills/global/web-scraper");
+    await gotoLoaded(page, "/skills/global/web-scraper", /\/api\/skills\/global\/web-scraper$/);
     // exact — the page also has an "Installs & views" heading that a substring match would catch.
-    await expect(page.getByRole("heading", { name: "Install", exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { name: "Install", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Install latest" })).toBeVisible();
   });
 
   test("Installed skills lists the seeded installs with a revoke control", async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/installed");
-    await expect(page.getByRole("heading", { name: "Installed skills." })).toBeVisible({ timeout: 20_000 });
+    await gotoLoaded(page, "/installed", /\/api\/installs$/);
+    await expect(page.getByRole("heading", { name: "Installed skills." })).toBeVisible();
     // The dev user is seeded with used installs (pdf-tools, lint-fixer, secret-helper), so at least
     // one active row exposes an `uninstall` control. Read-only — we do not click it.
     await expect(page.getByRole("button", { name: "uninstall" }).first()).toBeVisible();
