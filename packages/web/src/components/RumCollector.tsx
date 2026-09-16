@@ -43,11 +43,22 @@ export function markRumNavIntent(): void {
   navIntentAt = performance.now();
 }
 
+/** A uniform random number in [0, 1) from the Web Crypto CSPRNG. The id below is an opaque
+ *  per-tab correlation handle rather than a credential, but a guessable draw is still nothing to
+ *  hand out — and it keeps the sampling decision unbiased. Throws when Web Crypto is unavailable. */
+function secureRandom01(): number {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0]! / 2 ** 32;
+}
+
 function randomId(): string {
   try {
     return crypto.randomUUID().replace(/-/g, "");
   } catch {
-    return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   }
 }
 
@@ -67,7 +78,12 @@ function loadSession(sampleRate: number): SessionState {
   } catch {
     /* storage unavailable — fall through to an in-memory session */
   }
-  session = { id: randomId(), sampled: Math.random() * 100 < sampleRate };
+  try {
+    session = { id: randomId(), sampled: secureRandom01() * 100 < sampleRate };
+  } catch {
+    // No Web Crypto at all (never in a supported browser): stay silent rather than guess.
+    session = { id: `nocrypto-${Date.now().toString(36)}`, sampled: false };
+  }
   try {
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
   } catch {
