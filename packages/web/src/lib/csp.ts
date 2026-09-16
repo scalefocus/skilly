@@ -28,10 +28,32 @@ export function getCspMode(env: Record<string, string | undefined> = process.env
   }
 }
 
+/**
+ * The ONE document that legitimately submits a form across origins: the §29 MCP consent screen.
+ * Approving/declining POSTs here and the handler answers 303 to the client's registered
+ * `redirect_uri`, which is a different origin by definition.
+ */
+export const CROSS_ORIGIN_FORM_PATH = "/oauth/authorize";
+
+/**
+ * `form-action` for the consent screen (§22, §29). Browsers enforce `form-action` ACROSS REDIRECTS,
+ * so the default `'self'` aborts that 303 before the request is made and the authorization code
+ * never reaches the client — silently (net::ERR_ABORTED). This is exactly the set of redirect
+ * shapes Dynamic Client Registration accepts: loopback on any port, or https.
+ *
+ * It is a superset filter, NOT the control: the redirect target is still validated byte-for-byte
+ * against that client's registered URIs before a code is minted. No custom app scheme is listed —
+ * native clients are dispatched by the OS handler, not a browser navigation.
+ */
+const CONSENT_FORM_ACTION = "form-action 'self' http://127.0.0.1:* http://localhost:* https:";
+const DEFAULT_FORM_ACTION = "form-action 'self'";
+
 interface DocCspOpts {
   nonce?: string; // present ⇒ nonce-based script-src (production enforce/report-only)
   dev?: boolean; // `next dev`: eval-wrapped chunks need 'unsafe-eval', no nonce
   reporting?: boolean; // append report-uri/report-to directives
+  /** The §29 consent screen: widen `form-action` so its cross-origin 303 isn't blocked. */
+  crossOriginForm?: boolean;
 }
 
 /**
@@ -45,7 +67,7 @@ interface DocCspOpts {
  * self-hosted fonts (verified — no external resources).
  */
 export function buildDocumentCsp(opts: DocCspOpts = {}): string {
-  const { nonce, dev, reporting } = opts;
+  const { nonce, dev, reporting, crossOriginForm } = opts;
   const scriptSrc = nonce
     ? `script-src 'nonce-${nonce}' 'strict-dynamic' 'self'`
     : dev
@@ -61,7 +83,7 @@ export function buildDocumentCsp(opts: DocCspOpts = {}): string {
     scriptSrc,
     "connect-src 'self'",
     "font-src 'self'",
-    "form-action 'self'",
+    crossOriginForm ? CONSENT_FORM_ACTION : DEFAULT_FORM_ACTION,
   ];
   if (reporting) {
     directives.push(`report-uri ${CSP_REPORT_PATH}`, `report-to ${CSP_REPORT_GROUP}`);
@@ -92,8 +114,15 @@ export interface CspPlan {
  * can be unit-tested without a Next runtime. `nonce` is the candidate value the caller minted; it
  * is only adopted (returned in `plan.nonce`) when the hardened nonce policy applies.
  */
-export function planCsp(input: { mode: CspMode; isDev: boolean; isApi: boolean; nonce: string }): CspPlan {
-  const { mode, isDev, isApi, nonce: candidate } = input;
+export function planCsp(input: {
+  mode: CspMode;
+  isDev: boolean;
+  isApi: boolean;
+  nonce: string;
+  /** Request path, used only to widen `form-action` on the §29 consent screen. */
+  pathname?: string;
+}): CspPlan {
+  const { mode, isDev, isApi, nonce: candidate, pathname } = input;
 
   // API responses run no scripts — a resource-free CSP in every mode; no nonce, no reporting.
   if (isApi) return { headerName: "Content-Security-Policy", value: buildApiCsp() };
@@ -101,7 +130,10 @@ export function planCsp(input: { mode: CspMode; isDev: boolean; isApi: boolean; 
   const useNonce = !isDev && mode !== "off";
   const reporting = useNonce; // report only when the hardened policy is active
   const nonce = useNonce ? candidate : undefined;
-  const value = buildDocumentCsp({ nonce, dev: isDev, reporting });
+  // Path-keyed, never per-client: the middleware has no DB access, so every authorize request gets
+  // the identical header and it leaks nothing about which client is being consented to (§22).
+  const crossOriginForm = pathname === CROSS_ORIGIN_FORM_PATH;
+  const value = buildDocumentCsp({ nonce, dev: isDev, reporting, crossOriginForm });
   // Report-Only is a production posture; dev always emits an enforced (lenient) policy.
   const headerName: CspHeaderName =
     !isDev && mode === "report-only" ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy";

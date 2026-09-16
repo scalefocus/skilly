@@ -48,6 +48,60 @@ test("buildDocumentCsp: nonce policy drops unsafe-inline for scripts, keeps the 
   assert.equal(directive(p, "report-to"), "report-to csp-endpoint");
 });
 
+// ── form-action: the §29 consent-screen carve-out ──────────────────────────────────────────────
+// The consent POST is answered with a 303 to the client's registered redirect_uri — a different
+// origin — and browsers enforce form-action ACROSS REDIRECTS. Under 'self' that navigation is
+// aborted and the authorization code never reaches the client, silently.
+
+test("buildDocumentCsp: form-action widens ONLY for the consent screen", () => {
+  const normal = buildDocumentCsp({ nonce: "N" });
+  assert.equal(directive(normal, "form-action"), "form-action 'self'");
+
+  const consent = buildDocumentCsp({ nonce: "N", crossOriginForm: true });
+  assert.equal(
+    directive(consent, "form-action"),
+    "form-action 'self' http://127.0.0.1:* http://localhost:* https:",
+  );
+});
+
+test("buildDocumentCsp: the consent carve-out touches form-action and nothing else", () => {
+  const normal = buildDocumentCsp({ nonce: "N", reporting: true });
+  const consent = buildDocumentCsp({ nonce: "N", reporting: true, crossOriginForm: true });
+  const only = (p: string) => p.split("; ").filter((d) => !d.startsWith("form-action"));
+  assert.deepEqual(only(consent), only(normal), "no directive but form-action may differ");
+});
+
+test("planCsp: the widened form-action is keyed on the authorize path alone", () => {
+  const base = { mode: "enforce" as const, isDev: false, isApi: false, nonce: "N" };
+  const formAction = (pathname?: string) => directive(planCsp({ ...base, pathname }).value, "form-action");
+
+  assert.equal(formAction("/oauth/authorize"), "form-action 'self' http://127.0.0.1:* http://localhost:* https:");
+  // Everything else keeps the default — including neighbours and near-misses, so the carve-out
+  // can't be widened by a prefix match or an unrelated OAuth route.
+  for (const p of ["/oauth/consent", "/oauth/register", "/oauth/authorize/extra", "/catalog", "/", undefined]) {
+    assert.equal(formAction(p), "form-action 'self'", `${p ?? "(no path)"} must not be widened`);
+  }
+});
+
+test("planCsp: the consent carve-out applies in dev and every CSP mode, but never to /api", () => {
+  // The blocked redirect is a browser behavior, not a posture — a dev or CSP_MODE=off stack that
+  // still emits an enforced (lenient) policy must carry the carve-out too, or consent breaks there.
+  for (const mode of ["enforce", "report-only", "off"] as const) {
+    for (const isDev of [true, false]) {
+      const plan = planCsp({ mode, isDev, isApi: false, nonce: "N", pathname: "/oauth/authorize" });
+      assert.equal(
+        directive(plan.value, "form-action"),
+        "form-action 'self' http://127.0.0.1:* http://localhost:* https:",
+        `mode=${mode} isDev=${isDev}`,
+      );
+    }
+  }
+  // API responses stay on the resource-free lockdown, which has no form-action at all.
+  const api = planCsp({ mode: "enforce", isDev: false, isApi: true, nonce: "N", pathname: "/oauth/authorize" });
+  assert.equal(api.value, buildApiCsp());
+  assert.equal(directive(api.value, "form-action"), undefined);
+});
+
 test("buildDocumentCsp: no report directives unless reporting", () => {
   const p = buildDocumentCsp({ nonce: "N" });
   assert.equal(directive(p, "report-uri"), undefined);

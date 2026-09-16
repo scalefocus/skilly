@@ -22,6 +22,12 @@ async function registerClient(page: import("@playwright/test").Page, name = "e2e
   return (await res.json()) as { client_id: string; token_endpoint_auth_method: string };
 }
 
+// The click-to-copy toast specifically. `role="status"` is NOT unique on an authed page — the shell
+// also renders the §31.4 badge-earned toast, the §23 update notice and the header search's
+// empty-state bubble as live regions, so a bare getByRole("status") is a strict-mode violation the
+// moment the dev user has an unearned badge waiting.
+const copyToast = (page: import("@playwright/test").Page) => page.locator(".toast");
+
 function authorizeUrl(clientId: string, extra: Record<string, string> = {}) {
   const p = new URLSearchParams({
     response_type: "code",
@@ -74,10 +80,38 @@ test.describe("MCP connect flow (§29)", () => {
     await expect(page.getByRole("heading", { name: /isn.t valid/ })).toBeVisible();
     expect(page.url()).toContain("/oauth/authorize");
 
+    // A single, genuinely unregistered redirect_uri: the mismatch is what's reported.
     const client = await registerClient(page, "Redirect Mismatch Client");
-    await page.goto(`${authorizeUrl(client.client_id)}&redirect_uri=${encodeURIComponent("https://evil.example.com/cb")}`);
+    const mismatch = new URLSearchParams({
+      response_type: "code",
+      client_id: client.client_id,
+      redirect_uri: "https://evil.example.com/cb",
+      code_challenge: CODE_CHALLENGE,
+      code_challenge_method: "S256",
+      state: "e2e-state",
+    });
+    await page.goto(`/oauth/authorize?${mismatch.toString()}`);
     await expect(page.getByText(/does not match this client/)).toBeVisible();
-    expect(page.url()).not.toContain("evil.example.com");
+    // Parsed host, not a substring: the unregistered URI is legitimately present in the query we
+    // sent, so only the document's own host tells us whether we were redirected to it.
+    expect(new URL(page.url()).host).not.toBe("evil.example.com");
+    expect(new URL(page.url()).pathname).toBe("/oauth/authorize");
+  });
+
+  // OAuth 2.1: a repeated parameter is rejected outright. Smuggling a second redirect_uri past a
+  // registered one must NOT resolve to the registered value and sail through as verified. §29.
+  test("a redirect_uri supplied twice is rejected rather than resolved to the registered one", async ({ page }) => {
+    await devSignIn(page);
+    const client = await registerClient(page, "Duplicate Param Client");
+    await page.goto(`${authorizeUrl(client.client_id)}&redirect_uri=${encodeURIComponent("https://evil.example.com/cb")}`);
+    await expect(page.getByText(/redirect_uri parameter was supplied more than once/)).toBeVisible();
+    // Still on the registry's own authorize URL. Assert on the parsed host/path, not the raw string:
+    // "evil.example.com" legitimately appears in the query we sent, so a substring check would fail
+    // on a correct result. What matters is that we never NAVIGATED there.
+    const landed = new URL(page.url());
+    expect(landed.host).not.toBe("evil.example.com");
+    expect(landed.pathname).toBe("/oauth/authorize");
+    await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
   });
 
   test("a missing PKCE challenge is refused as a protocol error back to the client", async ({ page }) => {
@@ -97,7 +131,10 @@ test.describe("MCP connect flow (§29)", () => {
 
   test("approving mints a code and lists the connection; revoking removes it", async ({ page }) => {
     await devSignIn(page);
-    const client = await registerClient(page, "Approve Then Revoke Client");
+    // Unique per run: a grant survives a failed attempt, so a retry (CI runs with retries:1) would
+    // otherwise find TWO connections under the same name and trip strict mode on the listing below.
+    const name = `Approve Then Revoke ${Date.now()}`;
+    const client = await registerClient(page, name);
     await page.goto(authorizeUrl(client.client_id));
 
     // The loopback redirect won't resolve — that's fine, we only need the URL the browser was sent to.
@@ -114,13 +151,18 @@ test.describe("MCP connect flow (§29)", () => {
     // The grant now shows on the MCP page, and can be revoked from there.
     const list = await (await page.request.get("/api/mcp/connections")).json();
     const conn = (list.connections as Array<{ grantId: string; clientName: string }>).find(
-      (c) => c.clientName === "Approve Then Revoke Client",
+      (c) => c.clientName === name,
     );
     expect(conn, JSON.stringify(list)).toBeTruthy();
 
+    // The browser really does follow the 303 now, and the loopback callback refuses the connection.
+    // Let that navigation finish failing before we navigate away, or this goto races it and is
+    // interrupted ("interrupted by another navigation to chrome-error://chromewebdata/").
+    await page.waitForURL((u) => !u.toString().includes("/oauth/authorize"), { timeout: 15_000 }).catch(() => {});
+
     await page.goto("/mcp");
     await expect(page.getByRole("heading", { name: "MCP server" })).toBeVisible();
-    await expect(page.getByText("Approve Then Revoke Client")).toBeVisible();
+    await expect(page.getByText(name)).toBeVisible();
     // No credential is ever shown in a connect snippet — that's the point of the OAuth flow.
     await expect(page.getByText("x-access-token")).toHaveCount(0);
 
@@ -134,7 +176,8 @@ test.describe("MCP connect flow (§29)", () => {
 
   test("declining sends access_denied back to the client and creates no connection", async ({ page }) => {
     await devSignIn(page);
-    const client = await registerClient(page, "Declining Client");
+    const name = `Declining ${Date.now()}`;
+    const client = await registerClient(page, name);
     await page.goto(authorizeUrl(client.client_id));
 
     const [nav] = await Promise.all([
@@ -145,7 +188,7 @@ test.describe("MCP connect flow (§29)", () => {
 
     const list = await (await page.request.get("/api/mcp/connections")).json();
     expect(
-      (list.connections as Array<{ clientName: string }>).some((c) => c.clientName === "Declining Client"),
+      (list.connections as Array<{ clientName: string }>).some((c) => c.clientName === name),
     ).toBeFalsy();
   });
 
@@ -175,7 +218,7 @@ test.describe("MCP connect flow (§29)", () => {
     await page.goto("/mcp");
 
     await page.getByRole("button", { name: "Copy the Claude Code command" }).click();
-    await expect(page.getByRole("status")).toHaveText("✓ Copied");
+    await expect(copyToast(page)).toHaveText("✓ Copied");
     expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
       /^claude mcp add --transport http skilly https?:\/\/\S+$/,
     );
@@ -202,7 +245,7 @@ test.describe("MCP connect flow (§29)", () => {
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     });
     await page.mouse.click(pill.x, pill.y);
-    await expect(page.getByRole("status")).toHaveText("✓ Copied");
+    await expect(copyToast(page)).toHaveText("✓ Copied");
     expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
       /^claude mcp add --transport http skilly https?:\/\/\S+$/,
     );

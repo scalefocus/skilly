@@ -57,10 +57,14 @@ export default async function AuthorizePage({
   }
 
   const sp = await searchParams;
+  // Preserve repeats rather than collapsing them: a parameter supplied more than once must be
+  // REJECTED (OAuth 2.1), and checkAuthorizeRequest can only see that if we append every value.
+  // Collapsing to v[0] here silently resolved `redirect_uri=<registered>&redirect_uri=<attacker>`
+  // to the registered value and treated it as verified. §29.
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(sp)) {
-    if (typeof v === "string") params.set(k, v);
-    else if (Array.isArray(v) && v[0] != null) params.set(k, v[0]);
+    if (typeof v === "string") params.append(k, v);
+    else if (Array.isArray(v)) for (const one of v) params.append(k, one);
   }
 
   const check = await checkAuthorizeRequest(params);
@@ -82,7 +86,7 @@ export default async function AuthorizePage({
     return <ErrorCard message="Your account isn't provisioned in this registry yet — ask an administrator to check your directory sync." />;
   }
 
-  const requestId = stashAuthorizeRequest(access.userId, check.client, check.request);
+  const requestId = await stashAuthorizeRequest(access.userId, check.client, check.request);
   const { client } = check;
   const origin = (() => {
     try {

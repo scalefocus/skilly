@@ -794,7 +794,13 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .facet-row-chipbox[data-settled="true"] > .facet-row-chipbox-inner { overflow: visible; }
 @media (prefers-reduced-motion: reduce) {
   .facet-row-chevron { transition: none; }
-  .facet-row-chipbox, .facet-row-chipbox > .facet-row-chipbox-inner { transition: none; }
+  /* Must repeat [data-anim="true"]: a media query adds NO specificity, so the bare class selector
+     (0,1,0) loses to the armed rule above (0,2,0) and reduced motion was silently ignored on the
+     box and its inner — only the chevron actually stopped animating. */
+  .facet-row-chipbox,
+  .facet-row-chipbox > .facet-row-chipbox-inner,
+  .facet-row-chipbox[data-anim="true"],
+  .facet-row-chipbox[data-anim="true"] > .facet-row-chipbox-inner { transition: none; }
 }
 /* Narrow screens: the gutter costs more than it buys — stack the label above its chips. The 4px
    moves from the grid's row gap onto the chips themselves, so it rides INSIDE the animated block:

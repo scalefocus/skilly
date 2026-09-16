@@ -1560,6 +1560,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 16. ~~**Personal Access Token management** (`/tokens`)~~ **SUPERSEDED** — PATs and the CI-token UI were removed and replaced by the reusable, owner-revocable **install-token** model and the Installed Skills page (`/installed`, §23). `/tokens` now redirects to `/profile`.
 17. **Install analytics:** `skills.install_count` is incremented from the authenticated git-fetch access log (`worker/git/pgDeps.logAccess`, once per clone) **and from each user's first detail-page download** (deduped per `(skill, user)` via `skill_downloads`; §10), and surfaced in the catalog. **DONE.**
 18. **UI e2e (Playwright):** scaffolded in `packages/web/e2e/` (smoke specs + config), run opt-in against a live stack; the gated publish e2e now also covers a **.zip** hosted bundle and the **pointer-refresh** path. Broader journeys TODO.
+    - **The e2e stack MUST provision the seeded skills' git repos before the suite runs.** `db/seed.dev.sql` deliberately inserts hosted versions with `git_published=false` (their artifact keys have no bytes), so a stack that only applies the seed leaves every hosted skill stuck on the detail page's "Publishing this skill…" placeholder — the Install panel never renders, and every spec that drives it fails. After seeding, CI must run **`packages/worker/scripts/seed-bundles.mjs`** (uploads a minimal valid bundle per key) and then let the **worker's publish sweep** synthesize the repos and flip `git_published`. Seeding `git_published=true` directly is **not** the fix — that is the old behavior, and it leaves the versions stuck as "repository not provisioned" instead.
 
 **Tier 4 — strategic / infra**
 19. **Helm / Kubernetes:** chart at `deploy/helm/skilly` — stateless web (Deployment + Service + **HPA**), leader-locked worker (Deployment + git PVC), migrations Job (pre-install/upgrade hook over a `skilly-migrations` ConfigMap), Ingress (routes `/scim` + `*.git` → worker, else web), Secret/values, and bundled Postgres/MinIO/ClamAV gated by `enabled` flags (point at managed services to disable). `helm lint` + both value sets render in CI. **DONE.**
@@ -1889,6 +1890,30 @@ substantive tightening over the June-2026 audit CSP; the other directives are un
   style injection is low-risk and can't be nonced without breaking them), as do `img-src 'self' data:`
   (data-URI avatars, §5/§19), `connect-src 'self'`, `font-src 'self'` (self-hosted fonts), `object-src
   'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, `form-action 'self'`.
+- **`form-action` is widened on exactly one document: `/oauth/authorize`** (§29 consent screen),
+  to **`form-action 'self' http://127.0.0.1:* http://localhost:* https:`**. Every other response
+  keeps `form-action 'self'`.
+  - **Why it is required, not a convenience.** The consent screen is a form POST whose handler
+    answers `303` to the MCP client's registered `redirect_uri` — a different origin by definition.
+    Browsers enforce `form-action` **across redirects**, so under `'self'` the navigation is aborted
+    before the request is made and the authorization code never reaches the client: the §29 connect
+    flow cannot complete in any enforcing browser. The failure is silent (`net::ERR_ABORTED`, no
+    CSP report on the *redirect* leg in some engines), which is why it survived review.
+  - **Why this widening is safe.** The allowed set is exactly the shapes Dynamic Client Registration
+    already accepts (§29 *Redirect URIs*): loopback with any port, or `https`. It is a **superset
+    filter, not the control** — the actual redirect target is still validated byte-for-byte against
+    that client's registered URIs before any code is minted, and an unverifiable one renders the
+    error page rather than redirecting. CSP here is defence-in-depth against a form on this page
+    being repointed, not the thing that decides where a user may be sent.
+  - **Why not widen it globally.** `form-action` is the directive that stops an injected or
+    rewritten form on any OTHER page from posting a user's input off-origin. `/oauth/authorize` is
+    the only document in the product that legitimately submits across origins, so it is the only one
+    that relaxes. A custom app scheme (native clients, §29) is **not** added: those are handled by
+    the OS handler, not a browser navigation.
+  - Emitted by the same middleware that builds the policy, keyed on the request path — no per-client
+    lookup (the middleware has no DB access), so the header is identical for every authorize request
+    regardless of which client is being consented to. That also means it leaks nothing about the
+    client's registration.
 - **`CSP_MODE` env toggle** (§13; default **`enforce`**): `enforce` sends `Content-Security-Policy`;
   `report-only` sends the identical policy as `Content-Security-Policy-Report-Only` (nothing blocked —
   a shakedown mode so an operator can validate their own edge proxy / customizations before committing);
@@ -3387,6 +3412,30 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   granted in plain language ("read the catalog you can already see; create proposals, ratings and
   comments as you; mint install commands for skills you can access"), and that the grant is
   revocable from the `/mcp` page. Approving writes an `oauth_grants` row.
+- **The validated request is handed from the consent screen to its submit target in the database,
+  never in process memory.** Rendering `/oauth/authorize` persists the already-validated request to
+  `oauth_pending_authorizations` and puts only its opaque id in the form; `POST /oauth/consent`
+  consumes that id. The handler therefore trusts **nothing** from the form except the id and the
+  approve/deny decision — a `redirect_uri` or `client_id` edited between render and submit is not
+  merely ignored, it is never read. The row is **single-use, TTL'd (10 minutes) and bound to the
+  user it was stashed for**; an expired, foreign or already-consumed id fails closed with `400`.
+  *(Durable rather than in-process by requirement: the render and the submit are separate server
+  entry points and are not guaranteed to share a process — they do not under `next dev`'s per-route
+  bundling, and they would not across web replicas. An in-memory handoff makes consent unusable in
+  both cases.)*
+- **The consent screen's own CSP must permit the cross-origin submit.** Approving or declining is a
+  form POST answered with a `303` to the client's registered `redirect_uri` — necessarily a different
+  origin — and browsers enforce `form-action` across redirects. The registry's default
+  `form-action 'self'` therefore aborts the navigation and the authorization code never reaches the
+  client, silently. `/oauth/authorize` is served with a widened `form-action` covering exactly the
+  redirect shapes DCR accepts (loopback any port, or `https`); see §22 *Content-Security-Policy*.
+  The redirect target is still validated against the client's registration — the CSP is a superset
+  filter, not the control.
+- **A request parameter supplied more than once is rejected.** Per OAuth 2.1 the authorization
+  endpoint MUST NOT accept a repeated parameter; skilly fails closed with the non-redirecting error
+  page rather than silently resolving to the first (or last) occurrence. This is checked **before**
+  `client_id` and `redirect_uri` are read, so a duplicated `redirect_uri` can never be collapsed to
+  the registered value and treated as verified.
 - **Scope is a single opaque `mcp` scope**, bound to the caller's own RBAC. There are deliberately
   **no capability scopes** in v1: the boundary is the user's role, re-resolved per call, not a string
   in a token. *(Granular scopes are a future spec change, not an implementation detail.)*
@@ -3443,6 +3492,20 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   pruned).
 - Separate from **`tokens`** (§3), whose semantics are now install-only. No enum is widened, no
   column is reused; the two regimes never share a row.
+
+#### `oauth_pending_authorizations` (migration 0073)
+- `id` (uuid PK — the opaque handle the consent form carries), `user_id` (FK → `users`,
+  `ON DELETE CASCADE`), `client_id` (FK → `oauth_clients`, `ON DELETE CASCADE`), `request` (jsonb —
+  the **already-validated** authorize request: `redirect_uri`, `code_challenge`,
+  `code_challenge_method`, `state`, `resource`), `created_at`, `consumed_at` (nullable).
+- **Single-use and TTL'd (10 minutes).** Consuming a row sets `consumed_at` in the same statement
+  that reads it (`update … where id = $1 and user_id = $2 and consumed_at is null and created_at >
+  now() - interval '10 minutes' returning …`), so a double-submit cannot mint two codes.
+- Bound to the user it was stashed for: a row consumed by a **different** session fails closed.
+- Swept by the worker's housekeeping sweep alongside the other `oauth_*` expiries. Rows are
+  short-lived and carry no secret — the PKCE challenge is a public value and no token exists yet.
+- It is **not** a fourth `kind` on `oauth_tokens`: nothing here is a credential, it never leaves the
+  server, and it dies at consent time rather than participating in the rotation lineage.
 
 #### `audit_source` (migration 0064)
 - The enum gains **`mcp`**, so a governance row written from the MCP surface is queryable as such in
