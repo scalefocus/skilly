@@ -11,10 +11,15 @@ test.describe.configure({ mode: "serial" });
 const SID = "e2e-rum-session-0001";
 
 /** Wait for the collector's next timed flush to land (10 s cadence, a plain keepalive fetch that
- *  Playwright observes — unlike the sendBeacon path used on hide, which it may not). */
+ *  Playwright observes — unlike the sendBeacon path used on hide, which it may not).
+ *  The body is read only on a non-204: a 204 has none, and Chromium discards the body entry of a
+ *  keepalive fetch anyway, so an eager `res.text()` throws "No data found for resource" and fails
+ *  the test before the status is ever compared. */
 async function flushRum(page: Page): Promise<void> {
   const res = await page.waitForResponse((r) => r.url().includes("/api/rum") && r.request().method() === "POST", { timeout: 25_000 });
-  expect(res.status(), await res.text()).toBe(204);
+  if (res.status() === 204) return;
+  const body = await res.text().catch(() => "<body unavailable>");
+  expect(res.status(), body).toBe(204);
 }
 
 test.describe("real user monitoring (§32)", () => {
