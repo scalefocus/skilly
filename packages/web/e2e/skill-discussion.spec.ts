@@ -24,6 +24,12 @@ const OTHER_THREAD = /\/api\/skills\/global\/lint-fixer\/discussion\?offset=0/;
 const header = (page: Page) => page.getByRole("button", { name: /^Discussion/ });
 const card = (page: Page) => page.locator("section#discussion");
 const composerOf = (page: Page) => page.getByRole("textbox", { name: "Add to the discussion" });
+/**
+ * A rendered comment containing `text`. Scoped to paragraphs on purpose: for a tick after the POST
+ * resolves the composer still holds the same text, and a bare getByText on the card then matches
+ * both it and the new row (a strict-mode violation).
+ */
+const commentWith = (page: Page, text: string) => card(page).getByRole("paragraph").filter({ hasText: text });
 
 /** Post `body` and wait for the POST — the row renders from the thread refetch that follows. */
 async function post(page: Page, body: string): Promise<void> {
@@ -57,13 +63,12 @@ test.describe("skill discussion (@global/pdf-tools)", () => {
     await post(page, body);
 
     // It renders in the thread with a clickable version pill (vX.Y.Z).
-    const comment = card(page).getByText(body, { exact: false });
-    await expect(comment).toBeVisible();
+    await expect(commentWith(page, body)).toBeVisible();
     await expect(card(page).locator(".version-pill-btn").first()).toBeVisible();
 
     // Moderator delete (dev user is a platform admin) — the newest row is ours (newest-first).
     await deleteNewest(page);
-    await expect(card(page).getByText(body, { exact: false })).toHaveCount(0);
+    await expect(commentWith(page, body)).toHaveCount(0);
   });
 
   test("collapsing is remembered globally in localStorage; expanding clears it", async ({ page }) => {
@@ -118,7 +123,7 @@ test.describe("skill discussion (@global/pdf-tools)", () => {
     // A comment carrying a run that CANNOT be broken at a space — the min-content driver.
     const lead = probe("overflow probe");
     await post(page, `${lead} https://example.com/${"segment/".repeat(20)}end`);
-    await expect(c.getByText(lead, { exact: false })).toBeVisible();
+    await expect(commentWith(page, lead)).toBeVisible();
 
     // The blowout only appeared AFTER the open animation released the clip — assert the settled state.
     await expect(body).toHaveAttribute("data-settled", "true", { timeout: 10_000 });
@@ -139,7 +144,7 @@ test.describe("skill discussion (@global/pdf-tools)", () => {
     }
 
     await deleteNewest(page);
-    await expect(c.getByText(lead, { exact: false })).toHaveCount(0);
+    await expect(commentWith(page, lead)).toHaveCount(0);
   });
 
   test("emoji picker stays on-screen on a mobile viewport", async ({ page }) => {
