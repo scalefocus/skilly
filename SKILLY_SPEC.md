@@ -227,7 +227,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -264,6 +264,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `user_achievements` (migration 0071, detailed in §31)
 - `user_id` (FK → `users`, CASCADE), `key` (text — a catalog key from `@skilly/shared/achievements`), `earned_at` (timestamptz); **PK `(user_id, key)`**. One row per badge a user has earned; **no subject identity** (no skill/proposal/message reference — invariant #3 by construction). Written inline by `awardAchievement()` (`INSERT … ON CONFLICT DO NOTHING`) in the same transaction as the triggering write; seeded once by the migration's history backfill (§31.6). Deleted on GDPR erasure (§4).
+
+### `rum_samples` / `rum_errors` / `rum_daily` (migration 0074, detailed in §32)
+- **Operational client-side telemetry (NOT audit — mutable, no hash chain, bounded retention).** `rum_samples` — raw browser samples, 30-day retention: `id`, `created_at` (server-stamped), `user_id` (nullable FK → `users`, `ON DELETE SET NULL`), `session_id` (opaque per-tab id), `route` (a **template** from the known-route table or `other` — never a concrete path), `kind` (`page_view` | `vital` | `nav` | `api` | `error`), `name`, `value`, `ok`. `rum_errors` — the client-error fingerprint index (`fingerprint` PK, `type`, `message` ≤ 500, `frame` ≤ 300, `count`, `first_seen`, `last_seen`; pruned after 90 idle days). `rum_daily` — the per-`(day, route)` rollup (views, sessions, p75 of each metric, API calls/errors, error count), written hourly by a leader-only worker sweep for today + yesterday, kept indefinitely.
 
 ---
 
@@ -355,6 +358,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), between **Platform admins** and **Currently online**. Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
 - **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
+- **Anonymised in place (telemetry):** `rum_samples.user_id` → **NULL** via the FK (§32.3) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user.
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
@@ -1264,7 +1268,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
 - **Scale target:** ~low-thousands users, hundreds–low-thousands skills, tens of namespaces (Postgres FTS + single worker sufficient).
 - **Availability:** single-instance v1, but **stateless app** (horizontal-scalable later); worker is **singleton, leader-locked**. HA not day-one.
 - **Testing:** unit (domain, RBAC resolution, semver), integration (API + DB + **SCIM endpoint conformance against Entra payloads**), e2e (propose→review→publish→install happy path).
-- **Observability:** structured JSON logs, `/healthz` + `/readyz`, Prometheus `/metrics`, request IDs threaded into audit. OpenTelemetry deferred.
+- **Observability:** structured JSON logs, `/healthz` + `/readyz`, Prometheus `/metrics`, request IDs threaded into audit. OpenTelemetry deferred. **Client-side** performance and error telemetry is the platform-admin **Real user monitoring** surface (§32) — first-party, Postgres-backed, no third-party RUM SaaS.
 - **UI:** WCAG 2.1 AA; English-only with externalized strings; evergreen browsers. **Visual identity
   follows the Scalefocus brand book** (2021): primaries Navy `#082773` (heading/display anchor) +
   Cyan `#14ABE3` (the single interactive accent), Black/Grey/Light-grey neutrals; semantic
@@ -1509,6 +1513,10 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Audit & system log**
 - `GET /api/audit` (`q`, `from`, `to`, `action`, `namespaceId`, `limit`, `offset`; admin-only, §11). `GET /api/audit/verify` (hash-chain integrity), `POST /api/audit/trim` (platform-admin).
 - `GET /api/system-log` (`q`, `status`, `from`, `to`, `limit`, `offset`; **platform-admin only**, §25).
+
+**Real user monitoring (§32)**
+- `POST /api/rum` — the browser beacon: **any** signed-in user (silent 401 otherwise), ≤ 50 samples / ≤ 32 KB per batch, all-or-nothing validation (400), 60 batches/user/min (429), 204-and-discard while `rum_enabled` is off, §32.5.
+- `GET /api/admin/rum/summary?range=7|30|90|all` (chart series + per-route table incl. the `all` row), `GET /api/admin/rum/routes/:route/users?range=7|30` (top-20 affected users; 422 for 90/all), `GET /api/admin/rum/errors?range=&offset=&limit=` (fingerprinted client errors) — all **platform-admin only** (403), §32.8. `GET|PATCH /api/admin/settings` gains `rum_enabled` / `rum_sample_rate`, §32.6.
 
 **Administration**
 - `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
@@ -5018,3 +5026,270 @@ including on a backfilled award; migration 0072 backfills `hero_at = max(earned_
 full-house user and leaves everyone else null; `GET /api/levels` omits hidden, inactive and erased
 users, includes the caller's own hidden entry, omits level-0 users, and returns an empty map while
 the toggle is off; the card payload's `achievementHero`; the erasure sweep clears `hero_at`.
+
+---
+
+## 32. Real user monitoring (RUM)
+
+A **platform-admin-only** view of how the web app **performs in users' browsers** — page traffic,
+Web Vitals, route-transition and API latency as the browser saw them, and client-side errors —
+aggregated **per route**. The purpose is **proactive**: spot the slow page, the janky interaction,
+or the JavaScript error that users are quietly putting up with, and fix it **before** anyone files
+a complaint. It is the client-side complement to the server-side surfaces that already exist and
+**does not replace any of them**:
+
+| Question | Surface |
+|---|---|
+| Who is on the platform right now / how many people use it | **Currently online** + DAU/WAU/MAU + trend (§4) |
+| Which skills get viewed and installed | **Usage** (§21) |
+| What HTTP errors did the server return, and to whom | **System log** (§25) |
+| Who changed what | **Audit log** (§11) |
+| **How fast and how error-free is the app in the browser, per page** | **Real user monitoring (this section)** |
+
+RUM is **browser-only**: git-gateway traffic (§9), MCP traffic (§29) and the worker's HTTP surfaces
+never produce RUM samples — the Prometheus `/metrics` endpoint and the System log remain their story.
+Like the System log, RUM is **operational telemetry, not audit**: mutable tables, cheap inserts,
+bounded retention, **no** hash chain and **no** append-only trigger.
+
+### 32.1 What is measured
+
+Every sample carries the **route template** it belongs to (never a concrete path, §32.3) and falls
+into one of five **kinds**:
+
+| Kind | `name` | `value` | Meaning |
+|---|---|---|---|
+| `page_view` | — | — | The route became current (initial load or client-side navigation). |
+| `vital` | `lcp` · `inp` · `cls` · `ttfb` | ms (unitless for `cls`) | A Web Vital as reported by the **`web-vitals`** library (§32.4). |
+| `nav` | — | ms | **Route-transition time**: from the captured in-app navigation intent to the new route's first paint. Best-effort — absent when no intent was captured (browser back/forward, deep link). |
+| `api` | the **API route template** | ms | Browser-observed duration of a same-origin `/api/*` call, from a `PerformanceObserver` over `resource` entries (fetch/XHR initiators). `ok` = `responseStatus < 400` when the browser exposes it (Chromium), else `null`. |
+| `error` | the **fingerprint** (§32.2) | — | A JavaScript `error` event or `unhandledrejection` on this route. |
+
+**Out of scope for v1** (deliberately): long tasks, resource/asset timing, memory, session replay,
+click heatmaps, user journeys / funnels. Session-level metrics (length, pages per session) are
+**not shown** in v1, but every sample records a **per-tab session id** so they can be added later
+without a migration (§32.3).
+
+**Vitals attribution — honest limits.** The `web-vitals` library measures the *document*, not the
+SPA route, so:
+- **LCP and TTFB** are document-load metrics and are attributed to the **landing route** (the route
+  current at the hard load). They describe first opens, refreshes and deep links — not client-side
+  navigations.
+- **CLS** is collected with `reportAllChanges` and each report's **`delta`** is attributed to the route
+  current at report time, so a route's CLS is the layout shift that happened *while on it*.
+- **INP** is collected with `reportAllChanges` and each report is attributed to the route current when
+  the reported interaction happened (from the library's attribution entry). Per-route INP is therefore
+  a **directional** signal; the platform-wide INP (the "All routes" row) is the spec-exact one.
+
+### 32.2 Client errors
+
+An `error` sample is recorded for every `window` **`error`** event and **`unhandledrejection`**.
+What is captured is minimal and scrubbed:
+- **`type`** (the constructor name, e.g. `TypeError`, or `UnhandledRejection`), **`message`**
+  truncated to **500 characters**, and the **top stack frame only** as `path:line:col` (origin
+  stripped, ≤ 300 chars). **No full stack traces** — they reveal source layout and can embed user
+  content that appeared in an error message.
+- **Scrubbing** replaces anything that looks like an **email address** or a **token-like string**
+  (≥ 20 chars of base64/hex) with `[redacted]`, **client-side before sending**, and again
+  **server-side at ingest** (defence in depth).
+- **Fingerprint** = sha256 over `type` + the **normalised** message (digits and quoted strings
+  collapsed) + the top frame — **route is not part of it**, so one bug that fires on several pages is
+  one row; the routes it occurred on are derived from the `error` samples that reference it.
+- The `rum_errors` index row is **upserted** per occurrence: `count++`, `last_seen = now()`.
+
+Failed API calls are **not** `error` samples — they are `api` samples with `ok = false` and surface as
+the route's **API error rate**, kept separate from client errors because they usually already appear,
+with far more context, in the System log (§25).
+
+### 32.3 Data model (migration 0074)
+
+Three tables. All `created_at` / `first_seen` / `last_seen` are **server-stamped** — client clocks are
+never trusted (§32.5).
+
+- **`rum_samples`** (raw, 30-day) — `id` bigserial PK, `created_at` timestamptz default `now()`,
+  `user_id` (nullable FK → `users`, **`ON DELETE SET NULL`**), `session_id` text (the client's
+  **per-tab** opaque id, ≤ 64 chars — `sessionStorage`, so it dies with the tab), `route` text (a
+  template from the known-route table, or the literal `other`), `kind` text (CHECK in the five kinds),
+  `name` text nullable, `value` double precision nullable, `ok` boolean nullable. Indexes:
+  `(route, created_at)`, `(created_at)`, `(user_id)`, `(kind, name, created_at)`.
+- **`rum_errors`** (the fingerprint index, mutable) — `fingerprint` text PK, `type` text, `message`
+  text (≤ 500), `frame` text (≤ 300), `count` integer, `first_seen` timestamptz, `last_seen`
+  timestamptz.
+- **`rum_daily`** (the rollup, kept indefinitely) — `day` date, `route` text, `views` integer,
+  `sessions` integer (distinct `session_id`), `lcp_p75` / `inp_p75` / `cls_p75` / `ttfb_p75` /
+  `nav_p75` / `api_p75` double precision nullable, `api_calls` integer, `api_errors` integer,
+  `errors` integer; **PK `(day, route)`**.
+
+**Route identity (invariant #6 by construction).** `route` is always a **template** — `/skills/[ns]/[slug]`,
+`/requests/[id]`, `/api/skills/[ns]/[slug]/usage-series` … — resolved **client-side** from a single
+**known-route table** (`packages/web/src/lib/rum/routes.ts`: every page route with its human label,
+reusing the presence route→label map, plus every API route template) and **re-validated server-side
+against the same table**; anything unknown collapses into the single bucket **`other`**. Concrete
+paths and query strings are never sent and never stored. The dynamic pages report their **template
+only** — never the skill title that presence shows (§4) — so a restricted skill's existence is not
+inferable from RUM by any future non-admin surface (invariant #3).
+
+**Retention & rollup** (both on the worker, leader-only, mirroring the DAU snapshot and the
+housekeeping sweep):
+- The **rollup sweep** (`rollupRum`, once at boot then hourly, `RUM_ROLLUP_INTERVAL_MS` override)
+  recomputes and **upserts** `rum_daily` for **today and yesterday (UTC)** from the raw samples.
+  Because raw samples live 30 days, a missed run **self-heals** on the next run — unlike the DAU
+  chart, which has no source to reconstruct from. Percentiles are `percentile_cont(0.75)` over the
+  day's samples per route.
+- The **housekeeping sweep** prunes `rum_samples` older than **30 days** and `rum_errors` rows whose
+  `last_seen` is older than **90 days** (the System log's retention). `rum_daily` is never pruned.
+
+**GDPR erasure (§4).** `rum_samples.user_id` is set to **NULL** by the FK (the row is kept so route
+aggregates stay true); nothing else references the user. Deprovisioning changes nothing.
+
+### 32.4 Collection (the browser)
+
+A `RumCollector` client component mounted in the app shell, active only when the platform flag is
+on and the session won the sampling draw (§32.6):
+- **Session id**: created once per tab in `sessionStorage`; the **sampling draw** (`Math.random() <
+  rum_sample_rate / 100`) is made **once, when the id is created**, and stored with it, so a
+  session is either fully sampled or fully silent (views and vitals never disagree within a session).
+- **Page views + nav**: on initial mount and every `usePathname` change. The navigation intent for
+  `nav` is captured by a document-level capture listener on internal anchor clicks (and the shell's
+  own programmatic pushes); the sample is dropped if no intent was captured or the transition exceeds
+  60 s.
+- **Vitals**: the **`web-vitals`** npm package (`onLCP`, `onINP`, `onCLS`, `onTTFB`; `reportAllChanges`
+  for CLS and INP as in §32.1). It is a **build-time dependency** like recharts — no CDN, no runtime
+  fetch, so the §17 air-gap posture holds. INP is deliberately not hand-rolled.
+- **API latency**: a `PerformanceObserver({ type: 'resource', buffered: true })` filtered to
+  same-origin URLs under `/api/` with `fetch`/`xmlhttprequest` initiators; **`/api/rum` and
+  `/api/presence/page` are excluded** (the monitor must not measure itself). The URL is reduced to
+  its template client-side (§32.3).
+- **Errors**: `window.addEventListener('error' | 'unhandledrejection')`, scrubbed and fingerprinted
+  client-side (§32.2).
+- **Batching**: samples buffer in memory and flush every **10 s**, on `visibilitychange → hidden`
+  and on `pagehide` via **`navigator.sendBeacon`** (fetch `keepalive` fallback), **≤ 50 samples per
+  batch**. A rejected batch (400/401/429) is **dropped silently** — RUM never retries, never
+  surfaces an error to the user, and never blocks the UI.
+
+### 32.5 Ingest — `POST /api/rum`
+
+- **Auth required** (any signed-in user beacons their own telemetry); a signed-out caller gets a
+  **silent 401** the client ignores — identical posture to the presence beacon (§4).
+- Body `{ samples: [{ kind, route, name?, value?, ok?, sessionId, error?: { type, message, frame } }] }`,
+  **≤ 50 samples**, **≤ 32 KB**. Validation is **all-or-nothing** — one invalid sample rejects the
+  whole batch with **400** (deliberately 400, not 422: 400 is outside the System log's recorded
+  4xx set, so a misbehaving tab cannot flood §25):
+  - `kind` in the five kinds; `name` in the vital enum for `vital`, a known API template for `api`, a
+    64-hex fingerprint for `error`, absent otherwise; `route` a known template or `other`;
+  - `value` finite, ≥ 0, **≤ 60 000 ms** (durations) / **≤ 10** (`cls`); absent for `page_view`/`error`;
+  - `sessionId` matches `^[A-Za-z0-9_-]{8,64}$`; `error.message` ≤ 500 and `error.frame` ≤ 300 after
+    server-side re-scrubbing.
+- `created_at` is **server-stamped**; the client sends no timestamps.
+- **Rate limit**: **60 batches per user per minute** (the normal cadence is ~6); over the limit → 429.
+- When **`rum_enabled` is off** the endpoint returns **204 and discards** the batch, so a tab that
+  has not yet re-read the flag never errors.
+- The route is **not** wrapped in `withSystemLog`'s recorded 4xx set by design (above); 5xx from it
+  are recorded like any other.
+- Response: **204**.
+
+### 32.6 Platform toggle & sampling
+
+Two platform settings (`platform_settings`, §3), both **platform-admin only**, both audited as
+`settings.updated` like every setting, exposed to clients on `GET /api/me` as `rumEnabled` /
+`rumSampleRate`, and written through `PATCH /api/admin/settings`:
+- **`rum_enabled`** (default **`true`**). The control lives **at the top of the RUM page itself**
+  (§32.7) — a header row with the shared `Switch` — not on the Administration page: the admin who
+  decides whether to collect is looking at what collection produces. **Off**: the collector sends
+  nothing (re-read from `/api/me` on the app's normal poll, so it stops within a minute), the ingest
+  endpoint discards, and the RUM page keeps showing the **historical** data under a banner
+  *"Collection is off — showing data collected until <last sample>"*.
+- **`rum_sample_rate`** (integer **1–100**, default **100**) — the percentage of **sessions** that
+  collect (§32.4). Sits next to the switch as a small select (100 / 50 / 25 / 10 / 1 %). The org is
+  bounded, so 100 % is the expected setting; the knob exists so volume can be dialled down **without a
+  release**. The page header states the effective value ("Sampling 100 % of sessions").
+
+No per-user opt-out: this is an internal enterprise tool and the data is operational, attributable
+telemetry of the same class as the System log (§25).
+
+### 32.7 The page — `/admin/rum`
+
+A **dedicated page**, sidebar link **"Real user monitoring"** directly under **System log**, shown
+**only to platform admins** (the API is hard-gated with 403 regardless; the link is merely hidden for
+everyone else — namespace admins see nothing). Added to the presence route→label map as
+*"Real user monitoring"*. Top to bottom:
+
+1. **Header row** — title, the one-line purpose (*"How the app performs in your users' browsers.
+   Spot slow pages and usability issues before people report them."*), and on the right the
+   **`rum_enabled` switch** + **sample-rate select** (§32.6). Below it the standard **7d / 30d / 90d /
+   All** range toggle (remembered as `skilly.chart.rum-range`) and a **Refresh** button. Data is
+   fetched **on mount and on range change only** — like the DAU chart, not polled: the numbers do not
+   move meaningfully in a minute.
+2. **Trend chart** (recharts) — **page views** (left axis, bars) with **p75 LCP** and **p75 INP**
+   (right axis, ms, lines). Bucketing is **span-adaptive** with the same rule and thresholds as §21/§4
+   (day ≤ ~92 days, week ≤ ~730, month beyond); fewer than 3 points render visible markers.
+3. **Routes table** — one row per route with samples in the range, plus a pinned **"All routes"**
+   row on top. Columns: **Route** (the human label, template on hover), **Views**, **Sessions**,
+   **p75 LCP**, **p75 INP**, **p75 CLS**, **p75 TTFB**, **p75 nav**, **p75 API**, **API errors %**,
+   **Client errors** (count, and per 100 views on hover). Vitals columns render as **coloured pills**
+   in the Google **good / needs-improvement / poor** bands (LCP 2.5 s / 4 s · INP 200 ms / 500 ms ·
+   CLS 0.1 / 0.25 · TTFB 0.8 s / 1.8 s) using the existing pill styles; cells with no samples show
+   "—". Sortable by any column, default **Views desc**. **Expanding a row** loads the **per-user
+   drill-down** (§32.8): the top 20 people by sample count on that route with their own p75 LCP / INP
+   and client-error count — **only for 7d / 30d** (the rollup has no user dimension); on 90d / All the
+   expander explains *"Switch to 7d or 30d to see who was affected"*.
+4. **Client errors** — the `rum_errors` rows seen in the range, **ordered by last seen desc**,
+   sortable by count: type + message (monospace, truncated with the full text on hover), frame,
+   **count**, **first / last seen** (viewer-timezone via `useDateFmt()`), and the **top 3 routes** it
+   occurred on in the last 30 days. Paged **50 at a time**.
+5. **Empty state** — a fresh deployment (or a range with no samples) renders the standard
+   `EmptyState` with *"Samples appear a few minutes after users start browsing"*. **No zero-filling,
+   no placeholder points.**
+
+**Range → source.** **7d and 30d** are computed **on the fly** from `rum_samples` (true `p75` over raw
+samples). **90d and All** read `rum_daily`; there the vitals columns are the **views-weighted mean of
+the daily p75 values** (a percentile cannot be re-aggregated from percentiles), and the column
+header's tooltip says so. The chart's LCP/INP lines follow the same rule per bucket.
+
+### 32.8 API surface (all **platform-admin only**, 403 otherwise)
+
+- `GET /api/admin/rum/summary?range=7|30|90|all` → `{ range, bucket, enabled, sampleRate,
+  lastSampleAt, series: [{ date, views, lcpP75, inpP75 }], routes: [{ route, label, views, sessions,
+  lcpP75, inpP75, clsP75, ttfbP75, navP75, apiP75, apiCalls, apiErrorRate, errors }] }` — `routes`
+  includes the `all` pseudo-route first.
+- `GET /api/admin/rum/routes/:route/users?range=7|30` → `{ users: [{ userId, displayName, email,
+  avatar, samples, lcpP75, inpP75, errors }] }` (top 20; `:route` URL-encoded; **422** for 90/all;
+  erased tombstones render their label like everywhere else).
+- `GET /api/admin/rum/errors?range=7|30|90|all&offset=&limit=` → `{ errors: [{ fingerprint, type,
+  message, frame, count, firstSeen, lastSeen, routes: [...] }], total, hasMore }`.
+- `POST /api/rum` — the beacon (§32.5; **any** signed-in user).
+- `GET|PATCH /api/admin/settings` gains `rum_enabled` / `rum_sample_rate` (§32.6).
+
+### 32.9 Security posture
+
+- Every sample is bound to the **authenticated** caller; nothing is accepted anonymously (unlike the
+  CSP sink, §22, which browsers post without a session).
+- The **trust boundary is the ingest validator** (§32.5): fixed enums, bounded numbers, templated
+  routes, server timestamps, batch/body caps, per-user rate limit, all-or-nothing batches.
+- No concrete paths, no query strings, no full stacks, scrubbed messages (§32.2/§32.3) — invariant
+  #6 holds; the template-only rule for dynamic pages keeps invariant #3.
+- The beacon is same-origin first-party `fetch`/`sendBeacon`, so the nonce-based CSP (§22) needs no
+  change; **no third-party RUM SaaS**, no CDN script (§17 air-gap).
+- The RUM read API is hard-gated to platform admins; the page hides itself for everyone else.
+
+### 32.10 Testing
+
+**Unit** (`@skilly/web`): the ingest validator (each kind's `name`/`value` rules, the 60 s / CLS 10
+bounds, unknown route → `other`, batch size and all-or-nothing rejection, `sessionId` pattern);
+scrubbing (emails, hex/base64 tokens, truncation) and fingerprint stability (same bug on two routes →
+one fingerprint; a changed digit in the message → same fingerprint); the client route-templating of
+page and API URLs; the per-session sampling draw (a session is entirely in or entirely out); the p75
+and views-weighted-mean helpers; the Web-Vitals band classifier at the thresholds.
+
+**Integration**: `POST /api/rum` — 401 signed out, 204 + rows written with server `created_at`, 400
+on any invalid sample with **no** rows written, 429 past 60 batches/min, 204-and-discard while
+`rum_enabled` is off, `rum_errors` upsert increments `count` / `last_seen`; the three admin GETs — 403
+for a namespace admin and a member, correct p75 / API error rate / error counts over seeded samples,
+the `all` row, `users` 422 on 90/all and top-20 ordering; `rollupRum` — idempotent upsert of today +
+yesterday, a re-run after a "missed" run heals the gap; the housekeeping prune — raw > 30 d and errors
+idle > 90 d removed, `rum_daily` untouched; `PATCH /api/admin/settings` for the two keys writes
+`settings.updated` and `/api/me` reflects them; GDPR erasure leaves the sample with `user_id = NULL`.
+
+**e2e**: sign in → open two pages → `/admin/rum` (7d) lists both routes with ≥ 1 view and the "All
+routes" row → expand a row → the acting user appears in the drill-down → flip the switch off → the
+banner appears and no further `POST /api/rum` requests are made → a namespace-admin session sees no
+sidebar link and gets 403 on the summary.

@@ -27,6 +27,7 @@ import { notifyNewSystemEvents } from "./notify/systemLog.js";
 import { refreshPointerVersions } from "./git/pointerRefresh.js";
 import { recomputeRelatedSkills } from "./related.js";
 import { recordDailyActiveUsers } from "./dau.js";
+import { rollupRum, pruneRum } from "./rum.js";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
 import { mcpRouter } from "./mcp/server.js";
@@ -360,6 +361,33 @@ async function leaderLoops(): Promise<void> {
   };
   await dauSweep();
   setInterval(dauSweep, Number(process.env.DAU_SNAPSHOT_INTERVAL_MS ?? 86_400_000)); // 24h
+
+  // Real user monitoring rollup (SKILLY_SPEC.md §32.3): upsert rum_daily for today + yesterday
+  // (UTC) from the raw samples, hourly. Raw samples live 30 days, so a missed run self-heals.
+  const rumRollup = async () => {
+    if (!isLeader) return;
+    try {
+      const rows = await rollupRum(pool);
+      console.log(JSON.stringify({ level: "info", msg: "rolled up rum_daily", rows }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "rum rollup failed", err: String(err) }));
+    }
+  };
+  await rumRollup();
+  setInterval(rumRollup, Number(process.env.RUM_ROLLUP_INTERVAL_MS ?? 3_600_000)); // 1h
+
+  // RUM housekeeping (§32.3): raw samples > 30 days and error fingerprints idle > 90 days.
+  const rumPrune = async () => {
+    if (!isLeader) return;
+    try {
+      const { samples, errors } = await pruneRum(pool);
+      if (samples > 0 || errors > 0) console.log(JSON.stringify({ level: "info", msg: "pruned rum telemetry", samples, errors }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "rum prune failed", err: String(err) }));
+    }
+  };
+  await rumPrune();
+  setInterval(rumPrune, Number(process.env.RUM_PRUNE_INTERVAL_MS ?? 21_600_000)); // 6h
 }
 
 /**

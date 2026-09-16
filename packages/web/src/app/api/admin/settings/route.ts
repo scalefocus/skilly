@@ -1,7 +1,7 @@
 // Platform-admin: read/update platform settings (e.g. contribution policy). SKILLY_SPEC.md §4.
 import { currentAccess } from "../../../../lib/guard";
 import { pool } from "../../../../lib/db";
-import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
+import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,7 @@ export async function GET() {
 export async function PATCH(req: Request) {
   const access = await currentAccess();
   if (!access?.userId || !access.isPlatformAdmin) return Response.json({ error: "platform admin required" }, { status: 403 });
-  const body = (await req.json().catch(() => ({}))) as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean };
+  const body = (await req.json().catch(() => ({}))) as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number };
   if (typeof body.proposalsOpen === "boolean") await setProposalsOpen(body.proposalsOpen, access.userId);
   if (body.dateFormat === "eu" || body.dateFormat === "us") await setDateFormat(body.dateFormat, access.userId);
   if (body.duplicateEnforcement === "block" || body.duplicateEnforcement === "warn") await setDuplicateEnforcement(body.duplicateEnforcement, access.userId);
@@ -51,6 +51,15 @@ export async function PATCH(req: Request) {
   if (typeof body.mcpEnabled === "boolean") await setMcpEnabled(body.mcpEnabled, access.userId);
   // §31 achievements: dormant-not-destructive on/off.
   if (typeof body.achievementsEnabled === "boolean") await setAchievementsEnabled(body.achievementsEnabled, access.userId);
+  // §32 real user monitoring: the collect switch + the per-session sample rate.
+  if (typeof body.rumEnabled === "boolean") await setRumEnabled(body.rumEnabled, access.userId);
+  if (body.rumSampleRate !== undefined) {
+    try {
+      await setRumSampleRate(body.rumSampleRate, access.userId);
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : "invalid RUM sample rate" }, { status: 422 });
+    }
+  }
   if (body.mcpAccessTtlMinutes !== undefined) {
     try {
       await setMcpAccessTtlMinutes(body.mcpAccessTtlMinutes, access.userId);

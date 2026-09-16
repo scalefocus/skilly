@@ -106,6 +106,10 @@ export async function GET() {
     timeZone: prefs?.time_zone ?? null,
     // §31.7 platform toggle — the profile hides its Achievements card while off.
     achievementsEnabled: settings.achievementsEnabled,
+    // §32.6 real user monitoring — the browser collector reads both on mount and re-reads them on
+    // its 60s poll, so flipping the switch stops collection within a minute.
+    rumEnabled: settings.rumEnabled,
+    rumSampleRate: settings.rumSampleRate,
     // Max uploaded hosted-bundle size (bytes) — surfaced on the propose form so the limit is
     // explicit and a too-large bundle is rejected client-side before upload. §6.
     maxBundleBytes: settings.maxBundleBytes,
