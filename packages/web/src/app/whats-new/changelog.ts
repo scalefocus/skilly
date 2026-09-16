@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.6.1",
+    date: "2026-09-16",
+    summary:
+      "The sample-rate dropdown on the Real user monitoring admin page now uses the same themed select as the Maximum upload size setting, so the two admin dropdowns look alike in both light and dark themes.",
+  },
+  {
     version: "2.6.0",
     date: "2026-09-16",
     summary:
