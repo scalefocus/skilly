@@ -50,6 +50,19 @@ const PAGES = [
   "/skills/global/web-scraper",
   "/skills/global/lint-fixer",
   "/skills/global/secret-helper",
+  "/proposals",
+  "/proposals/00000000-0000-0000-0000-000000000000",
+  "/propose",
+  "/marketplaces",
+  "/mcp",
+  "/audit",
+  "/system-log",
+  "/tokens",
+  "/achievements/00000000-0000-0000-0000-000000000000",
+  // The OAuth routes are POST-only route handlers: a GET answers 405 but compiles them all the same.
+  "/oauth/register",
+  "/oauth/authorize",
+  "/oauth/consent",
 ];
 
 // API subtrees a GET must never touch: sign-in/out and cookie clearing, the email OAuth hop,

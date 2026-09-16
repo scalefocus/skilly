@@ -3,12 +3,18 @@
 // row) and drills down to the acting user, the beacon's trust boundary answers 401 signed-out and
 // 400 to a malformed batch, and flipping the header switch off shows the banner and stops the
 // beacon. Runs against the dev stack (SKILLY_DEV_AUTH=1) — serial, because it flips a platform
-// setting the shared dev user sees.
+// setting the shared dev user sees. The 90d/All ranges read `rum_daily`, which only the worker's
+// hourly sweep writes and the e2e stack runs no worker, so that test seeds one rollup row itself
+// (needs DATABASE_URL in the launching shell, like whats-new-notice.spec.ts).
+import { Pool } from "pg";
 import { test, expect, devSignIn, type Page } from "./fixtures";
 
 test.describe.configure({ mode: "serial" });
 
 const SID = "e2e-rum-session-0001";
+/** The (day, route) row seeded into `rum_daily` for the rollup-range test; removed afterwards. */
+const ROLLUP_ROUTE = "/e2e/rum-rollup";
+const dbUrl = process.env.DATABASE_URL;
 
 /** Wait for the collector's next timed flush to land (10 s cadence, a plain keepalive fetch that
  *  Playwright observes — unlike the sendBeacon path used on hide, which it may not).
@@ -71,12 +77,33 @@ test.describe("real user monitoring (§32)", () => {
     const users = page.getByTestId("rum-users");
     await expect(users).toBeVisible({ timeout: 10_000 });
     await expect(users).toContainText("Dev Admin");
+  });
 
-    // 90d / All have no user dimension: the expander says so instead of loading.
-    await page.getByRole("group", { name: "Range" }).getByRole("button", { name: "All", exact: true }).click();
-    await expect(page.getByTestId("rum-routes")).toBeVisible({ timeout: 10_000 });
-    await page.getByTestId("rum-routes").locator("tbody tr.rum-row").first().click();
-    await expect(page.getByText("Switch to 7d or 30d to see who was affected.")).toBeVisible();
+  test("90d / All read the daily rollup, and their expander has no user dimension", async ({ page }) => {
+    test.skip(!dbUrl, "DATABASE_URL not set — cannot seed the rollup");
+    // Seed today's rollup row for a sentinel route the way the worker's sweep would; without it the
+    // All range has no routes and the page shows its empty state instead of the table.
+    const pool = new Pool({ connectionString: dbUrl });
+    try {
+      await pool.query(
+        `insert into rum_daily (day, route, views, sessions, lcp_p75) values (current_date, $1, 3, 1, 1200)
+         on conflict (day, route) do update set views = excluded.views, sessions = excluded.sessions, lcp_p75 = excluded.lcp_p75`,
+        [ROLLUP_ROUTE],
+      );
+
+      await page.goto("/admin/rum");
+      await expect(page.getByRole("heading", { name: "Real user monitoring." })).toBeVisible({ timeout: 20_000 });
+      await page.getByRole("group", { name: "Range" }).getByRole("button", { name: "All", exact: true }).click();
+      const table = page.getByTestId("rum-routes");
+      await expect(table).toBeVisible({ timeout: 10_000 });
+      const row = table.locator(`tr[data-route='${ROLLUP_ROUTE}']`);
+      await expect(row).toBeVisible();
+      await row.click();
+      await expect(page.getByText("Switch to 7d or 30d to see who was affected.")).toBeVisible();
+    } finally {
+      await pool.query(`delete from rum_daily where route = $1`, [ROLLUP_ROUTE]).catch(() => {});
+      await pool.end();
+    }
   });
 
   test("the sidebar links the page for the admin and the presence label resolves", async ({ page }) => {
