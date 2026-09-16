@@ -160,9 +160,22 @@ export interface PlatformSettings {
   marketplaceNamePrefix: string;
   /** §31 achievements on/off. Ships ON; OFF hides the surfaces and mutes notifications but awards keep recording. */
   achievementsEnabled: boolean;
+  /** §32 real user monitoring on/off. Ships ON; OFF stops the browser collector and makes the ingest endpoint discard. */
+  rumEnabled: boolean;
+  /** §32 percentage (1–100) of browser sessions that collect RUM samples. */
+  rumSampleRate: number;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true };
+/** §32.6 the sample-rate choices the RUM page offers; the server accepts any integer 1–100. */
+export const RUM_SAMPLE_RATE_OPTIONS = [100, 50, 25, 10, 1] as const;
+export const RUM_SAMPLE_RATE_DEFAULT = 100;
+
+function coerceRumSampleRate(raw: unknown): number {
+  const n = typeof raw === "string" ? Number(raw) : raw;
+  return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
+}
+
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -189,7 +202,51 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     marketplaceSyncMinutes: coerceMarketplaceSyncMinutes(map.get("marketplace_sync_minutes")),
     marketplaceNamePrefix: coerceMarketplacePrefix(map.get("marketplace_name_prefix")),
     achievementsEnabled: map.get("achievements_enabled") !== false,
+    rumEnabled: map.get("rum_enabled") !== false,
+    rumSampleRate: coerceRumSampleRate(map.get("rum_sample_rate")),
   };
+}
+
+/** §32.6 is real user monitoring collecting? Read by the ingest endpoint on every batch. */
+export async function getRumSettings(db: Pool = pool): Promise<{ enabled: boolean; sampleRate: number }> {
+  const s = await getPlatformSettings(db);
+  return { enabled: s.rumEnabled, sampleRate: s.rumSampleRate };
+}
+
+/** §32.6 RUM on/off. OFF: the collector stops within a minute, ingest discards, history stays visible. */
+export async function setRumEnabled(enabled: boolean, actorUserId: string): Promise<void> {
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('rum_enabled', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(enabled), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "rum_enabled",
+    after: { rumEnabled: enabled },
+  });
+}
+
+/** §32.6 the share of browser sessions that collect (integer percent, 1–100). Throws on anything else. */
+export async function setRumSampleRate(rate: unknown, actorUserId: string): Promise<void> {
+  const n = typeof rate === "string" ? Number(rate) : rate;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 100) throw new Error("sample rate must be a whole number from 1 to 100");
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('rum_sample_rate', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(n), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "rum_sample_rate",
+    after: { rumSampleRate: n },
+  });
 }
 
 /** Are §31 achievements shown? Read by the profile card, the hall, the hover card and the award helper. */

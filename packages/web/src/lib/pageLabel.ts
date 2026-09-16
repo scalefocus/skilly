@@ -20,6 +20,8 @@ const STATIC_ROUTES: { prefix: string; label: string; exact?: boolean }[] = [
   { prefix: "/audit", label: "Audit log" },
   { prefix: "/system-log", label: "System log" },
   { prefix: "/admin", label: "Administration" },
+  // Longest-prefix match keeps this from being swallowed by /admin (§32.7).
+  { prefix: "/admin/rum", label: "Real user monitoring" },
   { prefix: "/quick-start", label: "Quick start" },
   { prefix: "/whats-new", label: "What's new" },
   { prefix: "/skills", label: "Skill" },

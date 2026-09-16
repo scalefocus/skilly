@@ -12,6 +12,7 @@ import { MessagesMenu } from "./MessagesMenu";
 import { UserBubble } from "./UserBubble";
 import { cachedGet, invalidateApi, usePopoverPresence, Pill } from "./ui";
 import { PageLabelOverrideProvider } from "./PageLabelOverride";
+import { RumCollector, markRumNavIntent } from "./RumCollector";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
 import { CHANGELOG } from "../app/whats-new/changelog";
 import { achievementDef } from "@skilly/shared/achievements";
@@ -30,6 +31,8 @@ const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "rev
 const USAGE_NAV = { href: "/usage", label: "Usage", icon: "M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3" };
 const AUDIT_NAV = { href: "/audit", label: "Audit log", icon: "M5 4h11l3 3v13H5zM8 11h8M8 15h5M8 7h4" };
 const SYSLOG_NAV = { href: "/system-log", label: "System log", icon: "M4 5h16v14H4zM7 9h2M7 13h2M7 17h2M12 9h5M12 13h5" };
+// §32 Real user monitoring — platform admins only, directly under System log.
+const RUM_NAV = { href: "/admin/rum", label: "Real user monitoring", icon: "M3 17l5-6 4 4 5-8 4 5M3 21h18" };
 const ADMIN_NAV = { href: "/admin", label: "Administration", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" };
 const NS_ADMIN_NAV = { href: "/namespaces", label: "Namespace administration", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" };
 
@@ -44,6 +47,8 @@ function Icon({ d }: { d: string }) {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  // Programmatic in-app navigation: mark the RUM transition-timer intent first (§32.4).
+  const go = (href: string) => { markRumNavIntent(); router.push(href); };
   const { data: session, status } = useSession();
   const [q, setQ] = useState("");
   const [myUserId, setMyUserId] = useState<string | null>(null);
@@ -564,6 +569,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             )}
           </Link>
         )}
+        {isPlatformAdmin && (
+          <Link href={RUM_NAV.href} className={`nav-item${isActive(RUM_NAV.href) ? " active" : ""}`}>
+            <Icon d={RUM_NAV.icon} />
+            {RUM_NAV.label}
+          </Link>
+        )}
         {canAdminNamespace && (
           <Link href={NS_ADMIN_NAV.href} className={`nav-item${isActive(NS_ADMIN_NAV.href) ? " active" : ""}`}>
             <Icon d={NS_ADMIN_NAV.icon} />
@@ -698,7 +709,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   if (p) {
                     setAcOpen(false);
                     setQ("");
-                    router.push(`/catalog?maintainer=${p.id}&by=${encodeURIComponent(p.name)}`);
+                    go(`/catalog?maintainer=${p.id}&by=${encodeURIComponent(p.name)}`);
                   }
                   return;
                 }
@@ -710,11 +721,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                 if (acOpen && acHi >= 0 && acHi < suggestions.length && suggestions[acHi]) {
                   const s = suggestions[acHi];
                   setAcOpen(false);
-                  router.push(`/skills/${s.namespaceSlug}/${s.skillSlug}`);
+                  go(`/skills/${s.namespaceSlug}/${s.skillSlug}`);
                   return;
                 }
                 setAcOpen(false);
-                router.push(`/catalog?q=${encodeURIComponent(q)}`);
+                go(`/catalog?q=${encodeURIComponent(q)}`);
               }}
               onBlur={(e) => {
                 // Close the menu unless focus moved to something inside the form (a suggestion).
@@ -774,7 +785,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         type="button"
                         className={`search-ac-item${i === acHi ? " hi" : ""}`}
                         onMouseEnter={() => setAcHi(i)}
-                        onClick={() => { setAcOpen(false); setQ(""); router.push(`/catalog?maintainer=${p.id}&by=${encodeURIComponent(p.name)}`); }}
+                        onClick={() => { setAcOpen(false); setQ(""); go(`/catalog?maintainer=${p.id}&by=${encodeURIComponent(p.name)}`); }}
                       >
                         <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                           <UserBubble name={p.name} avatar={p.avatar} size={22} />
@@ -794,7 +805,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         type="button"
                         className={`search-ac-item${i === acHi ? " hi" : ""}`}
                         onMouseEnter={() => setAcHi(i)}
-                        onClick={() => { setAcOpen(false); setQ(""); router.push(`/skills/${s.namespaceSlug}/${s.skillSlug}`); }}
+                        onClick={() => { setAcOpen(false); setQ(""); go(`/skills/${s.namespaceSlug}/${s.skillSlug}`); }}
                       >
                         <span className="search-ac-title">
                           {s.title}
@@ -810,7 +821,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       type="button"
                       className={`search-ac-item search-ac-all${acHi === suggestions.length ? " hi" : ""}`}
                       onMouseEnter={() => setAcHi(suggestions.length)}
-                      onClick={() => { setAcOpen(false); router.push(`/catalog?q=${encodeURIComponent(q.trim())}`); }}
+                      onClick={() => { setAcOpen(false); go(`/catalog?q=${encodeURIComponent(q.trim())}`); }}
                     >
                       See all results in catalog →
                     </button>
@@ -848,6 +859,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="content">
           <PageLabelOverrideProvider value={setPageLabelOverride}>{children}</PageLabelOverrideProvider>
         </main>
+        {/* §32 real-user-monitoring collector: renders nothing; gated by the platform flag + sampling. */}
+        {status === "authenticated" && <RumCollector />}
       </div>
       {/* What's new update notice (§23): a persistent floating card owned by the shell (not a page) so
           navigating right after landing doesn't lose it, portaled to <body>. No timer — it stays until

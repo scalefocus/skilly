@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.6.0",
+    date: "2026-09-16",
+    summary:
+      "Platform admins get a Real user monitoring page (sidebar, under System log) showing how skilly performs in people's browsers: page views, Web Vitals, route-transition and API latency, and client-side errors, per page, so slow pages and usability issues surface before anyone reports them. Collection is on by default and can be switched off or sampled from the top of that page; only route templates are recorded, never concrete paths.",
+  },
+  {
     version: "2.5.1",
     date: "2026-09-15",
     summary:

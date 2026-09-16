@@ -292,6 +292,9 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens", "user_achievements"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [userId]);
     }
+    // RUM samples (§32.3): anonymise in place — rows stay for the aggregates, the person goes.
+    // The tombstone never deletes the users row, so the FK's ON DELETE SET NULL cannot do this.
+    await client.query(`update rum_samples set user_id = null where user_id = $1`, [userId]);
     // Scrub + detach the row (tombstone). Display label retains the former email
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";

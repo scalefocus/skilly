@@ -31,6 +31,8 @@ export const PREF_PLATFORM_RANGE = "skilly.chart.platform-range";
 export const PREF_SKILL_RANGE = "skilly.chart.skill-range";
 // Administration → Currently online: the daily-active-users trend chart window (§4).
 export const PREF_DAU_RANGE = "skilly.chart.dau-range";
+/** §32.7 the Real user monitoring page's range toggle. */
+export const PREF_RUM_RANGE = "skilly.chart.rum-range";
 // Administration → Currently online: the selected "online" activity window in minutes (§4).
 export const PREF_ONLINE_WINDOW = "skilly.online-window";
 // Administration → every card is collapsible (§5). Each card remembers its own open/closed state

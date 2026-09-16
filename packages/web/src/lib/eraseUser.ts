@@ -122,6 +122,10 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens", "oauth_grants", "user_achievements"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [targetUserId]);
     }
+    // RUM samples (§32.3) are anonymised IN PLACE, not deleted: the rows stay so per-route
+    // performance aggregates remain true, only the person is dropped. Erasure is a tombstone
+    // (the users row is never deleted), so the column's ON DELETE SET NULL never fires — null it here.
+    await client.query(`update rum_samples set user_id = null where user_id = $1`, [targetUserId]);
 
     // Scrub + detach the row (tombstone). Detaching entra_object_id lets a returning person get a
     // brand-new account. The display label retains the former email ("<email> - Deleted") so a
