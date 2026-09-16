@@ -141,7 +141,11 @@ test("parseRumBatch: server re-scrubs and truncates error text", () => {
 test("scrubMessage: emails and token-like strings go, ordinary words stay", () => {
   assert.equal(scrubMessage("Failed for bob.smith@example.co.uk today"), "Failed for [redacted] today");
   assert.equal(scrubMessage("hash 0123456789abcdef0123456789abcdef"), "hash [redacted]");
-  assert.equal(scrubMessage("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0 here"), "token [redacted].[redacted] here");
+  // A real JWT's segments are ≥ 24 base64url chars with digits → redacted segment by segment.
+  assert.equal(scrubMessage("token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ here"), "token [redacted].[redacted] here");
+  assert.equal(scrubMessage("key sk-A1B2c3D4e5F6g7H8i9J0k1L2m3N4 end"), "key [redacted] end");
+  // Below the 24-char threshold (20 + 19 here) the heuristic deliberately leaves the text alone.
+  assert.equal(scrubMessage("short eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0 id"), "short eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0 id");
   // A long word with no digits is not a token.
   assert.equal(scrubMessage("internationalization failed"), "internationalization failed");
   assert.equal(scrubMessage("  a   b  "), "a b");
