@@ -251,17 +251,23 @@ export default function RumPage() {
             />
             <label className="muted" style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
               Sample
-              <select
-                aria-label="Sample rate"
-                value={summary?.sampleRate ?? 100}
-                disabled={busy || !summary}
-                onChange={(e) => void patch({ rumSampleRate: Number(e.target.value) })}
-                style={{ fontSize: 13 }}
-              >
-                {SAMPLE_RATES.map((r) => (
-                  <option key={r} value={r}>{r} %</option>
-                ))}
-              </select>
+              {/* Same themed select as the admin page's "Maximum upload size" dropdown. */}
+              <div className={`select-wrap${busy || !summary ? " is-disabled" : ""}`} style={{ width: 120 }}>
+                <select
+                  aria-label="Sample rate"
+                  value={summary?.sampleRate ?? 100}
+                  disabled={busy || !summary}
+                  onChange={(e) => void patch({ rumSampleRate: Number(e.target.value) })}
+                  style={{ width: "100%", padding: "10px 38px 10px 12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: 14 }}
+                >
+                  {SAMPLE_RATES.map((r) => (
+                    <option key={r} value={r}>{r} %</option>
+                  ))}
+                </select>
+                <svg className="select-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </div>
               of sessions
             </label>
           </div>
