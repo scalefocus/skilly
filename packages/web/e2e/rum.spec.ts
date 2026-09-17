@@ -108,9 +108,41 @@ test.describe("real user monitoring (§32)", () => {
 
   test("the sidebar links the page for the admin and the presence label resolves", async ({ page }) => {
     await page.goto("/");
-    const link = page.getByRole("link", { name: "Real user monitoring" });
+    // Sidebar-only rename (v2.7.0, §32.7): the link reads "Monitoring"; the page title is unchanged.
+    const link = page.getByRole("link", { name: "Monitoring", exact: true });
     await expect(link).toBeVisible({ timeout: 20_000 });
     await expect(link).toHaveAttribute("href", "/admin/rum");
+    await expect(page.getByRole("link", { name: "Real user monitoring" })).toHaveCount(0);
+  });
+
+  test("the Currently online card is the first section, collapsed by default, and expands in place (§4)", async ({ page }) => {
+    await page.goto("/admin/rum");
+    await expect(page.getByRole("heading", { name: "Real user monitoring." })).toBeVisible({ timeout: 20_000 });
+    const head = page.getByRole("button", { name: /^Currently online/ });
+    await expect(head).toBeVisible({ timeout: 20_000 });
+    // First section: the presence card precedes the telemetry settings switch in DOM order.
+    const order = await page.evaluate(() => {
+      const card = document.querySelector('[data-last-card="online"]');
+      // The only switch on the page is "Collect telemetry" in the telemetry settings card.
+      const sw = document.querySelector('[role="switch"]');
+      return card && sw ? (card.compareDocumentPosition(sw) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 : null;
+    });
+    expect(order, "the online card must come before the telemetry switch").toBe(true);
+    // Collapsed by default (fresh browser context) — nothing in the body is reachable yet.
+    if ((await head.getAttribute("aria-expanded")) === "true") await head.click();
+    await expect(head).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("group", { name: "Chart range" })).toBeHidden();
+    await head.click();
+    await expect(head).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("group", { name: "Chart range" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Online window" })).toBeVisible();
+    await expect(page.getByLabel("Search online users")).toBeVisible();
+    // The live user count in the header comes from /api/admin/users/online, which still polls here.
+    await expect(head).toHaveText(/\d+ users?/);
+    // The open choice persists across a reload under the same key the Administration card used.
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Real user monitoring." })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: /^Currently online/ })).toHaveAttribute("aria-expanded", "true", { timeout: 20_000 });
   });
 
   test("switching collection off shows the banner, discards beacons and stops the collector", async ({ page }) => {

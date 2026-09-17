@@ -9,7 +9,8 @@ import nextDynamic from "next/dynamic";
 import { EmptyState, Pill, Switch, useApi } from "../../../components/ui";
 import { UserBubble } from "../../../components/UserBubble";
 import { useDateFmt } from "../../../components/DateFormat";
-import { readPref, writePref, PREF_RUM_RANGE } from "../../../lib/prefs";
+import { readPref, writePref, PREF_RUM_RANGE, adminCardPrefKey } from "../../../lib/prefs";
+import { OnlineUsersCard } from "../OnlineUsersCard";
 import { bandFor, bandTone, formatCls, formatMs, VITAL_THRESHOLDS } from "../../../lib/rum/bands";
 import { labelForRoute, RUM_ROUTE_ALL } from "../../../lib/rum/routes";
 import type { RumVital } from "../../../lib/rum/validate";
@@ -113,6 +114,14 @@ export default function RumPage() {
 
   const [range, setRange] = useState<Range>(() => toRange(readPref(PREF_RUM_RANGE, "7")));
   const pickRange = (r: Range) => { setRange(r); writePref(PREF_RUM_RANGE, String(r)); };
+
+  // "Currently online" (§4) — the collapsible presence card, first on this page. Collapsed by
+  // default; the open state persists under the same `online` card key it had on Administration.
+  // Unlike the range above, this page's header renders during SSR, so the stored value is read
+  // after mount (null until then → the card waits) to avoid a hydration mismatch (lib/prefs.ts).
+  const [onlineOpen, setOnlineOpen] = useState<boolean | null>(null);
+  useEffect(() => { setOnlineOpen(readPref(adminCardPrefKey("online"), "0") === "1"); }, []);
+  const toggleOnline = () => setOnlineOpen((o) => { const next = !o; writePref(adminCardPrefKey("online"), next ? "1" : "0"); return next; });
 
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -237,6 +246,12 @@ export default function RumPage() {
         <h1 className="page-title">Real user monitoring.</h1>
         <p className="page-sub">How the app performs in your users’ browsers. Spot slow pages and usability issues before people report them. Platform admins only.</p>
       </div>
+
+      {/* Currently online (§4): first section, above the telemetry settings; renders regardless of
+          the RUM empty state below — a deployment with no samples still shows who is around. */}
+      {onlineOpen === null
+        ? <div className="skeleton" style={{ height: 58, borderRadius: "var(--radius)", marginBottom: 26 }} />
+        : <OnlineUsersCard open={onlineOpen} onToggle={toggleOnline} />}
 
       {/* Header row: the collect switch + sample rate (§32.6), then the range toggle + refresh. */}
       <section className="card card-pad reveal" style={{ marginBottom: 18 }}>

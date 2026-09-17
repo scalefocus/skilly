@@ -1,4 +1,4 @@
-// e2e: the Administration "Active users" trend chart (SKILLY_SPEC.md §4) — span-adaptive bucketing
+// e2e: the Monitoring page's "Active users" trend chart (SKILLY_SPEC.md §4) — span-adaptive bucketing
 // and the sparse-series markers. Regression cover for v1.140.1: with a history confined to a single
 // calendar month, the "All" range used to bucket monthly, producing a one-point series that draws as
 // a dot with no line ("only a single point is shown for all time").
@@ -38,9 +38,10 @@ async function pickRange(page: Page, label: string): Promise<Series> {
 test.describe("active-users trend chart (§4)", () => {
   test.beforeEach(async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/admin");
-    await expect(page.getByRole("heading", { name: "Run the platform." })).toBeVisible({ timeout: 20_000 });
-    // The chart lives inside the (collapsed-by-default) "Currently online" card.
+    // The chart lives inside the (collapsed-by-default) "Currently online" card, which is the first
+    // section of the Monitoring page since v2.7.0 (§4 / §32.7).
+    await page.goto("/admin/rum");
+    await expect(page.getByRole("heading", { name: "Real user monitoring." })).toBeVisible({ timeout: 20_000 });
     await openOnlineCard(page);
   });
 
@@ -88,7 +89,7 @@ test.describe("active-users trend chart (§4)", () => {
   test("the chosen range is remembered across a reload", async ({ page }) => {
     await pickRange(page, "90d");
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Run the platform." })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { name: "Real user monitoring." })).toBeVisible({ timeout: 20_000 });
     await openOnlineCard(page);
     const toggle = page.getByRole("group", { name: "Chart range" });
     await expect(toggle.getByRole("button", { name: "90d", exact: true })).toHaveClass(/sort-on/);

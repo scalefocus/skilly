@@ -18,8 +18,10 @@ test.describe("Administration collapsible cards (§5)", () => {
 
   test("cards start collapsed", async ({ page }) => {
     await expect(header(page, "Contribution policy")).toHaveAttribute("aria-expanded", "false");
-    await expect(header(page, "Currently online")).toHaveAttribute("aria-expanded", "false");
+    await expect(header(page, "Maintenance")).toHaveAttribute("aria-expanded", "false");
     await expect(header(page, "Namespaces")).toHaveAttribute("aria-expanded", "false");
+    // Currently online moved to the Monitoring page in v2.7.0 (§4) — no stub is left behind.
+    await expect(page.getByRole("button", { name: /^Currently online/ })).toHaveCount(0);
   });
 
   test("a collapsed card shows only its header — no body content peeks out", async ({ page }) => {
