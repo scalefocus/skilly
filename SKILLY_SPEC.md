@@ -5100,10 +5100,19 @@ Failed API calls are **not** `error` samples — they are `api` samples with `ok
 the route's **API error rate**, kept separate from client errors because they usually already appear,
 with far more context, in the System log (§25).
 
-### 32.3 Data model (migration 0074)
+### 32.3 Data model (migrations 0074 + 0075)
 
 Three tables. All `created_at` / `first_seen` / `last_seen` are **server-stamped** — client clocks are
 never trusted (§32.5).
+
+**App-role grants.** The web and worker connect as the least-privilege `skilly_app` role (§11), whose
+default privileges (migration 0002) cover **tables only**. `rum_samples.id` is a `bigserial`, so its
+sequence `rum_samples_id_seq` needs an **explicit** `GRANT USAGE, SELECT ON SEQUENCE … TO skilly_app`
+— exactly as `audit_log_seq_seq` (0008) and `usage_events_id_seq` (0015) have. Migration **0075**
+adds that grant (0074 omitted it: in production every `POST /api/rum` failed with a 500, *permission
+denied for sequence*, while the reads — table grants only — kept working, so the Monitoring page
+showed an empty range with no error). Rule for every future migration: **a serial/identity column
+ships with its sequence grant in the same file.**
 
 - **`rum_samples`** (raw, 30-day) — `id` bigserial PK, `created_at` timestamptz default `now()`,
   `user_id` (nullable FK → `users`, **`ON DELETE SET NULL`**), `session_id` text (the client's
@@ -5299,7 +5308,10 @@ for a namespace admin and a member, correct p75 / API error rate / error counts 
 the `all` row, `users` 422 on 90/all and top-20 ordering; `rollupRum` — idempotent upsert of today +
 yesterday, a re-run after a "missed" run heals the gap; the housekeeping prune — raw > 30 d and errors
 idle > 90 d removed, `rum_daily` untouched; `PATCH /api/admin/settings` for the two keys writes
-`settings.updated` and `/api/me` reflects them; GDPR erasure leaves the sample with `user_id = NULL`.
+`settings.updated` and `/api/me` reflects them; GDPR erasure leaves the sample with `user_id = NULL`;
+**privileges** — `skilly_app` holds `INSERT` on the three RUM tables and `USAGE` on **every** sequence
+in `public` (`has_sequence_privilege` over `pg_class` where `relkind = 'S'`), so a future serial
+column that forgets its grant fails the live-DB test instead of failing in production.
 
 **e2e**: sign in → open two pages → `/admin/rum` (7d) lists both routes with ≥ 1 view and the "All
 routes" row → expand a row → the acting user appears in the drill-down → flip the switch off → the

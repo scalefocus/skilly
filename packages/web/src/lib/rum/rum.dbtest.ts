@@ -1,5 +1,5 @@
 // Live-DB integration test for real user monitoring (SKILLY_SPEC.md §32.10). Gated behind
-// SKILLY_DB_E2E=1; requires a migrated Postgres (0001 … 0074) at DATABASE_URL.
+// SKILLY_DB_E2E=1; requires a migrated Postgres (0001 … 0075) at DATABASE_URL.
 //
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… pnpm --filter @skilly/web test:db
 //
@@ -155,6 +155,32 @@ test("rum: settings round-trip + audit; sample rate is validated", { skip: !enab
     await setRumEnabled(before.enabled, admin);
     await setRumSampleRate(before.sampleRate, admin);
   }
+});
+
+// §32.3 / §32.10 — the least-privilege app role must be able to WRITE what the web tier writes.
+// 0074 created rum_samples with a bigserial but no sequence grant, so production inserts failed with
+// "permission denied for sequence" while the reads (table grants) worked; 0075 adds the grant. The
+// sequence check deliberately spans EVERY sequence in public so the next serial column that forgets
+// its grant fails here instead of in production. Privilege lookups work whatever role runs the test.
+test("rum: skilly_app can insert the RUM tables and use every sequence (0075)", { skip: !enabled }, async () => {
+  const { rows: tables } = await pool.query<{ t: string; ins: boolean; sel: boolean }>(
+    `select t, has_table_privilege('skilly_app', t, 'INSERT') as ins, has_table_privilege('skilly_app', t, 'SELECT') as sel
+       from unnest(array['rum_samples', 'rum_errors', 'rum_daily']) as t`,
+  );
+  for (const r of tables) {
+    assert.equal(r.ins, true, `skilly_app lacks INSERT on ${r.t}`);
+    assert.equal(r.sel, true, `skilly_app lacks SELECT on ${r.t}`);
+  }
+
+  const { rows: seqs } = await pool.query<{ name: string; usage: boolean }>(
+    `select c.relname as name, has_sequence_privilege('skilly_app', c.oid, 'USAGE') as usage
+       from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where c.relkind = 'S' and n.nspname = 'public'
+      order by 1`,
+  );
+  assert.ok(seqs.some((r) => r.name === "rum_samples_id_seq"), "rum_samples_id_seq missing");
+  const denied = seqs.filter((r) => !r.usage).map((r) => r.name);
+  assert.deepEqual(denied, [], `skilly_app lacks USAGE on sequence(s): ${denied.join(", ")}`);
 });
 
 test("rum: GDPR erasure anonymises samples in place (user_id → NULL, row kept)", { skip: !enabled }, async () => {

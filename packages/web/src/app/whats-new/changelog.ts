@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.7.1",
+    date: "2026-09-17",
+    summary:
+      "Fixes real user monitoring collecting nothing in production: the browser beacon was rejected with a server error because the database role the app runs as was never granted access to the telemetry table's id sequence, so the Monitoring page stayed empty while users were active. A migration adds the grant; samples start landing as soon as it is applied, with no restart or user action needed.",
+  },
+  {
     version: "2.7.0",
     date: "2026-09-17",
     summary:
