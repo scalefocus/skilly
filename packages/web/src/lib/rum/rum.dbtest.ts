@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { pool } from "../db";
 import { insertRumSamples, getRumSummary, getRumRouteUsers, listRumErrors } from "./queries";
 import type { RumSample } from "./validate";
-import { getRumSettings, setRumEnabled, setRumSampleRate } from "../settings";
+import { getRumSettings, setRumEnabled, setRumFlushIntervals, setRumSampleRate } from "../settings";
 import { eraseUser } from "../eraseUser";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
@@ -141,19 +141,30 @@ test("rum: settings round-trip + audit; sample rate is validated", { skip: !enab
   try {
     await setRumEnabled(false, admin);
     await setRumSampleRate(25, admin);
-    assert.deepEqual(await getRumSettings(), { enabled: false, sampleRate: 25 });
+    // §32.6 the flush ladder: a string or an array, stored normalised (deduped, ascending).
+    assert.deepEqual(await setRumFlushIntervals("23, 5,,5, 7 ", admin), [5, 7, 23]);
+    assert.deepEqual(await getRumSettings(), { enabled: false, sampleRate: 25, flushIntervals: [5, 7, 23] });
+    assert.deepEqual(await setRumFlushIntervals([11, 7], admin), [7, 11]);
+    assert.deepEqual((await getRumSettings()).flushIntervals, [7, 11]);
     await assert.rejects(() => setRumSampleRate(0, admin));
     await assert.rejects(() => setRumSampleRate(101, admin));
     await assert.rejects(() => setRumSampleRate(12.5, admin));
     await assert.rejects(() => setRumSampleRate("abc", admin));
+    // Rejected ladders leave the stored set untouched.
+    await assert.rejects(() => setRumFlushIntervals("4, 9", admin), /between 5 and 3600/);
+    await assert.rejects(() => setRumFlushIntervals("17, 3601", admin), /between 5 and 3600/);
+    await assert.rejects(() => setRumFlushIntervals("17, x", admin), /not a whole number/);
+    await assert.rejects(() => setRumFlushIntervals("", admin), /at least one interval/);
+    assert.deepEqual((await getRumSettings()).flushIntervals, [7, 11]);
     const { rows } = await pool.query<{ n: string }>(
-      `select count(*)::text as n from audit_log where actor_user_id = $1 and action = 'settings.updated' and target_id in ('rum_enabled','rum_sample_rate') and created_at > now() - interval '1 minute'`,
+      `select count(*)::text as n from audit_log where actor_user_id = $1 and action = 'settings.updated' and target_id in ('rum_enabled','rum_sample_rate','rum_flush_intervals') and created_at > now() - interval '1 minute'`,
       [admin],
     );
-    assert.ok(Number(rows[0]!.n) >= 2);
+    assert.ok(Number(rows[0]!.n) >= 4);
   } finally {
     await setRumEnabled(before.enabled, admin);
     await setRumSampleRate(before.sampleRate, admin);
+    await setRumFlushIntervals(before.flushIntervals, admin);
   }
 });
 

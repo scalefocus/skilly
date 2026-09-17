@@ -1,6 +1,8 @@
 // Platform-wide settings (key/value in platform_settings). Currently just the contribution
 // policy. SKILLY_SPEC.md §4.
 import type { Pool } from "pg";
+import { parseIntervalSet } from "./intervalSet";
+import { DEFAULT_RUM_FLUSH_INTERVALS, parseRumFlushIntervals } from "./rum/ladder";
 import {
   coerceMaxFeatured,
   assertMaxFeatured,
@@ -75,22 +77,7 @@ const CHAT_POLL_MAX_ENTRIES = 20;
  *  form: integer seconds in `[1, 3600]`, deduped, sorted ascending, 1..20 entries. Throws on any
  *  invalid token / empty input / out-of-bounds value so the admin save surfaces a clear error. */
 export function parseChatPollIntervals(input: string | number[]): number[] {
-  const tokens = Array.isArray(input) ? input.map((n) => String(n)) : input.split(",");
-  const out: number[] = [];
-  for (const raw of tokens) {
-    const t = String(raw).trim();
-    if (t === "") continue; // tolerate trailing/empty commas
-    if (!/^\d+$/.test(t)) throw new Error(`"${t}" is not a whole number of seconds`);
-    const n = Number(t);
-    if (!Number.isInteger(n) || n < CHAT_POLL_MIN || n > CHAT_POLL_MAX) {
-      throw new Error(`each interval must be a whole number of seconds between ${CHAT_POLL_MIN} and ${CHAT_POLL_MAX}`);
-    }
-    out.push(n);
-  }
-  const cleaned = [...new Set(out)].sort((a, b) => a - b);
-  if (cleaned.length === 0) throw new Error("provide at least one interval");
-  if (cleaned.length > CHAT_POLL_MAX_ENTRIES) throw new Error(`at most ${CHAT_POLL_MAX_ENTRIES} intervals`);
-  return cleaned;
+  return parseIntervalSet(input, { min: CHAT_POLL_MIN, max: CHAT_POLL_MAX, maxEntries: CHAT_POLL_MAX_ENTRIES });
 }
 
 /** Coerce a stored value into a valid set, falling back to the default on anything malformed. */
@@ -164,6 +151,18 @@ export interface PlatformSettings {
   rumEnabled: boolean;
   /** §32 percentage (1–100) of browser sessions that collect RUM samples. */
   rumSampleRate: number;
+  /** §32.4/§32.6 the collector's flush ladder: ascending integer seconds, `[0]` is the floor. */
+  rumFlushIntervals: number[];
+}
+
+/** Coerce a stored flush set into a valid one, falling back to the default on anything malformed. */
+function coerceRumFlushIntervals(value: unknown): number[] {
+  try {
+    if (!Array.isArray(value)) return [...DEFAULT_RUM_FLUSH_INTERVALS];
+    return parseRumFlushIntervals(value as number[]);
+  } catch {
+    return [...DEFAULT_RUM_FLUSH_INTERVALS];
+  }
 }
 
 /** §32.6 the sample-rate choices the RUM page offers; the server accepts any integer 1–100. */
@@ -175,7 +174,7 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS] };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -204,13 +203,34 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     achievementsEnabled: map.get("achievements_enabled") !== false,
     rumEnabled: map.get("rum_enabled") !== false,
     rumSampleRate: coerceRumSampleRate(map.get("rum_sample_rate")),
+    rumFlushIntervals: coerceRumFlushIntervals(map.get("rum_flush_intervals")),
   };
 }
 
 /** §32.6 is real user monitoring collecting? Read by the ingest endpoint on every batch. */
-export async function getRumSettings(db: Pool = pool): Promise<{ enabled: boolean; sampleRate: number }> {
+export async function getRumSettings(db: Pool = pool): Promise<{ enabled: boolean; sampleRate: number; flushIntervals: number[] }> {
   const s = await getPlatformSettings(db);
-  return { enabled: s.rumEnabled, sampleRate: s.rumSampleRate };
+  return { enabled: s.rumEnabled, sampleRate: s.rumSampleRate, flushIntervals: s.rumFlushIntervals };
+}
+
+/** §32.6 the collector's flush ladder (§32.4). Accepts a comma-separated string or an array; stores
+ *  the normalised ascending set and returns it. Throws (→ 400 at the API) on invalid input. */
+export async function setRumFlushIntervals(input: string | number[], actorUserId: string): Promise<number[]> {
+  const intervals = parseRumFlushIntervals(input); // throws on invalid input
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at)
+     values ('rum_flush_intervals', $1::jsonb, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [JSON.stringify(intervals), actorUserId],
+  );
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "rum_flush_intervals",
+    after: { rumFlushIntervals: intervals },
+  });
+  return intervals;
 }
 
 /** §32.6 RUM on/off. OFF: the collector stops within a minute, ingest discards, history stays visible. */

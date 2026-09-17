@@ -51,6 +51,8 @@ interface Summary {
   bucket: "day" | "week" | "month";
   enabled: boolean;
   sampleRate: number;
+  /** §32.4 the collector's flush ladder (ascending seconds; [0] is the floor). */
+  flushIntervals: number[];
   lastSampleAt: string | null;
   series: { date: string; views: number; lcpP75: number | null; inpP75: number | null }[];
   routes: RouteRow[];
@@ -175,17 +177,31 @@ export default function RumPage() {
   // Drill-down cache is per range: a range change invalidates it.
   useEffect(() => { setUsers({}); setExpanded(null); }, [range]);
 
-  const patch = async (body: Record<string, unknown>) => {
+  const patch = async (body: Record<string, unknown>): Promise<boolean> => {
     setBusy(true);
     try {
       const r = await fetch("/api/admin/settings", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
+      setError(null);
       setTick((t) => t + 1);
+      return true;
     } catch (e) {
       setError(String((e as Error).message));
+      return false;
     } finally {
       setBusy(false);
     }
+  };
+
+  // §32.6 the flush ladder field: a comma-separated draft, synced from the saved set whenever the
+  // summary reloads, saved on blur / Enter, reverted to the saved set when the server rejects it.
+  const savedIntervals = summary?.flushIntervals.join(", ") ?? "";
+  const [intervalsDraft, setIntervalsDraft] = useState("");
+  useEffect(() => { setIntervalsDraft(savedIntervals); }, [savedIntervals]);
+  const saveIntervals = async () => {
+    if (!summary || intervalsDraft.trim() === savedIntervals) return;
+    const ok = await patch({ rumFlushIntervals: intervalsDraft });
+    if (!ok) setIntervalsDraft(savedIntervals);
   };
 
   const toggleExpand = (route: string) => {
@@ -285,6 +301,22 @@ export default function RumPage() {
               </div>
               of sessions
             </label>
+            <label className="muted" style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+              Flush every
+              <input
+                aria-label="Flush intervals (comma-separated seconds)"
+                className="input input-mono"
+                style={{ width: 210, padding: "9px 12px", fontSize: 13 }}
+                value={intervalsDraft}
+                placeholder="17, 23, 37, 59, 97, 157, 251"
+                disabled={busy || !summary}
+                onChange={(e) => setIntervalsDraft(e.target.value)}
+                onBlur={() => void saveIntervals()}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+                title="The browser collector's flush ladder (seconds, ascending): an active tab beacons at the first value; an idle tab climbs one step per flush and snaps back on the next click, key press or page change."
+              />
+              s
+            </label>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div className="sort-toggle" role="group" aria-label="Range">
@@ -299,6 +331,12 @@ export default function RumPage() {
             </button>
           </div>
         </div>
+        {summary && (
+          <div className="muted" data-testid="rum-cadence" style={{ marginTop: 10, fontSize: 12 }}>
+            Sampling {summary.sampleRate} % of sessions · beacons every {summary.flushIntervals[0]} s while active
+            {summary.flushIntervals.length > 1 ? `, backing off to ${summary.flushIntervals[summary.flushIntervals.length - 1]} s when idle` : ""}.
+          </div>
+        )}
         {summary && !summary.enabled && (
           <div className="muted" role="status" style={{ marginTop: 12, fontSize: 13, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: "var(--radius)" }}>
             Collection is off — showing data collected until {summary.lastSampleAt ? fmt.dateTime(summary.lastSampleAt) : "—"}.

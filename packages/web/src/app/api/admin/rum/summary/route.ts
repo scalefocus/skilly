@@ -12,5 +12,5 @@ export async function GET(req: Request) {
 
   const range = parseRumRange(new URL(req.url).searchParams.get("range"), 7);
   const [summary, settings] = await Promise.all([getRumSummary(range), getPlatformSettings()]);
-  return Response.json({ ...summary, enabled: settings.rumEnabled, sampleRate: settings.rumSampleRate });
+  return Response.json({ ...summary, enabled: settings.rumEnabled, sampleRate: settings.rumSampleRate, flushIntervals: settings.rumFlushIntervals });
 }

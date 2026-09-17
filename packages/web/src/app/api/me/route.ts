@@ -110,6 +110,8 @@ export async function GET() {
     // its 60s poll, so flipping the switch stops collection within a minute.
     rumEnabled: settings.rumEnabled,
     rumSampleRate: settings.rumSampleRate,
+    // §32.4 the flush ladder the collector walks (ascending seconds; [0] is the floor).
+    rumFlushIntervals: settings.rumFlushIntervals,
     // Max uploaded hosted-bundle size (bytes) — surfaced on the propose form so the limit is
     // explicit and a too-large bundle is rejected client-side before upload. §6.
     maxBundleBytes: settings.maxBundleBytes,
