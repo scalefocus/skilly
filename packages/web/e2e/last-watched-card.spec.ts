@@ -21,6 +21,12 @@ const stored = (page: Page, key: string) => page.evaluate((k) => window.localSto
 const adminLoaded = async (page: Page) => {
   await expect(page.getByRole("heading", { name: "Run the platform." })).toBeVisible({ timeout: NAV_TIMEOUT });
 };
+// Distance of an element's vertical centre from the viewport's centre.
+const offCentre = (page: Page, selector: string) =>
+  page.evaluate((sel) => {
+    const r = document.querySelector(sel)!.getBoundingClientRect();
+    return Math.abs((r.top + r.bottom) / 2 - window.innerHeight / 2);
+  }, selector);
 test.describe("last-watched card — Administration (§5)", () => {
   test.beforeEach(async ({ page }) => {
     await devSignIn(page);
@@ -65,30 +71,26 @@ test.describe("last-watched card — Administration (§5)", () => {
 
   test("on return the remembered card is expanded, centred and flashed", async ({ page }) => {
     // Remember a card far down the page, then leave it COLLAPSED (auto-expand must reopen it).
-    await page.evaluate((k) => localStorage.setItem(k, "deleteuser"), ADMIN_KEY);
+    // The card must be below the first viewport (so the arrival actually scrolls) AND have enough
+    // content under it while everything is collapsed for its header to reach the viewport centre:
+    // the arrival scroll runs before the expand animation grows the body, so a card near the page
+    // bottom can only be scrolled as far as the collapsed document allows. Email notifications
+    // sits ~6 collapsed cards above the end of the page; Delete User Info (used before v2.7.0) is
+    // now second-to-last since Currently online moved to the Monitoring page (§4) and no longer
+    // qualifies.
+    await page.evaluate((k) => localStorage.setItem(k, "email"), ADMIN_KEY);
     await reloadReady(page);
     await adminLoaded(page);
-    const del = header(page, "Delete User Info");
-    await expect(del).toHaveAttribute("aria-expanded", "true");
+    const card = header(page, "Email notifications");
+    await expect(card).toHaveAttribute("aria-expanded", "true");
     // The auto-expand wrote the card's own open preference, like a manual expand would.
-    await expect.poll(() => page.evaluate(() => localStorage.getItem("skilly.admin.card.deleteuser-open"))).toBe("1");
-    // The header ends up centred (smooth scroll — poll until it settles) — or as close to centred
-    // as the document allows: since Currently online moved to the Monitoring page (v2.7.0, §4),
-    // Delete User Info is the second-to-last card, and with everything else collapsed the page can
-    // run out of content below it before the header reaches the middle. `scrollIntoView` then
-    // stops at the document bottom, which is the correct behavior, so accept "pinned to the
-    // bottom" as well — as long as the header is fully in view.
-    await expect.poll(() => page.evaluate((sel) => {
-      const r = document.querySelector(sel)!.getBoundingClientRect();
-      const off = Math.abs((r.top + r.bottom) / 2 - window.innerHeight / 2);
-      const inView = r.top >= 0 && r.bottom <= window.innerHeight;
-      const atBottom = Math.ceil(window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight - 1;
-      return inView && (off < 40 || atBottom);
-    }, '[data-last-card="deleteuser"] [data-card-header]'), { timeout: 5_000 }).toBe(true);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("skilly.admin.card.email-open"))).toBe("1");
+    // The header ends up centred (smooth scroll — poll until it settles).
+    await expect.poll(() => offCentre(page, '[data-last-card="email"] [data-card-header]'), { timeout: 5_000 }).toBeLessThan(40);
     // The flash class is transient: it was on the card and is gone within ~1.5s.
-    await expect(page.locator('[data-last-card="deleteuser"]')).not.toHaveClass(/card-flash/, { timeout: 4_000 });
+    await expect(page.locator('[data-last-card="email"]')).not.toHaveClass(/card-flash/, { timeout: 4_000 });
     // The key persists — the behavior repeats on every visit.
-    expect(await stored(page, ADMIN_KEY)).toBe("deleteuser");
+    expect(await stored(page, ADMIN_KEY)).toBe("email");
   });
 
   test("a URL #hash skips the whole arrival, and the key is kept", async ({ page }) => {
