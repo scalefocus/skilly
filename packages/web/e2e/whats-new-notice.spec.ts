@@ -10,6 +10,7 @@
 // already requires it for the dev server); skipped otherwise. Opt-in like the rest of the suite.
 import { Pool } from "pg";
 import { APP_VERSION } from "@skilly/shared/version";
+import { CHANGELOG } from "../src/app/whats-new/changelog";
 import { test, expect, devSignIn } from "./fixtures";
 
 const DEV_OID = process.env.SKILLY_DEV_OID ?? "dev-admin-oid";
@@ -30,6 +31,18 @@ const cmp = (a: string, b: string) => {
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
   return 0;
 };
+
+/** A marker for the OVERFLOW tests: at least one minor below APP_VERSION (so the notice appears)
+ *  AND old enough that at least `minEntries` changelog entries are newer than it. Seeding exactly
+ *  one minor below is not enough on its own — right after a minor bump that window can hold just
+ *  one or two short entries, which never overflow the capped card (a test that then fails on every
+ *  x.y.0 release is a false alarm, not a regression). */
+function overflowSeed(minEntries = 6): string | null {
+  const minorBelow = oneMinorBelow(APP_VERSION);
+  if (!minorBelow) return null;
+  const deep = CHANGELOG[minEntries - 1]?.version;
+  return deep && cmp(deep, minorBelow) < 0 ? deep : minorBelow;
+}
 
 test.describe("What's new update notice (§23)", () => {
   // Every test mutates the SAME dev user's marker (and devSignIn's default pre-stamp advances it),
@@ -153,8 +166,9 @@ test.describe("What's new update notice (§23)", () => {
 
   /** Overflow (§23): the card never leaves the viewport however long the excerpted summaries are —
    *  it is capped at 60vh, the list alone scrolls (and gains a Tab stop), and the ✕ + link stay in
-   *  view without scrolling. Relies on the current CHANGELOG holding long enough entries newer than
-   *  the seeded marker to overflow a 600px-tall viewport (the 2.0.0 and 1.152.0 entries do). */
+   *  view without scrolling. The marker comes from `overflowSeed()`, so at least six changelog
+   *  entries are newer than it — enough to overflow a 600px-tall desktop viewport and a 700px
+   *  mobile one regardless of how short the latest release notes happen to be. */
   async function expectOverflowContained(page: import("@playwright/test").Page) {
     const notice = page.getByTestId("whats-new-notice");
     await expect(notice).toBeVisible({ timeout: 20_000 });
@@ -182,7 +196,7 @@ test.describe("What's new update notice (§23)", () => {
   }
 
   test("long release notes: the card stays inside a short viewport and the list scrolls", async ({ page }) => {
-    const seeded = oneMinorBelow(APP_VERSION);
+    const seeded = overflowSeed();
     test.skip(!seeded, `cannot derive a lower minor from ${APP_VERSION}`);
     await setMarker(seeded!);
     await devSignIn(page, { stampWhatsNew: false });
@@ -201,7 +215,7 @@ test.describe("What's new update notice (§23)", () => {
   });
 
   test("long release notes on mobile: the bottom sheet is capped and scrolls too", async ({ page }) => {
-    const seeded = oneMinorBelow(APP_VERSION);
+    const seeded = overflowSeed();
     test.skip(!seeded, `cannot derive a lower minor from ${APP_VERSION}`);
     await setMarker(seeded!);
     await devSignIn(page, { stampWhatsNew: false });
