@@ -21,13 +21,6 @@ const stored = (page: Page, key: string) => page.evaluate((k) => window.localSto
 const adminLoaded = async (page: Page) => {
   await expect(page.getByRole("heading", { name: "Run the platform." })).toBeVisible({ timeout: NAV_TIMEOUT });
 };
-// Distance of an element's vertical centre from the viewport's centre.
-const offCentre = (page: Page, selector: string) =>
-  page.evaluate((sel) => {
-    const r = document.querySelector(sel)!.getBoundingClientRect();
-    return Math.abs((r.top + r.bottom) / 2 - window.innerHeight / 2);
-  }, selector);
-
 test.describe("last-watched card — Administration (§5)", () => {
   test.beforeEach(async ({ page }) => {
     await devSignIn(page);
@@ -79,8 +72,19 @@ test.describe("last-watched card — Administration (§5)", () => {
     await expect(del).toHaveAttribute("aria-expanded", "true");
     // The auto-expand wrote the card's own open preference, like a manual expand would.
     await expect.poll(() => page.evaluate(() => localStorage.getItem("skilly.admin.card.deleteuser-open"))).toBe("1");
-    // The header ends up centred (smooth scroll — poll until it settles).
-    await expect.poll(() => offCentre(page, '[data-last-card="deleteuser"] [data-card-header]'), { timeout: 5_000 }).toBeLessThan(40);
+    // The header ends up centred (smooth scroll — poll until it settles) — or as close to centred
+    // as the document allows: since Currently online moved to the Monitoring page (v2.7.0, §4),
+    // Delete User Info is the second-to-last card, and with everything else collapsed the page can
+    // run out of content below it before the header reaches the middle. `scrollIntoView` then
+    // stops at the document bottom, which is the correct behavior, so accept "pinned to the
+    // bottom" as well — as long as the header is fully in view.
+    await expect.poll(() => page.evaluate((sel) => {
+      const r = document.querySelector(sel)!.getBoundingClientRect();
+      const off = Math.abs((r.top + r.bottom) / 2 - window.innerHeight / 2);
+      const inView = r.top >= 0 && r.bottom <= window.innerHeight;
+      const atBottom = Math.ceil(window.scrollY + window.innerHeight) >= document.documentElement.scrollHeight - 1;
+      return inView && (off < 40 || atBottom);
+    }, '[data-last-card="deleteuser"] [data-card-header]'), { timeout: 5_000 }).toBe(true);
     // The flash class is transient: it was on the card and is gone within ~1.5s.
     await expect(page.locator('[data-last-card="deleteuser"]')).not.toHaveClass(/card-flash/, { timeout: 4_000 });
     // The key persists — the behavior repeats on every visit.
