@@ -164,7 +164,7 @@ test("mentions: validate/persist/notify/resolve across contexts (§24)", { skip:
     const skillTok = tok("#", restrictedId);
     const userTok = tok("@", pinged);
     assert.equal(asMember[skillTok]?.kind, "skill");
-    assert.deepEqual(asMember[skillTok], { kind: "skill", id: restrictedId, state: "ok", title: (asMember[skillTok] as { title: string }).title, ns: `${K}-ns`, slug: `${K}-secret`, restricted: true });
+    assert.deepEqual(asMember[skillTok], { kind: "skill", id: restrictedId, state: "ok", title: (asMember[skillTok] as { title: string }).title, ns: `${K}-ns`, slug: `${K}-secret`, restricted: true, icon: null });
     assert.deepEqual(asMember[userTok], { kind: "user", id: pinged, name: "Pinged Person", erased: false });
 
     // An outsider gets the REDACTED entry — no name fields serialized at all.

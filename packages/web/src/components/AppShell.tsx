@@ -12,6 +12,7 @@ import { MessagesMenu } from "./MessagesMenu";
 import { UserBubble } from "./UserBubble";
 import { cachedGet, invalidateApi, usePopoverPresence, Pill } from "./ui";
 import { PageLabelOverrideProvider } from "./PageLabelOverride";
+import { SkillIcon } from "./SkillIcon";
 import { RumCollector, markRumNavIntent } from "./RumCollector";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
 import { CHANGELOG } from "../app/whats-new/changelog";
@@ -108,7 +109,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => io.disconnect();
   }, []);
   // Header search autocomplete: suggestions appear once 2+ chars are typed (debounced).
-  const [suggestions, setSuggestions] = useState<{ namespaceSlug: string; skillSlug: string; title: string; official?: boolean }[]>([]);
+  const [suggestions, setSuggestions] = useState<{ namespaceSlug: string; skillSlug: string; title: string; official?: boolean; icon?: { url: string | null; emoji: string | null } | null }[]>([]);
   const [acOpen, setAcOpen] = useState(false);
   const [acHi, setAcHi] = useState(-1);
   // True while a suggest request is in flight — gates the "Nothing found" bubble so it only
@@ -808,7 +809,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                         onMouseEnter={() => setAcHi(i)}
                         onClick={() => { setAcOpen(false); setQ(""); go(`/skills/${s.namespaceSlug}/${s.skillSlug}`); }}
                       >
-                        <span className="search-ac-title">
+                        <span className="search-ac-title" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          <SkillIcon icon={s.icon} title={s.title} size={24} />
                           {s.title}
                           {s.official && <span className="chip chip-official" style={{ marginLeft: 6 }} title="Official — endorsed by the platform"><span aria-hidden>✓</span> Official</span>}
                         </span>

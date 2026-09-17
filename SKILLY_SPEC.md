@@ -22,6 +22,7 @@ Every decision below was explicitly confirmed.
 | Identity | **Real SCIM 2.0** (worker-hosted) + **OIDC-only SSO** (Entra). Roles resolved from SCIM-synced groups |
 | RBAC | Explicit Entra-group→(namespace, role) mapping. Roles: Platform Admin / Namespace Admin / Namespace Member + implicit propose/consume |
 | Visibility | **Per-skill**: org-wide OR scoped to one namespace. No per-individual private, no per-version visibility |
+| Skill icons | **Optional, skill-level** image or emoji (§33): resolved from the bundle (`icon:` frontmatter → root `icon.png`) before the proposer's upload/emoji; re-encoded to 256×256 PNG; default = the skilly wordmark. Shown on every skill surface and on the **signed share link's** Open Graph card — the only per-skill unfurl, gated by a 7-day token minted by a signed-in viewer |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
@@ -129,7 +130,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `platform_admin` rows have `namespace_id = null`.
 
 ### `skills`
-- `id`, `namespace_id`, `slug`, `title`, `description`, `category_id` (nullable FK to `categories` — **back-compat shadow**; since migration 0010 the authoritative skill↔category mapping is the **`skill_categories`** join, supporting multiple categories), `tool_harness` (TEXT — the skill's **coding agent**, a **closed vocabulary**: `generic` (default) ∪ the agents the consumer tool supports; drives the install command's `--agent` flag, §6/§9), `type` (`hosted` | `pointer`), `visibility` (`org` | `namespace`), `status` (`active` | `archived`), `promoted_from_skill_version_id` (nullable, provenance), `install_count`, `featured_at` (nullable timestamptz; non-null ⇒ **Featured** homepage spotlight, §7), `featured_by` (nullable FK `users`, provenance), `created_at`. *(The former free-form `tags TEXT[]` column was **dropped in migration 0068** — §10 *Taxonomy*; the FTS trigger was rewritten without it in the same migration.)*
+- `id`, `namespace_id`, `slug`, `title`, `description`, `category_id` (nullable FK to `categories` — **back-compat shadow**; since migration 0010 the authoritative skill↔category mapping is the **`skill_categories`** join, supporting multiple categories), `tool_harness` (TEXT — the skill's **coding agent**, a **closed vocabulary**: `generic` (default) ∪ the agents the consumer tool supports; drives the install command's `--agent` flag, §6/§9), `type` (`hosted` | `pointer`), `visibility` (`org` | `namespace`), `status` (`active` | `archived`), `promoted_from_skill_version_id` (nullable, provenance), `install_count`, `featured_at` (nullable timestamptz; non-null ⇒ **Featured** homepage spotlight, §7), `featured_by` (nullable FK `users`, provenance), **`icon_sha256`** (nullable FK → `skill_icons`, the effective icon image, §33), **`icon_emoji`** (nullable TEXT — a single emoji grapheme, the fallback when no image resolves, §33), **`icon_source`** (nullable — `frontmatter` | `bundle` | `upload`: where `icon_sha256` came from, §33), `created_at`. *(The former free-form `tags TEXT[]` column was **dropped in migration 0068** — §10 *Taxonomy*; the FTS trigger was rewritten without it in the same migration.)*
 - Denormalized/derived columns (trigger-maintained): `search_tsv` (FTS `tsvector`, §10), `usage_search` (latest active version's usage examples, folded into `search_tsv` at weight D, §10/§20), `watcher_count` (count of `skill_watches` rows), plus `rating_sum` / `rating_count` (below).
 
 #### Tool/harness = coding agent (closed vocabulary)
@@ -164,7 +165,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **Original submission stored immutably**; reviewer edits tracked as revisions.
 
 ### `proposal_revisions`
-- `id`, `proposal_id`, `revision_no`, `payload` (metadata + artifact reference for that revision), `author`, `note`, `created_at`.
+- `id`, `proposal_id`, `revision_no`, `payload` (metadata + artifact reference for that revision — incl. the icon fields `iconSha256` / `iconFilename` / `iconEmoji`, **hash + filename, never bytes**, §33), `author`, `note`, `created_at`.
 - Captures proposer resubmissions and reviewer edits (with diff for audit).
 
 ### `scan_reports`
@@ -182,6 +183,14 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), `created_at`.
 - **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23. **The §29 MCP/OAuth credentials are a separate regime in separate tables** (`oauth_*` below) — header-borne, short-lived and rotating; they never share a row or an enum with `tokens`.
 - **`marketplace` tokens** (§30.4) are the same handle for a **plugin marketplace** rather than a skill: `skill_id` is NULL and the scope is carried by **`marketplace_scope`** (`public` | `namespace`) + **`namespace_id`** (FK → `namespaces`, `ON DELETE CASCADE`; set **iff** scope = `namespace`). `skill_id` is therefore **nullable**, and a CHECK enforces the discriminant: `install` ⇒ `skill_id` NOT NULL ∧ `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL ∧ `marketplace_scope` NOT NULL ∧ (`namespace_id` NOT NULL ⇔ scope = `namespace`). **`last_served_commit`** (TEXT, nullable) is the per-token attribution cursor of §30.7. Same TTL, reuse, reactivate and hard-delete-on-remove semantics as `install`; **`is_system` is never set** — system marketplaces are deferred (§30.4).
+
+### `skill_icons` (migration 0076, §33)
+- `sha256` (PK — the digest of the **normalized** PNG bytes), `bytes` (BYTEA — always a 256×256 PNG, metadata-stripped; typically well under 100 KB), `created_by` (nullable FK → `users`, `ON DELETE SET NULL`, provenance), `created_at`.
+- **Content-addressed and immutable**: the same image uploaded twice (or shared by several skills) is one row. Rows are **never deleted in v1** — an orphaned icon is unreferenced but harmless (orphan sweep deferred, §33). Served unauthenticated at `/skill-icons/<sha256>.png` (a 256-bit address is unguessable; the hash is only ever handed out through visibility-filtered API responses, the signed share card and notification emails).
+
+### `skill_share_links` (migration 0076, §33)
+- `id`, `hashed_token` (sha256 of the URL token, unique), `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `created_by` (FK → `users`, `ON DELETE SET NULL`), `expires_at` (creation + **7 days**, fixed), `created_at`, `last_used_at` (nullable — stamped when an unfurl/metadata request validates it).
+- A **fourth, separate token regime** (like `oauth_*`, never a row in `tokens`): it unlocks **unfurl metadata only** — never bytes, never a session, never an install. Random + skill-scoped + short-lived + hashed at rest; expired rows are swept by the worker's housekeeping. No management UI in v1 (§33).
 
 ### `categories`
 - `id`, `name` (UNIQUE, stored **lowercase**), `description` (nullable), **`slug`** (TEXT UNIQUE NOT
@@ -600,6 +609,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - A **single common top-level wrapper directory is stripped** on extraction (so a bundle
   zipped as `pdf-tools/SKILL.md` normalizes to `SKILL.md` at root).
 - Top-level `SKILL.md` with YAML frontmatter: `name` (required, **must match skill slug**), `description` (required), plus `category`, `tool/harness`, `usage_examples`, `version`. Optional `scripts/`, `references/`, `assets/`.
+- **Optional icon (§33).** The frontmatter may carry **`icon`**: either a **relative path inside the bundle** (e.g. `assets/logo.png` — no URLs, nothing is fetched) or a **single emoji**. Absent that, a root-level **`icon.png`** (also `.jpg` / `.jpeg` / `.webp`) is auto-detected. Accepted image formats are **PNG, JPEG, WebP by magic bytes** — SVG (script-capable) and GIF are refused; source ≤ **512 KB**, shorter side ≥ 64 px, longer side ≤ 4096 px. A bundle-borne icon is **normalized** at ingest (centre-cropped to square, resized to **256×256**, re-encoded as PNG with metadata stripped) and stored content-addressed in `skill_icons`. An `icon` that is unresolvable, oversize or in an unsupported format is a **soft warning**, never a rejection — the icon is optional and resolution simply falls through to the next rung (§33). The same detection runs on **Pointer mirrors** in the worker at mirror time.
 - **Hard validation (blocking):** frontmatter schema + required fields + name==slug.
 - **Limits:** **~200 MB bundle cap by default, configurable platform-wide** (admin setting `max_bundle_bytes`: 100 KB / 1 MB / 10 MB / 50 MB / 100 MB / 200 MB / 1 GB; §13). The configured cap is the **single source of truth honored at every stage** — upload, publish re-validation, pointer mirror, pre-scan/refresh, and the download/readme/file-browser extract — via a shared `bundleContentCap(maxBytes)` (the cap with a ≥20 MB decompression-headroom floor). So a bundle accepted at upload can never be rejected by a stricter default later (the web tier reads the setting directly; the worker reads it from `platform_settings`). **Large-upload caveats:** the web tier buffers the whole upload in memory, and **ClamAV's `clamd` refuses streams over its `StreamMaxLength`** — so for the larger tiers (200 MB / 1 GB) raise `clamd`'s `StreamMaxLength` (and web/worker memory) accordingly, or AV will error on oversized bundles (deployment manual). **Block executables/binaries** via a **denylist** of known binary extensions (`exe, dll, so, dylib, bin, o, a, class, jar, msi, apk, dmg, deb, rpm`) — any other extension passes (block-by-exclusion, not a strict text allowlist).
 - **Oversize rejection UX (HTTP 413).** The upload route rejects an over-cap body with **413** and
@@ -806,6 +816,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Closed tool/harness (coding-agent) vocabulary → install `--agent`.** The propose form's tool/harness is a **closed but searchable** picker over the curated agent list (`shared/agents.ts`; label shown, slug stored) — filter by label or slug, `Generic` first then alphabetical. The chosen agent **drives the install command**: a recognized non-generic slug appends `--agent <slug>` at the end of `npx skills add <url>` (§9); `Generic` (the default) appends nothing. Server-side, `verifySubmissionPayload` enforces **closed membership** (`generic` ∪ known agent slugs) — gating propose, direct publish, and reviewer edits/resubmits (`newPayload`). The old open vocabulary (type-a-new-value + derived suggestions) is removed; pre-existing values not in the list are **grandfathered** (shown raw, no `--agent`, **re-validated only when changed** — an unchanged value equal to the target skill's stored `tool_harness` passes even if it's a legacy slug; this carve-out is load-bearing now that new-version mode resends the field). The propose form's **paste-to-fill** preselects the agent when a pasted command carries a recognized `--agent <slug>`. **New-version mode:** the tool/harness picker stays **active** — a re-version may re-target the skill's coding agent (synced to the skill on accept, §8 below). Since `tool_harness` is skill-level, a change updates the `--agent` flag of the install command for **every** version, including already-published ones.
 - **Paste-to-fill for pointer proposals.** The propose form offers a paste box (the first field **inside the Pointer / external-git tab**, since it's pointer-specific; the Hosted/Pointer tab strip itself sits at the top of the form) that accepts a consumer-tool install command and fills the pointer fields from it — an **accelerator, not a third source type**: submission, validation, and review are unchanged, and every filled field stays editable. Parsing is a pure shared function (`parseInstallCommand`, beside the pinned wire-format adapter) covering the tool's source forms: full git URL (with optional `#ref`), GitHub `owner/repo` shorthand (normalized to `https://github.com/owner/repo.git`), GitHub `/tree/<ref>/<path>` URLs (split into URL + ref + folder), `--skill <name>` (→ the §6 skill folder; slug derived from its last segment), and the **skills-hub.ai install command** (`npx @skills-hub-ai/cli install <slug>` → the §6 API origin; the skilly slug is suggested from the registry slug and the ref must be a registry **version** — the command names none, so the form pins the registry's **latest version** via the ref pre-check, editable and quick-pickable from the published versions). Rules: for a **git** source, a command without a ref leaves the `main` default in charge (§8 below); `--all` is **rejected** with guidance (one skill per proposal, §6); URL schemes are never rewritten (the §6 SSRF validator remains the gate). **New-version mode:** the paste fills URL/ref/folder but **never changes the locked slug** (and cannot flip the locked source type); pasting a source counts as **explicitly supplying it**, so it switches the form off *Keep current files* (§8 below). A folder whose last segment differs from the slug shows a **soft warning** — submission is allowed, and the mirror-time `name == slug` validation stays the hard gate.
 - **Propose a new version from the skill detail page.** Any authenticated user can open the propose flow pre-filled from an existing skill (button on the detail page). In this mode only the **identity and access surface is LOCKED**: the **slug** (the install/repo identity — unique, read-only), the **visibility**, and the **delivery type** (hosted vs pointer). **Everything else is editable**, pre-filled with the skill's current values: the skill-level metadata — **title, description, categories, and tool/harness** — and the version-level inputs — the semver (pre-filled with the next patch above the current latest stable), the usage examples, the **"What changed" note** (required in new-version mode — see the dedicated bullet below), and the **source**, which is now **optional** (default **Keep current files**, below; or a fresh hosted bundle / a new pinned ref+subdir for a pointer). Anyone who may propose may edit any of these — including retitling the skill — applied at the same accept/publish gate as the version (so in a `require_review = false` namespace, a member's direct publish retitles instantly; that is intended). It targets the existing skill and goes through the **normal review/approval** path (or direct publish where permitted). On accept, a new `skill_version` is created **and the skill's title, description, categories, and tool/harness are synced to the submitted values** (categories added/removed to match; all are skill-level metadata, not version content, so this is allowed — the sync re-fires the FTS trigger so search stays current, and it applies **on accept regardless of channel**: a prerelease re-version still updates the skill-level metadata immediately even though `latest` never moves). Only **visibility** stays frozen (a visibility change remains a skill-management action, never a re-version); the slug is immutable, period.
+- **Skill icon (§33) — an optional, skill-level field on every propose/publish path.** The propose form carries an **Icon · optional** field (after Title): an **emoji picker** (the existing `EmojiPicker`) and an **image upload with a client-side square crop** for non-square images, plus a **preview tile** showing the *effective* icon and its **source label** — *from SKILL.md `icon:`*, *from icon.png in the bundle*, *uploaded*, *emoji*, or *default — skilly*. The effective icon is resolved by the **§33 precedence** — bundle frontmatter `icon:` → root `icon.png` → the uploaded image → the emoji → the default — against the bundle the materialized version will serve (*Keep current files* ⇒ the reused artifact; a pointer ⇒ its mirror), so **a bundle-borne icon beats an uploaded one**; when the bundle carries an icon the upload/emoji controls stay enabled but the preview says the bundle icon will be used (they persist as fallbacks). **New-version mode** pre-fills the current icon and offers three states — **keep**, **replace**, **remove**; *remove* clears the uploaded image and the emoji only — a bundle-borne icon can only be removed by shipping a bundle without it. **An icon change is a real change** for the metadata-only no-op guard (below). A **reviewer edit may remove the icon (image and/or emoji) but never upload a replacement** (the reviewer's *remove* is part of the ordinary reviewer-edit revision — no separate audit action). Revision payloads and audit rows carry the icon as **hash + filename + emoji, never bytes**. On accept (or direct publish) the resolved icon is **synced to the skill** exactly like title/categories/tool-harness — regardless of channel; **global promotion copies** the icon columns to the global copy; archive/yank leave it untouched. The **MCP `propose` / `update_proposal` tools silently ignore icon fields** (UI-only in this change, the same posture as the retired `tags` field).
 - **The "What changed" note (per-version).** Every **new version** carries a short, proposer-authored **"What changed"** note — a plain-text summary of what this version changes — surfaced on the skill detail page (§10) and to reviewers. It is **distinct from `usage_examples`**: usage documents *how to use* the skill; this note is *what moved* since the last version. Rules:
   - **Required on new versions; hidden on first versions.** **Required** (non-empty) on every **new-version** publish — through review **and** the direct-publish path (`require_review = false` members, §8) — and **not shown or collected** for a skill's **first** version (a new-skill proposal) or a **global promotion** (which materializes an independent global skill's first version, §8). A first version has no predecessor to describe.
   - **Plain text, no Markdown.** Stored raw; rendered **HTML-escaped with newlines preserved** (pre-wrap) — **no Markdown parsing, no embedded HTML, no URL autolinking**. Capped at **4,000 characters** (client-counted, server-enforced).
@@ -940,6 +951,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Usage dashboard (`/usage`, §21):** the dropdown is **suppressed** the same way and the box becomes a **live filter of the usage list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history); the box is **seeded from `?q=`** on arrival and **clearing it restores the full list**. This box drives the **usage dashboard's own** entitlement-scoped query (`GET /api/usage?q=`), **not** the catalog matcher above — see §21 for its match fields and scope. The usage page therefore carries **no separate in-page search box**.
   - **Requested skills page (`/requests`, §26):** the dropdown is **suppressed** and the box becomes a **live filter of the requests list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history) so `GET /api/requests?q=` re-queries on each keystroke; the box is **seeded from `?q=`** on arrival (shareable link, survives reload) and **clearing it restores the full list**. The match is the requests' **own** substring `ILIKE` over **title + description** (`applyLiveFilters`, §26) — a sibling of the registry matcher, over a different table, not the same predicate/dataset. The page carries **no separate in-page search box**; the page-local **category/tool facet rows (the Category row collapsible and collapsed by default, §26), the "Mine" toggle, the admin state filter, and the cards/list toggle** stay on the page and compose (AND) with `?q=`. `?q=` narrows the *rows*, never the *facet vocabulary* — the response's `facets` are computed ignoring `q`/`category`/`tool` (§26), so typing in the box never makes chips disappear underneath the pointer.
 - **Clear affordance (`✕`) — universal, all five modes.** The shared top-bar box carries a **clear control on its right edge, in the same slot as the `CTRL+K` hint**: the hint shows when the box is **empty**, and the moment the box holds **any** text the hint is **replaced by a small `✕` button** — only ever one of the two visible at a time, toggling instantly as the box goes empty/non-empty. The trigger is purely **"box is non-empty"**, so it is **independent** of the 2-char query floor, of whether the typeahead dropdown or the "Nothing found" bubble is showing, and of which of the five behaviors is active — including on the four **live-filter pages when the box is seeded from `?q=` on arrival** (a shared `/catalog?q=foo`-style link shows the `✕`, not the hint, on load). **Clicking `✕` or pressing `Escape`** (while the box is focused) **clears the box in one action** and **keeps keyboard focus in it**, ready to retype — it never blurs or navigates. `Escape` therefore **always clears** now, **superseding** its former job of merely closing the typeahead dropdown (emptying the query closes any open dropdown and dismisses the "Nothing found" bubble as a consequence). On a **live-filter page** (catalog / installed / usage / requests) clearing **drops `?q=` immediately** via `router.replace` — **not** waiting for the ~250ms live-filter debounce — so the full unfiltered list snaps back at once. The `✕` is a real **`type="button"`** labelled **"Clear search"** (keyboard-focusable, Tab-reachable, non-submitting), rendered as a **thin-stroke glyph** matching the box's search magnifier and the rest of the topbar icon set (not an emoji or heavy character). `Ctrl`/`Cmd+K` is **unchanged** (focus + select the box); if it selects pre-existing text the box is still non-empty, so the `✕` remains shown.
+- **Skill icon on every skill surface (§33).** Catalog **cards** render the icon **left of the title at 40 px** — and render **no slot at all** when the skill has none (titles may start at different x positions; accepted). The **list-view row** (32 px), the **Featured spotlight** (40 px), the **search-suggest dropdown** (24 px), **`#skill` mention chips** (16 px, inline), and the **Installed page** rows (24 px) follow the same *present-or-absent* rule. Only where a **single skill is the subject** does the **default** render — the **skill detail page header** (64 px, the skilly **wordmark + diamond lockup**) and the §33 share card. Every rendering sits on a **neutral tile with a 1 px border** so transparent PNGs survive both themes; images `object-fit: cover`, emoji centred; **alt text = the skill title**. The catalog/detail/suggest APIs expose `icon: { url, emoji } | null` (`url` = `/skill-icons/<sha256>.png`), visibility-filtered like every other field.
 - **Strictly visibility-filtered, auth-required.** A restricted skill must **never** appear in search, autocomplete, or counts for users outside its namespace. **No anonymous browsing.**
 - **Facets (implemented):** category, tool/harness, hosted-vs-pointer. The hosted-vs-pointer facet is labelled **"Source"** in the catalog UI with options **"Hosted"** and **"External"** — "External" being the one user-facing name for pointer skills, matching the `external` pill on catalog cards and the "External source" panel on the detail page (never "Mirrored"; mirroring is the internal mechanism, not the user-facing name). (Namespace, channel/stable-vs-beta, and scan-status facets are **deferred** — not computed or surfaced in v1.)
 - **`?category=<name>` arrival parameter.** The catalog accepts a category **name** in the URL
@@ -1045,6 +1057,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
   - Catalog mutations (publish, new version, yank, archive, **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive or last-version yank, §7), visibility change, namespace reassignment).
   - **Scan overrides** (`proposal.scan_override`).
+  - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
@@ -1121,6 +1134,7 @@ current or future type can ever leak JSON to a user.
   reviewer-note inline, followed by a **clickable call-to-action phrase** linking to the relevant
   place. The renderer authors links in a lightweight **`[label](url)`** form; that link form is the
   **only** markup it emits (everything else is plain text).
+- **Skill icon in the HTML transport (§33).** A notification about a skill that has an icon renders it as a **40 px `<img>`** beside the body (absolute `/skill-icons/<sha256>.png` via `PUBLIC_BASE_URL` — **unset → the image is omitted**, the usual degrade posture); an emoji icon is rendered as text. The **plain-text (SMTP) transport is unchanged** — no icon. Icon-less skills add nothing (no default logo in mail).
 - **Links — both transports carry the same link as the in-app row (§12 invariant).**
   - **HTML part:** `[label](url)` → `<a href="url">label</a>` (escaped; only `http(s)` URLs pass the
     existing safe-URL check). Bare `http(s)://` URLs still auto-link (unchanged), so the
@@ -1280,7 +1294,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
   **own wordmark/mark** (lowercase Montserrat-bold navy wordmark whose terminal dot is a **cyan
   diamond**, echoed by the favicon's diamond-in-navy-tile) — deliberately NOT the Scalefocus eye
   logo, which stays reserved for Scalefocus corporate collateral (documents, decks).
-  - **Social share card (Open Graph / Twitter).** A **single static, app-wide** card — `og:image`
+  - **Social share card (Open Graph / Twitter).** By default a **single static, app-wide** card (the **only** card a plain URL ever yields; a **signed share link** unlocks the per-skill card of §33) — `og:image`
     + `twitter:image` (`twitter:card = summary_large_image`), **1200×630** — surfaced on **every**
     route via the root-layout `metadata` (`openGraph` / `twitter`) plus Next's **`opengraph-image`
     file convention rendered with `ImageResponse`** (code-generated from brand tokens — **no binary
@@ -1448,16 +1462,18 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       tooltip cap is covered separately by **unit tests** over the shared card-text helpers
       (`lib/cardText.ts`, which the catalog cards and the §26 request cards both import — there is
       no second copy of the Markdown-stripping or capping rule).
-  - **Deliberately NOT per-skill / dynamic (invariant #3).** Auth gating is **client-side** (§2), so
+  - **Per-skill only behind a signed share link (invariant #3).** Auth gating is **client-side** (§2), so
     the server returns **200 HTML for every route** and an unauthenticated unfurl crawler receives
-    whatever `<head>` metadata is generated. A per-skill/dynamic card (`generateMetadata` on
+    whatever `<head>` metadata is generated. An unconditional per-skill card (`generateMetadata` on
     `/skills/[ns]/[slug]`) would stamp skill name/namespace/description into `og:*` and into the
     rendered image for **anyone**, leaking **restricted (`namespace`-visibility) skills** and
-    creating an existence oracle — a direct **invariant #3** violation. The static app-wide card
-    carries **no per-skill data**, so it is safe to serve unauthenticated. Per-skill social cards are
-    **out of scope** and must not be re-introduced without an authenticated, visibility-filtered
-    metadata path. **App/browser icons** (apple-touch, PWA manifest) are likewise **out of scope**
-    here — the existing `icon.svg` favicon is unchanged.
+    creating an existence oracle — a direct **invariant #3** violation. So a plain skill URL yields
+    **exactly** the static app-wide card, **byte-identical for a restricted skill and an unknown slug**
+    (no oracle). The per-skill card exists **only** when the URL carries a valid **`?s=<token>`**
+    signed share link (§33) — minted by a signed-in user who could see the skill, 7-day TTL, hashed at
+    rest: that is the *authenticated, visibility-filtered metadata path* this rule always demanded.
+    **App/browser icons** (apple-touch, PWA manifest) remain **out of scope** — the existing
+    `icon.svg` favicon is unchanged.
 - **Backup/DR:** documented Postgres + object-store backup/restore; skilly stateless beyond those.
 - **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6. The **worker's** HTTP surfaces — the git smart server (§9), the SCIM provisioning target (§5), and the operational `/healthz` `/readyz` `/metrics` endpoints — are additionally rate-limited **app-wide** via `express-rate-limit` (see §22 *Rate limiting (worker HTTP surfaces)*).
 
@@ -1478,6 +1494,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/skills/:ns/:slug/versions/:semver/changes` — the published version's **file changes vs its immediate predecessor** (§10): `{ available, baselineSemver, added, modified, removed, unchanged, files[] }`, or `{ available: false, reason }` when there's no predecessor / no stored artifact yet. `?path=<file>` returns that file's unified line diff (or a `binary` / `tooLarge` marker). Gated by the **skill's own visibility** (invariant #3; archived → owners only, §7), rate-limited like `download`, cached by `(skill, semver)` — the reviewer counterpart is `GET /api/proposals/:id/changes` (§8).
 - `POST /api/skills/:ns/:slug/promote` — initiate promotion to global. `POST /api/skills/:ns/:slug/yank`, `.../archive`, `.../delete` (permanent; platform-admin, archived-only).
 - `POST /api/skills/:ns/:slug/feature { featured }` — Featured spotlight toggle (platform-admin, re-verified; **409** at the `max_featured_skills` cap; rejected for a non-installable/archived skill), §7.
+- `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>`; audited `skill.share_link_created`. **404** for a skill the caller cannot see.
 
 **Proposals & publishing**
 - `POST /api/proposals` — submit (new skill or new version). `GET /api/proposals` — queue (scoped by reviewer authority). `GET /api/proposals/:id` — detail.
@@ -1485,6 +1502,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `DELETE /api/proposals/:id` — permanently delete a proposal (reviewer of its namespace; any state except `accepted`). Housekeeping, silent, audited (`proposal.deleted`); cleans the review conversation + pointer scan + dangling notifications. §8.
 - `GET /api/proposals/:id/files` (bundle browser, §8), `.../artifact`, `.../duplicate-check`, `GET|POST /api/proposals/:id/messages` (review discussion, §24).
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
+- `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon).
 - `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6); an unparseable multipart body is a clear 400, not a 500 (§6). **Chunked variant** for bundles larger than the configured chunk size (§6): `POST /api/uploads/chunked` (start; sweeps ≥2h-old orphans, returns `{uploadId, chunkBytes}`), `PUT /api/uploads/chunked/:id/parts/:index` (raw octet-stream part), `POST /api/uploads/chunked/:id/complete` (assemble → identical validate/scan/store; same response shape as the single-shot upload), `DELETE /api/uploads/chunked/:id` (abort). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
 
 **Consumption (git gateway — on the worker, NOT `/api/fetch`)**
@@ -1527,6 +1545,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Misc**
 - `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
@@ -1793,6 +1812,14 @@ responsibilities. Hardening that pins or clarifies invariants here:
   hosts**, and the worker additionally **resolves the host and rejects any private/loopback/
   link-local address** and disables HTTP redirects (DNS-rebinding defense). `ext::` is never an
   allowed git transport, even under `SKILLY_MIRROR_ALLOW_INSECURE`.
+- **Skill icons & share links (§33):** icon images are **never served as uploaded** — every icon
+  (uploaded or bundle-borne) is decoded under a pixel-count guard (`limitInputPixels`, decompression-bomb
+  defence) and **re-encoded** to a 256×256 PNG with metadata stripped, which defuses polyglot files and
+  EXIF payloads; SVG is refused outright (script-capable); the client-side crop output is never trusted.
+  The share token is random (32 bytes, base64url), **hashed at rest**, 7-day TTL, skill-scoped, unlocks
+  **metadata only**; the `?s=` query string is **stripped from structured logs, RUM route labels and
+  access logs** (invariant #6 posture). `/skill-icons` and `/share-card` are unauthenticated but
+  content-/token-addressed, and an invalid token is indistinguishable from an unknown skill.
 - **Version immutability** (invariant #2): the DB guard (`skill_versions_guard()`) blocks DELETE
   (except inside an explicit, audited permanent-delete transaction, §7) and pins the **full**
   immutable content set on UPDATE — `semver`, `skill_id`, `artifact_sha256`, `artifact_object_key`,
@@ -5378,3 +5405,166 @@ sidebar link and gets 403 on the summary. **Ladder (v2.8.0)**: with the set PATC
 the run, an idle tab's consecutive beacons are spaced ≥ 7 s apart after the first two ticks, and a
 click brings the next one back within ~5 s; the header field rejects `4, 9` inline and keeps the
 saved set. The suite restores the default set afterwards.
+
+---
+
+## 33. Skill icons & signed share links
+
+### 33.1 Why
+Skills have been identified by text alone. An optional **icon** gives the catalog and the skill detail
+page a visual anchor and lets a shared link **unfurl** into a recognizable card in Teams / Slack /
+Outlook. The unfurl is the hard part: §14 rejected per-skill Open Graph cards because unfurl crawlers
+are **unauthenticated** and the server returns **200 for every route** (invariant #3). This section
+supplies the *authenticated, visibility-filtered metadata path* §14 demanded — a **signed share link**
+minted by a signed-in user who can see the skill — and keeps every plain URL exactly as it is today.
+
+### 33.2 Icon model (skill-level metadata)
+- The icon is **skill-level metadata** like title, categories and tool/harness — **not** version content.
+  It is set or changed through any propose/publish path (new-skill proposal, new-version proposal,
+  direct publish, reviewer edit) and **synced to the skill on accept regardless of channel** (§8).
+  Icons never version and never change an install.
+- **Two representations, stored side by side:** an **image** (`skills.icon_sha256` → `skill_icons`) and
+  an **emoji** (`skills.icon_emoji`, exactly **one emoji grapheme cluster**, validated server-side).
+  Display rule: **image if set, else emoji, else default.** The emoji persists underneath an image so
+  it takes over if the image is later removed.
+- `skills.icon_source` records where the effective image came from — `frontmatter` | `bundle` |
+  `upload` — and drives both the form's source label and the *remove* semantics below.
+- **Resolution precedence** (evaluated at accept / direct publish, against the bundle the materialized
+  version will serve — *Keep current files* ⇒ the reused artifact, a Pointer ⇒ its mirror):
+  1. the SKILL.md frontmatter **`icon:`** key naming a file inside the bundle;
+  2. a root-level **`icon.png`** (or `.jpg` / `.jpeg` / `.webp`);
+  3. the **image uploaded** in the form;
+  4. the **emoji** — a frontmatter `icon:` whose value is a single emoji lands here (it beats a
+     form-picked emoji but loses to any image);
+  5. the **default** — the skilly wordmark + diamond (rendered, never stored).
+  **Consequence (deliberate):** a bundle-borne icon beats the proposer's upload; *remove* only clears
+  rungs 3–4; a bundle icon is removed by shipping a bundle without it.
+- **Soft failures only.** An unresolvable `icon:` path, an oversize or unsupported bundle image, or a
+  malformed emoji produces a **warning** on the upload response and the proposal page and falls
+  through to the next rung. Icons are optional; they never block a proposal or a publish.
+- **Storage — `skill_icons`** (§3): content-addressed by the sha256 of the **normalized** PNG,
+  immutable, deduplicated across skills, never deleted in v1 (orphan sweep deferred). The icon is
+  **not personal data**: GDPR erasure (§4) leaves it untouched; permanent skill delete (§7) leaves the
+  row orphaned (harmless).
+
+### 33.3 Image ingestion
+- **Formats:** PNG, JPEG, WebP — detected by **magic bytes**, never by extension. **SVG is refused**
+  (script-capable, consistent with §12's `data:image/svg+xml` strip); **GIF is refused** (animation has
+  no place in a 40 px tile). **Limits:** source ≤ **512 KB**; shorter side ≥ **64 px**; longer side
+  ≤ **4096 px**; decode runs under a pixel-count guard (`limitInputPixels`).
+- **Normalization (`sharp`, a native dependency added to both the web and worker images):**
+  centre-crop to square → resize to **256×256** → re-encode **PNG** → **strip all metadata**. The output
+  bytes are what is hashed and stored; the input is discarded. Re-encoding is the sanitizer — it defuses
+  polyglot files and EXIF payloads — which is why icons deliberately **skip ClamAV**: the bytes never
+  reach a consumer's disk and never leave skilly un-transcoded.
+- **Uploaded icons** pass a **client-side square crop** first when the image is not square (the
+  proposer chooses the crop; a square image skips the step). The client's output is **still**
+  normalized server-side — it is never trusted.
+- **Bundle-borne icons** are extracted during hosted-bundle validation (web, at `POST /api/uploads` /
+  the chunked finalize) and during Pointer mirroring (worker), normalized identically and stored. The
+  upload response reports `bundleIcon: { sha256, url, source: 'frontmatter' | 'bundle' } | null` plus
+  any `warnings`, so the form can preview the effective icon **before** submission.
+- `POST /api/icons` (§15) is the upload endpoint: multipart, any signed-in user, rate-limited, **413**
+  over the byte cap, **422** for an unsupported format or an out-of-range dimension → `{ sha256, url }`.
+  The proposal / publish payload carries `iconSha256` + `iconFilename` (the original upload name, for
+  the revision diff) + `iconEmoji`; **`verifySubmissionPayload` enforces ownership** — a referenced
+  hash must have been uploaded by the caller (or be the target skill's current `icon_sha256`), mirroring
+  the existing artifact-ownership check.
+
+### 33.4 Propose, review, publish
+- **Form field** *Icon · optional*, placed after **Title**: an emoji picker (the existing
+  `EmojiPicker`), an image upload with crop, and a **preview tile** showing the effective icon with its
+  source label — *from SKILL.md `icon:`* / *from icon.png in the bundle* / *uploaded* / *emoji* /
+  *default — skilly*. When the bundle carries an icon, the upload/emoji controls **stay enabled** but the
+  preview states the bundle icon will be used (upload/emoji persist as fallbacks).
+- **New-version mode** pre-fills the current icon and offers **keep / replace / remove** (§8). A
+  changed icon **counts as a real change** for the metadata-only no-op guard (§8): a re-version whose
+  only difference is the icon is valid (the "Updated metadata" pre-fill applies).
+- **Reviewer edit:** the icon is **metadata** — a reviewer may **remove** the image and/or the emoji
+  but **cannot upload a replacement** (files are proposer-only, §8). The removal is part of the ordinary
+  reviewer-edit revision; **no separate audit action**.
+- **Revisions & audit** carry `iconSha256`, `iconFilename`, `iconEmoji` — hash, name and emoji, **never
+  bytes** (§11).
+- **Accept / direct publish** resolves the precedence and writes `icon_sha256` / `icon_emoji` /
+  `icon_source` to the skill. **Global promotion (§8)** copies all three to the global copy. A namespace
+  with `require_review = false` publishes the icon unreviewed — the same posture as descriptions.
+- **MCP (§29):** `propose` / `update_proposal` **silently ignore** icon fields (no 400) — UI-only in
+  this change.
+
+### 33.5 Display
+- **Tile:** every rendering sits on a **neutral tile** (surface colour, **1 px `--line` border**, radius
+  proportional to size) so transparent PNGs survive both themes; images `object-fit: cover`; an emoji is
+  centred at ~70 % of the tile. **Alt text = the skill title** (`alt` on images, `role="img"` +
+  `aria-label` on emoji).
+- **Present-or-absent surfaces** (no slot when the skill has no icon): catalog **card** — **40 px, left
+  of the title**; catalog **list row** — 32 px before the title block; **Featured spotlight** — 40 px;
+  **search-suggest dropdown** — 24 px; **`#skill` mention chips** (§24) — 16 px inline; **Installed page**
+  rows — 24 px. Card titles therefore start at different x positions depending on the skill; accepted.
+- **Single-subject surfaces render the default:** the **skill detail page header** shows the icon at
+  **64 px** left of the title block, or the **skilly wordmark + diamond lockup** when the skill has none;
+  the **share card** (§33.6) does the same at card scale.
+- **Emails (§12):** the HTML transport renders a 40 px `<img>` (absolute URL via `PUBLIC_BASE_URL`;
+  unset → omitted) or the emoji as text; the plain-text transport is unchanged; no default logo in mail.
+- **API shape:** `CatalogEntry` and the detail/suggest/installed payloads gain
+  `icon: { url: string | null, emoji: string | null } | null` (`url` = `/skill-icons/<sha256>.png`),
+  visibility-filtered like every other field.
+
+### 33.6 Signed share links
+- **Minting.** The detail page's **Share** button calls `POST /api/skills/:ns/:slug/share` (§15) and
+  copies the returned `url` — `<PUBLIC_BASE_URL or request origin>/skills/<ns>/<slug>?s=<token>` — to the
+  clipboard (same copy-toast). The caller must be able to **see** the skill (visibility-checked; **404**
+  otherwise). **Every click mints a fresh token** — the raw token is never stored (only its sha256
+  hash, like every other token regime here), so the endpoint has nothing to hand back for a "reuse";
+  multiple concurrent live links per (user, skill) are normal and harmless, each independently
+  7-day-TTL'd. Every mint is audited **`skill.share_link_created`** (actor, skill, expiry — never
+  the token).
+- **Token:** 32 random bytes, base64url; stored as **sha256** in `skill_share_links` (§3) with
+  `expires_at = created_at + 7 days` (fixed, no setting), `created_by`, `last_used_at`. Skill delete
+  cascades; expired rows are swept by the worker's housekeeping. **No management UI** in v1 — links
+  simply expire. A **distinct regime** from `tokens` and `oauth_*`: it unlocks unfurl metadata only,
+  never bytes, never a session.
+- **Server metadata.** `/skills/[ns]/[slug]` gains a **server-side `generateMetadata`** that reads `?s`.
+  A token that is present, unexpired and **matches this skill** ⇒ `og:title` / `twitter:title` = the
+  skill title, `og:description` = the plain-text description (the shared `cardText` helpers, capped),
+  `og:image` / `twitter:image` = `/share-card/<token>.png`; `last_used_at` is stamped. **Anything else**
+  — no token, expired, unknown, or a token for a different skill — ⇒ **exactly** the static app-wide
+  metadata and card, **byte-identical to an unknown slug** (no existence oracle).
+- **Visibility is checked at mint, not at unfurl.** The sharer could see the skill when they minted;
+  the 7-day TTL bounds the exposure. An **archived** skill's link keeps working while the skill row
+  exists; a permanently deleted skill cascades its links away.
+- **The page itself stays client-gated**: opening a share link still requires sign-in (§2). The link
+  changes what a crawler's `<head>` sees, nothing about who may read the page.
+- **`GET /share-card/:token.png`** (unauthenticated, `next/og` `ImageResponse`, **1200×630**): a valid
+  token renders the **per-skill card** — the §14 navy field; the icon tile (image, emoji, or the
+  wordmark + diamond lockup when none) on the left; the **title**, **`@ns/slug`** and the capped
+  description on the right; the skilly mark in a corner. Text uses `next/og`'s bundled typeface, as the
+  static card does (§14). An invalid token renders the **static card** with **200** (a crawler shows the
+  brand card; nothing distinguishes the states). `Cache-Control: public, max-age` capped at the token's
+  remaining TTL.
+- **Never log the token.** The `?s=` query string is stripped from structured request logs, the RUM
+  route label (§32) and `access_log` — invariant #6 posture (§22).
+
+### 33.7 Tests (ship with the change — §16 discipline)
+- **Unit (`@skilly/shared` / web lib):** precedence resolution over every combination of frontmatter
+  path / frontmatter emoji / root icon / upload / emoji (incl. the *remove* semantics and the
+  bundle-beats-upload rule); frontmatter `icon` parsing (path vs. emoji vs. junk → warning); single-emoji
+  validation; magic-byte format detection incl. SVG/GIF refusal; share-token TTL/expiry arithmetic;
+  `?s=` stripping in the log/RUM sanitizers; the no-op guard counting an icon change as a real change.
+- **Integration (API + DB):** `POST /api/icons` normalizes a non-square JPEG to a 256×256 PNG with no
+  metadata and dedupes by hash; over-cap → 413, SVG → 422; `verifySubmissionPayload` rejects a hash the
+  caller did not upload; bundle upload reports `bundleIcon` for `icon:` and for root `icon.png`, and a
+  warning for a bad path; accept syncs the icon to the skill and promotion copies it; reviewer edit can
+  remove but a reviewer upload is rejected; `POST .../share` is 404 for a restricted skill the caller
+  cannot see, reuses the live link, and audits the mint; `generateMetadata` with a valid token emits the
+  skill's `og:*`, and with a missing/expired/foreign token emits the static metadata **identical** to an
+  unknown slug; `/share-card/<bad>.png` and `/share-card/<valid>.png` both return 200 PNG; `/skill-icons`
+  serves immutable bytes and 404s unknown hashes.
+- **e2e (Playwright):** propose a skill with an uploaded icon → the catalog card shows the 40 px tile
+  and an icon-less neighbour shows no slot → the detail header shows it at 64 px → new-version *remove*
+  → the header falls back to the wordmark lockup; a bundle carrying `icon.png` shows the *from icon.png*
+  source label in the form preview; Share copies a `?s=` URL.
+
+### 33.8 Migration 0076
+- `skill_icons` and `skill_share_links` as in §3; `skills` gains `icon_sha256` (FK → `skill_icons`),
+  `icon_emoji`, `icon_source` (CHECK on the three values); grants for `skilly_app` on the new tables.
+  No backfill — existing skills start icon-less (default lockup on the detail page, no slot elsewhere).

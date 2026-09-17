@@ -13,6 +13,11 @@ const nextConfig = {
     ? { onDemandEntries: { maxInactiveAge: 24 * 60 * 60 * 1000, pagesBufferLength: 500 } }
     : {}),
   transpilePackages: ["@skilly/shared"],
+  // sharp (§33 icon normalization) ships native prebuilt binaries per platform/libc — keep it OUT
+  // of the webpack/traced server bundle so its `@img/*` optional-dependency binaries are resolved
+  // from node_modules at runtime instead of statically traced (which can silently drop the wrong
+  // platform's binary in `output: "standalone"`).
+  serverExternalPackages: ["sharp"],
   experimental: {
     // keep server actions on; used for proposal/review flows
     serverActions: { bodySizeLimit: "12mb" }, // ~10MB bundle cap + overhead (§6)

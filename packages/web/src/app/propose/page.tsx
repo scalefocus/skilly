@@ -17,6 +17,9 @@ import { MarkdownField } from "../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../components/ToolHarnessPicker";
 import { fmtSize, bundleUploadError } from "../../lib/uploadError";
 import { uploadBundle as uploadBundleRequest } from "../../lib/uploadBundleClient";
+import { cropImageToSquare, loadImageDimensions } from "../../lib/iconCrop";
+import { EmojiPicker } from "../../components/EmojiPicker";
+import { SkillIcon } from "../../components/SkillIcon";
 
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
@@ -128,6 +131,34 @@ function ProposeForm() {
   });
   const [categories, setCategories] = useState<string[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<{ name: string; slug: string }[]>([]);
+
+  // Skill icon (§33) — optional. `iconFile` is the proposer's chosen replacement image (cropped
+  // to a square client-side, re-normalized server-side regardless); `iconEmoji` the alternative/
+  // fallback; `bundleIcon` a preview of what a HOSTED upload's bundle carried (frontmatter/root
+  // icon.* beats the upload/emoji, §33.2). `currentIcon`/`iconMode` are new-version-mode only.
+  const [iconFile, setIconFile] = useState<File | null>(null);
+  const [iconPreviewUrl, setIconPreviewUrl] = useState<string | null>(null);
+  const [iconNeedsCrop, setIconNeedsCrop] = useState(false);
+  const [iconCropOffset, setIconCropOffset] = useState(0.5);
+  const [iconEmoji, setIconEmoji] = useState("");
+  const [bundleIcon, setBundleIcon] = useState<{ sha256?: string; emoji?: string; url?: string; source: "frontmatter" | "bundle" } | null>(null);
+  const [currentIcon, setCurrentIcon] = useState<{ url: string | null; emoji: string | null } | null>(null);
+  const [iconMode, setIconMode] = useState<"keep" | "replace" | "remove">("keep");
+  async function onIconFileChange(file: File | null) {
+    setBundleIcon(null);
+    if (iconPreviewUrl) URL.revokeObjectURL(iconPreviewUrl);
+    setIconFile(file);
+    setIconCropOffset(0.5);
+    if (!file) { setIconPreviewUrl(null); setIconNeedsCrop(false); return; }
+    setIconPreviewUrl(URL.createObjectURL(file));
+    try {
+      const { width, height } = await loadImageDimensions(file);
+      setIconNeedsCrop(width !== height);
+    } catch {
+      setIconNeedsCrop(false);
+    }
+    if (isNewVersion) setIconMode("replace");
+  }
   // §10 *Category slugs*: the same shared check the server runs at submit — reserved `general`,
   // a name with no slug, or a slug another category already owns — flagged inline as you type.
   const categoryError = checkCategoryNames(categories, categoryOptions);
@@ -353,6 +384,8 @@ function ProposeForm() {
         setCategories(j.meta?.categories ?? []);
         setSourceType(j.meta?.type ?? "hosted");
         setNvLatest(j.latest ?? null);
+        setCurrentIcon(j.meta?.icon ?? null);
+        setIconMode("keep");
         // Baseline for the §8 no-op guard (reuse mode: at least one field must differ from this).
         nvBaseline.current = {
           title: j.meta?.title ?? "",
@@ -585,6 +618,9 @@ function ProposeForm() {
       throw new Error(bundleUploadError(up.status, j.error, file.size));
     }
     setScan(j.scan);
+    // Bundle-borne icon (§33): a bundle's own frontmatter `icon:`/root icon.* beats whatever the
+    // proposer separately uploaded/picked — preview it so the form is honest about what will ship.
+    setBundleIcon(j.bundleIcon ?? null);
     return {
       artifactObjectKey: j.artifactObjectKey,
       artifactSha256: j.artifactSha256,
@@ -662,6 +698,34 @@ function ProposeForm() {
         pointer = { url: f.externalUrl, ref: f.externalRef, subdir: f.externalSubdir.trim() || null };
       }
 
+      // Skill icon (§33) — resolved AFTER the hosted upload above (so a bundle-borne icon, just
+      // discovered, can win) per the §33.2 precedence: bundle icon > proposer's uploaded image >
+      // emoji > nothing. New-version "keep" leaves the fields untouched (server coalesce-skips);
+      // "remove" clears both explicitly.
+      let iconFields: { iconSha256?: string | null; iconEmoji?: string | null; iconSource?: "frontmatter" | "bundle" | "upload" | null } = {};
+      if (isNewVersion && iconMode === "keep") {
+        iconFields = {};
+      } else if (isNewVersion && iconMode === "remove") {
+        iconFields = { iconSha256: null, iconEmoji: null, iconSource: null };
+      } else if (bundleIcon?.sha256) {
+        iconFields = { iconSha256: bundleIcon.sha256, iconEmoji: null, iconSource: bundleIcon.source };
+      } else if (bundleIcon?.emoji) {
+        iconFields = { iconSha256: null, iconEmoji: bundleIcon.emoji, iconSource: bundleIcon.source };
+      } else if (iconFile) {
+        const cropped = await cropImageToSquare(iconFile, iconCropOffset);
+        const form = new FormData();
+        form.append("icon", cropped, "icon.png");
+        const r = await fetch("/api/icons", { method: "POST", body: form });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error ?? "Could not upload the icon");
+        iconFields = { iconSha256: j.sha256, iconEmoji: null, iconSource: "upload" };
+      } else if (iconEmoji.trim()) {
+        iconFields = { iconSha256: null, iconEmoji: iconEmoji.trim(), iconSource: null };
+      } else if (!isNewVersion) {
+        iconFields = { iconSha256: null, iconEmoji: null, iconSource: null };
+      }
+      const finalMetadata = { ...metadata, ...iconFields };
+
       // In new-version mode, target the existing skill so this becomes a new version of it. On
       // accept the skill's title/description/categories/tool-harness are SYNCED to the
       // submitted values (§8) — only the slug and visibility stay frozen.
@@ -669,7 +733,7 @@ function ProposeForm() {
         namespaceSlug: f.namespaceSlug,
         ...(isNewVersion ? { targetSkillSlug: f.skillSlug } : {}),
         semver: f.semver,
-        metadata,
+        metadata: finalMetadata,
         ...artifact,
         pointer,
         // Keep current files (§8): the server resolves the reuse snapshot itself.
@@ -1101,6 +1165,89 @@ function ProposeForm() {
               accept. The slug stays the immutable identity. */}
           <input className="input input-lg" style={{ width: "100%" }} value={f.title} onChange={set("title")} placeholder="PDF Tools" />
           {lock && <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Editing the title renames the skill when this version is accepted (the slug never changes).</p>}
+        </div>
+        <div>
+          <label style={label}>Icon <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· optional</span></label>
+          {(() => {
+            // Effective icon preview + its source label, mirroring the §33.2 precedence the
+            // server resolves at accept: bundle icon > proposer upload > emoji > default.
+            const removed = isNewVersion && iconMode === "remove";
+            const effective = removed
+              ? null
+              : bundleIcon?.url
+                ? { url: bundleIcon.url, emoji: null }
+                : bundleIcon?.emoji
+                  ? { url: null, emoji: bundleIcon.emoji }
+                  : iconPreviewUrl
+                    ? { url: iconPreviewUrl, emoji: null }
+                    : iconEmoji.trim()
+                      ? { url: null, emoji: iconEmoji.trim() }
+                      : isNewVersion && iconMode === "keep"
+                        ? currentIcon
+                        : null;
+            const sourceLabel = removed
+              ? "removed"
+              : bundleIcon?.source === "frontmatter"
+                ? "from SKILL.md icon:"
+                : bundleIcon?.source === "bundle"
+                  ? "from icon.* in the bundle"
+                  : iconPreviewUrl
+                    ? "uploaded"
+                    : iconEmoji.trim()
+                      ? "emoji"
+                      : isNewVersion && iconMode === "keep" && currentIcon
+                        ? "current icon"
+                        : "default — skilly";
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <SkillIcon icon={effective} title={f.title || "icon preview"} size={48} fallback="default" />
+                <span className="muted" style={{ fontSize: 12.5 }}>{sourceLabel}</span>
+                {isNewVersion && (
+                  <div className="sort-toggle" role="group" aria-label="Icon on this version">
+                    <button type="button" className={iconMode === "keep" ? "active" : ""} onClick={() => setIconMode("keep")}>Keep</button>
+                    <button type="button" className={iconMode === "replace" ? "active" : ""} onClick={() => setIconMode("replace")}>Replace</button>
+                    <button type="button" className={iconMode === "remove" ? "active" : ""} onClick={() => { setIconMode("remove"); onIconFileChange(null); setIconEmoji(""); }}>Remove</button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {(!isNewVersion || iconMode === "replace") && (
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <label className="filepick-btn" style={{ fontSize: 12.5 }}>
+                Choose image…
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  style={{ display: "none" }}
+                  onChange={(e) => { onIconFileChange(e.target.files?.[0] ?? null); if (e.target.files?.[0]) setIconEmoji(""); }}
+                />
+              </label>
+              <EmojiPicker align="left" onPick={(e) => { setIconEmoji(e); onIconFileChange(null); }} />
+              {iconEmoji && (
+                <span className="muted mono" style={{ fontSize: 12.5 }}>
+                  {iconEmoji} <button type="button" className="btn-ghost" style={{ fontSize: 11 }} onClick={() => setIconEmoji("")}>clear</button>
+                </span>
+              )}
+              {iconFile && (
+                <button type="button" className="btn-ghost" style={{ fontSize: 11 }} onClick={() => onIconFileChange(null)}>remove image</button>
+              )}
+            </div>
+          )}
+          {iconNeedsCrop && iconFile && (!isNewVersion || iconMode === "replace") && (
+            <div style={{ marginTop: 8 }}>
+              <label className="muted" style={{ fontSize: 11.5 }}>Crop position (this image isn’t square — 256×256 is cropped from it)</label>
+              <input
+                type="range" min={0} max={1} step={0.01} value={iconCropOffset}
+                onChange={(e) => setIconCropOffset(Number(e.target.value))}
+                style={{ width: "100%", maxWidth: 260 }}
+              />
+            </div>
+          )}
+          <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
+            Shown on the catalog card, the skill page, and the share-link preview. PNG/JPEG/WebP up to 512 KB, or a single emoji.
+            Skills without an icon show the skilly logo.
+          </p>
         </div>
         <div>
           <label style={label}>

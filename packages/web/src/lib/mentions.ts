@@ -32,7 +32,7 @@ export interface PreparedMention extends MentionRef {
 /** What the reader is entitled to see for each token — the value side of the `mentions` map. */
 export type ResolvedMention =
   | { kind: "user"; id: string; name: string; erased: boolean }
-  | { kind: "skill"; id: string; state: "ok"; title: string; ns: string; slug: string; restricted: boolean }
+  | { kind: "skill"; id: string; state: "ok"; title: string; ns: string; slug: string; restricted: boolean; icon: { url: string | null; emoji: string | null } | null }
   | { kind: "skill"; id: string; state: "restricted" }
   | { kind: "skill"; id: string; state: "gone"; label: string | null };
 
@@ -224,12 +224,14 @@ export async function resolveMentions(access: Access, messageIds: string[]): Pro
     u_name: string | null; u_erased: string | null;
     s_title: string | null; s_slug: string | null; s_status: string | null;
     s_visibility: "org" | "namespace" | null; s_namespace_id: string | null; ns_slug: string | null;
+    s_icon_sha256: string | null; s_icon_emoji: string | null;
   }>(
     `select distinct mm.kind, mm.target_id, mm.label,
             case when mm.kind = 'user' then ${nameSql("u.display_name", "u.email")} end as u_name,
             u.erased_at::text as u_erased,
             s.title as s_title, s.slug as s_slug, s.status as s_status,
-            s.visibility as s_visibility, s.namespace_id as s_namespace_id, n.slug as ns_slug
+            s.visibility as s_visibility, s.namespace_id as s_namespace_id, n.slug as ns_slug,
+            s.icon_sha256 as s_icon_sha256, s.icon_emoji as s_icon_emoji
        from message_mentions mm
        left join users u on mm.kind = 'user' and u.id = mm.target_id
        left join skills s on mm.kind = 'skill' and s.id = mm.target_id
@@ -270,7 +272,11 @@ export async function resolveMentions(access: Access, messageIds: string[]): Pro
           maintainerOf.has(r.target_id)
         : isSkillVisible(access, { namespaceId: r.s_namespace_id, visibility: r.s_visibility ?? "namespace" });
     map[token] = visible
-      ? { kind: "skill", id: r.target_id, state: "ok", title: r.s_title ?? r.s_slug, ns: r.ns_slug, slug: r.s_slug, restricted: r.s_visibility === "namespace" }
+      ? {
+          kind: "skill", id: r.target_id, state: "ok", title: r.s_title ?? r.s_slug, ns: r.ns_slug, slug: r.s_slug,
+          restricted: r.s_visibility === "namespace",
+          icon: r.s_icon_sha256 || r.s_icon_emoji ? { url: r.s_icon_sha256 ? `/skill-icons/${r.s_icon_sha256}.png` : null, emoji: r.s_icon_emoji } : null,
+        }
       : { kind: "skill", id: r.target_id, state: "restricted" };
   }
   return map;

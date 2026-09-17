@@ -71,6 +71,8 @@ export interface InstallView {
   clientUserAgent: string | null;
   clientIp: string | null; // originating IP of the first clone; null if unknown
   skillArchived: boolean;
+  /** Optional skill icon (§33) — image and/or emoji, or null. */
+  icon: { url: string | null; emoji: string | null } | null;
 }
 
 /** A user's USED installs (generated-but-unused tokens are ephemeral and not listed). §23 */
@@ -79,9 +81,11 @@ export async function listInstalls(userId: string): Promise<InstallView[]> {
     id: string; pinned_semver: string | null; used_at: string; expires_at: string | null;
     client_user_agent: string | null; client_ip: string | null; ns_slug: string; skill_slug: string;
     title: string; inactive: boolean; skill_status: "active" | "archived";
+    icon_sha256: string | null; icon_emoji: string | null;
   }>(
     `select t.id, t.pinned_semver, t.used_at, t.expires_at, t.client_user_agent, t.client_ip,
             n.slug as ns_slug, s.slug as skill_slug, s.title, s.status as skill_status,
+            s.icon_sha256, s.icon_emoji,
             (t.expires_at is not null and t.expires_at <= now()) as inactive
        from tokens t
        join skills s on s.id = t.skill_id
@@ -102,6 +106,7 @@ export async function listInstalls(userId: string): Promise<InstallView[]> {
     clientUserAgent: r.client_user_agent,
     clientIp: r.client_ip,
     skillArchived: r.skill_status === "archived",
+    icon: r.icon_sha256 || r.icon_emoji ? { url: r.icon_sha256 ? `/skill-icons/${r.icon_sha256}.png` : null, emoji: r.icon_emoji } : null,
   }));
 }
 
@@ -116,9 +121,11 @@ export async function listSystemInstalls(): Promise<SystemInstallView[]> {
     id: string; pinned_semver: string | null; used_at: string; expires_at: string | null;
     client_user_agent: string | null; client_ip: string | null; ns_slug: string; skill_slug: string;
     title: string; inactive: boolean; skill_status: "active" | "archived"; minted_by: string | null;
+    icon_sha256: string | null; icon_emoji: string | null;
   }>(
     `select t.id, t.pinned_semver, t.used_at, t.expires_at, t.client_user_agent, t.client_ip,
             n.slug as ns_slug, s.slug as skill_slug, s.title, s.status as skill_status,
+            s.icon_sha256, s.icon_emoji,
             (t.expires_at is not null and t.expires_at <= now()) as inactive,
             u.display_name as minted_by
        from tokens t
@@ -141,6 +148,7 @@ export async function listSystemInstalls(): Promise<SystemInstallView[]> {
     clientIp: r.client_ip,
     skillArchived: r.skill_status === "archived",
     mintedBy: r.minted_by,
+    icon: r.icon_sha256 || r.icon_emoji ? { url: r.icon_sha256 ? `/skill-icons/${r.icon_sha256}.png` : null, emoji: r.icon_emoji } : null,
   }));
 }
 

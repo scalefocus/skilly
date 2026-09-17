@@ -45,11 +45,18 @@ export async function resolveGraphTransport(pool: Pool, env: GraphMailEnv | null
   return {
     kind: "graph",
     send: async (to, msg) => {
+      // §33.5: a 40px icon ahead of the message body — image when PUBLIC_BASE_URL makes an
+      // absolute URL possible, else the emoji as plain text; icon-less skills add nothing.
+      const iconHtml = msg.iconUrl && BASE_URL
+        ? `<img src="${BASE_URL}${msg.iconUrl}" width="40" height="40" alt="" style="border-radius:8px;vertical-align:middle;margin-right:8px;display:inline-block;" />`
+        : msg.iconEmoji
+          ? `<span style="font-size:22px;vertical-align:middle;margin-right:8px;">${msg.iconEmoji}</span>`
+          : "";
       await sendGraphMail(env, token.accessToken, {
         to,
         subject: msg.subject,
         text: renderEmailText(msg.text, BASE_URL),
-        html: renderWrappedEmailHtml(wrapper, msg.text, BASE_URL),
+        html: iconHtml + renderWrappedEmailHtml(wrapper, msg.text, BASE_URL),
       });
     },
   };

@@ -19,6 +19,9 @@ import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
 import { bundleUploadError } from "../../../lib/uploadError";
 import { uploadBundle as uploadBundleRequest } from "../../../lib/uploadBundleClient";
+import { cropImageToSquare, loadImageDimensions } from "../../../lib/iconCrop";
+import { EmojiPicker } from "../../../components/EmojiPicker";
+import { SkillIcon } from "../../../components/SkillIcon";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string }
 interface Meta {
@@ -31,6 +34,9 @@ interface Meta {
   usageExamples?: string | null;
   /** Per-version "What changed" note (plain text, §8). Present on new-version proposals. */
   whatChanged?: string | null;
+  /** Skill icon (§33) — image and/or emoji, or null/absent for none. */
+  iconSha256?: string | null;
+  iconEmoji?: string | null;
 }
 interface Revision {
   revisionNo: number;
@@ -52,6 +58,7 @@ interface Revision {
 interface TargetSkillCurrent {
   title: string; description: string; toolHarness: string; categories: string[];
   usageExamples: string | null; latestStable: string | null;
+  iconSha256: string | null; iconEmoji: string | null;
 }
 interface Detail {
   id: string; state: string; targetNamespaceSlug: string; targetSkillId: string | null; proposedSemver: string;
@@ -97,6 +104,10 @@ interface EditDraft {
   /** proposer resubmit, new-version only (§8): switch the files to "Keep current files" —
    *  the server re-snapshots the then-latest stable artifact on resubmit. */
   reuseFiles: boolean;
+  /** Skill icon (§33) — resolved value (always resent, unlike files). A REVIEWER may only clear
+   *  both to null (Remove); only the SUBMITTER sees the upload/emoji replace controls. */
+  iconSha256: string | null;
+  iconEmoji: string | null;
 }
 
 /**
@@ -198,6 +209,12 @@ function ChangesOnAccept({ meta, cur, payload }: { meta: Meta; cur: TargetSkillC
   }
   if (((meta.usageExamples ?? "").trim() || null) !== ((cur.usageExamples ?? "").trim() || null)) {
     rows.push(<DiffRow key="usage" label="Usage" block oldNode={cur.usageExamples ?? "—"} newNode={(meta.usageExamples ?? "").trim() || "—"} />);
+  }
+  if ((meta.iconSha256 ?? null) !== cur.iconSha256 || (meta.iconEmoji ?? null) !== cur.iconEmoji) {
+    const iconOf = (sha: string | null | undefined, emoji: string | null | undefined) => (
+      <SkillIcon icon={{ url: sha ? `/skill-icons/${sha}.png` : null, emoji: emoji ?? null }} title="" size={28} fallback="default" />
+    );
+    rows.push(<DiffRow key="icon" label="Icon" oldNode={iconOf(cur.iconSha256, cur.iconEmoji)} newNode={iconOf(meta.iconSha256, meta.iconEmoji)} />);
   }
   return (
     <div className="card card-pad" style={{ marginTop: 26 }}>
@@ -307,6 +324,9 @@ function ProposalDetailInner() {
         // §8: reviewer/proposer edit of the per-version note. Server requires it non-empty on a
         // new-version proposal; on a new-skill proposal it's absent (field hidden below).
         whatChanged: edit.whatChanged.trim() || null,
+        // Skill icon (§33) — always resent; a reviewer's edit can only have cleared it (Remove).
+        iconSha256: edit.iconSha256,
+        iconEmoji: edit.iconEmoji,
       },
     };
     // Proposer replaced the hosted bundle: swap in the freshly-uploaded artifact (keeps the same
@@ -535,6 +555,8 @@ function ProposalDetailInner() {
                         : null,
                       // Start from the revision's current files mode (§8).
                       reuseFiles: !!latest.payload.reuse,
+                      iconSha256: m.iconSha256 ?? null,
+                      iconEmoji: m.iconEmoji ?? null,
                     })}
                   >
                     ✎ Edit
@@ -553,6 +575,46 @@ function ProposalDetailInner() {
                   </p>
                 )}
                 <div><label style={labelStyle}>Title</label><input className="input" style={{ width: "100%" }} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></div>
+                <div>
+                  <label style={labelStyle}>Icon <span style={{ textTransform: "none", letterSpacing: 0 }}>· optional</span></label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <SkillIcon icon={{ url: edit.iconSha256 ? `/skill-icons/${edit.iconSha256}.png` : null, emoji: edit.iconEmoji }} title={edit.title || "icon"} size={40} fallback="default" />
+                    {(edit.iconSha256 || edit.iconEmoji) && (
+                      <button type="button" className="btn-ghost" style={{ fontSize: 12 }} onClick={() => setEdit({ ...edit, iconSha256: null, iconEmoji: null })}>
+                        ✕ Remove icon
+                      </button>
+                    )}
+                    {isSubmitter && (
+                      <>
+                        <label className="filepick-btn" style={{ fontSize: 12 }}>
+                          Replace…
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            style={{ display: "none" }}
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              try {
+                                const { width, height } = await loadImageDimensions(file);
+                                const cropped = width === height ? file : await cropImageToSquare(file, 0.5);
+                                const form = new FormData();
+                                form.append("icon", cropped, "icon.png");
+                                const r = await fetch("/api/icons", { method: "POST", body: form });
+                                const j = await r.json().catch(() => ({}));
+                                if (r.ok) setEdit((prev) => (prev ? { ...prev, iconSha256: j.sha256, iconEmoji: null } : prev));
+                              } catch {
+                                // best-effort — the field simply keeps its previous value
+                              }
+                            }}
+                          />
+                        </label>
+                        <EmojiPicker align="left" onPick={(em) => setEdit((prev) => (prev ? { ...prev, iconSha256: null, iconEmoji: em } : prev))} />
+                      </>
+                    )}
+                  </div>
+                  {!isSubmitter && <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Reviewers can remove an icon but not upload a new one — the proposer owns the image.</p>}
+                </div>
                 <div>
                   <label style={labelStyle}>Description <span style={{ textTransform: "none", letterSpacing: 0 }}>· Markdown</span></label>
                   <MarkdownField value={edit.description} onChange={(v) => setEdit({ ...edit, description: v })} rows={3} />

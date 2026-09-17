@@ -20,7 +20,7 @@ import type { LeaderBadgeInfo } from "./leaderBadges";
 // Client mirror of the server's per-reader resolution (lib/mentions.ts → ResolvedMention).
 export type ResolvedMention =
   | { kind: "user"; id: string; name: string; erased: boolean }
-  | { kind: "skill"; id: string; state: "ok"; title: string; ns: string; slug: string; restricted: boolean }
+  | { kind: "skill"; id: string; state: "ok"; title: string; ns: string; slug: string; restricted: boolean; icon: { url: string | null; emoji: string | null } | null }
   | { kind: "skill"; id: string; state: "restricted" }
   | { kind: "skill"; id: string; state: "gone"; label: string | null };
 
@@ -59,6 +59,11 @@ export function MentionChip({ token, resolved }: { token: string; resolved: Reso
   if (resolved.state === "ok") {
     return (
       <Link className="mention-chip mention-chip-skill" href={`/skills/${resolved.ns}/${resolved.slug}`}>
+        {resolved.icon && (
+          resolved.icon.url
+            ? <img src={resolved.icon.url} alt="" aria-hidden style={{ width: 16, height: 16, borderRadius: 4, marginRight: 4, verticalAlign: "-3px", border: "1px solid var(--line)", objectFit: "cover" }} />
+            : <span aria-hidden style={{ marginRight: 4 }}>{resolved.icon.emoji}</span>
+        )}
         {resolved.restricted ? `${resolved.ns} / ${resolved.title}` : resolved.title}
       </Link>
     );

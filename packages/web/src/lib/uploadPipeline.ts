@@ -10,7 +10,9 @@ import { extractBundle } from "./bundle";
 import { findDuplicateSkill } from "./duplicate";
 import { getDuplicateEnforcement } from "./settings";
 import { fmtSize } from "./uploadError";
-import { validateBundle, runScanners, PURE_SCANNERS, maxSeverity, contentDigest, bundleContentCap, type EffectiveAccess } from "@skilly/shared";
+import { validateBundle, runScanners, PURE_SCANNERS, maxSeverity, contentDigest, bundleContentCap, parseFrontmatter, type EffectiveAccess } from "@skilly/shared";
+import { resolveBundleIcon } from "@skilly/shared/icon";
+import { ingestIcon, iconUrl } from "./icons";
 
 /**
  * Validate + scan + store an uploaded hosted bundle and answer with the upload contract
@@ -54,6 +56,35 @@ export async function processBundleUpload(
   // byte-identical upload that already exists in the catalog.
   const contentSha256 = contentDigest(files);
 
+  // Bundle-borne icon (§33): SKILL.md frontmatter `icon:` (path or emoji) beats a root icon.*.
+  // Extracted here (advisory — a soft warning, never a rejection) so the propose form can preview
+  // the effective icon before submission; ownership is created_by = this uploader, same as an
+  // /api/icons upload, so verifySubmissionPayload's ownership check covers both paths uniformly.
+  let bundleIcon: { sha256?: string; emoji?: string; url?: string; source: "frontmatter" | "bundle" } | null = null;
+  const iconWarnings: string[] = [];
+  try {
+    const skillMd = files.find((f) => f.path === "SKILL.md");
+    const fm = skillMd ? parseFrontmatter(new TextDecoder().decode(skillMd.bytes)) : {};
+    const resolved = resolveBundleIcon(files, fm.icon);
+    if (resolved) {
+      iconWarnings.push(...resolved.warnings);
+      if (resolved.entry) {
+        const ingested = await ingestIcon(Buffer.from(resolved.entry.bytes), access.userId);
+        if (ingested.ok) {
+          bundleIcon = { sha256: ingested.sha256, url: iconUrl(ingested.sha256), source: resolved.source };
+        } else {
+          iconWarnings.push(`bundle icon: ${ingested.error.error}`);
+        }
+      } else if (resolved.emoji) {
+        bundleIcon = { emoji: resolved.emoji, source: resolved.source };
+      }
+    }
+  } catch (e) {
+    // Advisory only — never fail the upload over icon extraction (§33.3).
+    iconWarnings.push("could not extract a bundle icon (non-fatal)");
+    console.error(JSON.stringify({ level: "warn", msg: "bundle icon extraction failed", err: String(e) }));
+  }
+
   // Store the original uploaded bundle (verbatim) at an immutable key; record the scan.
   const artifactObjectKey = `uploads/${access.userId}/${randomUUID()}.bundle`;
   try {
@@ -94,7 +125,8 @@ export async function processBundleUpload(
   return Response.json(
     // `artifactFilename` (the original upload's name) rides along so the proposal/version persists
     // it and the detail-page download can serve the bundle back with its original extension (§6/§10).
-    { artifactObjectKey, artifactSha256, contentSha256, artifactFilename: filename ?? null, scan: { severity, findings }, duplicate, duplicateEnforcement },
+    // `bundleIcon` + `warnings` (§33) let the propose form preview the effective icon before submit.
+    { artifactObjectKey, artifactSha256, contentSha256, artifactFilename: filename ?? null, scan: { severity, findings }, duplicate, duplicateEnforcement, bundleIcon, warnings: iconWarnings },
     { status: 201 },
   );
 }

@@ -6,6 +6,7 @@ import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
+import { SkillIcon } from "../../components/SkillIcon";
 import { filterInstalls } from "../../lib/installedFilter";
 
 interface Install {
@@ -22,6 +23,8 @@ interface Install {
   skillArchived: boolean;
   /** System-installs view only (§23): the platform admin who minted it. */
   mintedBy?: string | null;
+  /** Optional skill icon (§33) — image and/or emoji, or null. */
+  icon?: { url: string | null; emoji: string | null } | null;
 }
 
 /** Which installs to list: the caller's own, or (platform admins only) all system installs. §23 */
@@ -130,7 +133,8 @@ function InstalledInner() {
               style={{ cursor: "pointer" }}
               onClick={() => router.push(`/skills/${i.namespaceSlug}/${i.skillSlug}`)}
             >
-              <div className="install-main">
+              <div className="install-main" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <SkillIcon icon={i.icon} title={i.title} size={24} />
                 <div className="version-head" style={{ flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
                   <Link href={`/skills/${i.namespaceSlug}/${i.skillSlug}`} style={{ fontWeight: 600, fontSize: 14.5 }}>{i.title}</Link>
                   <div className="ns mono" style={{ fontSize: 11.5 }}>@{i.namespaceSlug}/{i.skillSlug}</div>

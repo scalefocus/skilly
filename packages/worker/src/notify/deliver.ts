@@ -34,6 +34,11 @@ export interface RenderedNotification {
   text: string;
   /** Structured body for outbound webhooks (Teams/Slack accept arbitrary JSON). */
   webhook: Record<string, unknown>;
+  /** §33.5: the referenced skill's icon, when the payload names one (namespaceSlug + skillSlug)
+   *  and the skill has one — looked up in the delivery sweep (renderNotification stays pure/DB-
+   *  free). The HTML transport renders it as a small image; the plain-text transport ignores it. */
+  iconUrl?: string | null;
+  iconEmoji?: string | null;
 }
 
 /** The body sentence for each proposal state-change notification (§12 Notification content). */
@@ -295,6 +300,22 @@ export async function deliverPendingNotifications(pool: Pool, channels: Delivery
     }
     try {
       const msg = renderNotification(row);
+      // §33.5: attach the referenced skill's icon (payload names ns/slug for most skill-related
+      // types) — advisory only, never blocks delivery on a lookup hiccup.
+      const ns = typeof row.payload?.namespaceSlug === "string" ? row.payload.namespaceSlug : null;
+      const slug = typeof row.payload?.skillSlug === "string" ? row.payload.skillSlug : null;
+      if (ns && slug) {
+        try {
+          const { rows: irows } = await pool.query<{ icon_sha256: string | null; icon_emoji: string | null }>(
+            `select s.icon_sha256, s.icon_emoji from skills s join namespaces n on n.id = s.namespace_id where n.slug = $1 and s.slug = $2`,
+            [ns, slug],
+          );
+          if (irows[0]?.icon_sha256) msg.iconUrl = `/skill-icons/${irows[0].icon_sha256}.png`;
+          else if (irows[0]?.icon_emoji) msg.iconEmoji = irows[0].icon_emoji;
+        } catch {
+          // Advisory only.
+        }
+      }
       // Per-user email opt-out + missing-address skip (§12): the row still delivers on schedule.
       if (channels.email && row.email && row.emailNotifications) await channels.email.send(row.email, msg);
       if (channels.webhook) await channels.webhook(msg.webhook);
