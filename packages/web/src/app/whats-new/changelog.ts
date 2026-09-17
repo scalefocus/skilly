@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.7.0",
+    date: "2026-09-17",
+    summary:
+      "The sidebar link to the platform-admin telemetry page now reads Monitoring (same place under System log; the page itself is still titled Real user monitoring). The Currently online card \u2014 active-users trend, DAU/WAU/MAU, the online window and the user list \u2014 has moved from Administration to the top of that Monitoring page; it is no longer on Administration. Your remembered chart range, online window and open/closed choice carry over.",
+  },
+  {
     version: "2.6.1",
     date: "2026-09-16",
     summary:

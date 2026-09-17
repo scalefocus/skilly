@@ -31,8 +31,9 @@ const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "rev
 const USAGE_NAV = { href: "/usage", label: "Usage", icon: "M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3" };
 const AUDIT_NAV = { href: "/audit", label: "Audit log", icon: "M5 4h11l3 3v13H5zM8 11h8M8 15h5M8 7h4" };
 const SYSLOG_NAV = { href: "/system-log", label: "System log", icon: "M4 5h16v14H4zM7 9h2M7 13h2M7 17h2M12 9h5M12 13h5" };
-// §32 Real user monitoring — platform admins only, directly under System log.
-const RUM_NAV = { href: "/admin/rum", label: "Real user monitoring", icon: "M3 17l5-6 4 4 5-8 4 5M3 21h18" };
+// §32.7 Monitoring (real user monitoring + the Currently online presence card, §4) — platform admins
+// only, directly under System log. Sidebar label only: the page title stays "Real user monitoring."
+const RUM_NAV = { href: "/admin/rum", label: "Monitoring", icon: "M3 17l5-6 4 4 5-8 4 5M3 21h18" };
 const ADMIN_NAV = { href: "/admin", label: "Administration", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" };
 const NS_ADMIN_NAV = { href: "/namespaces", label: "Namespace administration", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" };
 
