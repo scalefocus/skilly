@@ -74,6 +74,10 @@
     "./achievements": {
       "types": "./dist/achievements.d.ts",
       "default": "./dist/achievements.js"
+    },
+    "./icon": {
+      "types": "./dist/icon.d.ts",
+      "default": "./dist/icon.js"
     }
   },
   "scripts": {

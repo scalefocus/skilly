@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.9.0",
+    date: "2026-09-17",
+    summary:
+      "Skills can now carry an optional icon — an uploaded image or an emoji — shown on the catalog card, the skill page, search results, mention chips, and the Installed page; skills without one keep showing the skilly logo. A bundle's own SKILL.md icon takes priority over an uploaded one. The Share button on a skill page now mints a signed link that unfurls that skill's own preview card in Teams, Slack and Outlook for 7 days; every other link keeps the plain skilly card.",
+  },
+  {
     version: "2.8.0",
     date: "2026-09-17",
     summary:

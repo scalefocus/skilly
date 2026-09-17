@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { lookup } from "node:dns/promises";
 import { create } from "tar";
-import { validateBundle, validatePointerUrl, validateGitRef, validateSubdir, isSkillsHubUrl, isBlockedIp, contentDigest, bundleContentCap, type BundleEntry } from "@skilly/shared";
+import { validateBundle, validatePointerUrl, validateGitRef, validateSubdir, isSkillsHubUrl, isBlockedIp, contentDigest, bundleContentCap, parseFrontmatter, type BundleEntry } from "@skilly/shared";
+import { resolveBundleIcon } from "@skilly/shared/icon";
+import { ingestBundleIcon } from "../icon.js";
 import { getMaxBundleBytes } from "../settings.js";
 import { tryAward } from "../achievements.js";
 import type { Pool } from "pg";
@@ -265,6 +267,26 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
   // Advisory scan at ingest (mirror time) so reviewers see findings pre-accept.
   const findings = await runScanPipeline(files);
   await writeArtifactScanReport(pool, artifactKey, findings);
+
+  // Bundle-borne icon (§33.2/§33.6): a bundle icon (frontmatter `icon:` or root icon.*) OVERRIDES
+  // whatever accept-time sync already wrote to skills.icon_* (the proposer's uploaded icon/emoji
+  // fallback, or the skill's prior icon on an unrelated re-version) — bundle beats upload, exactly
+  // as the hosted upload path resolves it. Advisory: never fails the mirror.
+  try {
+    const skillMd = files.find((f) => f.path === "SKILL.md");
+    const fm = skillMd ? parseFrontmatter(new TextDecoder().decode(skillMd.bytes)) : {};
+    const resolved = resolveBundleIcon(files, fm.icon);
+    if (resolved?.entry) {
+      const sha256 = await ingestBundleIcon(pool, Buffer.from(resolved.entry.bytes));
+      if (sha256) {
+        await pool.query(`update skills set icon_sha256 = $2, icon_emoji = null, icon_source = $3 where id = $1`, [input.skillId, sha256, resolved.source]);
+      }
+    } else if (resolved?.emoji) {
+      await pool.query(`update skills set icon_sha256 = null, icon_emoji = $2, icon_source = $3 where id = $1`, [input.skillId, resolved.emoji, resolved.source]);
+    }
+  } catch {
+    // Advisory only — a mirror must never fail over icon extraction.
+  }
 
   // §31: was this the skill's first version? (read before the insert — Shipped It vs Sequel)
   const priorVersions = Number((await pool.query<{ n: string }>(`select count(*)::text as n from skill_versions where skill_id = $1`, [input.skillId])).rows[0]?.n ?? 0);

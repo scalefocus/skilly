@@ -29,3 +29,4 @@ export * from "./category.js";
 export * from "./contact.js";
 export * from "./whats-new.js";
 export * from "./achievements.js";
+export * from "./icon.js";

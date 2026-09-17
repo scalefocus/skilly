@@ -14,3 +14,13 @@ export async function sweepExpiredTokens(pool: Pool): Promise<number> {
   );
   return rowCount ?? 0;
 }
+
+/**
+ * Sweep expired skill share links (§33.6) — a fourth, separate token regime (never a row in
+ * `tokens`). No reactivation concept here (unlike install/marketplace tokens): an expired share
+ * link is simply gone, and the Share button mints a fresh one next time. Same reaper cadence.
+ */
+export async function sweepExpiredShareLinks(pool: Pool): Promise<number> {
+  const { rowCount } = await pool.query(`delete from skill_share_links where expires_at <= now()`);
+  return rowCount ?? 0;
+}

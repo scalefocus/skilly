@@ -34,6 +34,7 @@ import { appendAudit } from "./audit";
 import { awardAchievement } from "./achievements";
 import { categoryListError, upsertCategory } from "./categories";
 import { normalizeCategoryNames } from "@skilly/shared";
+import { isSingleEmoji } from "@skilly/shared/icon";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
 import { findDuplicateSkill, type DuplicateMatch } from "./duplicate";
@@ -56,6 +57,12 @@ export interface ProposalMetadata {
    */
   whatChanged?: string | null;
   visibility: "org" | "namespace";
+  /** Skill icon (§33) — skill-level metadata like title/categories. `iconSha256`/`iconEmoji`
+   *  null = explicitly no icon (a reviewer/proposer *remove*); undefined = field not resent
+   *  (legacy/MCP caller) and left untouched. `iconSource` records provenance for display. */
+  iconSha256?: string | null;
+  iconEmoji?: string | null;
+  iconSource?: "frontmatter" | "bundle" | "upload" | null;
 }
 
 /**
@@ -218,6 +225,21 @@ export async function verifySubmissionPayload(
       return "describe what changed in this version — the “What changed” note is required";
     }
   }
+  // Icon (§33): a referenced image must have been uploaded by the caller (via /api/icons or
+  // auto-extracted from THEIR OWN bundle upload, both created_by = caller) — OR be the target
+  // skill's current icon (carry-forward, e.g. an unchanged re-version / reviewer echo), mirroring
+  // the artifact-ownership check above. An emoji, if present, must be exactly one grapheme.
+  if (payload.metadata?.iconSha256) {
+    const owned = (await db.query(
+      `select 1 from skill_icons where sha256 = $1 and (created_by = $2 or exists (
+         select 1 from skills where id = $3 and icon_sha256 = $1))`,
+      [payload.metadata.iconSha256, callerUserId, opts.targetSkillId ?? null],
+    )).rowCount;
+    if (!owned) return "icon does not belong to you — upload it via /api/icons first";
+  }
+  if (payload.metadata?.iconEmoji != null && !isSingleEmoji(payload.metadata.iconEmoji)) {
+    return "icon must be a single emoji";
+  }
   if (payload.pointer) {
     const urlErr = validatePointerUrl(payload.pointer.url);
     if (urlErr) return urlErr;
@@ -269,8 +291,9 @@ async function reuseNoopError(
 ): Promise<string | null> {
   const { rows } = await db.query<{
     title: string; description: string; tool_harness: string; categories: string[] | null;
+    icon_sha256: string | null; icon_emoji: string | null;
   }>(
-    `select s.title, s.description, s.tool_harness,
+    `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji,
             coalesce((select array_agg(c.name) from skill_categories sc
                         join categories c on c.id = sc.category_id
                        where sc.skill_id = s.id), '{}') as categories
@@ -284,7 +307,9 @@ async function reuseNoopError(
     (meta.description ?? "").trim() !== cur.description.trim() ||
     (meta.toolHarness ?? "").trim() !== cur.tool_harness ||
     !sameSet(normSet(meta.categories, true), normSet(cur.categories, true)) ||
-    ((meta.usageExamples ?? "").trim() || null) !== ((reusedUsage ?? "").trim() || null);
+    ((meta.usageExamples ?? "").trim() || null) !== ((reusedUsage ?? "").trim() || null) ||
+    (meta.iconSha256 !== undefined && (meta.iconSha256 ?? null) !== cur.icon_sha256) ||
+    (meta.iconEmoji !== undefined && (meta.iconEmoji ?? null) !== cur.icon_emoji);
   return changed
     ? null
     : "nothing changed — edit at least one field (title, description, categories, tool/harness, or usage), or provide a new source";
@@ -578,6 +603,8 @@ function payloadUnchanged(prev: RevisionPayload, next: RevisionPayload): boolean
     // the proposal) — so a changed "What changed" makes the revise non-noop. This is separate from
     // the reuse no-op guard, where the note deliberately does NOT count (§8).
     eqText(a.whatChanged, b.whatChanged) &&
+    (a.iconSha256 ?? null) === (b.iconSha256 ?? null) &&
+    (a.iconEmoji ?? null) === (b.iconEmoji ?? null) &&
     (prev.artifactObjectKey ?? null) === (next.artifactObjectKey ?? null) &&
     samePointer(prev.pointer, next.pointer) &&
     (prev.reuse?.fromVersionId ?? null) === (next.reuse?.fromVersionId ?? null)
@@ -926,8 +953,8 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
   let skillId = input.targetSkillId;
   if (!skillId) {
     const { rows } = await client.query<{ id: string }>(
-      `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, promoted_from_skill_version_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8)
+      `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, promoted_from_skill_version_id, icon_sha256, icon_emoji, icon_source)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        returning id`,
       [
         input.targetNamespaceId,
@@ -938,6 +965,9 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
         isPointer ? "pointer" : "hosted",
         meta.visibility,
         payload.promotedFromSkillVersionId ?? null,
+        meta.iconSha256 ?? null,
+        meta.iconEmoji ?? null,
+        meta.iconSource ?? null,
       ],
     );
     skillId = rows[0]!.id;
@@ -967,6 +997,15 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
         meta.toolHarness?.trim() || null,
       ],
     );
+    // Icon (§33.4) — SET, not coalesce: unlike title/description, an explicit null (remove) must
+    // actually clear the column. Only touched when the submitted payload resent either field (our
+    // own UI always resends both in scope; MCP proposals omit them and so never touch the icon).
+    if (meta.iconSha256 !== undefined || meta.iconEmoji !== undefined) {
+      await client.query(
+        `update skills set icon_sha256 = $2, icon_emoji = $3, icon_source = $4 where id = $1`,
+        [skillId, meta.iconSha256 ?? null, meta.iconEmoji ?? null, meta.iconSource ?? null],
+      );
+    }
     // Version-acceptance maintainer auto-add (§19): gated against the skill's CURRENT
     // namespace/visibility — never touched by a re-version (visibility stays frozen above) — not
     // the submitted payload's meta.visibility, which only ever applies to a brand-new skill.
@@ -1086,8 +1125,10 @@ export async function promoteToGlobal(
     await pool.query<{
       id: string; namespace_id: string; slug: string; title: string; description: string;
       tool_harness: string; categories: string[];
+      icon_sha256: string | null; icon_emoji: string | null; icon_source: "frontmatter" | "bundle" | "upload" | null;
     }>(
       `select s.id, s.namespace_id, s.slug, s.title, s.description, s.tool_harness,
+              s.icon_sha256, s.icon_emoji, s.icon_source,
               coalesce((select array_agg(c.name order by c.name)
                           from skill_categories sc join categories c on c.id = sc.category_id
                          where sc.skill_id = s.id), '{}') as categories
@@ -1124,6 +1165,10 @@ export async function promoteToGlobal(
     toolHarness: skill.tool_harness,
     usageExamples: lv.usage_examples,
     visibility: "org",
+    // Global promotion copies the icon to the materialized global copy (§33.4).
+    iconSha256: skill.icon_sha256,
+    iconEmoji: skill.icon_emoji,
+    iconSource: skill.icon_source,
   };
   const payload: RevisionPayload = lv.external_ref
     ? { metadata, pointer: { url: lv.external_origin_url!, ref: lv.external_ref, subdir: lv.external_subdir }, promotedFromSkillVersionId: lv.id }
@@ -1360,6 +1405,9 @@ export interface TargetSkillCurrent {
   usageExamples: string | null;
   /** Latest stable semver — what "Keep current files" reuses; null when nothing stable is live. */
   latestStable: string | null;
+  /** The skill's current icon (§33), for the review page's old → new icon diff. */
+  iconSha256: string | null;
+  iconEmoji: string | null;
 }
 
 /**
@@ -1479,8 +1527,9 @@ export async function getProposalDetail(
   if (p.target_skill_id) {
     const { rows: srows } = await pool.query<{
       title: string; description: string; tool_harness: string; categories: string[] | null;
+      icon_sha256: string | null; icon_emoji: string | null;
     }>(
-      `select s.title, s.description, s.tool_harness,
+      `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji,
               coalesce((select array_agg(c.name order by c.name) from skill_categories sc
                           join categories c on c.id = sc.category_id
                          where sc.skill_id = s.id), '{}') as categories
@@ -1501,6 +1550,8 @@ export async function getProposalDetail(
         categories: s.categories ?? [],
         usageExamples: latestStable ? vrows.find((v) => v.semver === latestStable)?.usage_examples ?? null : null,
         latestStable,
+        iconSha256: s.icon_sha256,
+        iconEmoji: s.icon_emoji,
       };
     }
   }

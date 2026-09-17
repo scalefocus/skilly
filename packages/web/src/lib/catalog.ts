@@ -4,6 +4,12 @@ import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, type Effective
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
 
+/** The `icon` shape every catalog/detail/suggest payload exposes (§33). */
+export interface SkillIconView { url: string | null; emoji: string | null }
+export function iconView(sha256: string | null, emoji: string | null): SkillIconView | null {
+  return sha256 || emoji ? { url: sha256 ? `/skill-icons/${sha256}.png` : null, emoji: emoji ?? null } : null;
+}
+
 export interface SkillRow {
   id: string;
   namespaceId: string;
@@ -26,6 +32,8 @@ export interface SkillRow {
   featured: boolean;
   /** When it was Featured (UTC ISO), or null. */
   featuredAt: string | null;
+  /** Optional skill icon (§33) — image and/or emoji, or null when the skill has none. */
+  icon: SkillIconView | null;
 }
 
 export async function findSkill(namespaceSlug: string, skillSlug: string): Promise<SkillRow | null> {
@@ -42,9 +50,11 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
     official_at: string | null;
     official_by_name: string | null;
     featured_at: string | null;
+    icon_sha256: string | null;
+    icon_emoji: string | null;
   }>(
     `select s.id, s.namespace_id, n.slug as namespace_slug, s.slug, s.visibility, s.status, s.tool_harness, s.created_at,
-            s.official_at, ob.display_name as official_by_name, s.featured_at,
+            s.official_at, ob.display_name as official_by_name, s.featured_at, s.icon_sha256, s.icon_emoji,
             coalesce((select max(sv.created_at) from skill_versions sv where sv.skill_id = s.id), s.created_at) as updated_at
        from skills s join namespaces n on n.id = s.namespace_id
        left join users ob on ob.id = s.official_by
@@ -68,6 +78,7 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
         officialByName: r.official_by_name,
         featured: r.featured_at != null,
         featuredAt: r.featured_at,
+        icon: iconView(r.icon_sha256, r.icon_emoji),
       }
     : null;
 }
@@ -108,6 +119,9 @@ export interface CatalogEntry {
    *  per-user and matches the Catalog nav "new items" count. False when the caller has no
    *  last-seen marker passed (e.g. non-catalog callers). §10. */
   isNew: boolean;
+  /** Optional skill icon (§33) — image and/or emoji, or null. Present-or-absent on every
+   *  catalog/list/suggest surface; the default lockup renders only on single-skill surfaces. */
+  icon: SkillIconView | null;
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
@@ -264,11 +278,12 @@ export async function searchSkills(
     categories: string[] | null; install_count: string;
     rating_sum: string; rating_count: string; watcher_count: string; status: "active" | "archived";
     created_at: string; updated_at: string; versions: string[] | null; official: boolean;
+    icon_sha256: string | null; icon_emoji: string | null;
   }>(
     `select n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
             s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
-            (s.official_at is not null) as official,
+            (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji,
             s.created_at as created_at,
             coalesce(max(sv.created_at), s.created_at) as updated_at,
             s.watcher_count::text as watcher_count,
@@ -310,6 +325,7 @@ export async function searchSkills(
       createdAt: r.created_at,
       official: r.official,
       isNew: !Number.isNaN(seenMs) && new Date(r.created_at).getTime() > seenMs,
+      icon: iconView(r.icon_sha256, r.icon_emoji),
     };
   });
 }
@@ -365,11 +381,12 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
     categories: string[] | null; install_count: string;
     rating_sum: string; rating_count: string; watcher_count: string; status: "active" | "archived";
     created_at: string; updated_at: string; versions: string[] | null; official: boolean; installed: boolean;
+    icon_sha256: string | null; icon_emoji: string | null;
   }>(
     `select n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
             s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
-            (s.official_at is not null) as official, s.created_at as created_at,
+            (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji, s.created_at as created_at,
             coalesce(max(sv.created_at), s.created_at) as updated_at,
             s.watcher_count::text as watcher_count,
             exists (select 1 from skill_installs si where si.skill_id = s.id and si.user_id = $${viewerIdx}) as installed,
@@ -406,6 +423,7 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
       updatedAt: r.updated_at,
       createdAt: r.created_at,
       official: r.official,
+      icon: iconView(r.icon_sha256, r.icon_emoji),
       isNew: false, // not a catalog listing — the "new to you" badge doesn't apply here
     };
   };
@@ -436,7 +454,7 @@ export async function pendingMirrorStatus(skillId: string): Promise<PendingMirro
   return { semver: r.semver, attempts: r.attempts, failed: r.attempts >= max, lastError: r.last_error };
 }
 
-export interface SkillSuggestion { id: string; namespaceSlug: string; skillSlug: string; title: string; official: boolean }
+export interface SkillSuggestion { id: string; namespaceSlug: string; skillSlug: string; title: string; official: boolean; icon: SkillIconView | null }
 
 /**
  * Lightweight autocomplete for the header search box. Visibility-filtered like the catalog
@@ -468,15 +486,15 @@ export async function suggestSkills(access: EffectiveAccess, q: string, limit = 
   // 5 results are a true prefix of what the catalog shows for the same query.
   const titleMatch = ilikeSearch(params, q, where);
   params.push(Math.min(10, Math.max(1, limit)));
-  const { rows } = await pool.query<{ id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean }>(
-    `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official
+  const { rows } = await pool.query<{ id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null }>(
+    `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji
        from skills s join namespaces n on n.id = s.namespace_id
       where ${where.join(" and ")}
       order by case when ${titleMatch} then 0 else 1 end asc, s.install_count desc, s.title asc
       limit $${params.length}`,
     params,
   );
-  return rows.map((r) => ({ id: r.id, namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official }));
+  return rows.map((r) => ({ id: r.id, namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official, icon: iconView(r.icon_sha256, r.icon_emoji) }));
 }
 
 export interface Facets {
@@ -614,6 +632,8 @@ export interface SkillFormDefaults {
   toolHarness: string;
   categories: string[];
   type: "hosted" | "pointer";
+  icon: SkillIconView | null;
+  iconSource: "frontmatter" | "bundle" | "upload" | null;
 }
 
 /** Skill-level metadata used to pre-fill the "propose new version" form (locked fields). */
@@ -621,8 +641,9 @@ export async function skillFormDefaults(skillId: string): Promise<SkillFormDefau
   const { rows } = await pool.query<{
     title: string; description: string; tool_harness: string;
     type: "hosted" | "pointer"; categories: string[] | null;
+    icon_sha256: string | null; icon_emoji: string | null; icon_source: "frontmatter" | "bundle" | "upload" | null;
   }>(
-    `select s.title, s.description, s.tool_harness, s.type,
+    `select s.title, s.description, s.tool_harness, s.type, s.icon_sha256, s.icon_emoji, s.icon_source,
             coalesce((select array_agg(c.name order by c.name)
                         from skill_categories sc join categories c on c.id = sc.category_id
                        where sc.skill_id = s.id), '{}') as categories
@@ -631,5 +652,8 @@ export async function skillFormDefaults(skillId: string): Promise<SkillFormDefau
   );
   const r = rows[0];
   if (!r) return null;
-  return { title: r.title, description: r.description, toolHarness: r.tool_harness, categories: r.categories ?? [], type: r.type };
+  return {
+    title: r.title, description: r.description, toolHarness: r.tool_harness, categories: r.categories ?? [], type: r.type,
+    icon: iconView(r.icon_sha256, r.icon_emoji), iconSource: r.icon_source,
+  };
 }

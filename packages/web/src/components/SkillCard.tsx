@@ -4,6 +4,7 @@ import { agentLabel } from "@skilly/shared/agents";
 import { Pill, formatCount } from "./ui";
 import { useDateFmt } from "./DateFormat";
 import { plainText, descTooltip } from "../lib/cardText";
+import { SkillIcon } from "./SkillIcon";
 
 export interface CatalogEntry {
   namespaceSlug: string;
@@ -20,6 +21,8 @@ export interface CatalogEntry {
   watcherCount: number;
   status?: "active" | "archived";
   latest: string | null;
+  /** Optional skill icon (§33) — image and/or emoji, or null. */
+  icon?: { url: string | null; emoji: string | null } | null;
   updatedAt?: string;
   createdAt?: string;
   /** Server-computed: this skill is new TO THIS USER (appeared since their last catalog visit).
@@ -95,7 +98,10 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
         {s.visibility === "namespace" && <Pill tone="warn">restricted</Pill>}
         {s.status === "archived" && <Pill tone="danger">archived</Pill>}
       </div>
-      <h3 title={s.title}>{s.title}</h3>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <SkillIcon icon={s.icon} title={s.title} size={40} />
+        <h3 title={s.title} style={{ minWidth: 0 }}>{s.title}</h3>
+      </div>
       <p className="desc" title={descTooltip(s.description)}>{plainText(s.description)}</p>
       {/* One line, hard-clipped behind a fade (see .skill-card-cats) — no inline flexWrap, or it
           would override the nowrap. */}
@@ -123,9 +129,12 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
     <Link href={`/skills/${s.namespaceSlug}/${s.skillSlug}`} className={`card skill-row${s.isNew ? " has-new" : ""}`}>
       {/* Absolutely pinned to the row's right edge, spanning full height (see .skill-row > .chip-new). */}
       <NewBadge s={s} />
-      <div className="skill-row-id">
-        <div style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</div>
-        <div className="ns mono" style={{ fontSize: 11.5 }}>@{s.namespaceSlug}/{s.skillSlug}</div>
+      <div className="skill-row-id" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <SkillIcon icon={s.icon} title={s.title} size={32} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</div>
+          <div className="ns mono" style={{ fontSize: 11.5 }}>@{s.namespaceSlug}/{s.skillSlug}</div>
+        </div>
       </div>
       <p className="desc muted skill-row-desc">{plainText(s.description)}</p>
       <div className="skill-row-meta">

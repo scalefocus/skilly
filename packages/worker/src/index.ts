@@ -17,7 +17,7 @@ import { syncMarketplaces, marketplaceSettings } from "./git/marketplaceSync.js"
 import { mirrorPendingVersions } from "./git/mirrorPending.js";
 import { s3ArtifactStore } from "./storage/objectStore.js";
 import { defaultRepoRoot } from "./git/repoStore.js";
-import { sweepExpiredTokens } from "./tokens.js";
+import { sweepExpiredTokens, sweepExpiredShareLinks } from "./tokens.js";
 import { reconcile } from "./reconcile/reconcile.js";
 import { graphClient } from "./reconcile/graph.js";
 import { deliverPendingNotifications } from "./notify/deliver.js";
@@ -134,7 +134,7 @@ async function leaderLoops(): Promise<void> {
   await syncMarketplacesTick();
   setInterval(syncMarketplacesTick, 60_000);
 
-  // Token reaper: delete expired one-time/PAT tokens.
+  // Token reaper: delete expired one-time/PAT tokens + expired skill share links (§33.6).
   const reap = async () => {
     if (!isLeader) return;
     try {
@@ -142,6 +142,12 @@ async function leaderLoops(): Promise<void> {
       if (n > 0) console.log(JSON.stringify({ level: "info", msg: "reaped expired tokens", count: n }));
     } catch (err) {
       console.error(JSON.stringify({ level: "error", msg: "token reap failed", err: String(err) }));
+    }
+    try {
+      const n = await sweepExpiredShareLinks(pool);
+      if (n > 0) console.log(JSON.stringify({ level: "info", msg: "reaped expired share links", count: n }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "share link reap failed", err: String(err) }));
     }
   };
   await reap();

@@ -84,6 +84,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     official: skill.official,
     officialAt: skill.officialAt,
     officialByName: skill.officialByName,
+    icon: skill.icon,
     canMarkOfficial: access.isPlatformAdmin && !archived,
     // Featured homepage spotlight (§7): current state + whether this caller can toggle it. The
     // Spotlight control is platform-admin only and only on an active, installable skill.

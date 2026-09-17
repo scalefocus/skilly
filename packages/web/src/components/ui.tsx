@@ -159,10 +159,29 @@ export function CopyCommand({
  * "Share" button: copies the current page URL (or an explicit `url`) and confirms with a
  * centered toast. Styled like the other `btn btn-sm` actions so it sits naturally beside them.
  */
-export function ShareButton({ url, label = "Share", title = "Copy a link to this skill" }: { url?: string; label?: string; title?: string }) {
+export function ShareButton({
+  url,
+  fetchUrl,
+  label = "Share",
+  title = "Copy a link to this skill",
+}: {
+  url?: string;
+  /** §33.6: when set, called on click to mint a fresh signed share URL instead of copying
+   *  window.location.href verbatim (used by the skill detail page's Share button). */
+  fetchUrl?: () => Promise<string | null>;
+  label?: string;
+  title?: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState(false);
   const share = async () => {
-    const target = url ?? (typeof window !== "undefined" ? window.location.href : "");
+    setErr(false);
+    let target = url;
+    if (!target && fetchUrl) {
+      target = (await fetchUrl().catch(() => null)) ?? undefined;
+      if (!target) { setErr(true); setTimeout(() => setErr(false), 1600); return; }
+    }
+    target = target ?? (typeof window !== "undefined" ? window.location.href : "");
     if (!target) return;
     if (await copyToClipboard(target)) {
       setCopied(true);
@@ -173,6 +192,7 @@ export function ShareButton({ url, label = "Share", title = "Copy a link to this
     <button type="button" className="btn btn-sm" onClick={share} title={title}>
       <span aria-hidden style={{ marginRight: 5 }}>↗</span>{label}
       {copied && createPortal(<div className="toast" role="status">✓ Link copied</div>, document.body)}
+      {err && createPortal(<div className="toast" role="status">Couldn’t create a share link</div>, document.body)}
     </button>
   );
 }
