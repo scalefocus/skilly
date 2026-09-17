@@ -28,11 +28,28 @@ async function flushRum(page: Page): Promise<void> {
   expect(res.status(), body).toBe(204);
 }
 
+/** The flush ladder pinned for the run (§32.4/§32.10): a 5 s floor keeps the timed-flush waits short. */
+const E2E_FLUSH_INTERVALS = [5, 7];
+const DEFAULT_FLUSH_INTERVALS = [17, 23, 37, 59, 97, 157, 251];
+
 test.describe("real user monitoring (§32)", () => {
   test.beforeEach(async ({ page }) => {
     await devSignIn(page);
-    // Make sure collection is on (a previous aborted run may have left it off).
-    await page.request.patch("/api/admin/settings", { data: { rumEnabled: true, rumSampleRate: 100 } });
+    // Make sure collection is on (a previous aborted run may have left it off) and the ladder is the
+    // short e2e set — the collector reads it from /api/me on every page load.
+    await page.request.patch("/api/admin/settings", { data: { rumEnabled: true, rumSampleRate: 100, rumFlushIntervals: E2E_FLUSH_INTERVALS } });
+  });
+
+  test.afterAll(async ({ browser }) => {
+    // Restore the default ladder so a dev stack left running after the suite beacons at 17 s again.
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    try {
+      await devSignIn(page);
+      await page.request.patch("/api/admin/settings", { data: { rumFlushIntervals: DEFAULT_FLUSH_INTERVALS } });
+    } finally {
+      await ctx.close();
+    }
   });
 
   test("the beacon rejects signed-out and malformed batches, accepts a valid one", async ({ page, browser }) => {
@@ -143,6 +160,62 @@ test.describe("real user monitoring (§32)", () => {
     await page.reload();
     await expect(page.getByRole("heading", { name: "Real user monitoring." })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: /^Currently online/ })).toHaveAttribute("aria-expanded", "true", { timeout: 20_000 });
+  });
+
+  test("the flush ladder backs off while idle and snaps back to the floor on a click (§32.4)", async ({ page }) => {
+    test.slow(); // ~40 s of wall-clock waiting by design
+    const posts: number[] = [];
+    page.on("request", (r) => { if (r.url().includes("/api/rum") && r.method() === "POST") posts.push(Date.now()); });
+    await page.goto("/catalog");
+    await expect(page.getByRole("heading").first()).toBeVisible({ timeout: 20_000 });
+
+    // Keep the buffer non-empty WITHOUT user actions: same-origin API calls become `api` samples
+    // through the PerformanceObserver, which must not reset the ladder.
+    const feeder = setInterval(() => { void page.evaluate(() => fetch("/api/stats").catch(() => {})).catch(() => {}); }, 1000);
+    try {
+      // Set [5, 7]: ticks at ~5 s (→ step 1), then every 7 s while idle. Wait for three beacons.
+      await expect.poll(() => posts.length, { timeout: 35_000, intervals: [500] }).toBeGreaterThanOrEqual(3);
+      const idleGap = posts[2]! - posts[1]!;
+      expect(idleGap, `idle beacons should be ≥ 7 s apart, got ${idleGap} ms`).toBeGreaterThanOrEqual(6_000);
+
+      // A click is a user action: the next beacon arrives within one floor (5 s) plus slack.
+      const n = posts.length;
+      const clickedAt = Date.now();
+      await page.getByRole("heading").first().click();
+      await expect.poll(() => posts.length, { timeout: 12_000, intervals: [250] }).toBeGreaterThan(n);
+      const snapGap = posts[n]! - clickedAt;
+      expect(snapGap, `after a click the next beacon should land within ~5 s, got ${snapGap} ms`).toBeLessThanOrEqual(8_000);
+    } finally {
+      clearInterval(feeder);
+    }
+  });
+
+  test("the header field saves a new ladder and rejects an out-of-bounds one inline (§32.6)", async ({ page }) => {
+    await page.goto("/admin/rum");
+    await expect(page.getByRole("heading", { name: "Real user monitoring." })).toBeVisible({ timeout: 20_000 });
+    const field = page.getByLabel("Flush intervals (comma-separated seconds)");
+    await expect(field).toHaveValue("5, 7", { timeout: 10_000 });
+    await expect(page.getByTestId("rum-cadence")).toContainText("beacons every 5 s while active, backing off to 7 s when idle");
+
+    // Out of bounds (floor is 5 s): rejected with the parser's message, field reverts to the saved set.
+    await field.fill("4, 9");
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/api/admin/settings") && r.request().method() === "PATCH"),
+      field.press("Enter"),
+    ]);
+    await expect(page.getByText(/between 5 and 3600/)).toBeVisible({ timeout: 10_000 });
+    await expect(field).toHaveValue("5, 7");
+    const stored = (await (await page.request.get("/api/me")).json()) as { rumFlushIntervals: number[] };
+    expect(stored.rumFlushIntervals).toEqual([5, 7]);
+
+    // A valid set is normalised (deduped, ascending) and reflected in the header line.
+    await field.fill("11, 5,, 5, 7");
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/api/admin/settings") && r.request().method() === "PATCH" && r.status() === 200),
+      field.press("Enter"),
+    ]);
+    await expect(field).toHaveValue("5, 7, 11", { timeout: 10_000 });
+    await expect(page.getByTestId("rum-cadence")).toContainText("backing off to 11 s when idle");
   });
 
   test("switching collection off shows the banner, discards beacons and stops the collector", async ({ page }) => {

@@ -2,23 +2,30 @@
 // Real-user-monitoring collector (SKILLY_SPEC.md §32.4). Mounted once in the app shell for a
 // signed-in user; renders nothing. Collects page views, route-transition time, Web Vitals (via the
 // `web-vitals` package — a build-time dependency, no CDN), browser-observed `/api/*` latency, and
-// client errors, then batches them to `POST /api/rum` (≤ 50 per batch, every 10 s, and on
-// hide/pagehide via sendBeacon). Every sample carries a ROUTE TEMPLATE, never a concrete path.
+// client errors, then batches them to `POST /api/rum` (≤ 50 per batch) on a FLUSH LADDER and on
+// hide/pagehide via sendBeacon. Every sample carries a ROUTE TEMPLATE, never a concrete path.
+//
+// The flush ladder (§32.4, lib/rum/ladder.ts): the timer walks the admin-configured interval set
+// `rumFlushIntervals` (default primes, 17 s floor). A tick flushes only if the buffer holds anything,
+// then — if no user action happened since the previous tick — climbs one step, holding at the last
+// value; a pointerdown, keydown or route change snaps it back to the floor (pulling a pending tick
+// forward to at most one floor from now, never closer). Hidden tabs freeze the timer; becoming
+// visible restarts at the floor. The flags (`rumEnabled`, `rumSampleRate`, `rumFlushIntervals`) are
+// read from /api/me on mount and re-read on a tick once 60 s have passed — there is no separate
+// periodic poll, so an idle tab makes no request beyond its backed-off ticks.
 //
 // The collector is fail-silent by design: a rejected batch is dropped (no retry), nothing here can
 // throw into the app, and it never blocks the UI. Collection is gated by the platform flag
-// (`rumEnabled`) and a once-per-session sampling draw (`rumSampleRate`), both read from /api/me on
-// mount and re-read every 60 s so flipping the switch stops collection within a minute.
+// (`rumEnabled`) and a once-per-session sampling draw (`rumSampleRate`).
 import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { onCLS, onINP, onLCP, onTTFB } from "web-vitals/attribution";
 import { templateForApiUrl, templateForPath } from "../lib/rum/routes";
 import { fingerprintFor, RUM_MAX_BATCH, RUM_MAX_CLS, RUM_MAX_DURATION_MS, RUM_MAX_MESSAGE, sanitizeFrame, scrubMessage, type RumSampleIn } from "../lib/rum/validate";
+import { DEFAULT_RUM_FLUSH_INTERVALS, RUM_FLAGS_REREAD_MS, clampIndex, delayMs, isValidFlushSet, nextIndex, snappedDelayMs } from "../lib/rum/ladder";
 import { cachedGet } from "./ui";
 
 const SESSION_KEY = "skilly.rum.session";
-const FLUSH_MS = 10_000;
-const FLAGS_POLL_MS = 60_000;
 /** Cap on samples held before the flags are known (or between flushes). Oldest are dropped. */
 const BUFFER_CAP = 200;
 
@@ -29,6 +36,12 @@ interface SessionState {
   sampled: boolean;
 }
 
+interface Flags {
+  rumEnabled?: unknown;
+  rumSampleRate?: unknown;
+  rumFlushIntervals?: unknown;
+}
+
 let session: SessionState | null = null;
 /** null = flags not loaded yet (buffer, don't flush); false = off (drop); true = collecting. */
 let active: boolean | null = null;
@@ -37,6 +50,14 @@ let currentRoute = "other";
 const routeHistory: { at: number; route: string }[] = [];
 let navIntentAt: number | null = null;
 let installed = false;
+
+// The flush ladder (§32.4).
+let flushSet: readonly number[] = DEFAULT_RUM_FLUSH_INTERVALS;
+let ladderIndex = 0;
+let actedSinceTick = false;
+let timer: ReturnType<typeof setTimeout> | null = null;
+let timerDueAt = 0;
+let lastFlagsReadAt = 0;
 
 /** Called right before a programmatic in-app navigation so the transition time can be measured. */
 export function markRumNavIntent(): void {
@@ -115,14 +136,70 @@ function flush(unloading: boolean): void {
   }
 }
 
-function applyFlags(j: { rumEnabled?: unknown; rumSampleRate?: unknown } | null): void {
+// ---- the flush ladder -------------------------------------------------------------------------------
+
+function schedule(ms: number): void {
+  if (timer) clearTimeout(timer);
+  timerDueAt = Date.now() + ms;
+  timer = setTimeout(tick, ms);
+}
+
+/** Hidden tab: no ticks at all (the hide-flush has already emptied the buffer). */
+function freeze(): void {
+  if (timer) clearTimeout(timer);
+  timer = null;
+}
+
+function tick(): void {
+  timer = null;
+  if (document.visibilityState === "hidden") return; // frozen; the visibility handler restarts it
+  try {
+    flush(false);
+    if (Date.now() - lastFlagsReadAt >= RUM_FLAGS_REREAD_MS) void readFlags(false);
+  } catch {
+    /* never let a flush kill the timer chain */
+  }
+  ladderIndex = nextIndex(ladderIndex, flushSet.length, actedSinceTick);
+  actedSinceTick = false;
+  schedule(delayMs(flushSet, ladderIndex));
+}
+
+/** A genuine user action: snap to the floor and pull a far-away tick forward to one floor from now.
+ *  Never fires a flush by itself — the floor is the minimum spacing between beacons. */
+function onUserAction(): void {
+  actedSinceTick = true;
+  ladderIndex = 0;
+  if (!timer) return; // frozen (hidden) — the visibility handler restarts at the floor
+  const remaining = timerDueAt - Date.now();
+  const snapped = snappedDelayMs(remaining, flushSet);
+  if (snapped < remaining) schedule(snapped);
+}
+
+function applyFlags(j: Flags | null): void {
   if (!j) return;
   const enabled = j.rumEnabled !== false;
   const rate = typeof j.rumSampleRate === "number" ? j.rumSampleRate : 100;
+  if (isValidFlushSet(j.rumFlushIntervals)) {
+    flushSet = j.rumFlushIntervals;
+    ladderIndex = clampIndex(ladderIndex, flushSet.length);
+  }
   const s = loadSession(rate);
   const next = enabled && s.sampled;
   active = next;
   if (!next) buffer = [];
+}
+
+/** Read the flags: deduped with the shell's own /api/me request on mount, a plain fetch on ticks. */
+async function readFlags(initial: boolean): Promise<void> {
+  lastFlagsReadAt = Date.now();
+  try {
+    const j = initial
+      ? await cachedGet<Flags>("/api/me")
+      : await fetch("/api/me").then((r) => (r.ok ? (r.json() as Promise<Flags>) : null));
+    applyFlags(j);
+  } catch {
+    /* keep the current state; the next eligible tick tries again */
+  }
 }
 
 /** The route that was current at `performance.now()`-time `t` (for INP attribution). */
@@ -175,7 +252,8 @@ function installOnce(): void {
   }
 
   // Browser-observed API latency: same-origin /api/* fetch/XHR resource entries, templated
-  // client-side; /api/rum and /api/presence/page are excluded inside templateForApiUrl.
+  // client-side; /api/rum and /api/presence/page are excluded inside templateForApiUrl. These are
+  // NOT user actions (§32.4): a background poll must not keep the ladder at the floor.
   try {
     const po = new PerformanceObserver((list) => {
       for (const e of list.getEntries() as PerformanceResourceTiming[]) {
@@ -218,22 +296,27 @@ function installOnce(): void {
     { capture: true },
   );
 
-  // Flush cadence + unload paths.
-  setInterval(() => flush(false), FLUSH_MS);
+  // User actions that snap the ladder back to the floor (§32.4). Route changes are handled in the
+  // pathname effect below. Scroll is deliberately not counted.
+  document.addEventListener("pointerdown", onUserAction, { capture: true, passive: true });
+  document.addEventListener("keydown", onUserAction, { capture: true, passive: true });
+
+  // Unload paths + the hidden-tab freeze. Returning to the tab is an action: restart at the floor.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flush(true);
+    if (document.visibilityState === "hidden") {
+      flush(true);
+      freeze();
+    } else {
+      ladderIndex = 0;
+      actedSinceTick = false;
+      schedule(delayMs(flushSet, 0));
+    }
   });
   window.addEventListener("pagehide", () => flush(true));
 
-  // Flags: /api/me on mount (deduped with the shell's own request), then every 60 s while visible.
-  cachedGet<{ rumEnabled?: unknown; rumSampleRate?: unknown }>("/api/me").then(applyFlags).catch(() => {});
-  setInterval(() => {
-    if (document.visibilityState === "hidden") return;
-    fetch("/api/me")
-      .then((r) => (r.ok ? (r.json() as Promise<{ rumEnabled?: unknown; rumSampleRate?: unknown }>) : null))
-      .then(applyFlags)
-      .catch(() => {});
-  }, FLAGS_POLL_MS);
+  // Flags on mount (deduped with the shell's own request), then the first tick one floor from now.
+  void readFlags(true);
+  schedule(delayMs(flushSet, 0));
 }
 
 export function RumCollector() {
@@ -264,6 +347,8 @@ export function RumCollector() {
           }),
         );
       }
+      // A route change is a user action (§32.4): snap the flush ladder back to the floor.
+      if (!isFirst) onUserAction();
     } catch {
       /* never throw into the shell */
     }

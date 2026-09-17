@@ -1,7 +1,7 @@
 // Platform-admin: read/update platform settings (e.g. contribution policy). SKILLY_SPEC.md §4.
 import { currentAccess } from "../../../../lib/guard";
 import { pool } from "../../../../lib/db";
-import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
+import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, setRumFlushIntervals, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,7 @@ export async function GET() {
 export async function PATCH(req: Request) {
   const access = await currentAccess();
   if (!access?.userId || !access.isPlatformAdmin) return Response.json({ error: "platform admin required" }, { status: 403 });
-  const body = (await req.json().catch(() => ({}))) as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number };
+  const body = (await req.json().catch(() => ({}))) as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number; rumFlushIntervals?: string | number[] };
   if (typeof body.proposalsOpen === "boolean") await setProposalsOpen(body.proposalsOpen, access.userId);
   if (body.dateFormat === "eu" || body.dateFormat === "us") await setDateFormat(body.dateFormat, access.userId);
   if (body.duplicateEnforcement === "block" || body.duplicateEnforcement === "warn") await setDuplicateEnforcement(body.duplicateEnforcement, access.userId);
@@ -58,6 +58,14 @@ export async function PATCH(req: Request) {
       await setRumSampleRate(body.rumSampleRate, access.userId);
     } catch (e) {
       return Response.json({ error: e instanceof Error ? e.message : "invalid RUM sample rate" }, { status: 422 });
+    }
+  }
+  // §32.4/§32.6 the collector's flush ladder — a comma-separated string or an array of seconds.
+  if (body.rumFlushIntervals !== undefined) {
+    try {
+      await setRumFlushIntervals(body.rumFlushIntervals, access.userId);
+    } catch (e) {
+      return Response.json({ error: e instanceof Error ? e.message : "invalid RUM flush intervals" }, { status: 422 });
     }
   }
   if (body.mcpAccessTtlMinutes !== undefined) {

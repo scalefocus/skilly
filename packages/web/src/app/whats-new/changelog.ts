@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.8.0",
+    date: "2026-09-17",
+    summary:
+      "Real user monitoring now beacons on a backoff ladder instead of a fixed 10-second timer: an active tab reports every 17 seconds and an idle one gradually backs off to about four minutes, snapping back to 17 seconds on the next click, key press or page change. Platform admins tune the ladder as a comma-separated list of seconds in the Monitoring page header, next to the collect switch and sample rate. The collector also re-reads its settings on those ticks rather than on its own minute timer, so idle tabs make no periodic requests at all.",
+  },
+  {
     version: "2.7.1",
     date: "2026-09-17",
     summary:

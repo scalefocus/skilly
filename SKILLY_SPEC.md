@@ -5172,10 +5172,38 @@ on and the session won the sampling draw (§32.6):
   its template client-side (§32.3).
 - **Errors**: `window.addEventListener('error' | 'unhandledrejection')`, scrubbed and fingerprinted
   client-side (§32.2).
-- **Batching**: samples buffer in memory and flush every **10 s**, on `visibilitychange → hidden`
-  and on `pagehide` via **`navigator.sendBeacon`** (fetch `keepalive` fallback), **≤ 50 samples per
-  batch**. A rejected batch (400/401/429) is **dropped silently** — RUM never retries, never
-  surfaces an error to the user, and never blocks the UI.
+- **Batching — the flush ladder** (v2.8.0; before it the collector flushed every fixed 10 s
+  regardless of what the user did). Samples buffer in memory and flush on a **timer that walks the
+  admin-configured interval set `rum_flush_intervals`** (§32.6, default **`[17, 23, 37, 59, 97, 157,
+  251]`** seconds — primes, like the chat ladder in §24, so the beacons rarely coincide with other
+  periodic requests) exactly the way the chat conversation list backs off:
+  - the timer starts at the **floor `set[0]`** (17 s by default); a **tick** flushes the buffer if it
+    holds anything (an empty buffer sends **nothing** — no request at all) and then schedules the
+    next tick;
+  - a tick that fires with **no user action since the previous tick** advances **one step** up the
+    set; it **clamps and holds at the last value** (251 s by default) until something resets it;
+  - a **user action** — a `pointerdown` or `keydown` anywhere in the document, or a **route change**
+    (the same `usePathname` change that records the page view) — **snaps the ladder back to the
+    floor**: the step index returns to 0 and, if the pending tick is further away than `set[0]`, it
+    is **rescheduled to `set[0]` from now** (a snap never flushes immediately — the floor is the
+    minimum spacing between beacons). Samples the collector generates on its own — API latency from
+    background polls, vitals, errors — are **not** user actions, so an idle tab whose chat poll keeps
+    producing `api` samples still backs off;
+  - while the tab is **hidden** the timer **freezes** (the hide-flush below has already emptied the
+    buffer); on becoming **visible** the ladder **resets to the floor** (returning to the tab is an
+    action) and the timer restarts at `set[0]`.
+  The buffer cap (200, oldest dropped) is unchanged. Independent of the ladder, the collector still
+  flushes on `visibilitychange → hidden` and on `pagehide` via **`navigator.sendBeacon`** (fetch
+  `keepalive` fallback), **≤ 50 samples per batch**. A rejected batch (400/401/429) is **dropped
+  silently** — RUM never retries, never surfaces an error to the user, and never blocks the UI.
+- **Flag re-reads ride the ladder too.** The collector reads `rumEnabled` / `rumSampleRate` /
+  `rumFlushIntervals` from `/api/me` **on mount** (deduped with the shell's own request) and then
+  **re-reads them on a flush tick when ≥ 60 s have passed since the last read** — there is **no
+  separate fixed 60 s `/api/me` poll** any more (v2.8.0), so an idle tab makes no periodic request
+  at all beyond its backed-off ticks. Consequence for the switch (§32.6): flipping collection **off**
+  stops an *active* tab within about a minute and an *idle* tab within its current ladder step (≤ the
+  set's last value, ~4 min by default). A changed interval set is applied at the next re-read: the
+  ladder keeps its **step index**, clamped to the new set's length.
 
 ### 32.5 Ingest — `POST /api/rum`
 
@@ -5191,7 +5219,9 @@ on and the session won the sampling draw (§32.6):
   - `sessionId` matches `^[A-Za-z0-9_-]{8,64}$`; `error.message` ≤ 500 and `error.frame` ≤ 300 after
     server-side re-scrubbing.
 - `created_at` is **server-stamped**; the client sends no timestamps.
-- **Rate limit**: **60 batches per user per minute** (the normal cadence is ~6); over the limit → 429.
+- **Rate limit**: **60 batches per user per minute** (the normal cadence is **≤ ~4** at the default
+  17 s floor, §32.4; the interval floor of 5 s in §32.6 keeps even the most aggressive admin setting
+  under the limit); over the limit → 429.
 - When **`rum_enabled` is off** the endpoint returns **204 and discards** the batch, so a tab that
   has not yet re-read the flag never errors.
 - The route is **not** wrapped in `withSystemLog`'s recorded 4xx set by design (above); 5xx from it
@@ -5200,9 +5230,19 @@ on and the session won the sampling draw (§32.6):
 
 ### 32.6 Platform toggle & sampling
 
-Two platform settings (`platform_settings`, §3), both **platform-admin only**, both audited as
+Three platform settings (`platform_settings`, §3), all **platform-admin only**, all audited as
 `settings.updated` like every setting, exposed to clients on `GET /api/me` as `rumEnabled` /
-`rumSampleRate`, and written through `PATCH /api/admin/settings`:
+`rumSampleRate` / `rumFlushIntervals`, and written through `PATCH /api/admin/settings`:
+- **`rum_flush_intervals`** (v2.8.0) — the collector's **flush ladder** (§32.4): an **ascending,
+  deduped list of integer seconds**, each **`5..3600`**, **≤ 20 entries**, stored as a JSON array.
+  Default (and the fallback whenever the stored value is absent or malformed): **`[17, 23, 37, 59,
+  97, 157, 251]`** — primes; **17 s is the floor by default**, the value an active tab beacons at.
+  Same parse rules as `chat_poll_intervals` (§24): comma-separated input, blanks tolerated, tokens
+  must be whole numbers, deduped and sorted ascending on save, at least one entry; an invalid save is
+  rejected with a clear **422** (like every other settings validation on `PATCH /api/admin/settings`)
+  and nothing is stored. The **5 s lower bound** exists because of the
+  60-batches/min ingest limit (§32.5). Edited **on the RUM page header** next to the switch and the
+  sample rate (§32.7), not on Administration — same reasoning as the other two.
 - **`rum_enabled`** (default **`true`**). The control lives **at the top of the RUM page itself**
   (§32.7) — a header row with the shared `Switch` — not on the Administration page: the admin who
   decides whether to collect is looking at what collection produces. **Off**: the collector sends
@@ -5236,7 +5276,12 @@ and both the presence route→label map (§4) and the RUM known-route table (§3
    key (§5).
 1. **Header row** — title, the one-line purpose (*"How the app performs in your users' browsers.
    Spot slow pages and usability issues before people report them."*), and on the right the
-   **`rum_enabled` switch** + **sample-rate select** (§32.6). Below it the standard **7d / 30d / 90d /
+   **`rum_enabled` switch** + **sample-rate select** + the **flush-cadence field** (§32.6): a
+   monospace comma-separated input labelled *"Flush every"* with the unit *"s"*, prefilled with the
+   saved set, placeholder = the default set, **saved on blur / Enter** through the same PATCH, with
+   the parse error shown inline on rejection and the field reverting to the saved value. The header
+   states the effective floor (*"Sampling 100 % of sessions · beacons every 17 s while active,
+   backing off to 251 s when idle"*). Below it the standard **7d / 30d / 90d /
    All** range toggle (remembered as `skilly.chart.rum-range`) and a **Refresh** button. Data is
    fetched **on mount and on range change only** — like the DAU chart, not polled: the numbers do not
    move meaningfully in a minute.
@@ -5278,7 +5323,11 @@ header's tooltip says so. The chart's LCP/INP lines follow the same rule per buc
 - `GET /api/admin/rum/errors?range=7|30|90|all&offset=&limit=` → `{ errors: [{ fingerprint, type,
   message, frame, count, firstSeen, lastSeen, routes: [...] }], total, hasMore }`.
 - `POST /api/rum` — the beacon (§32.5; **any** signed-in user).
-- `GET|PATCH /api/admin/settings` gains `rum_enabled` / `rum_sample_rate` (§32.6).
+- `GET|PATCH /api/admin/settings` gains `rum_enabled` / `rum_sample_rate` / `rum_flush_intervals`
+  (§32.6; the PATCH body key is `rumFlushIntervals`, accepting an array of numbers or a
+  comma-separated string, answering the normalised array). `GET /api/me` carries all three as
+  `rumEnabled` / `rumSampleRate` / `rumFlushIntervals`; the summary endpoint above also returns
+  `flushIntervals` so the page header can render the effective set.
 
 ### 32.9 Security posture
 
@@ -5299,7 +5348,16 @@ bounds, unknown route → `other`, batch size and all-or-nothing rejection, `ses
 scrubbing (emails, hex/base64 tokens, truncation) and fingerprint stability (same bug on two routes →
 one fingerprint; a changed digit in the message → same fingerprint); the client route-templating of
 page and API URLs; the per-session sampling draw (a session is entirely in or entirely out); the p75
-and views-weighted-mean helpers; the Web-Vitals band classifier at the thresholds.
+and views-weighted-mean helpers; the Web-Vitals band classifier at the thresholds; the **flush
+ladder** as a pure state machine (`packages/web/src/lib/rum/ladder.ts`): starts at `set[0]`, a tick
+without an action advances one step and clamps at the last value, an action snaps to index 0 and
+shortens a pending delay longer than `set[0]` to `set[0]`, a new set clamps the index, and the
+`rum_flush_intervals` parser (bounds 5..3600, ≤ 20 entries, dedupe/sort, rejection messages).
+
+**Integration** additions (v2.8.0): `PATCH /api/admin/settings` with `rumFlushIntervals` as a string
+and as an array stores the normalised set, rejects `4`, `3601`, non-numeric tokens and an empty
+list with 422 and leaves the stored value untouched, writes `settings.updated`; `/api/me` and the
+summary endpoint reflect it.
 
 **Integration**: `POST /api/rum` — 401 signed out, 204 + rows written with server `created_at`, 400
 on any invalid sample with **no** rows written, 429 past 60 batches/min, 204-and-discard while
@@ -5316,4 +5374,7 @@ column that forgets its grant fails the live-DB test instead of failing in produ
 **e2e**: sign in → open two pages → `/admin/rum` (7d) lists both routes with ≥ 1 view and the "All
 routes" row → expand a row → the acting user appears in the drill-down → flip the switch off → the
 banner appears and no further `POST /api/rum` requests are made → a namespace-admin session sees no
-sidebar link and gets 403 on the summary.
+sidebar link and gets 403 on the summary. **Ladder (v2.8.0)**: with the set PATCHed to `[5, 7]` for
+the run, an idle tab's consecutive beacons are spaced ≥ 7 s apart after the first two ticks, and a
+click brings the next one back within ~5 s; the header field rejects `4, 9` inline and keeps the
+saved set. The suite restores the default set afterwards.
