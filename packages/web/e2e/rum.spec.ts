@@ -163,7 +163,7 @@ test.describe("real user monitoring (§32)", () => {
   });
 
   test("the flush ladder backs off while idle and snaps back to the floor on a click (§32.4)", async ({ page }) => {
-    test.slow(); // ~40 s of wall-clock waiting by design
+    test.slow(); // wall-clock waiting by design; extra so a slow runner still clears both polls below
     const posts: number[] = [];
     page.on("request", (r) => { if (r.url().includes("/api/rum") && r.method() === "POST") posts.push(Date.now()); });
     await page.goto("/catalog");
@@ -174,7 +174,12 @@ test.describe("real user monitoring (§32)", () => {
     const feeder = setInterval(() => { void page.evaluate(() => fetch("/api/stats").catch(() => {})).catch(() => {}); }, 1000);
     try {
       // Set [5, 7]: ticks at ~5 s (→ step 1), then every 7 s while idle. Wait for three beacons.
-      await expect.poll(() => posts.length, { timeout: 35_000, intervals: [500] }).toBeGreaterThanOrEqual(3);
+      // The poll budget (not the assertions below) is the slack for a slow runner: page-load/
+      // hydration and each request round-trip eat into the ~19 s the ladder itself needs before
+      // the 3rd beacon lands, and a loaded CI box can burn several extra seconds there without
+      // the ladder's own timing being wrong — give it real headroom rather than tightening the
+      // window and risking exactly this flake.
+      await expect.poll(() => posts.length, { timeout: 55_000, intervals: [500] }).toBeGreaterThanOrEqual(3);
       const idleGap = posts[2]! - posts[1]!;
       expect(idleGap, `idle beacons should be ≥ 7 s apart, got ${idleGap} ms`).toBeGreaterThanOrEqual(6_000);
 
@@ -182,7 +187,7 @@ test.describe("real user monitoring (§32)", () => {
       const n = posts.length;
       const clickedAt = Date.now();
       await page.getByRole("heading").first().click();
-      await expect.poll(() => posts.length, { timeout: 12_000, intervals: [250] }).toBeGreaterThan(n);
+      await expect.poll(() => posts.length, { timeout: 18_000, intervals: [250] }).toBeGreaterThan(n);
       const snapGap = posts[n]! - clickedAt;
       expect(snapGap, `after a click the next beacon should land within ~5 s, got ${snapGap} ms`).toBeLessThanOrEqual(8_000);
     } finally {
