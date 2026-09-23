@@ -7,6 +7,7 @@ import { isKnownApiRoute, isKnownPageRoute, labelForRoute, RUM_API_ROUTES, RUM_P
 import { fingerprintFor, normalizeMessage, parseRumBatch, RUM_MAX_BATCH, RUM_MAX_CLS, RUM_MAX_DURATION_MS, RUM_MAX_MESSAGE, sanitizeFrame, scrubMessage } from "./validate";
 import { p75, rumBucketFor, weightedMean } from "./math";
 import { bandFor, bandTone, formatMs } from "./bands";
+import { sortRouteRows } from "./sort";
 
 const SID = "abcdefgh12345678";
 const FP = "a".repeat(64);
@@ -211,3 +212,42 @@ test("bandFor at the published thresholds", () => {
   assert.equal(formatMs(820), "820 ms");
   assert.equal(formatMs(1240), "1.24 s");
 });
+
+// ---- routes table sort (§32.7) -----------------------------------------------------------------------
+{
+  const row = (route: string, label: string, inpP75: number | null, views = 1) => ({ route, label, inpP75, views });
+  const rows = [
+    row(RUM_ROUTE_ALL, "All routes", 56, 80),
+    row("/catalog", "Catalog", 62, 12),
+    row("/propose", "Propose a skill", 196, 4),
+    row("/admin", "Administration", null, 4),
+    row("/audit", "Audit log", null, 2),
+    row("/", "Overview", 10, 14),
+    row("/skills/[ns]/[slug]", "Skill", 62, 6),
+  ];
+  const order = (key: "inpP75" | "views", dir: "asc" | "desc") => sortRouteRows(rows, key, dir).map((r) => r.label);
+
+  test("sortRouteRows: the All routes totals row stays first, outside the sort, in both directions", () => {
+    assert.equal(order("inpP75", "desc")[0], "All routes");
+    assert.equal(order("inpP75", "asc")[0], "All routes");
+    assert.equal(order("views", "asc")[0], "All routes");
+  });
+
+  test("sortRouteRows: route rows order numerically (196 before 62 before 10), not as text", () => {
+    assert.deepEqual(order("inpP75", "desc"), ["All routes", "Propose a skill", "Catalog", "Skill", "Overview", "Administration", "Audit log"]);
+    assert.deepEqual(order("inpP75", "asc"), ["All routes", "Overview", "Catalog", "Skill", "Propose a skill", "Administration", "Audit log"]);
+  });
+
+  test("sortRouteRows: ties break by label A→Z and no-value rows sink to the bottom either way", () => {
+    assert.deepEqual(order("views", "desc"), ["All routes", "Overview", "Catalog", "Skill", "Administration", "Propose a skill", "Audit log"]);
+    const asc = order("inpP75", "asc");
+    assert.deepEqual(asc.slice(-2), ["Administration", "Audit log"]);
+  });
+
+  test("sortRouteRows: works without an All routes row and does not mutate its input", () => {
+    const input = rows.slice(1);
+    const before = input.map((r) => r.label);
+    assert.deepEqual(sortRouteRows(input, "inpP75", "desc").map((r) => r.label)[0], "Propose a skill");
+    assert.deepEqual(input.map((r) => r.label), before);
+  });
+}
