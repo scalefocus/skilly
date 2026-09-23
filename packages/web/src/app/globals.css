@@ -652,6 +652,10 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .page-title { font-family: var(--font-display); font-size: clamp(34px, 5vw, 52px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; color: var(--anchor); font-optical-sizing: auto; }
 .page-sub { color: var(--muted); margin-top: 12px; max-width: 60ch; font-size: 15.5px; }
 
+/* §34.12 catalog: no skill matched every word, so the grid shows partial matches — say so, once,
+   above the results (same soft accent as the maintained-by / namespace-view banners). */
+.search-partial { margin: 0 0 16px; padding: 10px 14px; border-radius: var(--radius-sm); background: var(--accent-soft); font-size: 13.5px; }
+
 /* ── Code / install command ────────────────────────────────────────────── */
 .code {
   font-family: var(--font-mono); font-size: 13px; background: var(--surface-2);

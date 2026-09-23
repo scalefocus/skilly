@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.11.0",
+    date: "2026-09-23",
+    summary:
+      "Search now understands words: the catalog, the header search and the MCP server match word forms (extracting finds extract), also search each skill’s SKILL.md instructions and categories, forgive typos in skill names, and show partial matches when nothing fits every word. Refine with “quotes”, -word and OR. Platform admins add synonyms and pick the search language in Administration → Search.",
+  },
+  {
     version: "2.10.0",
     date: "2026-09-23",
     summary:

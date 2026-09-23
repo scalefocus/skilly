@@ -10,6 +10,9 @@ export const M = {
   tokensMinted: metrics.counter("skilly_tokens_minted_total", "Tokens minted (install)"),
   installCommands: metrics.counter("skilly_install_commands_total", "Install commands generated"),
   searches: metrics.counter("skilly_catalog_searches_total", "Catalog searches served"),
+  // §34.15 — counts only; no query text is ever recorded.
+  searchRequests: metrics.counter("skilly_search_requests_total", "Registry searches, by surface and match mode (all|any|none)"),
+  searchZeroResults: metrics.counter("skilly_search_zero_results_total", "Registry searches with a query that returned nothing, by surface"),
   rateLimited: metrics.counter("skilly_rate_limited_total", "Requests rejected by the rate limiter"),
   cspReports: metrics.counter("skilly_csp_reports_total", "CSP violation reports received (§22)"),
 };

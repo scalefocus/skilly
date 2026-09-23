@@ -14,6 +14,7 @@ import { resolveBundleIcon } from "@skilly/shared/icon";
 import { ingestBundleIcon } from "../icon.js";
 import { getMaxBundleBytes } from "../settings.js";
 import { tryAward } from "../achievements.js";
+import { fillSearchText } from "../searchIndex.js";
 import type { Pool } from "pg";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { runScanPipeline } from "../scan/pipeline.js";
@@ -302,5 +303,7 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
     await tryAward(pool, input.createdBy, "first_published");
     if (priorVersions > 0) await tryAward(pool, input.createdBy, "first_new_version", { noHabits: true });
   }
+  // §34.3: the files are in hand — index the SKILL.md text now (write-once, advisory).
+  await fillSearchText(pool, rows[0]!.id, files);
   return { versionId: rows[0]!.id, artifactKey };
 }

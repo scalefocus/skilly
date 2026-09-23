@@ -4,14 +4,18 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
 import { resolveUserAccess } from "../../../../lib/access";
-import { suggestSkills } from "../../../../lib/catalog";
+import { suggestSkills, suggestSkillsResult } from "../../../../lib/catalog";
 import { enforceRateLimit } from "../../../../lib/ratelimit";
 import { pool } from "../../../../lib/db";
+import { M } from "../../../../lib/metrics";
+import { SEARCH_MAX_CHARS } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
 const MIN_CHARS = 2;
-const MAX_CHARS = 64;
+// The pickers (mention / fulfilment) keep their 64-char cap; the dropdown shares the §34 engine's
+// cap with the catalog, so its 5 rows stay the catalog's first 5 for any query (§34.2).
+const PICKER_MAX_CHARS = 64;
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -39,7 +43,7 @@ export async function GET(req: Request) {
   if (limited) return limited;
 
   const access = await resolveUserAccess(oid);
-  const q = raw.slice(0, MAX_CHARS);
+  const q = raw.slice(0, orgOnly || mention ? PICKER_MAX_CHARS : SEARCH_MAX_CHARS);
   if (mention) {
     const slash = q.indexOf("/");
     if (slash > 0) {
@@ -55,6 +59,10 @@ export async function GET(req: Request) {
     }
     return Response.json({ suggestions: await suggestSkills(access, q, 6, { orgOnly: true }) });
   }
-  const suggestions = await suggestSkills(access, q, 5, { orgOnly });
+  if (orgOnly) return Response.json({ suggestions: await suggestSkills(access, q, 5, { orgOnly }) });
+  // The header dropdown: the §34 engine. Counts only (§34.15).
+  const { suggestions, matchMode } = await suggestSkillsResult(access, q, 5);
+  M.searchRequests.inc({ surface: "suggest", mode: matchMode ?? "none" });
+  if (matchMode && suggestions.length === 0) M.searchZeroResults.inc({ surface: "suggest" });
   return Response.json({ suggestions });
 }

@@ -165,7 +165,7 @@ pipeline {
 
           # Worker integration flow (publish/mirror) + web DB tests.
           SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
-            node --test "packages/worker/dist/integration/publishFlow.test.js"
+            node --test "packages/worker/dist/integration/publishFlow.test.js" "packages/worker/dist/integration/searchIndex.test.js"
           SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
             pnpm --filter @skilly/web test:db
         '''

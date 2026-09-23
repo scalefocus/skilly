@@ -17,6 +17,10 @@ interface Facets {
 
 const TYPE_LABEL: Record<string, string> = { hosted: "Hosted", pointer: "External" };
 
+// The §34.4 query syntax, shown only when a search needs help: the partial-matches notice and the
+// no-results empty state (§34.12). The top bar stays as it is.
+const SEARCH_TIP = "Tip: use \"quotes\" for an exact phrase, -word to exclude, and OR between alternatives.";
+
 function Catalog() {
   const params = useSearchParams();
   // Press Enter to jump to the header search box (the catalog has no page-local input).
@@ -123,9 +127,11 @@ function Catalog() {
   if (sort === "top_rated") qs.set("sort", "top_rated");
   else if (sort === "latest") qs.set("sort", "latest");
 
-  const { data, loading, error } = useApi<{ skills: CatalogEntry[] }>(`/api/skills${qs.toString() ? `?${qs}` : ""}`);
+  const { data, loading, error } = useApi<{ skills: CatalogEntry[]; matchMode?: "all" | "any" | null }>(`/api/skills${qs.toString() ? `?${qs}` : ""}`);
   const { data: facets } = useApi<Facets>("/api/skills/facets");
   const skills = data?.skills ?? [];
+  // §34.5: no skill matched every word, so the grid shows skills matching some of them.
+  const partialMatches = !maintainer && !!submitted && data?.matchMode === "any" && skills.length > 0;
 
   const Chip = ({ active, label, count, onClick }: { active: boolean; label: string; count: number; onClick: () => void }) => (
     <button className={`facet${active ? " facet-on" : ""}`} onClick={onClick} type="button">
@@ -256,13 +262,26 @@ function Catalog() {
               </div>
             </div>
           )}
+          {partialMatches && (
+            <p className="search-partial" role="status">
+              No skills match all of your words — showing skills that match some of them.{" "}
+              <span className="muted">{SEARCH_TIP}</span>
+            </p>
+          )}
           {skills.length === 0 ? (
             maintainer ? (
               <EmptyState title="No skills to show" hint={`${maintainerName || "This person"} maintains no skills you have access to.`} />
             ) : nsView && !(submitted || category || tool || type || mine || official) ? (
               <EmptyState title="No skills to show" hint={`${nsViewName || nsView} has no skills you have access to yet.`} />
             ) : (
-            <EmptyState title={showArchived ? "No archived skills" : submitted || category || tool || type ? "No skills match your filters" : "No skills published yet"} hint={showArchived ? "You have no archived skills to restore." : canManage ? "Try a different search, clear filters, or toggle Archived above." : "Try a different search or clear filters."} />
+            <EmptyState
+              title={showArchived ? "No archived skills" : submitted || category || tool || type ? "No skills match your filters" : "No skills published yet"}
+              hint={
+                showArchived
+                  ? "You have no archived skills to restore."
+                  : `${canManage ? "Try a different search, clear filters, or toggle Archived above." : "Try a different search or clear filters."}${submitted ? ` ${SEARCH_TIP}` : ""}`
+              }
+            />
             )
           ) : view === "cards" ? (
             <div className="card-grid">

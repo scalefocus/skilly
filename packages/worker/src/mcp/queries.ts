@@ -15,7 +15,15 @@ import {
   canReviewNamespace,
   buildSkillResourceUri,
   TOOL_OPTIONS,
+  resolveSkillSearch,
+  catalogOrderBy,
+  searchExplainColumns,
+  cleanSnippet,
+  substringSnippet,
+  SEARCH_FIELDS,
   type EffectiveAccess,
+  type MatchMode,
+  type SearchField,
 } from "@skilly/shared";
 
 export interface SkillHit {
@@ -35,9 +43,14 @@ export interface SkillHit {
   updatedAt: string;
   /** The MCP resource URI for this skill's latest stable SKILL.md — saves the agent a guess. */
   resourceUri: string;
+  /** With a query (§34.11): the fields any query word matched. */
+  matchedIn?: SearchField[];
+  /** With a query (§34.11): a plain-text excerpt around the match, or null (title/slug/category/typo
+   *  hits). Lets an agent judge relevance without reading SKILL.md, which counts as adoption. */
+  snippet?: string | null;
 }
 
-const HIT_COLUMNS = `n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
+const HIT_COLUMNS = `s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
         s.visibility, s.tool_harness, s.install_count::text as install_count,
         s.rating_sum::text as rating_sum, s.rating_count::text as rating_count,
         (s.official_at is not null) as official,
@@ -51,6 +64,7 @@ const HIT_GROUP_BY = `group by n.slug, s.slug, s.title, s.description, s.type, s
         s.tool_harness, s.install_count, s.rating_sum, s.rating_count, s.official_at, s.created_at, s.id`;
 
 interface HitRow {
+  id: string;
   namespace_slug: string;
   skill_slug: string;
   title: string;
@@ -98,32 +112,39 @@ export interface SearchOpts {
   offset?: number;
 }
 
+interface ExplainRow {
+  id: string;
+  description: string;
+  usage_search: string | null;
+  x_title: boolean;
+  x_slug: boolean;
+  x_description: boolean;
+  x_categories: boolean;
+  x_usage: boolean;
+  x_instructions: boolean;
+  x_snippet: string | null;
+  x_sub_description: boolean;
+  x_sub_usage: boolean;
+}
+
 /**
- * The §10 catalog search: the SAME substring predicate (title/slug/description/usage), the
- * same facets, the same name-matches-first ranking — visibility-filtered per invariant #3. Active
- * skills only; archived skills are owner-only and not part of the MCP read surface.
+ * The §10 catalog search: the SAME §34 engine (the shared resolveSkillSearch — matching, the
+ * any-word fallback, the match-quality tiers), the same facets and the same ORDER BY as the web
+ * catalog — visibility-filtered per invariant #3. Active skills only; archived skills are
+ * owner-only and not part of the MCP read surface. With a query, each hit also says which fields
+ * matched and carries a snippet (§34.11), computed for the returned page only.
  */
 export async function searchSkills(
   pool: Pool,
   access: EffectiveAccess,
   opts: SearchOpts,
-): Promise<{ skills: SkillHit[]; total: number }> {
+): Promise<{ skills: SkillHit[]; total: number; matchMode: MatchMode | null; synonymsApplied: string[][] }> {
   const params: unknown[] = [];
   const where: string[] = ["s.status = 'active'"];
 
   const vis = skillVisibilityWhere(access, params);
   if (vis) where.push(vis);
 
-  let titleMatch = "";
-  const q = opts.q?.trim();
-  if (q) {
-    params.push(`%${q}%`);
-    const p = params.length;
-    titleMatch = `(s.title ilike $${p} or s.slug ilike $${p})`;
-    where.push(
-      `(${titleMatch} or s.description ilike $${p} or coalesce(s.usage_search, '') ilike $${p})`,
-    );
-  }
   if (opts.category) {
     params.push(opts.category);
     where.push(
@@ -139,17 +160,13 @@ export async function searchSkills(
     params.push(opts.type);
     where.push(`s.type = $${params.length}`);
   }
-
-  const bayes =
-    `((s.rating_sum + 5 * (select coalesce(sum(rating_sum)::numeric / nullif(sum(rating_count), 0), 0) from skills))` +
-    ` / (s.rating_count + 5))`;
-  const rankOrder = titleMatch ? `case when ${titleMatch} then 0 else 1 end asc,` : "";
-  const orderBy =
-    opts.sort === "top_rated"
-      ? `${bayes} desc, s.rating_count desc, s.install_count desc, s.title asc`
-      : opts.sort === "latest"
-        ? `coalesce(max(sv.created_at), s.created_at) desc, s.install_count desc, s.title asc`
-        : `${rankOrder} s.install_count desc, ${bayes} desc, (s.official_at is not null) desc, s.title asc`;
+  // Free text: the shared §34 engine, resolved after every filter so its any-word fallback probe
+  // sees exactly what this call can list — the web catalog makes the identical call.
+  const engine = await resolveSkillSearch(pool, opts.q, where, params);
+  const orderBy = catalogOrderBy(opts.sort, engine?.relevance ?? "");
+  // The count runs the same WHERE — which may need fewer params than the ORDER BY (the any-word
+  // coverage keys are ORDER BY-only), and Postgres rejects unreferenced parameters.
+  const countParams = params.slice(0, engine ? engine.whereParamCount : params.length);
 
   const limit = Math.min(50, Math.max(1, opts.limit ?? 20));
   const offset = Math.max(0, opts.offset ?? 0);
@@ -169,10 +186,41 @@ export async function searchSkills(
     ),
     pool.query<{ total: string }>(
       `select count(*)::text as total from skills s join namespaces n on n.id = s.namespace_id where ${where.join(" and ")}`,
-      params.slice(0, params.length - 2),
+      countParams,
     ),
   ]);
-  return { skills: hits.rows.map(toHit), total: Number(count.rows[0]?.total ?? 0) };
+  const skills = hits.rows.map(toHit);
+  if (engine && hits.rows.length) {
+    // Why each hit matched (§34.11) — the returned page only, never the whole match set. Every row
+    // here already passed the visibility filter above, so no snippet can quote an invisible skill.
+    const xp: unknown[] = [];
+    const cols = searchExplainColumns(engine.search, xp);
+    xp.push(hits.rows.map((r) => r.id));
+    const { rows } = await pool.query<ExplainRow>(
+      `select s.id, s.description, s.usage_search,
+              ${cols}
+         from skills s
+        where s.id = any($${xp.length}::uuid[])`,
+      xp,
+    );
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const needle = engine.search.substring;
+    hits.rows.forEach((h, i) => {
+      const x = byId.get(h.id);
+      if (!x) return;
+      skills[i]!.matchedIn = SEARCH_FIELDS.filter((f) => x[`x_${f}`]);
+      skills[i]!.snippet =
+        cleanSnippet(x.x_snippet) ??
+        (needle && x.x_sub_description ? substringSnippet(x.description, needle) : null) ??
+        (needle && x.x_sub_usage ? substringSnippet(x.usage_search ?? "", needle) : null);
+    });
+  }
+  return {
+    skills,
+    total: Number(count.rows[0]?.total ?? 0),
+    matchMode: engine?.matchMode ?? null,
+    synonymsApplied: engine?.search.synonymsApplied ?? [],
+  };
 }
 
 export interface SkillRef {
