@@ -91,7 +91,7 @@ jobs:
           done
       - run: pnpm --filter @skilly/shared build
       - run: pnpm --filter @skilly/worker build
-      - run: node --test packages/worker/dist/integration/publishFlow.test.js
+      - run: node --test packages/worker/dist/integration/publishFlow.test.js packages/worker/dist/integration/searchIndex.test.js
       - run: pnpm --filter @skilly/web test:db
 
   build:

@@ -23,4 +23,9 @@ export const M = {
   mcpAuthFailures: metrics.counter("skilly_mcp_auth_failures_total", "MCP requests refused at authentication"),
   mcpInstallsMinted: metrics.counter("skilly_mcp_installs_minted_total", "Install commands minted through MCP"),
   mcpWrites: metrics.counter("skilly_mcp_writes_total", "Content created through MCP, by kind"),
+  // §34.15 search — counts only; no query text is ever recorded.
+  searchRequests: metrics.counter("skilly_search_requests_total", "Registry searches, by surface and match mode (all|any|none)"),
+  searchZeroResults: metrics.counter("skilly_search_zero_results_total", "Registry searches with a query that returned nothing, by surface"),
+  searchIndexPending: metrics.gauge("skilly_search_index_pending", "Skill versions whose SKILL.md text awaits extraction"),
+  searchIndexFailed: metrics.gauge("skilly_search_index_failed", "Skill versions whose SKILL.md text extraction gave up"),
 };

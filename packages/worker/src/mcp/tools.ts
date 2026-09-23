@@ -20,6 +20,7 @@ import {
 } from "@skilly/shared";
 import type { McpCaller } from "./auth.js";
 import { getMcpSettings, getProposalsOpen } from "./settings.js";
+import { M } from "../metrics.js";
 import {
   findNamespace,
   findVisibleSkill,
@@ -95,15 +96,17 @@ export function toolDefinitions(): ToolDefinition[] {
       title: "Search skills",
       readOnly: true,
       description:
-        "Search this skilly registry's catalog. THIS IS THE DISCOVERY PATH — the resource list deliberately advertises templates only and never enumerates the catalog, so start here. Results are filtered to what you are allowed to see. Each hit includes a `resourceUri` you can read directly.",
+        "Search this skilly registry's catalog. THIS IS THE DISCOVERY PATH — the resource list deliberately advertises templates only and never enumerates the catalog, so start here. Results are filtered to what you are allowed to see. Each hit includes a `resourceUri` you can read directly, plus `matchedIn` (the fields your words matched) and a short `snippet` — use them to judge relevance WITHOUT reading SKILL.md, because reading a skill's SKILL.md counts as adopting it. When no skill matches every word, `matchMode` is \"any\" and the hits match only some of your words.",
       inputSchema: {
         type: "object",
         properties: {
-          query: str("Free-text search over title, slug, description and usage examples. Substring match, so partial words work."),
+          query: str(
+            "Free-text search over name, category names, description, usage examples and the SKILL.md instructions. Natural language is fine: word forms match (extracting ≈ extract), results rank by where the words match, then popularity. Operators: \"exact phrase\", -word to exclude, A OR B (capital OR). Registry-curated synonyms expand plain words; `synonymsApplied` lists the ones used.",
+          ),
           category: str("Restrict to one category label."),
           tool: str("Restrict to one tool/harness slug (e.g. claude-code)."),
           type: { type: "string", enum: ["hosted", "pointer"], description: "'hosted' = the bytes live in this registry; 'pointer' = mirrored from an external repo." },
-          sort: { type: "string", enum: ["relevance", "top_rated", "latest"], description: "Default 'relevance' (name matches first, then popularity)." },
+          sort: { type: "string", enum: ["relevance", "top_rated", "latest"], description: "Default 'relevance' (match-quality tiers — every word in the name first — then popularity)." },
           limit: num("Max results, 1–50 (default 20)."),
           offset: num("Skip this many results (pagination)."),
         },
@@ -503,6 +506,9 @@ export async function callTool(
         limit: n(args, "limit"),
         offset: n(args, "offset"),
       });
+      // §34.15: counts only — the query text is never recorded.
+      M.searchRequests.inc({ surface: "mcp", mode: res.matchMode ?? "none" });
+      if (res.matchMode && res.total === 0) M.searchZeroResults.inc({ surface: "mcp" });
       return toolJson(res);
     }
 

@@ -10,6 +10,7 @@ import { afterToggle } from "../../lib/lastWatched";
 import { EmailCard } from "./EmailCard";
 import { SystemBannerCard } from "./SystemBannerCard";
 import { McpCard } from "./McpCard";
+import { SearchCard } from "./SearchCard";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
@@ -37,7 +38,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
   "systembanner", "mcp", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
-  "achievements",
+  "achievements", "search",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -694,6 +695,9 @@ export default function AdminPage() {
       {/* Email notifications (§12) — collapsible like every card */}
       <McpCard open={cards.open.mcp} onToggle={() => cards.toggle("mcp")} />
 
+      {/* Search (§34) — the search language and the synonym groups */}
+      <SearchCard open={cards.open.search} onToggle={() => cards.toggle("search")} />
+
       {/* Achievements (§31) — the dormant-not-destructive on/off */}
       <AchievementsSettings enabled={data.settings.achievementsEnabled} busy={busy} call={call} open={cards.open.achievements} onToggle={() => cards.toggle("achievements")} />
 
@@ -1005,6 +1009,7 @@ function MaintenanceCard({ open, onToggle }: { open: boolean; onToggle: () => vo
       <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
         Trigger background jobs on demand. They otherwise run on their own schedule; a manual run is handy right after a burst of installs.
       </p>
+      <SearchIndexLine />
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ fontWeight: 600, fontSize: 14 }}>“Skills you might like” index</div>
@@ -1022,6 +1027,63 @@ function MaintenanceCard({ open, onToggle }: { open: boolean; onToggle: () => vo
       </div>
       {err && <div style={{ marginTop: 10, fontSize: 13, color: "var(--danger)" }}>{err}</div>}
     </CollapsibleCard>
+  );
+}
+
+// Search index status (§34.10): SKILL.md extraction over active versions, plus the progress of a
+// search-language rebuild. The worker's sweeps do the work; "Retry failed" re-arms failed rows for
+// the next pass (audited). Polls while anything is outstanding.
+interface SearchIndexStatus {
+  versions: { total: number; done: number; pending: number; failed: number };
+  rebuild: { label: string; total: number; current: number; running: boolean };
+}
+
+function SearchIndexLine() {
+  const [status, setStatus] = useState<SearchIndexStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/admin/jobs/search-index");
+      if (r.ok) setStatus(await r.json());
+    } catch { /* transient — the poll retries */ }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const outstanding = !!status && (status.rebuild.running || status.versions.pending > 0);
+  useEffect(() => {
+    if (!outstanding) return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [outstanding, load]);
+
+  const retry = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch("/api/admin/jobs/search-index/retry", { method: "POST" });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "Retry failed");
+      setStatus(((await r.json()) as { status: SearchIndexStatus }).status);
+    } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(false); }
+  };
+
+  const v = status?.versions;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>Search index</div>
+        <div className="muted mono" style={{ fontSize: 11.5 }}>
+          {!status || !v
+            ? "…"
+            : status.rebuild.running
+              ? `Rebuilding search index for ${status.rebuild.label}: ${formatCount(status.rebuild.current)} / ${formatCount(status.rebuild.total)} skills`
+              : `${formatCount(v.done)} / ${formatCount(v.total)} versions indexed${v.failed > 0 ? ` · ${formatCount(v.failed)} failed` : ""}`}
+        </div>
+        {err && <div style={{ marginTop: 6, fontSize: 13, color: "var(--danger)" }}>{err}</div>}
+      </div>
+      <button type="button" className="btn btn-sm" disabled={busy || !v || v.failed === 0} onClick={() => void retry()} title="Re-attempt the SKILL.md text extraction that failed">
+        Retry failed
+      </button>
+    </div>
   );
 }
 

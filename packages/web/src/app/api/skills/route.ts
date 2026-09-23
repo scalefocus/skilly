@@ -2,9 +2,10 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
-import { searchSkills } from "../../../lib/catalog";
+import { searchCatalog } from "../../../lib/catalog";
 import { getNavSeen } from "../../../lib/settings";
 import { enforceRateLimit } from "../../../lib/ratelimit";
+import { M } from "../../../lib/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +38,8 @@ export async function GET(req: Request) {
   // The timestamp is advanced on LEAVE (see AppShell), so it stays stable across in-visit
   // filtering/sorting. §10.
   const catalogSeenAt = !archivedOnly && access.userId ? (await getNavSeen(access.userId)).catalogSeenAt : null;
-  const skills = await searchSkills(access, {
+  const { skills, matchMode } = await searchCatalog(access, {
+    // Free text runs the §34 engine; below its 2-character floor the query is simply absent.
     q: url.searchParams.get("q") ?? undefined,
     category: url.searchParams.get("category") ?? undefined,
     tool: url.searchParams.get("tool") ?? undefined,
@@ -59,5 +61,9 @@ export async function GET(req: Request) {
     namespaceSlug: namespaceParam(url),
     catalogSeenAt,
   });
-  return Response.json({ skills });
+  // §34.15: counts only — the query text is never recorded.
+  M.searchRequests.inc({ surface: "catalog", mode: matchMode ?? "none" });
+  if (matchMode && skills.length === 0) M.searchZeroResults.inc({ surface: "catalog" });
+  // matchMode ("all" | "any", null without a query) drives the catalog's partial-matches notice (§34.12).
+  return Response.json({ skills, matchMode });
 }

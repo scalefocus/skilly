@@ -1,6 +1,6 @@
 // Catalog read helpers (web). SKILLY_SPEC.md §6, §7, §10.
 import { pool } from "./db";
-import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, type EffectiveAccess } from "@skilly/shared";
+import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, resolveSkillSearch, catalogOrderBy, type EffectiveAccess, type MatchMode } from "@skilly/shared";
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
 
@@ -133,11 +133,11 @@ export async function listAllCategories(): Promise<{ name: string; slug: string 
 }
 
 /**
- * Append the shared free-text predicate (substring ILIKE over title/slug/description/usage)
- * to `where`, pushing the escaped `%term%` onto `params`. Returns a SQL expression that is true
- * when the match is on the NAME (title or slug) — used to sort name matches first (§10). LIKE
- * metacharacters in `q` are escaped so "%"/"_" can't widen the match or scan-bomb. Shared by the
- * catalog grid (searchSkills) and the header dropdown (suggestSkills) so they match identically.
+ * Append the substring name-picker predicate (ILIKE over title/slug/description/usage) to `where`,
+ * pushing the escaped `%term%` onto `params`. Returns a SQL expression that is true when the match
+ * is on the NAME (title or slug) — sorted first. LIKE metacharacters in `q` are escaped so "%"/"_"
+ * can't widen the match or scan-bomb. Only the pick-a-skill-by-name pickers use it now — `#skill`
+ * mentions (§24) and the request-fulfilment picker (§26); registry search is the §34 engine.
  */
 function ilikeSearch(params: unknown[], q: string, where: string[]): string {
   const term = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
@@ -151,15 +151,27 @@ function ilikeSearch(params: unknown[], q: string, where: string[]): string {
   return `(s.title ilike $${t} escape '\\' or s.slug ilike $${t} escape '\\')`;
 }
 
+export interface CatalogSearchOpts {
+  q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest"; limit?: number;
+  archivedOnly?: boolean; officialOnly?: boolean; featuredOnly?: boolean; ownerUserId?: string | null;
+  maintainerUserId?: string | null; namespaceSlug?: string | null; catalogSeenAt?: string | null;
+}
+
+/** Visibility-filtered catalog listing — see searchCatalog. */
+export async function searchSkills(access: EffectiveAccess, opts: CatalogSearchOpts): Promise<CatalogEntry[]> {
+  return (await searchCatalog(access, opts)).skills;
+}
+
 /**
  * Visibility-filtered catalog search. INVARIANT (#3): restricted skills never appear for
- * users outside their namespace. Substring ILIKE over title/slug/description/usage when
- * `q` is set (name matches ranked first; §10).
+ * users outside their namespace. With `q`, the §34 full-text engine matches and ranks (match-quality
+ * tiers, then popularity); `matchMode` says whether every word matched ("all") or the query fell
+ * back to some-word matches ("any"), null without a query.
  */
-export async function searchSkills(
+export async function searchCatalog(
   access: EffectiveAccess,
-  opts: { q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest"; limit?: number; archivedOnly?: boolean; officialOnly?: boolean; featuredOnly?: boolean; ownerUserId?: string | null; maintainerUserId?: string | null; namespaceSlug?: string | null; catalogSeenAt?: string | null },
-): Promise<CatalogEntry[]> {
+  opts: CatalogSearchOpts,
+): Promise<{ skills: CatalogEntry[]; matchMode: MatchMode | null }> {
   M.searches.inc();
   const params: unknown[] = [];
   const where: string[] = [];
@@ -192,14 +204,6 @@ export async function searchSkills(
     // see what (§29). Never inline this predicate again.
     const vis = skillVisibilityWhere(access, params);
     if (vis) where.push(vis);
-  }
-  // Free-text search is substring ILIKE (NOT full-text), so the catalog grid and the header
-  // dropdown match IDENTICALLY and respond to partial words as you type (§10). Trade-off: no
-  // ts_rank relevance score — ordering instead surfaces name matches first (titleMatch below),
-  // then popularity. Shared with suggestSkills via ilikeSearch so the two can't drift.
-  let titleMatch = "";
-  if (opts.q) {
-    titleMatch = ilikeSearch(params, opts.q, where);
   }
   if (opts.category) {
     params.push(opts.category);
@@ -241,34 +245,20 @@ export async function searchSkills(
     params.push(opts.namespaceSlug);
     where.push(`n.slug = $${params.length}`);
   }
+  // Free text (§34): the shared engine, resolved AFTER every filter above so its any-word fallback
+  // probe sees exactly the rows this listing can show. The same call backs the header dropdown and
+  // the worker's MCP search_skills, so the three surfaces match and rank identically.
+  const engine = await resolveSkillSearch(pool, opts.q, where, params);
   params.push(Math.min(100, opts.limit ?? 60));
   const limitIdx = params.length;
-  // Relevance proxy when searching: name (title/slug) matches sort ahead of description/tag-only
-  // matches; popularity (install_count) breaks the tie below. Only the default ("relevance") sort
-  // uses it — Top rated / Latest stay explicit, popularity/recency-first.
-  const rankOrder = titleMatch ? `case when ${titleMatch} then 0 else 1 end asc,` : "";
 
-  // Bayesian-smoothed rating (§18): (sum + C*m)/(count + C), C=5 prior votes, m=global mean.
-  // m is an uncorrelated scalar subquery (evaluated once); rating_sum/count ride on s.id (PK,
-  // already in GROUP BY), so this is valid in ORDER BY without extra grouping. A lone 5★ skill
-  // can't outrank an established 4.6★ one.
-  const bayes =
-    `((s.rating_sum + 5 * (select coalesce(sum(rating_sum)::numeric / nullif(sum(rating_count), 0), 0) from skills))` +
-    ` / (s.rating_count + 5))`;
-  // "Top rated" sorts by the smoothed score directly; "Latest" by most-recently-updated;
-  // default keeps install_count primary with the smoothed rating as the final tiebreaker.
+  // Relevance (the default sort): match-quality tier → popularity → the Bayesian-smoothed rating
+  // (§18) → Official as a gentle final tiebreaker (§7). "Top rated" and "Latest" order the same
+  // match set by their own keys. Every s.* key rides on s.id (the PK, in GROUP BY).
   const orderBy = opts.featuredOnly
     ? // Featured feed (§7): most-recently-featured first (s.id is in GROUP BY, so s.featured_at is valid here).
       `s.featured_at desc, s.title asc`
-    : opts.sort === "top_rated"
-      ? `${bayes} desc, s.rating_count desc, s.install_count desc, s.title asc`
-      : opts.sort === "latest"
-        ? // "last update" = newest version's created_at (publishing a version is the update),
-          // falling back to the skill's own created_at. Mirrors findSkill's updatedAt.
-          `coalesce(max(sv.created_at), s.created_at) desc, s.install_count desc, s.title asc`
-        : // Default ("relevance"/popular): name-match → popularity → smoothed rating, then Official
-          // as a GENTLE final tiebreaker (§7) so it nudges without overriding a better match.
-          `${rankOrder} s.install_count desc, ${bayes} desc, (s.official_at is not null) desc, s.title asc`;
+    : catalogOrderBy(opts.sort, engine?.relevance ?? "");
 
   // Categories are aggregated via a correlated subquery so the join doesn't inflate the
   // version array_agg below.
@@ -304,7 +294,7 @@ export async function searchSkills(
   // "New to you": the skill row was created after the caller last opened the catalog. Compared in
   // epoch-ms so it's tz-agnostic; absent a seen marker (non-catalog callers) nothing is flagged.
   const seenMs = opts.catalogSeenAt ? new Date(opts.catalogSeenAt).getTime() : NaN;
-  return rows.map((r) => {
+  const skills = rows.map((r): CatalogEntry => {
     const ratingCount = Number(r.rating_count);
     return {
       namespaceSlug: r.namespace_slug,
@@ -328,6 +318,7 @@ export async function searchSkills(
       icon: iconView(r.icon_sha256, r.icon_emoji),
     };
   });
+  return { skills, matchMode: engine?.matchMode ?? null };
 }
 
 /**
@@ -456,34 +447,59 @@ export async function pendingMirrorStatus(skillId: string): Promise<PendingMirro
 
 export interface SkillSuggestion { id: string; namespaceSlug: string; skillSlug: string; title: string; official: boolean; icon: SkillIconView | null }
 
-/**
- * Lightweight autocomplete for the header search box. Visibility-filtered like the catalog
- * (#3 — restricted skills never surface). Deliberately cheap to bound DoS exposure:
- *  - the caller requires q.length >= 3 and caps it (the route does both),
- *  - substring ILIKE on title/slug only — NO ranking, NO joins, NO aggregates,
- *  - returns at most `limit` (≤10) minimal rows, active skills only.
- */
+/** The suggestions only — see suggestSkillsResult. */
 export async function suggestSkills(access: EffectiveAccess, q: string, limit = 5, opts: { orgOnly?: boolean; namespaceSlug?: string } = {}): Promise<SkillSuggestion[]> {
+  return (await suggestSkillsResult(access, q, limit, opts)).suggestions;
+}
+
+/**
+ * Lightweight autocomplete. Visibility-filtered like the catalog (#3 — restricted skills never
+ * surface). Deliberately cheap to bound DoS exposure: the route floors and caps `q`; no joins beyond
+ * the namespace, no aggregates; at most `limit` (≤10) minimal rows, active skills only.
+ *  - Default scope (the header dropdown): the §34 engine with the catalog's exact ORDER BY, so its
+ *    rows are the first of the unfiltered catalog's Relevance list for the same query (§34.2).
+ *  - `orgOnly` / `namespaceSlug` (the §24 mention and §26 fulfilment pickers): substring name
+ *    matching, name matches first — pick-a-known-skill-by-name, not discovery (§34.2).
+ */
+export async function suggestSkillsResult(
+  access: EffectiveAccess,
+  q: string,
+  limit = 5,
+  opts: { orgOnly?: boolean; namespaceSlug?: string } = {},
+): Promise<{ suggestions: SkillSuggestion[]; matchMode: MatchMode | null }> {
   const params: unknown[] = [];
   const where: string[] = ["s.status = 'active'"];
+  const toSuggestion = (r: { id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null }): SkillSuggestion =>
+    ({ id: r.id, namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official, icon: iconView(r.icon_sha256, r.icon_emoji) });
+  if (!opts.namespaceSlug && !opts.orgOnly) {
+    // Invariant #3 via the shared predicate (see the note in searchCatalog).
+    const vis = skillVisibilityWhere(access, params);
+    if (vis) where.push(vis);
+    const engine = await resolveSkillSearch(pool, q, where, params);
+    if (!engine) return { suggestions: [], matchMode: null };
+    params.push(Math.min(10, Math.max(1, limit)));
+    const { rows } = await pool.query<{ id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null }>(
+      `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji
+         from skills s join namespaces n on n.id = s.namespace_id
+        where ${where.join(" and ")}
+        order by ${catalogOrderBy("relevance", engine.relevance)}
+        limit $${params.length}`,
+      params,
+    );
+    return { suggestions: rows.map(toSuggestion), matchMode: engine.matchMode };
+  }
   if (opts.namespaceSlug) {
     // Mention `ns/` prefix (§24 Mentions): the caller typed an explicit namespace they can see
     // into — suggest within THAT namespace only (restricted skills included; the route verified
     // the caller's access to the namespace before passing it here).
     params.push(opts.namespaceSlug);
     where.push(`n.slug = $${params.length}`);
-  } else if (opts.orgOnly) {
+  } else {
     // Requested-skill "propose an existing skill" fulfilment (§26) and bare-name mention
     // suggestions (§24): the result must be org-visible, regardless of the searching user's
     // own namespace access.
     where.push(`s.visibility = 'org'`);
-  } else {
-    // Invariant #3 via the shared predicate (see the note in searchSkills).
-    const vis = skillVisibilityWhere(access, params);
-    if (vis) where.push(vis);
   }
-  // Same substring predicate + name-match expression as the catalog grid (§10) so the dropdown's
-  // 5 results are a true prefix of what the catalog shows for the same query.
   const titleMatch = ilikeSearch(params, q, where);
   params.push(Math.min(10, Math.max(1, limit)));
   const { rows } = await pool.query<{ id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null }>(
@@ -494,7 +510,7 @@ export async function suggestSkills(access: EffectiveAccess, q: string, limit = 
       limit $${params.length}`,
     params,
   );
-  return rows.map((r) => ({ id: r.id, namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official, icon: iconView(r.icon_sha256, r.icon_emoji) }));
+  return { suggestions: rows.map(toSuggestion), matchMode: null };
 }
 
 export interface Facets {

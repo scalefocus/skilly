@@ -22,6 +22,7 @@ Every decision below was explicitly confirmed.
 | Identity | **Real SCIM 2.0** (worker-hosted) + **OIDC-only SSO** (Entra). Roles resolved from SCIM-synced groups |
 | RBAC | Explicit Entra-group→(namespace, role) mapping. Roles: Platform Admin / Namespace Admin / Namespace Member + implicit propose/consume |
 | Visibility | **Per-skill**: org-wide OR scoped to one namespace. No per-individual private, no per-version visibility |
+| Search | **PostgreSQL full-text search only** (§34): stemmed and weighted (title/slug › description › categories › usage + `SKILL.md` body), admin-curated synonyms, typo + substring fallback tiers, `"phrase"` / `-exclude` / `OR` syntax, admin-selectable language. **No vector store, no new extension.** One engine for the catalog, the header search and MCP |
 | Skill icons | **Optional, skill-level** image or emoji (§33): resolved from the bundle (`icon:` frontmatter → root `icon.png`) before the proposer's upload/emoji; re-encoded to 256×256 PNG; default = the skilly wordmark. Shown on every skill surface and on the **signed share link's** Open Graph card — the only per-skill unfurl, gated by a 7-day token minted by a signed-in viewer |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
@@ -85,7 +86,7 @@ Every decision below was explicitly confirmed.
 - **Backend/UI:** Next.js (App Router, Route Handlers, Server Actions) running as a **long-running standalone Node server** (`output: "standalone"`). **Never Vercel.**
 - **Auth:** Auth.js (`next-auth`) with the **Entra ID (Azure AD) OIDC** provider. OIDC for authentication only.
 - **Worker:** standalone Node service. Hosts the SCIM 2.0 HTTP endpoints, runs Entra reconciliation, and executes the scan pipeline. Runs as a **singleton with leader lock** (advisory lock in Postgres) to avoid double-processing.
-- **Datastore:** **PostgreSQL** — relational metadata + **built-in full-text search (`tsvector`)** + append-only audit log. No Elasticsearch/OpenSearch in v1.
+- **Datastore:** **PostgreSQL** — relational metadata + **built-in full-text search (`tsvector`)** + append-only audit log. No Elasticsearch/OpenSearch in v1 — and no vector store or extension beyond the already-installed `pg_trgm` for search either (§34).
 - **Artifact storage:** **S3-compatible object store** (bundled **MinIO** for on-prem; real S3 supported). Skill versions stored as **immutable tarballs**.
 - **Scanner:** **ClamAV** container + secret-scanning + static heuristics, behind a pluggable interface.
 
@@ -131,7 +132,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `skills`
 - `id`, `namespace_id`, `slug`, `title`, `description`, `category_id` (nullable FK to `categories` — **back-compat shadow**; since migration 0010 the authoritative skill↔category mapping is the **`skill_categories`** join, supporting multiple categories), `tool_harness` (TEXT — the skill's **coding agent**, a **closed vocabulary**: `generic` (default) ∪ the agents the consumer tool supports; drives the install command's `--agent` flag, §6/§9), `type` (`hosted` | `pointer`), `visibility` (`org` | `namespace`), `status` (`active` | `archived`), `promoted_from_skill_version_id` (nullable, provenance), `install_count`, `featured_at` (nullable timestamptz; non-null ⇒ **Featured** homepage spotlight, §7), `featured_by` (nullable FK `users`, provenance), **`icon_sha256`** (nullable FK → `skill_icons`, the effective icon image, §33), **`icon_emoji`** (nullable TEXT — a single emoji grapheme, the fallback when no image resolves, §33), **`icon_source`** (nullable — `frontmatter` | `bundle` | `upload`: where `icon_sha256` came from, §33), `created_at`. *(The former free-form `tags TEXT[]` column was **dropped in migration 0068** — §10 *Taxonomy*; the FTS trigger was rewritten without it in the same migration.)*
-- Denormalized/derived columns (trigger-maintained): `search_tsv` (FTS `tsvector`, §10), `usage_search` (latest active version's usage examples, folded into `search_tsv` at weight D, §10/§20), `watcher_count` (count of `skill_watches` rows), plus `rating_sum` / `rating_count` (below).
+- Denormalized/derived columns (trigger-maintained): `search_tsv` (FTS `tsvector` — A title + slug, B description, C category names, D usage + `SKILL.md` body of the **indexed version**, §34.3), `search_lang` (the text-search configuration `search_tsv` was built with — the §34.9 reindex job's work list, migration 0077), `usage_search` (the **indexed version's** usage examples — latest stable, else highest active prerelease, §34.3; before migration 0077 the newest-*created* active version, §20), `content_search` (the indexed version's `SKILL.md` body, from `skill_version_search`, migration 0077), `watcher_count` (count of `skill_watches` rows), plus `rating_sum` / `rating_count` (below).
 
 #### Tool/harness = coding agent (closed vocabulary)
 - `tool_harness` names the **coding agent** the skill targets, chosen from a **closed, curated list** (the agents `npx skills add --agent <slug>` supports — e.g. `claude-code`, `cursor`, `gemini-cli`, `windsurf`, …). The single source of truth is `shared/agents.ts` (`{ slug, label }[]`); the slug is stored, the label is displayed.
@@ -152,6 +153,14 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Immutable once published. `latest` = highest **stable** semver among `active` versions.
 - `usage_examples` (per-version, surfaced in the UI as a Markdown "Usage" block, §20) — frozen with the version (a change is a new version, invariant #2).
 - `what_changed` (per-version, **plain-text** "What changed" note — the human summary of what *this version changes*, distinct from `usage_examples` which is *how to use* the skill; §8/§10). **Required** on every new-**version** publish (proposal **and** direct publish), **hidden/omitted** on a skill's **first** version (new-skill proposal) and on **global promotion** (materializes a first version, §8). Frozen with the version (invariant #2). Not Markdown — stored raw, rendered escaped with newlines preserved, no markup/autolinking; capped at ~4,000 chars.
+
+### `skill_version_search` (migration 0077, §34)
+- `skill_version_id` (PK, FK → `skill_versions`, `ON DELETE CASCADE`), `body_text` (nullable TEXT — the version's root `SKILL.md`, frontmatter stripped, capped at 64 KB; null until extracted), `status` (`pending` | `indexed` | `absent` | `failed`), `attempts` (INTEGER), `last_error` (nullable, one line — no secrets, no bytes), `updated_at`.
+- **Search bookkeeping, not version content**: kept outside `skill_versions` so the immutable row and its guard (§22) are untouched. `body_text` is **write-once** (a version's bytes never change, invariant #2). A trigger inserts a `pending` row for every new version (and for a restored version that has none); the creating path or the §34.10 extraction sweep fills it in.
+
+### `search_synonym_groups` (migration 0077, §34.8)
+- `id` (UUID PK), `terms` (TEXT[] — 2–10 trimmed, lowercased terms of 1–4 words and ≤ 60 characters each), `normalized` (TEXT[] — each term's normalized form under the active search language, trigger-maintained and recomputed on a language change, §34.9), `normalized_lang` (the configuration `normalized` was computed under — the reindex job's work list), `created_by` / `updated_by` (nullable FK → `users`, `ON DELETE SET NULL`), `created_at`, `updated_at`.
+- Platform-admin curated, audited (§11); a term's normalized form belongs to **at most one** group (write-time check); at most 500 groups.
 
 ### `skill_maintainers` (§19)
 - `skill_id`, `user_id` (composite PK — one row per maintained user), `added_by`, `created_at`. Both FKs `ON DELETE CASCADE`.
@@ -236,7 +245,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -942,14 +951,14 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 
 ## 10. Search, discovery, taxonomy
 
-- **Free-text search is substring `ILIKE`** over title, slug, description, **and the latest active version's usage examples** (the denormalized `skills.usage_search`, migration 0020) — the **same predicate** for the header dropdown and the catalog grid, so they match identically and respond to **partial words as you type** (a true type-ahead filter). The `search_tsv` `tsvector` (title=A/description=B/usage=D — weight C, formerly tags, is unused since migration 0068) is still trigger-maintained but is **no longer the query path**: we deliberately trade full-text relevance ranking for consistent, responsive substring matching (a conscious choice — revisit if catalog scale makes ranking quality matter; the FTS machinery is retained so that's reversible). Maintainer names remain **not** matched (low value).
+- **Free-text search is PostgreSQL full-text search with forgiving layers — the §34 engine** (superseding the substring-`ILIKE` decision recorded here through v2.10.0, whose revisit condition §34.1 explains). **One engine** serves the **header dropdown, the catalog grid and the MCP `search_skills` tool** identically, so they match and rank the same: stemmed, any-word-order matching over **title + slug (A), description (B), category names (C)** and the **indexed version's usage examples + `SKILL.md` body (D)** (§34.3); platform-admin-curated **synonym groups** (§34.8); a **last-word prefix** so partial words still work as you type; a **typo tier** on titles; and today's **substring predicate kept as the lowest tier**, so nothing a plain query matched before stops matching (§34.5). Queries accept `"phrases"`, `-exclusions` and capital `OR` (§34.4); a multi-word query that matches nothing falls back to any-word matches, flagged `matchMode: "any"`. **No vector store, no new extension** — lexical, not embedding-semantic (§34.1). Maintainer names remain **not** matched (low value).
 - **Search surfaces (one box, five behaviors + a people mode):** the single top-bar box adapts to the page it's on. Its placeholder reads **"Search the registry…"** everywhere except the installed-skills page (**"Search installed skills…"**), the usage dashboard (**"Search usage…"**), and the Requested skills page (**"Search requests…"**).
   - **People mode (`@`) — overrides all five behaviors.** A query whose **first character is `@`** switches the box to a **people typeahead**: the dropdown shows up to **5** matching users — `UserBubble` avatar + display name + email — matched by **substring over display name and email** (2+ chars after the `@`), **excluding erased tombstones and non-`active` users**. Picking one navigates to that person's **maintained-by catalog view** (`/catalog?maintainer=<id>&by=<name>`, §10 above). Backed by the new `GET /api/users/suggest?q=` (§15 — any signed-in user, rate-limited, same posture as `/api/skills/suggest`; people have no per-user visibility model, §28 precedent). People mode is available on **every** page, including the four live-filter pages — a leading `@` re-enables the dropdown there and **suspends the live filter** (nothing is written to `?q=` while in people mode; clearing or deleting the `@` restores the page's normal behavior). Keyboard/clear/Escape semantics are unchanged from the skill dropdown.
-  - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches (name-matches first), opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
-  - **Catalog page:** the dropdown is **suppressed**; the same top-bar box becomes a **live filter of the card/row grid** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (merged with the other filters, kept out of history) and the grid re-queries + re-ranks on each keystroke, exactly like choosing a category or tool. The box is **seeded from `?q=`** on arrival, and **clearing it restores the full catalog**.
+  - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches — the first 5 of the **unfiltered** catalog *Relevance* order for the same query (§34.6) — opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
+  - **Catalog page:** the dropdown is **suppressed**; the same top-bar box becomes a **live filter of the card/row grid** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (merged with the other filters, kept out of history) and the grid re-queries + re-ranks on each keystroke, exactly like choosing a category or tool. The box is **seeded from `?q=`** on arrival, and **clearing it restores the full catalog**. When the §34 engine falls back to any-word matching (`matchMode: "any"`), a one-line **partial-matches notice** plus the query-syntax tip sits above the grid, and a zero-result search shows the tip in the empty state (§34.12).
   - **Installed-skills page (`/installed`, §23):** the dropdown is **suppressed** and the box becomes a **client-side live filter of the caller's own installed list** (no refetch, no query param) — a case-insensitive substring match over each row's title, namespace slug, and skill slug, engaging from the **1st character** (the list is small and already loaded). The typed query is still mirrored to **`?q=`** (`router.replace`, seeded on arrival; clearing restores the full list). This is a **non-registry** mode: different data, matcher, and matched fields — see §23 (*Installed Skills page → Header search*).
   - **Usage dashboard (`/usage`, §21):** the dropdown is **suppressed** the same way and the box becomes a **live filter of the usage list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history); the box is **seeded from `?q=`** on arrival and **clearing it restores the full list**. This box drives the **usage dashboard's own** entitlement-scoped query (`GET /api/usage?q=`), **not** the catalog matcher above — see §21 for its match fields and scope. The usage page therefore carries **no separate in-page search box**.
-  - **Requested skills page (`/requests`, §26):** the dropdown is **suppressed** and the box becomes a **live filter of the requests list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history) so `GET /api/requests?q=` re-queries on each keystroke; the box is **seeded from `?q=`** on arrival (shareable link, survives reload) and **clearing it restores the full list**. The match is the requests' **own** substring `ILIKE` over **title + description** (`applyLiveFilters`, §26) — a sibling of the registry matcher, over a different table, not the same predicate/dataset. The page carries **no separate in-page search box**; the page-local **category/tool facet rows (the Category row collapsible and collapsed by default, §26), the "Mine" toggle, the admin state filter, and the cards/list toggle** stay on the page and compose (AND) with `?q=`. `?q=` narrows the *rows*, never the *facet vocabulary* — the response's `facets` are computed ignoring `q`/`category`/`tool` (§26), so typing in the box never makes chips disappear underneath the pointer.
+  - **Requested skills page (`/requests`, §26):** the dropdown is **suppressed** and the box becomes a **live filter of the requests list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history) so `GET /api/requests?q=` re-queries on each keystroke; the box is **seeded from `?q=`** on arrival (shareable link, survives reload) and **clearing it restores the full list**. The match is the requests' **own** substring `ILIKE` over **title + description** (`applyLiveFilters`, §26) — deliberately **not** the §34 registry engine (§34.2): a different table and a different matcher. The page carries **no separate in-page search box**; the page-local **category/tool facet rows (the Category row collapsible and collapsed by default, §26), the "Mine" toggle, the admin state filter, and the cards/list toggle** stay on the page and compose (AND) with `?q=`. `?q=` narrows the *rows*, never the *facet vocabulary* — the response's `facets` are computed ignoring `q`/`category`/`tool` (§26), so typing in the box never makes chips disappear underneath the pointer.
 - **Clear affordance (`✕`) — universal, all five modes.** The shared top-bar box carries a **clear control on its right edge, in the same slot as the `CTRL+K` hint**: the hint shows when the box is **empty**, and the moment the box holds **any** text the hint is **replaced by a small `✕` button** — only ever one of the two visible at a time, toggling instantly as the box goes empty/non-empty. The trigger is purely **"box is non-empty"**, so it is **independent** of the 2-char query floor, of whether the typeahead dropdown or the "Nothing found" bubble is showing, and of which of the five behaviors is active — including on the four **live-filter pages when the box is seeded from `?q=` on arrival** (a shared `/catalog?q=foo`-style link shows the `✕`, not the hint, on load). **Clicking `✕` or pressing `Escape`** (while the box is focused) **clears the box in one action** and **keeps keyboard focus in it**, ready to retype — it never blurs or navigates. `Escape` therefore **always clears** now, **superseding** its former job of merely closing the typeahead dropdown (emptying the query closes any open dropdown and dismisses the "Nothing found" bubble as a consequence). On a **live-filter page** (catalog / installed / usage / requests) clearing **drops `?q=` immediately** via `router.replace` — **not** waiting for the ~250ms live-filter debounce — so the full unfiltered list snaps back at once. The `✕` is a real **`type="button"`** labelled **"Clear search"** (keyboard-focusable, Tab-reachable, non-submitting), rendered as a **thin-stroke glyph** matching the box's search magnifier and the rest of the topbar icon set (not an emoji or heavy character). `Ctrl`/`Cmd+K` is **unchanged** (focus + select the box); if it selects pre-existing text the box is still non-empty, so the `✕` remains shown.
 - **Skill icon on every skill surface (§33).** Catalog **cards** render the icon **left of the title at 40 px** — and render **no slot at all** when the skill has none (titles may start at different x positions; accepted). The **list-view row** (32 px), the **Featured spotlight** (40 px), the **search-suggest dropdown** (24 px), **`#skill` mention chips** (16 px, inline), and the **Installed page** rows (24 px) follow the same *present-or-absent* rule. Only where a **single skill is the subject** does the **default** render — the **skill detail page header** (64 px, the skilly **wordmark + diamond lockup**) and the §33 share card. Every rendering sits on a **neutral tile with a 1 px border** so transparent PNGs survive both themes; images `object-fit: cover`, emoji centred; **alt text = the skill title**. The catalog/detail/suggest APIs expose `icon: { url, emoji } | null` (`url` = `/skill-icons/<sha256>.png`), visibility-filtered like every other field.
 - **Strictly visibility-filtered, auth-required.** A restricted skill must **never** appear in search, autocomplete, or counts for users outside its namespace. **No anonymous browsing.**
@@ -997,9 +1006,10 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Proposals page default filters:** the **To review** tab opens with the three open states selected (Proposed + Under review + Changes requested) — everything still in flight; **My submissions** opens with **no filter selected** (all your submissions, every state).
 - **Requested skills mirrors the Catalog's "new to you" mechanic exactly (§26):** each user has a `requests_seen_at` marker; the **Requested skills** nav item shows the same superscript **1–9 / 9+** count of **open** requests posted since they last opened the page, and the same predicate flags individual request cards/rows with the **"new" edge badge**. Keyed strictly on `created_at` — editing an already-seen request never re-flags it (matching the Catalog's "a new version isn't a new skill" rule, not the Review queue's `updated_at` re-arm rule). **No visibility filter** (requests have no namespace) and **no distinction by who posted a request** — a requester sees their own just-posted request flagged "new" too, same as anyone else. The marker advances **on leaving** `/requests` (including its detail pages, which share the surface — opening one request and navigating away marks every currently-open request seen, the same blast radius the Review queue already has for `/proposals/:id`), not on entry.
 - **Download** (`GET /api/skills/:ns/:slug/download?semver=&format=`): the detail page can download a skill version as a file — a **primary button** for the latest stable version and a **per-row** button on each active version. A **governed, visibility-checked** path (same posture as the SKILL.md `readme` route; rate-limited) — NOT a consumer install (the git gateway is that, per invariant #4). The stored artifact is served **verbatim with its original extension** (`.skill`/`.zip`/`.tar.gz`; §6), named `<slug>-<semver>.<ext>`. The optional **`format=skill|tar.gz`** param (§6 *Pointer download format choice*) lets Pointer downloads re-pack the mirrored tarball as a `.skill` zip; the detail page renders the Pointer primary Download as a **split-button dropdown** (`.skill` default, `.tar.gz` alternative). Only **active (non-yanked)** versions are downloadable; **archived** skills only by owners.
-- **Discovery over MCP (§29):** the `search_skills` tool runs the **same substring predicate, facets,
-  sorts and visibility filter** as this section — an agent sees exactly what its user would see in the
-  catalog, no more. The MCP server deliberately exposes **resource *templates* only** and never
+- **Discovery over MCP (§29):** the `search_skills` tool runs the **same §34 engine, facets, sorts and
+  visibility filter** as this section — an agent sees exactly what its user would see in the catalog,
+  no more — and adds per-hit `matchedIn` plus a plain-text `snippet`, so an agent can judge relevance
+  without reading (and so adopting) a `SKILL.md` (§34.11). The MCP server deliberately exposes **resource *templates* only** and never
   enumerates the catalog through `resources/list` (clients pull listed resources straight into context,
   which would flood the agent and turn every list call into a filtered catalog scan), so **search is the
   only discovery path** there. The visibility predicate itself is extracted into `@skilly/shared` and
@@ -1045,7 +1055,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Surfaces removed:** the *Tags* input on the propose form (new-skill and new-version modes), the *Tags* row of the proposal review page (both the read view and the metadata-edit panel, §8), the old/new *Tags* diff row, and the `tags` field of MCP skill-search results (§29). The accept-time metadata sync (§8) and the no-op guard (§8) compare title/description/categories/tool-harness/usage only.
   - **API compatibility.** `POST /api/proposals`, `POST /api/publish`, proposer `revise`/`resubmit`, and the reviewer metadata edit **silently ignore** a `tags` field in the request body (no 400) — no consumer other than skilly's own UI ever sent it, and a hard reject would only punish a stale browser tab mid-deploy.
   - **Marketplace manifest.** Tags used to fill the per-plugin `keywords` array; with plugins grouped by category (§30.3) it now carries the member skills' titles and slugs, and the §30.5 content hash covers category slugs instead of tags.
-- **Ranking:** with a query active, **name matches first** — a skill whose **title or slug** contains the term sorts ahead of one matched only in its description/usage — then popularity (`install_count`), then the **Bayesian-smoothed rating (§18)** as the final tiebreaker. This is the **"Relevance"** sort (the default); with no query, popularity leads. A dedicated **"Top rated"** sort orders by the smoothed rating directly, **"Latest"** by most-recent version. A star value is never a match term.
+- **Ranking:** with a query active, the **"Relevance"** sort (the default) orders by **match-quality tier** — every word in the name › every word within name/description/categories › every word anywhere (usage and body included) › *(any-word fallback only)* some words › substring/typo only — and, **within a tier**, by popularity (`install_count`), then the **Bayesian-smoothed rating (§18)**, then Official (§34.6). With no query, popularity leads. A dedicated **"Top rated"** sort orders the same match set by the smoothed rating directly, **"Latest"** by most-recent version. A star value is never a match term.
 - **"Skills you might like" (related skills):** the skill **detail page** ends with a *"Skills you might like"* section — up to **3** other skills **most often installed together** with this one (pure **co-install** signal, no content similarity). Computed **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the per-`(user, skill)` adoption ledger `skill_installs` (§21): two skills are related when the same users adopted both; `shared_count` = number of shared adopters. Stored in **`related_skills`** (migration 0046) as a wider top-N candidate list per skill so the read path (`relatedSkills` → `GET /api/skills/:ns/:slug/related`) can **visibility-filter per viewer** (invariant #3 — restricted skills never surface to outsiders) and still fill the **top 3 the viewer can see** **and hasn't adopted yet**, ranked by shared adopters then `install_count`. Active skills only. **Already-installed exclusion:** a neighbour the viewer has adopted (a `skill_installs` row — git install **or** first download, uninstall-agnostic) is dropped. **Empty-state:** if there were visible neighbours but the viewer has installed **all** of them, the section shows *"You have all related skills."*; if there were **no** visible neighbours to begin with (a new/low-adoption skill, or all its neighbours restricted-invisible), the section is **hidden** entirely. (`relatedSkills` returns `{ related, allInstalled }` to tell those two empty cases apart; the nightly rebuild means a brand-new skill won't appear as a neighbour until the next run.)
 - **On-demand rebuild (Administration → Maintenance):** a **platform admin** can trigger the recompute without waiting for the nightly run, via a **"Rebuild now"** button in a **Maintenance / background jobs** card. Because the batch job lives on the worker, the button doesn't run it inline — it **signals** the worker: the route (`POST /api/admin/jobs/related-rebuild`, platform-admin only, **audited** as `job.related_rebuild_requested`) sets `platform_settings.related_rebuild_requested_at`; the worker's short **signal poll** (leader-only) picks it up, runs `recomputeRelatedSkills`, and **clears** the flag. The recompute takes a **Postgres advisory lock** so a manual run and the nightly sweep never collide (the second caller skips). Both runs stamp `related_last_run_at` + `related_last_run_count` into `platform_settings`, which the card shows ("last rebuilt … · N links"); `GET /api/admin/jobs/related-rebuild` returns that status and whether a run is in flight, and the button polls it (idle → *Rebuilding…* → done).
 
@@ -1060,6 +1070,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
+  - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15).
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
@@ -1280,6 +1291,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
 ## 14. Non-functional requirements
 
 - **Scale target:** ~low-thousands users, hundreds–low-thousands skills, tens of namespaces (Postgres FTS + single worker sufficient).
+- **Search latency (§34.14):** p95 server time **≤ 150 ms** for catalog and MCP search and **≤ 75 ms** for the header dropdown, at 5,000 skills.
 - **Availability:** single-instance v1, but **stateless app** (horizontal-scalable later); worker is **singleton, leader-locked**. HA not day-one.
 - **Testing:** unit (domain, RBAC resolution, semver), integration (API + DB + **SCIM endpoint conformance against Entra payloads**), e2e (propose→review→publish→install happy path).
 - **Observability:** structured JSON logs, `/healthz` + `/readyz`, Prometheus `/metrics`, request IDs threaded into audit. OpenTelemetry deferred. **Client-side** performance and error telemetry is the platform-admin **Real user monitoring** surface (§32) — first-party, Postgres-backed, no third-party RUM SaaS.
@@ -1484,7 +1496,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
 REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PAT auth path**; PATs were removed with the install-token model, §9/§23). SCIM under `/scim/v2` on the worker. This inventory is indicative; the route handlers are the source of truth.
 
 **Catalog & skills**
-- `GET /api/skills` — search/list (visibility-filtered, faceted).
+- `GET /api/skills` — search/list (visibility-filtered, faceted); `q` runs the §34 engine and the response is `{ skills, matchMode }` (`"all" | "any"`, `null` without a query).
 - `GET /api/skills/featured` — the **Featured skills** home-page feed (§7): visibility-filtered, **live-published only**, most-recent-featured first, **not** sliced to the cap; an empty result ⇒ the section is omitted.
 - `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7).
 - `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once, and **never listed as an installation** on the Installed Skills page (§23).
@@ -1541,6 +1553,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), …).
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
+- **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
@@ -1607,6 +1620,9 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Phase 8 — Achievement levels**
 27. **User level + Hero (§31.10):** the badge count (0–20, derived, never stored) worn as a progress ring around every `UserBubble` — omitted at level 0, crowned at Hero, outline-only so it never contends with the §21 badge slot below; a level bar replacing the profile card's *"N of M earned"* line and heading the hall with *"Hero since &lt;date&gt;"*; the §28 hover card's count line restated as a level (`achievementHero` joins `achievementCount`); a permanent `users.hero_at` high-water stamp (migration 0072, backfilled from `max(earned_at)`, cleared on erasure) so a growing catalog can never un-Hero anyone; a bulk `GET /api/levels` map cached like `/api/leaders` (hidden / inactive / erased users absent, the caller's own entry always present, empty while the toggle is off); and the level line folded into the existing `achievement.earned` notification and toast — no new notification type, no level column on the leaderboard. **DONE.**
+
+**Phase 9 — Full-text search**
+28. **The PostgreSQL FTS engine (§34):** one shared engine (`@skilly/shared` parser + SQL builder) behind the header dropdown, the catalog grid and MCP `search_skills`, replacing the substring `ILIKE`; a weighted vector over title/slug, description, category names and the indexed version's usage + `SKILL.md` body (extracted into `skill_version_search`, backfilled by a leader-only worker sweep); `"phrase"` / `-exclude` / capital-`OR` syntax with a last-word prefix; platform-admin synonym groups; typo (`pg_trgm`) and substring fallback tiers; match-quality tier ranking; an any-word fallback flagged by `matchMode`; MCP `matchedIn` + `snippet`; an admin-selectable search language with a background reindex; the Administration **Search** card and a Maintenance index line; migration 0077. **DONE.**
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -1695,7 +1711,7 @@ Per-skill **ownership + notification** layer. Designed to name accountable owner
 
 - **Reuses the existing per-version `usage_examples`** field on `skill_versions` (already captured in proposal metadata; v1 only adds the missing UI). Per-version is intentional: triggering/options can change per release, so usage stays version-accurate and immutability (invariant #2) holds — a change is a new version.
 - **Authored in the proposal**, frozen with the version. The detail page renders the **latest stable version's** usage as a **Markdown "Usage" quick-start block above the rendered `SKILL.md`** (curated how-to-trigger first, full spec below), via the existing XSS-safe renderer.
-- **Indexed in FTS** at weight D (below title/description), via the denormalized `skills.usage_search` column (migration 0020) — §10. (Earlier drafts left usage out of FTS; it is now included.)
+- **Indexed in FTS** at weight D (alongside the `SKILL.md` body, below title/description/categories), via the denormalized `skills.usage_search` column (migration 0020), taken from the **indexed version** — latest stable, else the highest active prerelease (§34.3; migration 0077 replaced the earlier newest-created-version rule). (Earlier drafts left usage out of FTS; it is now included.)
 
 ---
 
@@ -1820,6 +1836,13 @@ responsibilities. Hardening that pins or clarifies invariants here:
   **metadata only**; the `?s=` query string is **stripped from structured logs, RUM route labels and
   access logs** (invariant #6 posture). `/skill-icons` and `/share-card` are unauthenticated but
   content-/token-addressed, and an invalid token is indistinguishable from an unknown skill.
+- **Search input (§34):** a query is parsed by `@skilly/shared` into words, phrases and operators, and
+  the SQL builder binds every normalized unit as a parameter — raw user text never reaches
+  `to_tsquery` syntax parsing or string-built SQL, and LIKE metacharacters are escaped in **both**
+  processes (the worker previously did not). Input is capped (200 characters, 12 units, ≤ 10 synonym
+  members per unit), and no query text is logged or stored (§34.15). Every tier, the any-word fallback
+  decision, `total` and snippets are computed over the caller's visible set only, so none of them can
+  act as an existence oracle for a restricted skill (§34.7).
 - **Version immutability** (invariant #2): the DB guard (`skill_versions_guard()`) blocks DELETE
   (except inside an explicit, audited permanent-delete transaction, §7) and pins the **full**
   immutable content set on UPDATE — `semver`, `skill_id`, `artifact_sha256`, `artifact_object_key`,
@@ -2669,6 +2692,8 @@ bodies, or any other free text.
   can see into that namespace also matches that namespace's **restricted** skills (which then
   render redacted for readers without access, below). Suggestions come from
   `GET /api/skills/suggest?scope=mention`; the 2-char floor applies to the whole query after `#`.
+  Mention suggestions keep **substring name matching** — they are a pick-by-name picker, not the §34
+  search engine (§34.2).
 
 **Composer UX.**
 - **Trigger:** `#`/`@` typed at a **word boundary** (start of text or after whitespace) opens the
@@ -3092,7 +3117,7 @@ skill that **already** satisfies it.
   access to them, so the resulting link is always openable by the requester and everyone else.
   Reuses the existing header-search autocomplete (`GET /api/skills/suggest`) with a new
   `scope=org` mode — same auth requirement, 2-char floor, result cap, and per-user rate limit as
-  today's header search.
+  today's header search. It keeps **substring name matching** rather than the §34 engine (§34.2).
 - **Selecting a skill swaps the button**: the default **"Propose a skill →"** becomes
   **"Propose an existing skill"**; clearing the selection reverts it. Only one button is shown —
   the dropdown's selection state decides which action fires. This mirrors the layout the open
@@ -3587,7 +3612,7 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 **Core read (6)**
 | Tool | Behavior |
 |---|---|
-| `search_skills` | The §10 catalog search: same substring predicate, same facets (`category`, `tool`, `source`), same sorts, same visibility filter. Paginated. |
+| `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`), same sorts, same visibility filter. Paginated. Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
 | `get_skill` | §15 detail: metadata, versions, rating aggregate, maintainers, `latestInstallable`, `publishing`, external-source panel data. |
 | `get_skill_content` | Raw `SKILL.md` for a version (default: latest stable). The tool twin of the resource read, with identical counting (§29 *Adoption*). |
 | `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
@@ -3849,7 +3874,8 @@ since consumption is universal.
 2. **A two-package feature** (`/oauth/authorize` in web, everything else on the worker) with a proxy
    split to match — accepted because the alternative is a second login implementation.
 3. **Catalog read queries exist twice** (web and worker). Bounded by extracting the visibility
-   predicate and role resolution into `@skilly/shared`; result shapes may still drift.
+   predicate and role resolution into `@skilly/shared` — and, since §34, the search parser, matching
+   and ranking too (§34.13); result shapes may still drift.
 4. **24 tools** is above the comfortable client budget, and is a hard ceiling.
 5. **Agent ratings enter §18's Bayesian aggregate** — marked "via MCP", not excluded or weighted.
 6. **Agent-paced writes meet human-paced review** (§8) and human-read threads (§24); web-equal rate
@@ -5700,3 +5726,401 @@ minted by a signed-in user who can see the skill — and keeps every plain URL e
 - `skill_icons` and `skill_share_links` as in §3; `skills` gains `icon_sha256` (FK → `skill_icons`),
   `icon_emoji`, `icon_source` (CHECK on the three values); grants for `skilly_app` on the new tables.
   No backfill — existing skills start icon-less (default lockup on the detail page, no slot elsewhere).
+
+---
+
+## 34. Full-text search engine
+
+### 34.1 Why — and what "semantic" means here
+- **Supersedes §10's substring decision.** Through v2.10.0 every registry search surface ran one
+  substring `ILIKE` over title/slug/description/usage; the trigger-maintained `search_tsv` was kept
+  but never queried (§10 recorded the trade: consistent partial-word typing over relevance ranking).
+  The trade failed its revisit condition on **query shape** rather than catalog size: agents on the
+  MCP server (§29) search with sentences (*"turn markdown notes into slides"*), which a single
+  substring never matches, and people type word forms (*"extracting"*) and word orders a substring
+  cannot bridge.
+- **PostgreSQL's built-in full-text search becomes the primary matcher**, wrapped in forgiving
+  layers — curated **synonyms** (§34.8), a **typo** tier and today's **substring** predicate kept as
+  the lowest tier (§34.5) — and ranked by **match-quality tiers** (§34.6).
+- **Lexical, not embedding-semantic — stated plainly.** FTS understands word forms (stemming), drops
+  stop words, accepts any word order and knows which field matched; it does **not** know that
+  *slides* and *PowerPoint* mean the same thing. Meaning-level equivalence comes **only** from the
+  synonym groups platform admins curate. The UI never labels this "AI" or "semantic" search.
+- **No new infrastructure.** No vector database, no `pgvector`, **no new Postgres extension** —
+  `pg_trgm` (the typo tier) has been installed since migration 0027 for the header autocomplete, and
+  `unaccent` is deliberately **not** added (§34.18) — and **no dictionary or thesaurus files** on the
+  database server, so the engine runs unchanged on the stock `postgres:16-alpine` image and on managed
+  Postgres. Synonyms are a plain table.
+
+### 34.2 Surfaces — one engine, one implementation
+- **In scope:** the header dropdown (`GET /api/skills/suggest`, default scope), the catalog grid
+  (`GET /api/skills?q=`, in every view that composes with `q` — facets, My Skills, Official, archived,
+  namespace view, maintained-by view) and the MCP **`search_skills`** tool (§29). All three run the
+  **same** engine with the same synonyms, language, visibility predicate and ranking, so the §10
+  promises hold: the dropdown's 5 results are the first 5 of the **unfiltered** catalog *Relevance*
+  list for the same query, and an agent sees exactly what its user would see.
+- **Unchanged — they keep today's substring matching** (small lists, or "pick a known skill by name as
+  you type" pickers, where mid-word substring is the right behavior): `#skill` mention suggestions
+  (`scope=mention`, §24), the request-fulfilment picker (`scope=org`, §26), the Requested skills box
+  and MCP `list_skill_requests` (§26), the usage dashboard (§21), the Installed page (§23), the
+  Marketplaces directory (§30.6), the header's `@` people mode (§10), the audit and system-log viewers
+  (§11/§25), the duplicate check (§8) and the maintainer-candidate picker (§19).
+
+### 34.3 What is indexed
+- **One weighted vector per skill** — `skills.search_tsv`, trigger-maintained, GIN-indexed (the
+  index exists since migration 0001):
+
+  | Weight | Content |
+  |---|---|
+  | **A** | title + slug (a hyphenated slug tokenizes into its words) |
+  | **B** | description |
+  | **C** | category names — all of the skill's categories (the weight freed when tags were dropped, migration 0068) |
+  | **D** | usage examples + `SKILL.md` body, both from the **indexed version** |
+
+- **The indexed version** is the one `latest` resolves to (highest active stable semver, §7). A skill
+  with **no active stable version** falls back to its **highest active prerelease**, so a beta-only
+  skill stays findable by its instructions; a skill with no active version has an empty D. It is
+  recomputed on every version insert and every `status` change — yank **and** restore. This **fixes a
+  drift**: `usage_search` used to take the newest-*created* active version, which disagreed with
+  `latest` after a backport or a new beta. Semver precedence in SQL is a function
+  (`skilly_semver_key()`, §34.17) that must order exactly as `@skilly/shared`'s `compareSemver` —
+  pinned by a parity test.
+- **Body text** = that version's root `SKILL.md` with the **YAML frontmatter stripped** (its `name` /
+  `description` duplicate the title and description; its other keys are noise). The Markdown is
+  otherwise kept verbatim — the FTS parser ignores punctuation, and fenced code stays in because
+  command and tool names are useful terms. **Only `SKILL.md`**: `references/`, scripts and other
+  bundle files are not indexed. **Capped at 64 KB** of UTF-8 text, cut on a character boundary; text
+  beyond the cap is not searchable.
+- **Stored once per version, outside `skill_versions`.** The extracted text lives in a side table
+  (`skill_version_search`, §3), so the immutable version row and its guard (§22) are untouched; the
+  indexed version's body is denormalized onto `skills.content_search`, the sibling of `usage_search`.
+  Extraction is **write-once** — a version's bytes never change (invariant #2), so neither does its
+  text.
+- **Extraction points.** A trigger inserts a `pending` row for every new version, whatever path
+  created it, and the **worker** fills it in wherever it already holds the bytes: the **publish
+  sweep** — every version, hosted *and* pointer, passes through it to have its git tag synthesized, so
+  hosted accept, direct publish, a *Keep current files* re-version and global promotion are all
+  covered there — and **pointer mirroring**, which already decodes `SKILL.md` for the icon (§33). The
+  web tier never reads artifacts for search: at accept time the bytes live in object storage, not in
+  memory. **Publishing never fails because of indexing:** if extraction throws, the row stays
+  `pending` for the sweep (§34.10).
+- **Never indexed:** proposals and their revisions (only published versions are searchable), pointer
+  versions still awaiting their mirror, namespace names, maintainer names (§10/§19 — people search is
+  the `@` mode), *What changed* notes, and the tool/harness (a facet, not text).
+
+### 34.4 Query language
+Parsed by one pure function in `@skilly/shared` (`parseSearchQuery`); the SQL builder receives the
+parse tree, never the raw string.
+- **Normalization & caps.** Trimmed, Unicode-NFC, whitespace collapsed, **truncated to 200
+  characters**, and at most **12 words or phrases in total** — exclusions and every `OR` member
+  count, so an `OR` chain cannot grow a query past the cap — with the rest dropped, never an error.
+  The **2-character floor** applies on every surface: a shorter query is treated as **no query** (the
+  catalog shows its full list, `search_skills` returns the no-query order, the dropdown stays closed).
+- **Words** are ANDed. Each is normalized by the active text-search configuration (§34.9) exactly as
+  the indexed text is, so `front-end`, `node.js` or `extracting` tokenize and stem identically on both
+  sides; punctuation means nothing beyond the operators below. Stop words (per configuration) drop
+  out, and a unit that normalizes to nothing is dropped.
+- **`"quoted phrase"`** — the words must appear adjacent and in order (stemmed; a stop word keeps its
+  positional gap, as with PostgreSQL's `phraseto_tsquery`). An **unclosed** quote runs to the end of
+  the query (websearch behavior).
+- **`-exclusion`** — a `-` directly before a word or a quoted phrase, at the start of the query or
+  after whitespace, **excludes** skills matching it. A `-` inside a word (`front-end`) is not an
+  operator.
+- **`OR`** — only the **uppercase** token `OR` between two units is an operator, and it **binds
+  tighter than the implicit AND** (Google-style, deliberately *not* PostgreSQL's websearch
+  precedence): `markdown OR html slides` = *(markdown or html) and slides*, and `a OR b OR c` is one
+  group. A leading, trailing or doubled `OR`, or one touching an exclusion, is ignored. **Lowercase
+  `or` is an ordinary word** (an English stop word), so natural-language agent sentences parse as
+  plain words.
+- **Last-word prefix.** The final unit, if it is a **bare positive word of ≥ 2 characters** — or the
+  last word inside an **unclosed** trailing quote — also matches as a **prefix** (`pow` →
+  *PowerPoint*, `pdf ext` → *PDF Extractor*); this is what keeps as-you-type filtering responsive. A
+  closed quote or an exclusion never gets a prefix, a 1-character word matches exactly, never as
+  a prefix, and a query cut short by the 12-term cap gets none (its kept tail is not the word being
+  typed). Prefix words must be letters and digits only — the one form that can be handed to
+  PostgreSQL's prefix syntax without carrying tsquery operators in.
+- **Exclusions only** (`-excel`) matches **every visible skill except** those matching an exclusion,
+  in the **no-query order** (§10: popularity leads), with `matchMode = "all"`.
+
+### 34.5 Matching — FTS plus the forgiving layers
+- **Synonyms (§34.8) expand bare positive words only.** Each such word — and each maximal run of
+  consecutive bare words forming a multi-word synonym term (longest match first, left to right) —
+  becomes an OR of its group's members, multi-word members as phrases. **Quoted phrases and
+  exclusions are literal** and never expanded. An expanded unit still counts as **one** unit for the
+  fallback and the tiers below, and the last-word prefix applies to the typed word, not to its
+  synonyms.
+- **Strict match** (`matchMode = "all"`): every positive unit matches somewhere in `search_tsv`
+  (A–D), and no exclusion matches.
+- **Any-word fallback** (`matchMode = "any"`) is used **only when the strict match finds no visible
+  skill**, the query has **≥ 2 positive units**, and it contains **no `OR`** (a query that already
+  spells out its alternatives is not rewritten). At least one positive unit must match, and
+  **exclusions are still enforced** — a fallback never lets an excluded skill back in. The decision
+  rests on FTS matches alone; substring and typo hits never prevent it.
+- **Substring tier — operator-free queries only** (no quotes, exclusions or `OR`): today's §10
+  predicate, unchanged — the whole trimmed query as a case-insensitive substring (LIKE metacharacters
+  escaped) of the **title, slug, description or usage examples** (`usage_search`, now of the indexed
+  version). It keeps every match the old search found, e.g. `sql` → a skill described as
+  *"PostgreSQL migrations"*, which FTS alone misses (it sees one word, `postgresql`). Never over the
+  body.
+- **Typo tier — operator-free queries of ≥ 4 characters only:** `pg_trgm` `word_similarity` of the
+  query against the **title and slug** at a fixed threshold (**0.5**, a named constant), so
+  `powerpiont` still finds *PowerPoint Generator*. Titles and slugs only: a typo in a description word
+  would need a vocabulary built from every skill's words, which §34.7 rules out.
+- A skill matched by several layers appears **once**, in its best tier.
+
+### 34.6 Ranking — the *Relevance* sort
+With a query active, *Relevance* (the default sort) orders by **match-quality tier**, then by today's
+popularity keys **within** each tier:
+
+| Tier | Matches |
+|---|---|
+| **1** | every positive unit matches in the **name** (title/slug, weight A) |
+| **2** | every positive unit matches within **name, description or categories** (A–C) |
+| **3** | every positive unit matches **anywhere**, usage and body included (A–D) |
+| **4** | *(any-word fallback only)* **some** positive units match — sub-ordered by **how many** units matched (desc), then hits within A–C before hits only in usage/body |
+| **5** | **substring or typo only** — sub-ordered substring in the name › substring in description/usage › typo |
+
+- **Within a tier:** `install_count` desc → Bayesian-smoothed rating desc (§18) → Official first (§7)
+  → title → namespace slug → skill slug. The order is **total**, so MCP `offset` pagination is stable.
+- **Why the tiers split name / description + categories / anywhere:** a body is long and matches
+  common words incidentally. A single "anywhere" tier would let a popular skill whose instructions
+  happen to mention *pdf* and *table* outrank one *described* as "Extract tables from PDFs".
+- **Other sorts** — *Top rated* and *Latest* — order the **same match set** (fallback included) by
+  their own, unchanged keys (§10); tiers are ignored. With **no query**, ordering is unchanged
+  (popularity leads). The Featured feed carries no query and is unaffected.
+
+### 34.7 Visibility (invariant #3)
+- The shared visibility predicate (`skillVisibilityWhere`) filters **before** matching. Every tier,
+  the strict → any-word decision, `total`, `matchedIn` and snippets are computed over the caller's
+  **visible** set only. In particular, a restricted skill that would match every word must **not**
+  keep an outsider's query in `all` mode — otherwise `matchMode` would be an existence oracle.
+- **Synonyms are admin-authored vocabulary, not derived from skill content**, so they reveal nothing.
+- **No "did you mean" / suggestion vocabulary** is built: it would be derived from every skill's
+  words, restricted skills included. The typo tier compares against **visible** titles and slugs only.
+- A snippet quotes only text the caller can already read on the skill's detail page (description,
+  usage, the rendered `SKILL.md`).
+
+### 34.8 Synonyms
+- **Model** — `search_synonym_groups` (§3): an **equivalence group** of **2–10 terms**, each trimmed
+  and lowercased, **1–4 words**, **≤ 60 characters**. Any member, as a searcher types it, expands to
+  the whole group (bidirectional; there are no one-way mappings).
+- **A term belongs to at most one group**, checked at write time on its **normalized form** under the
+  active language (in English `slide` and `slides` collide), so groups never chain transitively. A
+  violation is a **422** naming the group that already holds the term. Cap: **500 groups** (422
+  beyond).
+- **Normalization is PostgreSQL's job.** The stemmer lives nowhere else, so each group stores its
+  members' normalized forms and the language they were computed under (recomputed on a language
+  change), and query words are normalized in SQL — never by a JavaScript re-implementation of
+  stemming. A member term that normalizes to nothing (a stop word, bare punctuation) is refused
+  (**422**), as is a group whose terms all normalize to the same word.
+- **Authority: platform admins only**, in the UI and the API. Namespace admins do not curate synonyms
+  — the vocabulary is platform-wide.
+- **Audited:** `search.synonym_group_created` (after), `search.synonym_group_updated` (terms
+  before/after), `search.synonym_group_deleted` (before).
+- **Propagation: immediate.** There is no application cache — every search looks the groups up in
+  the same query that normalizes its words (§34.13), so a change reaches every surface, MCP included,
+  on the very next search.
+- **Ships empty.** The admin card's empty state shows example groups (`k8s, kubernetes` ·
+  `js, javascript` · `ppt, pptx, powerpoint, slides`) as guidance, not data; nothing is seeded.
+- **After a language change** (§34.9) normalized forms can newly collide. A searched word that
+  matches members of **several** groups expands to their **union** (deterministic, never an error),
+  and the admin card flags the colliding groups with a warning so an admin can merge them. Writes
+  re-check uniqueness under the new language.
+
+### 34.9 Search language
+- **`search_language`** (`platform_settings`, default **`english`**, today's hard-coded configuration)
+  selects the PostgreSQL text-search configuration for both indexing and queries. The choices are read
+  **at runtime** from the server's built-in configurations (`pg_catalog.pg_ts_config`) — whatever that
+  PostgreSQL ships (English, German, French, Spanish, Russian, …) — shown by language name, one at a
+  time. PostgreSQL's `simple` configuration is offered as **"No stemming (any language)"** for
+  languages PostgreSQL has no stemmer for (Bulgarian, Polish, Czech, …), with help text stating its
+  trade-off: **no stop words**, so sentence-style queries lean on the any-word fallback.
+- **Platform-admin only**, in the Administration **Search** card (§34.12). Validated against
+  `pg_ts_config` on save (**422** otherwise), preceded by a **confirm dialog** (*"Rebuilds the search
+  index for N skills; results are briefly less precise while it runs."*), and audited as
+  `settings.updated` (from → to).
+- **Switch now, rebuild behind.** Queries use the new language **immediately**: the database resolves
+  the active configuration inside every statement (`skilly_search_config()`), so neither process
+  caches it. Each skill records the configuration its vector was built with (`skills.search_lang`);
+  the worker's **reindex job** (leader-only, every 15 s) rebuilds every row whose `search_lang`
+  differs from the active language — and re-normalizes the synonym groups built under another one —
+  in **small batches** (~100 skills per statement, up to ~5 s per tick, so install-count updates
+  never queue behind it). Rows not yet rebuilt match less well for those seconds, which is accepted at
+  the scale target. Progress shows on the Maintenance card (§34.10). `skilly_search_config()` falls
+  back to `english` should the stored value ever fail to resolve, for indexing and querying alike.
+- The query syntax (`"…"`, `-`, `OR`) is the same in every language.
+
+### 34.10 Index maintenance, backfill & the Maintenance card
+- **Triggers keep the vector current.** `search_tsv` recomputes when title, slug, description,
+  `usage_search` or `content_search` change, and on `skill_categories` insert/delete. (Categories are
+  create-only today — no rename path exists; one added later must refresh its skills' vectors.)
+  `usage_search` and `content_search` recompute on every `skill_versions` insert or `status` change
+  and whenever a `skill_version_search` row is filled in.
+- **Extraction sweep** (worker, leader-only, every 15 s): takes `pending` rows of
+  `skill_version_search` — each skill's **indexed version first** — in bounded batches (50 by
+  default), reads the artifact from object storage, extracts it (§34.3) and marks the row `indexed`,
+  or `absent` when the bundle has no root `SKILL.md` (or the version has no stored bundle at all). A
+  failure increments `attempts` and stores a one-line `last_error` (no secrets, no bytes), and the row
+  waits **2 min × attempts** before its next try; after **5** attempts it is `failed`. Each failure is
+  also a structured JSON log line.
+- **Backfill is the same sweep.** Migration 0077 inserts a `pending` row for every **active** existing
+  version, and the sweep drains them in the background after deploy; until it finishes, older skills
+  match on title, description, categories and usage but not yet on their body. A version yanked at
+  migration time gets its row if it is later restored.
+- **Maintenance card** (the §10 *On-demand rebuild* card) gains a line — **"Search index: 812 / 840
+  versions indexed · 3 failed"** (over active versions; `indexed` and `absent` both count as done) —
+  and a **Retry failed** button that resets every `failed` row to `pending` with `attempts = 0`. The
+  sweep picks them up on its next pass, so no worker signal is needed; the reset is audited as
+  **`job.search_retry_requested`** (with the row count). While a language rebuild runs, the line reads
+  **"Rebuilding search index for German: 312 / 840 skills"**. `GET /api/admin/jobs/search-index`
+  returns the counts and rebuild progress, and the card polls it.
+
+### 34.11 Responses & contracts
+- **`GET /api/skills`** → `{ skills, matchMode }`, where `matchMode` is `"all" | "any"`, or `null`
+  without a query. The skill shape is unchanged.
+- **`GET /api/skills/suggest`** keeps its response shape; the default scope runs the engine, while the
+  `mention` and `org` scopes keep substring matching (§34.2).
+- **MCP `search_skills`** → `{ skills, total, matchMode, synonymsApplied }` — `synonymsApplied` lists
+  the groups the query actually expanded (`string[][]`, empty when none) — and each hit gains:
+  - **`matchedIn`** — the fields any positive unit matched: `title` · `slug` · `description` ·
+    `categories` · `usage` · `instructions` (the body). A substring or typo hit names the field it
+    hit.
+  - **`snippet`** — a **plain-text** excerpt (≤ ~30 words, `ts_headline` with empty markers) around the
+    match, from the highest-weight matching field among **description → usage → instructions**, or
+    `null` when the match was only in the title, slug or categories, or by typo. **Why:** reading
+    `SKILL.md` over MCP counts as adoption (§29), so without a snippet an agent would have to *adopt*
+    a skill just to judge whether it is relevant.
+  - Both are computed for the **returned page only** (≤ 50 hits); `total` counts the whole effective
+    match set.
+- **Tool description** (rewritten — it is what the model reads): natural-language queries are fine;
+  results rank by match quality, then popularity; `matchMode: "any"` means no skill matched every
+  word; the operators are `"exact phrase"`, `-exclude` and `A OR B` (capital `OR`); and `snippet` /
+  `matchedIn` exist to judge relevance **without** reading `SKILL.md`. The `query` parameter no longer
+  says "substring match"; `sort: relevance` reads "match-quality tiers, then popularity". **No new
+  tool** — the §29 ceiling of 24 holds.
+- Every change is **additive** (new fields, nothing removed), so neither API nor MCP clients break.
+
+### 34.12 UI
+- **Catalog grid, `matchMode = "any"`:** a one-line notice above the results — *"No skills match all
+  of your words — showing skills that match some of them."* — followed by the syntax tip.
+- **Catalog grid, zero results:** the existing empty state gains the same tip.
+- **The tip** (one line, shown only in those two states): *"Tip: use `"quotes"` for an exact phrase,
+  `-word` to exclude, and `OR` between alternatives."* The top bar is **unchanged** — no ⓘ, no new
+  control.
+- **Header dropdown, cards and list rows:** unchanged — no highlighting, no snippets, no notice. The
+  *"Nothing found"* bubble and the *"See all results in catalog →"* footer are untouched.
+- **Administration → Search** (a new `CollapsibleCard`, platform admins; summary e.g. *"English · 12
+  synonym groups"*):
+  - **Language** — a select of the §34.9 choices, plus the confirm dialog.
+  - **Synonym groups** — one row per group with its terms as chips and **Edit** / **Delete**; **Add
+    group** takes comma-separated terms; the server's 422 messages render inline under the field;
+    collision warnings (§34.8) render on the affected rows; the empty state shows the example groups.
+- **Maintenance card** gains the §34.10 line and button.
+
+### 34.13 One implementation, shared
+- **An `@skilly/shared` search module** (server-only — never imported by client components) holds the
+  parser (§34.4), the synonym-expansion rules (§34.5) and a **SQL fragment builder** in the
+  `skillVisibilityWhere` mould: it appends only **bound parameters** (never interpolated user text) and
+  returns the match predicate, the tier and order expressions and the fallback strategy
+  (`resolveSkillSearch`: one normalization query — PostgreSQL stems every unit and looks the synonym
+  groups up — then, when the fallback could apply, the strict-exists probe, then the match). Web
+  `searchCatalog` / `suggestSkills` and the worker's `searchSkills` all call it with their own pool and
+  WHERE clause; neither process caches synonyms or the language.
+- This closes an existing drift: the worker's `searchSkills` did **not** escape LIKE metacharacters in
+  `q` (the web's `ilikeSearch` did), so `%` and `_` widened MCP matches.
+- It narrows §29's accepted trade-off #3 ("catalog read queries exist twice"): result *shaping* may
+  still differ per process, matching and ranking cannot.
+
+### 34.14 Limits & performance
+- **Bounded input:** 200 characters, 12 units, ≤ 10 synonym members per unit — every generated
+  `tsquery` has a hard size ceiling, and raw user text never reaches `to_tsquery` syntax parsing (§22).
+- **Rate limits unchanged:** catalog search 120/min, suggest 40/min, MCP `search_skills` 120/min.
+- **Latency target (§14):** p95 server time **≤ 150 ms** for `GET /api/skills?q=` and
+  `search_skills`, and **≤ 75 ms** for the dropdown, at **5,000 skills** — served by the existing GIN
+  on `search_tsv` and the trigram GINs on title and slug (migration 0027). The substring tier's scan of
+  description and usage stays sequential, as it is today — acceptable at the scale target. Snippets
+  are generated only for the returned MCP page, never for the UI.
+
+### 34.15 Observability
+- Prometheus: `skilly_catalog_searches_total` (existing) is kept; new on both processes,
+  `skilly_search_requests_total{surface="catalog|suggest|mcp", mode="all|any|none"}` and
+  `skilly_search_zero_results_total{surface}`; worker gauges `skilly_search_index_pending` and
+  `skilly_search_index_failed`.
+- **No query text is stored or logged anywhere** — counts only (a zero-result query log is deferred,
+  §34.18). Structured request logs already omit query strings (§22).
+
+### 34.16 Tests (ship with the change — §16 discipline)
+- **Unit (`@skilly/shared`):** the parser — plain words, stop words, 1-character words, closed and
+  unclosed quotes, exclusions (leading, after a space, *not* inside a word), capital-`OR` precedence
+  and chains, lowercase `or`, leading/trailing/doubled `OR`, an `OR` touching an exclusion, the
+  200-character and 12-unit caps, prefix eligibility (last bare word ≥ 2 characters, an unclosed
+  quote's last word; never a closed quote or an exclusion), exclusions only; synonym expansion —
+  single- and multi-word terms, longest match, no expansion inside quotes or exclusions, union on
+  collision; the builder emits **only** bound parameters for a hostile corpus (tsquery syntax, quotes,
+  backslashes, `%` / `_`, NUL, very long input); `skilly_semver_key()` orders a corpus exactly as
+  `compareSemver`.
+- **Integration (DB):** stemming (`extracting` → *extract*); prefix (`pow` → *PowerPoint*); substring
+  (`sql` → *PostgreSQL* in a description); typo (`powerpiont`); tier order, including the body-noise
+  case (a description match outranks a more-installed body-only match); the any-word fallback and its
+  suppression by `OR` and by a single unit; exclusions enforced in strict mode *and* in the fallback;
+  exclusions only; quotes literal (no synonym expansion); synonyms bidirectional and multi-word;
+  category names match and refresh on a category change; body indexing — latest stable, beta-only
+  fallback, recompute on yank *and* restore, and the `usage_search` fix; the language switch (reindex →
+  German stemming) and the trigger's fallback; **visibility negatives** — a restricted skill never
+  matches an outsider through title, body, category, synonym, typo or substring, never flips
+  `matchMode`, never counts in `total`; the dropdown's 5 equal the unfiltered catalog's first 5 over a
+  query corpus; **web and worker return identical ordered results** for the same caller and query.
+- **Integration (admin library + DB):** synonym groups — 422 on each validation (term shape, 2–10
+  terms, stop-word terms, same-word groups, uniqueness under normalization; the 500-group cap is the
+  same code path) and the audit rows; collisions after a language switch are flagged and expand to
+  the union; `search_language` — 422 for an unknown configuration, the `settings.updated` audit
+  (from → to), rebuild progress in the index status; **Retry failed** resets the rows and is audited;
+  `body_text` is write-once. The routes' platform-admin gate is the same `currentAccess()` check every
+  `/api/admin/*` route uses.
+- **Web = worker:** the web live-DB suite loads the worker's own `searchSkills` at runtime and asserts
+  identical ordered results and `matchMode` for a query corpus, as an admin and as an outsider.
+- **Worker:** the extraction sweep (backfill from object storage; failure → attempts → `failed`; an
+  absent `SKILL.md`); MCP `search_skills` returns `matchMode`, `synonymsApplied`, `matchedIn` and
+  `snippet`, never a snippet for an invisible skill, and carries the rewritten tool description.
+- **e2e (Playwright):** the catalog live filter with a multi-word query shows the partial-match notice
+  and the tip; an exclusion hides a skill; a platform admin adds a synonym group on the Search card and
+  the catalog then finds a skill through it; the Maintenance card shows the index line.
+
+### 34.17 Migration 0077
+- `skill_version_search` (§3), with a `pending` row for every existing **active** version, and the
+  trigger on `skill_versions` that creates one for every new version and for a restored version that
+  has none; `skills` gains
+  `content_search` (TEXT) and `search_lang` (TEXT); `search_synonym_groups` (§3). Grants for
+  `skilly_app` on the new tables (UUID keys, so no sequence needs a grant — cf. migration 0075).
+- `skilly_semver_key(text)` — an `IMMUTABLE` SQL function returning a sort key that orders exactly as
+  `compareSemver`: numeric core, a prerelease below its release, numeric prerelease identifiers
+  compared numerically.
+- `skilly_search_config()` (the active configuration — `search_language` resolved against the
+  built-in `pg_catalog` configurations, else `english`), `skilly_search_normalize(text)` (a term's
+  lexemes in position order, for synonyms), `skilly_indexed_version(skill)` and
+  `skilly_refresh_skill_search(skill)` (point `usage_search` / `content_search` at the indexed
+  version).
+- `skills_tsv_update()` rewritten (A title + slug, B description, C categories, D usage + body, under
+  `skilly_search_config()`); `skills_usage_search_sync()` rewritten to the indexed-version rule
+  (§34.3); new triggers on `skill_categories`, on `skill_versions` (the `pending` rows) and on
+  `skill_version_search` (the write-once guard, and the body flowing into `content_search`), and one
+  normalizing `search_synonym_groups` on write.
+- Every skill's vector is recomputed at the end of the migration: the body part stays empty until the
+  sweep fills it, while usage and categories are indexed immediately. No `platform_settings` row is
+  written — an absent `search_language` means `english`.
+
+### 34.18 Accepted trade-offs
+1. **Lexical, not semantic.** Concept-level matches exist only where admins curated a synonym group;
+   an empty list means none.
+2. **Accent-sensitive.** `unaccent` would be a new extension, so *resume* ≠ *résumé* except through the
+   typo tier on titles.
+3. **Stemming quirks are PostgreSQL's** — e.g. English stems *excellent* to *excel*, so `-excel` also
+   excludes skills that say "excellent".
+4. **Mid-word matches never reach the body** — `point` finds *PowerPoint* only through the substring
+   tier (title, slug, description, usage).
+5. **Result sets can jump while typing**, as a query crosses between strict and any-word mode.
+6. **Only `SKILL.md`, and only its first 64 KB**, is searchable text.
+7. **A language change degrades matching** for the seconds its rebuild takes.
+8. **No "why it matched" in the UI** in v1 — `snippet` and `matchedIn` are MCP-only.
+9. **No query analytics** — counts only. A zero-result query log (the natural input for curating
+   synonyms) is **deferred**, not rejected.

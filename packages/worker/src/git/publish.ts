@@ -11,6 +11,7 @@ import { repoPath } from "./repoStore.js";
 import { synthesizeVersion, listTags, pointMainAtTag } from "./synth.js";
 import { extractBundle } from "./bundle.js";
 import type { SkillFile } from "./synth.js";
+import { fillSearchText } from "../searchIndex.js";
 
 /**
  * Ensure SKILL.md frontmatter contains `name: <skillSlug>`.
@@ -93,11 +94,12 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
     const isLatestStable = resolveLatest(activeRows.map((r) => r.semver)) === row.semver;
     const bareRepoPath = repoPath(deps.repoRoot, row.ns_slug, row.skill_slug);
 
+    let files: SkillFile[] | null = null;
     try {
       const targz = await deps.store.get(row.artifact_object_key);
       // Inject `name: <slug>` into SKILL.md frontmatter if missing — Claude Code skills only carry
       // `description`, but the vercel-labs/skills CLI (and our own validateBundle) require `name`.
-      const files = ensureSkillName(await extractBundle(targz, cap), row.skill_slug);
+      files = ensureSkillName(await extractBundle(targz, cap), row.skill_slug);
 
       // Security scanning happens at INGEST (hosted upload / pointer mirror) so reviewers
       // see findings pre-accept. Here we only re-run BLOCKING validation as a safety net —
@@ -120,6 +122,8 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
     }
 
     await pool.query(`update skill_versions set git_published = true where id = $1`, [row.id]);
+    // §34.3: the bytes are in hand, so index the SKILL.md text now (write-once, advisory).
+    if (files) await fillSearchText(pool, row.id, files);
 
     // Notify everyone watching this skill that a new version is live, plus its maintainers
     // (explicit maintainers + the namespace's admins — implicit watchers, §19). UNION dedupes.
