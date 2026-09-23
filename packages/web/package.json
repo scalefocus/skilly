@@ -35,7 +35,7 @@
     "recharts": "^3.10.1",
     "sharp": "^0.34",
     "tar": "^7.5.22",
-    "web-vitals": "^5"
+    "web-vitals": "^6"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
