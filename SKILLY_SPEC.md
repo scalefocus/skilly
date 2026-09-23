@@ -816,7 +816,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Closed tool/harness (coding-agent) vocabulary → install `--agent`.** The propose form's tool/harness is a **closed but searchable** picker over the curated agent list (`shared/agents.ts`; label shown, slug stored) — filter by label or slug, `Generic` first then alphabetical. The chosen agent **drives the install command**: a recognized non-generic slug appends `--agent <slug>` at the end of `npx skills add <url>` (§9); `Generic` (the default) appends nothing. Server-side, `verifySubmissionPayload` enforces **closed membership** (`generic` ∪ known agent slugs) — gating propose, direct publish, and reviewer edits/resubmits (`newPayload`). The old open vocabulary (type-a-new-value + derived suggestions) is removed; pre-existing values not in the list are **grandfathered** (shown raw, no `--agent`, **re-validated only when changed** — an unchanged value equal to the target skill's stored `tool_harness` passes even if it's a legacy slug; this carve-out is load-bearing now that new-version mode resends the field). The propose form's **paste-to-fill** preselects the agent when a pasted command carries a recognized `--agent <slug>`. **New-version mode:** the tool/harness picker stays **active** — a re-version may re-target the skill's coding agent (synced to the skill on accept, §8 below). Since `tool_harness` is skill-level, a change updates the `--agent` flag of the install command for **every** version, including already-published ones.
 - **Paste-to-fill for pointer proposals.** The propose form offers a paste box (the first field **inside the Pointer / external-git tab**, since it's pointer-specific; the Hosted/Pointer tab strip itself sits at the top of the form) that accepts a consumer-tool install command and fills the pointer fields from it — an **accelerator, not a third source type**: submission, validation, and review are unchanged, and every filled field stays editable. Parsing is a pure shared function (`parseInstallCommand`, beside the pinned wire-format adapter) covering the tool's source forms: full git URL (with optional `#ref`), GitHub `owner/repo` shorthand (normalized to `https://github.com/owner/repo.git`), GitHub `/tree/<ref>/<path>` URLs (split into URL + ref + folder), `--skill <name>` (→ the §6 skill folder; slug derived from its last segment), and the **skills-hub.ai install command** (`npx @skills-hub-ai/cli install <slug>` → the §6 API origin; the skilly slug is suggested from the registry slug and the ref must be a registry **version** — the command names none, so the form pins the registry's **latest version** via the ref pre-check, editable and quick-pickable from the published versions). Rules: for a **git** source, a command without a ref leaves the `main` default in charge (§8 below); `--all` is **rejected** with guidance (one skill per proposal, §6); URL schemes are never rewritten (the §6 SSRF validator remains the gate). **New-version mode:** the paste fills URL/ref/folder but **never changes the locked slug** (and cannot flip the locked source type); pasting a source counts as **explicitly supplying it**, so it switches the form off *Keep current files* (§8 below). A folder whose last segment differs from the slug shows a **soft warning** — submission is allowed, and the mirror-time `name == slug` validation stays the hard gate.
 - **Propose a new version from the skill detail page.** Any authenticated user can open the propose flow pre-filled from an existing skill (button on the detail page). In this mode only the **identity and access surface is LOCKED**: the **slug** (the install/repo identity — unique, read-only), the **visibility**, and the **delivery type** (hosted vs pointer). **Everything else is editable**, pre-filled with the skill's current values: the skill-level metadata — **title, description, categories, and tool/harness** — and the version-level inputs — the semver (pre-filled with the next patch above the current latest stable), the usage examples, the **"What changed" note** (required in new-version mode — see the dedicated bullet below), and the **source**, which is now **optional** (default **Keep current files**, below; or a fresh hosted bundle / a new pinned ref+subdir for a pointer). Anyone who may propose may edit any of these — including retitling the skill — applied at the same accept/publish gate as the version (so in a `require_review = false` namespace, a member's direct publish retitles instantly; that is intended). It targets the existing skill and goes through the **normal review/approval** path (or direct publish where permitted). On accept, a new `skill_version` is created **and the skill's title, description, categories, and tool/harness are synced to the submitted values** (categories added/removed to match; all are skill-level metadata, not version content, so this is allowed — the sync re-fires the FTS trigger so search stays current, and it applies **on accept regardless of channel**: a prerelease re-version still updates the skill-level metadata immediately even though `latest` never moves). Only **visibility** stays frozen (a visibility change remains a skill-management action, never a re-version); the slug is immutable, period.
-- **Skill icon (§33) — an optional, skill-level field on every propose/publish path.** The propose form carries an **Icon · optional** field (after Title): an **emoji picker** (the existing `EmojiPicker`) and an **image upload with a client-side square crop** for non-square images, plus a **preview tile** showing the *effective* icon and its **source label** — *from SKILL.md `icon:`*, *from icon.png in the bundle*, *uploaded*, *emoji*, or *default — skilly*. The effective icon is resolved by the **§33 precedence** — bundle frontmatter `icon:` → root `icon.png` → the uploaded image → the emoji → the default — against the bundle the materialized version will serve (*Keep current files* ⇒ the reused artifact; a pointer ⇒ its mirror), so **a bundle-borne icon beats an uploaded one**; when the bundle carries an icon the upload/emoji controls stay enabled but the preview says the bundle icon will be used (they persist as fallbacks). **New-version mode** pre-fills the current icon and offers three states — **keep**, **replace**, **remove**; *remove* clears the uploaded image and the emoji only — a bundle-borne icon can only be removed by shipping a bundle without it. **An icon change is a real change** for the metadata-only no-op guard (below). A **reviewer edit may remove the icon (image and/or emoji) but never upload a replacement** (the reviewer's *remove* is part of the ordinary reviewer-edit revision — no separate audit action). Revision payloads and audit rows carry the icon as **hash + filename + emoji, never bytes**. On accept (or direct publish) the resolved icon is **synced to the skill** exactly like title/categories/tool-harness — regardless of channel; **global promotion copies** the icon columns to the global copy; archive/yank leave it untouched. The **MCP `propose` / `update_proposal` tools silently ignore icon fields** (UI-only in this change, the same posture as the retired `tags` field).
+- **Skill icon (§33) — an optional, skill-level field on every propose/publish path.** The propose form carries an **Icon · optional** field (after Title): an **emoji picker** (the existing `EmojiPicker`) and an **image upload framed in the icon crop dialog** (§33.4 — it opens by itself for a non-square image; *Adjust crop* re-opens it), plus a **preview tile** showing the *effective* icon and its **source label** — *from SKILL.md `icon:`*, *from icon.png in the bundle*, *uploaded*, *emoji*, or *default — skilly*. The effective icon is resolved by the **§33 precedence** — bundle frontmatter `icon:` → root `icon.png` → the uploaded image → the emoji → the default — against the bundle the materialized version will serve (*Keep current files* ⇒ the reused artifact; a pointer ⇒ its mirror), so **a bundle-borne icon beats an uploaded one**; when the bundle carries an icon the upload/emoji controls stay enabled but the preview says the bundle icon will be used (they persist as fallbacks). **New-version mode** pre-fills the current icon and offers three states — **keep**, **replace**, **remove** (the app's segmented pill, §33.4); *remove* clears the uploaded image and the emoji only — a bundle-borne icon can only be removed by shipping a bundle without it. **An icon change is a real change** for the metadata-only no-op guard (below). A **reviewer edit may remove the icon (image and/or emoji) but never upload a replacement** (the reviewer's *remove* is part of the ordinary reviewer-edit revision — no separate audit action). Revision payloads and audit rows carry the icon as **hash + filename + emoji, never bytes**. On accept (or direct publish) the resolved icon is **synced to the skill** exactly like title/categories/tool-harness — regardless of channel; **global promotion copies** the icon columns to the global copy; archive/yank leave it untouched. The **MCP `propose` / `update_proposal` tools silently ignore icon fields** (UI-only in this change, the same posture as the retired `tags` field).
 - **The "What changed" note (per-version).** Every **new version** carries a short, proposer-authored **"What changed"** note — a plain-text summary of what this version changes — surfaced on the skill detail page (§10) and to reviewers. It is **distinct from `usage_examples`**: usage documents *how to use* the skill; this note is *what moved* since the last version. Rules:
   - **Required on new versions; hidden on first versions.** **Required** (non-empty) on every **new-version** publish — through review **and** the direct-publish path (`require_review = false` members, §8) — and **not shown or collected** for a skill's **first** version (a new-skill proposal) or a **global promotion** (which materializes an independent global skill's first version, §8). A first version has no predecessor to describe.
   - **Plain text, no Markdown.** Stored raw; rendered **HTML-escaped with newlines preserved** (pre-wrap) — **no Markdown parsing, no embedded HTML, no URL autolinking**. Capped at **4,000 characters** (client-counted, server-enforced).
@@ -1502,7 +1502,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `DELETE /api/proposals/:id` — permanently delete a proposal (reviewer of its namespace; any state except `accepted`). Housekeeping, silent, audited (`proposal.deleted`); cleans the review conversation + pointer scan + dangling notifications. §8.
 - `GET /api/proposals/:id/files` (bundle browser, §8), `.../artifact`, `.../duplicate-check`, `GET|POST /api/proposals/:id/messages` (review discussion, §24).
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
-- `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon).
+- `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon). The web form never sends the picked file itself — it uploads its own **256×256 PNG** crop (§33.3), so the 512 KB cap binds API callers only and is independent of the form's **10 MB** source limit.
 - `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6); an unparseable multipart body is a clear 400, not a 500 (§6). **Chunked variant** for bundles larger than the configured chunk size (§6): `POST /api/uploads/chunked` (start; sweeps ≥2h-old orphans, returns `{uploadId, chunkBytes}`), `PUT /api/uploads/chunked/:id/parts/:index` (raw octet-stream part), `POST /api/uploads/chunked/:id/complete` (assemble → identical validate/scan/store; same response shape as the single-shot upload), `DELETE /api/uploads/chunked/:id` (abort). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
 
 **Consumption (git gateway — on the worker, NOT `/api/fetch`)**
@@ -1924,7 +1924,10 @@ substantive tightening over the June-2026 audit CSP; the other directives are un
 - **Unchanged directives:** `style-src 'self' 'unsafe-inline'` stays (React/recharts inline styles;
   style injection is low-risk and can't be nonced without breaking them), as do `img-src 'self' data:`
   (data-URI avatars, §5/§19), `connect-src 'self'`, `font-src 'self'` (self-hosted fonts), `object-src
-  'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, `form-action 'self'`.
+  'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, `form-action 'self'`. **`img-src` deliberately
+  carries no `blob:`** — browser-side image work never mints `blob:` image URLs: the icon crop dialog
+  (§33.3–§33.4) decodes with `createImageBitmap`, draws on a `<canvas>` and previews through a `data:`
+  URL, so no directive is widened for it.
 - **`form-action` is widened on exactly one document: `/oauth/authorize`** (§29 consent screen),
   to **`form-action 'self' http://127.0.0.1:* http://localhost:* https:`**. Every other response
   keeps `form-action 'self'`.
@@ -5450,16 +5453,34 @@ minted by a signed-in user who can see the skill — and keeps every plain URL e
 ### 33.3 Image ingestion
 - **Formats:** PNG, JPEG, WebP — detected by **magic bytes**, never by extension. **SVG is refused**
   (script-capable, consistent with §12's `data:image/svg+xml` strip); **GIF is refused** (animation has
-  no place in a 40 px tile). **Limits:** source ≤ **512 KB**; shorter side ≥ **64 px**; longer side
-  ≤ **4096 px**; decode runs under a pixel-count guard (`limitInputPixels`).
+  no place in a 40 px tile). **Server intake limits** (bundle-borne icons and the bytes `POST /api/icons`
+  receives): ≤ **512 KB**; shorter side ≥ **64 px**; longer side ≤ **4096 px**; decode runs under a
+  pixel-count guard (`limitInputPixels`). The form's own, larger **source** limit is below.
 - **Normalization (`sharp`, a native dependency added to both the web and worker images):**
   centre-crop to square → resize to **256×256** → re-encode **PNG** → **strip all metadata**. The output
   bytes are what is hashed and stored; the input is discarded. Re-encoding is the sanitizer — it defuses
   polyglot files and EXIF payloads — which is why icons deliberately **skip ClamAV**: the bytes never
   reach a consumer's disk and never leave skilly un-transcoded.
-- **Uploaded icons** pass a **client-side square crop** first when the image is not square (the
-  proposer chooses the crop; a square image skips the step). The client's output is **still**
-  normalized server-side — it is never trusted.
+- **Uploaded icons are framed and rendered in the browser** — the proposer chooses the square in the
+  crop dialog (§33.4) — and the browser uploads **only its own 256×256 PNG**, never the picked file.
+  **Source checks**, run client-side **before** anything is staged or the dialog opens, in this order;
+  each failure is an inline error under the field (`role="alert"`) and leaves the field exactly as it was:
+  1. size ≤ **10 MB** (10 × 1024 × 1024 bytes — generous because the source never leaves the browser):
+     *"This image is 14.2 MB — icons accept up to 10 MB."*;
+  2. **PNG / JPEG / WebP by magic bytes** — the shared `detectImageFormat`, the check the server runs;
+     SVG, GIF and anything else: *"Icons must be PNG, JPEG or WebP."*;
+  3. it decodes: *"This image couldn't be read."*;
+  4. shorter side ≥ **64 px** and longer side ≤ **4096 px** — the server's dimension rules, applied to
+     the source: *"This image is 40 × 40 px — icons need at least 64 × 64 px."* / *"This image is
+     8000 × 6000 px — icons accept at most 4096 px on the longer side."*
+  The source is decoded with **`createImageBitmap`**, EXIF orientation applied, so a photo is framed the
+  right way up; an animated PNG/WebP becomes a still. **Every** picked image is rendered to the 256×256
+  PNG — a square one too (its full frame, without the dialog) — with high-quality resampling and its
+  transparency kept; that output is always far below the server's 512 KB cap. It is **still**
+  normalized server-side — the client's output is never trusted.
+- **No `blob:` image URLs.** The enforced CSP (`img-src 'self' data:`, §22) blocks them, and v2.9.0
+  previewed and cropped the picked file through `blob:` URLs. The dialog draws the decoded source on a
+  `<canvas>`; the preview tile shows the rendered PNG as a `data:` URL. No CSP directive is widened.
 - **Bundle-borne icons** are extracted during hosted-bundle validation (web, at `POST /api/uploads` /
   the chunked finalize) and during Pointer mirroring (worker), normalized identically and stored. The
   upload response reports `bundleIcon: { sha256, url, source: 'frontmatter' | 'bundle' } | null` plus
@@ -5473,16 +5494,104 @@ minted by a signed-in user who can see the skill — and keeps every plain URL e
 
 ### 33.4 Propose, review, publish
 - **Form field** *Icon · optional*, placed after **Title**: an emoji picker (the existing
-  `EmojiPicker`), an image upload with crop, and a **preview tile** showing the effective icon with its
-  source label — *from SKILL.md `icon:`* / *from icon.png in the bundle* / *uploaded* / *emoji* /
-  *default — skilly*. When the bundle carries an icon, the upload/emoji controls **stay enabled** but the
-  preview states the bundle icon will be used (upload/emoji persist as fallbacks).
-- **New-version mode** pre-fills the current icon and offers **keep / replace / remove** (§8). A
-  changed icon **counts as a real change** for the metadata-only no-op guard (§8): a re-version whose
-  only difference is the icon is valid (the "Updated metadata" pre-fill applies).
+  `EmojiPicker`), an image upload framed in the **crop dialog** (below), and a **48 px preview tile**
+  showing the effective icon with its source label — *from SKILL.md `icon:`* / *from icon.png in the
+  bundle* / *uploaded* / *emoji* / *default — skilly*, plus *current icon* and *removed* in new-version
+  mode. When the bundle carries an icon, the upload/emoji controls **stay enabled** but the preview
+  states the bundle icon will be used (upload/emoji persist as fallbacks).
+- **Controls use the app's shared, theme-token styles** — no browser-default buttons and no
+  per-control size overrides, so the field looks the same as the rest of the form in light and dark
+  themes. One row: **Choose image…** (the themed `.filepick-btn` pill); **Choose emoji…**, a pill in
+  the same style that opens the `EmojiPicker` grid (the icon field only — the chat composers keep their
+  bare 🙂 trigger); then, when present, the staged emoji with **Clear**, or — for an image picked in this
+  session — **Adjust crop** (`.btn .btn-sm`) and **Remove image**; *Clear* and *Remove image* are
+  `.btn .btn-ghost .btn-sm`. Help text: *"Shown on the catalog card, the skill page, and the share-link
+  preview. PNG, JPEG or WebP up to 10 MB (at least 64 × 64 px), cropped to a square — or a single emoji.
+  Skills without an icon show the skilly logo."*
+- **New-version mode** pre-fills the current icon and offers **keep / replace / remove** (§8) as the
+  app's **segmented pill** — the catalog sort control (`.sort-toggle` / `.sort-opt` / `.sort-on`,
+  `role="group"`, `aria-label="Icon on this version"`, `aria-pressed` on each option), exactly like the
+  form's *Propose or request* switch. Behaviour is unchanged: *replace* reveals the upload/emoji row;
+  *remove* clears the staged image and emoji. A changed icon **counts as a real change** for the
+  metadata-only no-op guard (§8): a re-version whose only difference is the icon is valid (the
+  "Updated metadata" pre-fill applies).
+- **Crop dialog** (`IconCropDialog`, built on the shared `Modal` below):
+  - **When it opens.** Automatically when a valid **non-square** source is picked (after the §33.3
+    source checks). A **square** source skips it and is staged at its full frame straight away.
+    **Adjust crop** re-opens the dialog for any image picked in this session, at the last applied
+    position and zoom. A **stored** icon (the current icon in new-version mode, or an icon already on a
+    proposal) offers no *Adjust crop* — it is already the normalized 256×256 PNG; re-framing it means
+    picking the original again.
+  - **Layout.** Title *Crop icon* and a one-line hint (*Drag to move · scroll or pinch to zoom*). A square
+    viewport shows the image under a **fixed, centred frame**, with the image outside the frame dimmed.
+    The frame is a **rounded square** whose corner radius matches what the 40 px catalog tile clips
+    (≈ 20 % of its side). It is a guide only: the saved PNG keeps its full square. Below the viewport: a
+    **Zoom** slider that shows the factor (*1.0×*), a **live 48 px preview** in the standard icon tile,
+    and the actions **Reset** · **Cancel** · **Apply** (primary). The viewport is at most 360 px and
+    shrinks to fit a phone with 16 px side gutters, with no horizontal scroll.
+  - **Framing rules.** **The image moves; the frame never does.** The frame always lies fully inside the
+    image: panning is clamped, and zooming out stops at **1×**, where the frame spans the shorter side.
+    There is no zooming out past the image's edge and no padding. Maximum zoom is where the framed
+    square would drop below **64 source px** (`shorter side ÷ 64`), so a crop can never trip the
+    server's minimum. A source whose shorter side is exactly 64 px is fixed at 1× (slider disabled). The
+    slider is **logarithmic**, so the deep range of a 4096 px photo stays usable. Wheel and pinch zoom
+    about the pointer / pinch midpoint; the slider and keys zoom about the frame centre. The dialog
+    opens **centred at 1×**; **Reset** returns there.
+  - **Input.** Drag with mouse, pen or one finger to pan; **pinch** with two fingers to zoom; the
+    **wheel** zooms. The viewport claims its gestures (`touch-action: none`), so the page neither scrolls
+    nor zooms while the pointer is over it. **Keyboard:** the viewport takes focus when the dialog opens,
+    and with it focused the **arrow keys** pan (Shift = bigger steps), **+ / −** zoom and **Enter**
+    applies; **Esc** cancels from anywhere in the dialog. The viewport is labelled *Crop area* and
+    describes its keys; the slider reports the factor as its value text.
+  - **Apply** renders the framed region to the **256×256 PNG** (§33.3), stages it and closes. Wherever
+    the upload is the effective icon, the preview tile then shows **exactly that PNG**. Staging an image
+    clears the emoji, as picking one always has. The upload keeps today's timing: **at submit** on the
+    propose form, **immediately** on the proposal page (below).
+  - **Cancel / Esc on a fresh pick drops the picked image**, and the field is exactly as it was before
+    the pick: a previously applied image, the emoji and the pill state are all untouched. On a re-open
+    via *Adjust crop*, Cancel keeps the previously applied crop. **A click on the backdrop does
+    nothing**, so a drag released outside the viewport can never discard a pick.
+  - The decoded source stays in memory only while its image is staged (for *Adjust crop*). It is
+    released when the image is removed or replaced (by another image or an emoji), or when the page is
+    left.
+- **Shared `Modal`** (`components/ui.tsx`) — the app's first modal dialog; the existing confirmations
+  stay `window.confirm`. It renders in a portal, as a panel on the `.card` tokens (surface, line,
+  radius, shadow) over the app's standard dark scrim, so it is correct in both themes. It is the **top
+  layer**: above the topbar, the mobile nav drawer, the messages sheet, the toasts, the badge toast, the
+  What's new notice and the directory hover card. It uses `role="dialog"` + `aria-modal="true"`,
+  labelled by its title, with a header **✕** that runs the dialog's cancel. Focus moves in on open,
+  **Tab is trapped** inside, **Esc** runs the dialog's cancel, and focus returns to the control that
+  opened it. While it is open the page behind is
+  **inert** and its **scroll is locked**, with no layout shift. Backdrop-click dismissal is **opt-in per
+  dialog** (the crop dialog opts out). It opens with the shared `.menu-pop` fade + scale, with no
+  animation under `prefers-reduced-motion`. At phone width (≤ 560 px) the panel spans the viewport
+  minus 16 px gutters, and its body scrolls when the viewport is short.
+- **Style parity — every UI element this change adds or touches** (the field row, the pill, the crop
+  dialog, the `Modal`, the inline errors and the proposal-page row) uses the app's existing classes and
+  theme tokens only: no browser-default controls, no hard-coded colours, no one-off font sizes. Every
+  element renders correctly in light and dark themes and carries the app's hover, focus-visible and
+  disabled states. Concretely:
+  - the dialog title uses the display face (`--font-display`, like the admin card titles); the hint and
+    the zoom factor are `.muted`; the *Zoom* label uses the form's field-label style (mono, uppercase,
+    `--faint`);
+  - buttons are `.btn` (Reset as `.btn-ghost`, Apply as `.btn-primary`), and the header ✕ is the What's
+    new notice's close button;
+  - the viewport sits on `--surface-2` inside a `--line` border at `--radius-sm`, takes the `.switch`
+    focus ring, outlines the frame in `--accent`, and dims the outside with the app's scrim;
+  - the inline errors share one `.field-error` style (`--danger`, the size of the form's category
+    error); the preview is the standard `SkillIcon` tile;
+  - the zoom slider is the app's **first themed range control** (`.range`): a `--line-strong` track
+    filled with `--accent` up to the thumb, a `--surface` thumb ringed in `--accent`, and the `.switch`
+    focus ring and disabled look.
 - **Reviewer edit:** the icon is **metadata** — a reviewer may **remove** the image and/or the emoji
   but **cannot upload a replacement** (files are proposer-only, §8). The removal is part of the ordinary
   reviewer-edit revision; **no separate audit action**.
+- **Proposal page — the submitter's *Replace…*** runs the same §33.3 source checks and crop dialog, and
+  **Apply uploads at once**. On success the edit shows the new icon. On a failure (413 / 422 / 429 or a
+  network error) the server's message is shown inline (`role="alert"`) and the previous icon stays —
+  failures are no longer swallowed. *Adjust crop* works there too: re-applying re-uploads, and the
+  superseded upload becomes an orphan (harmless, §33.2). The row uses the propose form's control styles
+  (*Replace…* / *Choose emoji…* pills, *Remove icon* as `.btn .btn-ghost .btn-sm`).
 - **Revisions & audit** carry `iconSha256`, `iconFilename`, `iconEmoji` — hash, name and emoji, **never
   bytes** (§11).
 - **Accept / direct publish** resolves the precedence and writes `icon_sha256` / `icon_emoji` /
@@ -5563,6 +5672,29 @@ minted by a signed-in user who can see the skill — and keeps every plain URL e
   and an icon-less neighbour shows no slot → the detail header shows it at 64 px → new-version *remove*
   → the header falls back to the wordmark lockup; a bundle carrying `icon.png` shows the *from icon.png*
   source label in the form preview; Share copies a `?s=` URL.
+- **Crop dialog & field controls** (§33.3–§33.4):
+  - **Unit (web lib, `node --test`):** the crop geometry — zoom bounds (1× up to `shorter ÷ 64`; fixed at
+    1× for a source whose shorter side is 64 px), the logarithmic slider mapping round-trips, the frame
+    never leaves the image under any pan and zoom, zooming about a point keeps that point fixed, the
+    source rectangle is whole pixels, in bounds and ≥ 64 px, Reset = centred 1×, and a square source =
+    its full frame. The source checks: over 10 MB, SVG / GIF / unknown magic bytes, under 64 px and over
+    4096 px each give their own message, and a valid source passes.
+  - **No component test:** web unit tests run under `node --test` with no DOM, so the dialog's behaviour
+    is pinned end-to-end below.
+  - **Integration:** no API or DB change. The existing `POST /api/icons` cases keep guarding the
+    server's limits, and `csp.test.ts` keeps pinning `img-src 'self' data:` (no `blob:`).
+  - **e2e (Playwright), through the real form rather than the API:** a non-square fixture (left half
+    red, right half blue) opens the dialog by itself → pan fully right and zoom in by keyboard → Apply →
+    the preview tile's pixels are blue → submit → the stored `/skill-icons/<sha>.png` is 256×256 and
+    blue (what was framed is what is saved; a `blob:` / CSP regression fails here). Cancel and Esc on a
+    fresh pick leave a previously picked emoji in place, and a backdrop click does not close the dialog.
+    *Adjust crop* re-opens at the last position, and its Cancel keeps the crop. A square fixture skips
+    the dialog and offers *Adjust crop*. An 11 MB file and a 40 × 40 image show their inline errors and
+    stage nothing. Focus lands in the dialog, Tab stays inside, and focus returns to the opener on
+    close. The dialog panel resolves to the `--surface` token in both themes. The new-version pill
+    exposes `aria-pressed`, and *Remove* shows *removed*. On the proposal page the submitter's
+    *Replace…* → dialog → Apply updates the icon, and a mocked 413 shows the inline error and keeps the
+    previous icon.
 
 ### 33.8 Migration 0076
 - `skill_icons` and `skill_share_links` as in §3; `skills` gains `icon_sha256` (FK → `skill_icons`),

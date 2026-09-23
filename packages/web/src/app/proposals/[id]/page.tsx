@@ -19,9 +19,9 @@ import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
 import { bundleUploadError } from "../../../lib/uploadError";
 import { uploadBundle as uploadBundleRequest } from "../../../lib/uploadBundleClient";
-import { cropImageToSquare, loadImageDimensions } from "../../../lib/iconCrop";
 import { EmojiPicker } from "../../../components/EmojiPicker";
 import { SkillIcon } from "../../../components/SkillIcon";
+import { useIconCropFlow } from "../../../components/IconCropDialog";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string }
 interface Meta {
@@ -261,6 +261,22 @@ function ProposalDetailInner() {
   // Edit mode: null = read view. Edits travel as a new revision with the decision (reviewer) or
   // the resubmit (proposer).
   const [edit, setEdit] = useState<EditDraft | null>(null);
+  // The submitter's icon Replace… (§33.4): the propose form's source checks and crop dialog, but
+  // Apply uploads at once — a failure shows inline (the flow's `error`) and the previous icon stays.
+  // `iconUploadSha` is the last upload, so Adjust crop is offered only while that image is the edit's.
+  const iconInput = useRef<HTMLInputElement>(null);
+  const [iconUploadSha, setIconUploadSha] = useState<string | null>(null);
+  const iconCrop = useIconCropFlow(async (render) => {
+    const form = new FormData();
+    form.append("icon", render.blob, "icon.png");
+    const r = await fetch("/api/icons", { method: "POST", body: form }).catch(() => {
+      throw new Error("Couldn’t upload the icon — check your connection and try again.");
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(typeof j.error === "string" && j.error ? j.error : `Couldn’t upload the icon (HTTP ${r.status}).`);
+    setIconUploadSha(j.sha256);
+    setEdit((prev) => (prev ? { ...prev, iconSha256: j.sha256, iconEmoji: null } : prev));
+  });
   const [uploading, setUploading] = useState(false);
   // Chunked-upload chunk size (bytes, §6) — a replacement bundle above it uploads in pieces with
   // a determinate progress bar. Default 5 MB until /api/me loads.
@@ -540,7 +556,7 @@ function ProposalDetailInner() {
                 ) : (
                   <button
                     className="btn btn-sm"
-                    onClick={() => setEdit({
+                    onClick={() => { iconCrop.setError(null); setEdit({
                       title: m.title,
                       description: m.description,
                       toolHarness: m.toolHarness,
@@ -557,7 +573,7 @@ function ProposalDetailInner() {
                       reuseFiles: !!latest.payload.reuse,
                       iconSha256: m.iconSha256 ?? null,
                       iconEmoji: m.iconEmoji ?? null,
-                    })}
+                    }); }}
                   >
                     ✎ Edit
                   </button>
@@ -577,42 +593,56 @@ function ProposalDetailInner() {
                 <div><label style={labelStyle}>Title</label><input className="input" style={{ width: "100%" }} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></div>
                 <div>
                   <label style={labelStyle}>Icon <span style={{ textTransform: "none", letterSpacing: 0 }}>· optional</span></label>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div className="icon-field-row">
                     <SkillIcon icon={{ url: edit.iconSha256 ? `/skill-icons/${edit.iconSha256}.png` : null, emoji: edit.iconEmoji }} title={edit.title || "icon"} size={40} fallback="default" />
-                    {(edit.iconSha256 || edit.iconEmoji) && (
-                      <button type="button" className="btn-ghost" style={{ fontSize: 12 }} onClick={() => setEdit({ ...edit, iconSha256: null, iconEmoji: null })}>
-                        ✕ Remove icon
-                      </button>
-                    )}
                     {isSubmitter && (
                       <>
-                        <label className="filepick-btn" style={{ fontSize: 12 }}>
-                          Replace…
-                          <input
-                            type="file"
-                            accept="image/png,image/jpeg,image/webp"
-                            style={{ display: "none" }}
-                            onChange={async (e) => {
-                              const file = e.target.files?.[0];
-                              if (!file) return;
-                              try {
-                                const { width, height } = await loadImageDimensions(file);
-                                const cropped = width === height ? file : await cropImageToSquare(file, 0.5);
-                                const form = new FormData();
-                                form.append("icon", cropped, "icon.png");
-                                const r = await fetch("/api/icons", { method: "POST", body: form });
-                                const j = await r.json().catch(() => ({}));
-                                if (r.ok) setEdit((prev) => (prev ? { ...prev, iconSha256: j.sha256, iconEmoji: null } : prev));
-                              } catch {
-                                // best-effort — the field simply keeps its previous value
-                              }
-                            }}
-                          />
-                        </label>
-                        <EmojiPicker align="left" onPick={(em) => setEdit((prev) => (prev ? { ...prev, iconSha256: null, iconEmoji: em } : prev))} />
+                        <button type="button" className="filepick-btn" disabled={iconCrop.busy} onClick={() => iconInput.current?.click()}>
+                          {iconCrop.busy ? "Uploading…" : "Replace…"}
+                        </button>
+                        <input
+                          ref={iconInput}
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          hidden
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = ""; // re-picking the same file must fire change again
+                            void iconCrop.pick(file);
+                          }}
+                        />
+                        <EmojiPicker
+                          align="left"
+                          triggerLabel="Choose emoji…"
+                          disabled={iconCrop.busy}
+                          onPick={(em) => {
+                            iconCrop.clear();
+                            setEdit((prev) => (prev ? { ...prev, iconSha256: null, iconEmoji: em } : prev));
+                          }}
+                        />
+                        {iconCrop.staged && edit.iconSha256 !== null && edit.iconSha256 === iconUploadSha && (
+                          <button type="button" className="btn btn-sm" disabled={iconCrop.busy} onClick={iconCrop.adjust}>
+                            Adjust crop
+                          </button>
+                        )}
                       </>
                     )}
+                    {(edit.iconSha256 || edit.iconEmoji) && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={iconCrop.busy}
+                        onClick={() => {
+                          iconCrop.clear();
+                          setEdit({ ...edit, iconSha256: null, iconEmoji: null });
+                        }}
+                      >
+                        Remove icon
+                      </button>
+                    )}
                   </div>
+                  {iconCrop.error && <p role="alert" className="field-error">{iconCrop.error}</p>}
+                  {iconCrop.dialog}
                   {!isSubmitter && <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Reviewers can remove an icon but not upload a new one — the proposer owns the image.</p>}
                 </div>
                 <div>

@@ -3,6 +3,10 @@
 import type { BundleEntry } from "./validate.js";
 
 export const ICON_MAX_SOURCE_BYTES = 512 * 1024;
+/** Largest file the browser accepts as an uploaded icon's SOURCE (§33.3). Generous because the
+ *  source never leaves the browser — only its 256×256 PNG render is uploaded, and that is what the
+ *  server's ICON_MAX_SOURCE_BYTES cap applies to. */
+export const ICON_MAX_UPLOAD_SOURCE_BYTES = 10 * 1024 * 1024;
 export const ICON_MIN_DIMENSION = 64;
 export const ICON_MAX_DIMENSION = 4096;
 export const ICON_OUTPUT_SIZE = 256;
