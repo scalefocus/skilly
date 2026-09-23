@@ -13,7 +13,19 @@ const EMOJI = [
 // `align` anchors the popup to the button's left or right edge (default "right"). Use "left" when the
 // button sits at the left of its row (e.g. the discussion composer) so the panel opens rightward and
 // stays on-screen on narrow/mobile viewports instead of overflowing past the left edge.
-export function EmojiPicker({ onPick, align = "right" }: { onPick: (emoji: string) => void; align?: "left" | "right" }) {
+// `triggerLabel` swaps the bare 🙂 button for a labelled `.filepick-btn` pill — the skill icon field
+// (§33.4), where it sits beside the "Choose image…" pill; the chat composers keep the bare trigger.
+export function EmojiPicker({
+  onPick,
+  align = "right",
+  triggerLabel,
+  disabled,
+}: {
+  onPick: (emoji: string) => void;
+  align?: "left" | "right";
+  triggerLabel?: string;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -24,16 +36,30 @@ export function EmojiPicker({ onPick, align = "right" }: { onPick: (emoji: strin
   }, [open]);
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-flex" }}>
-      <button
-        type="button"
-        className="btn-ghost"
-        aria-label="Insert emoji"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", width: 36, height: 36, padding: 0, fontSize: 18, lineHeight: 1.1, overflow: "visible", borderRadius: "var(--radius-sm)" }}
-      >
-        🙂
-      </button>
+      {triggerLabel ? (
+        <button
+          type="button"
+          className="filepick-btn"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {triggerLabel}
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="btn-ghost"
+          aria-label="Insert emoji"
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => setOpen((o) => !o)}
+          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", width: 36, height: 36, padding: 0, fontSize: 18, lineHeight: 1.1, overflow: "visible", borderRadius: "var(--radius-sm)" }}
+        >
+          🙂
+        </button>
+      )}
       {open && (
         <div role="menu" style={{ position: "absolute", bottom: "calc(100% + 6px)", ...(align === "left" ? { left: 0 } : { right: 0 }), zIndex: 30, background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow)", padding: 6, display: "grid", gridTemplateColumns: "repeat(8, 30px)", gap: 2, width: "max-content", maxWidth: "calc(100vw - 24px)", boxSizing: "border-box" }}>
           {EMOJI.map((e) => (

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 // Compact number formatting for display counts (15843 → "15.8K", 2_400_000 → "2.4M").
@@ -575,5 +575,124 @@ export function InfoTip({ label, children }: { label: string; children: React.Re
         </span>
       )}
     </span>
+  );
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusablesIn(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0);
+}
+
+/**
+ * The app's modal dialog (SKILLY_SPEC.md §33.4 *Shared Modal*) — the top layer. Mount it to open it
+ * and unmount it to close it. Rendered in a portal on the .card tokens over the standard scrim, it
+ * moves focus in (to `initialFocusRef`, else the first focusable control), traps Tab, runs `onCancel`
+ * on Esc and on the header ✕, returns focus to whatever had it before on close, makes the page behind
+ * inert and locks its scroll. Backdrop-click dismissal is opt-in (`dismissOnBackdrop`) and needs the
+ * press AND the release on the backdrop, so a drag that merely ends there never dismisses. Key events
+ * never leave the dialog, so page-level shortcuts (Enter, Ctrl+K) can't act behind it.
+ */
+export function Modal({
+  title,
+  onCancel,
+  footer,
+  children,
+  dismissOnBackdrop = false,
+  initialFocusRef,
+}: {
+  title: string;
+  onCancel: () => void;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+  dismissOnBackdrop?: boolean;
+  initialFocusRef?: React.RefObject<HTMLElement | null>;
+}) {
+  const backdrop = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const pressedBackdrop = useRef(false);
+  const cancel = useRef(onCancel);
+  cancel.current = onCancel;
+  const titleId = useId();
+
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const root = document.documentElement;
+    const body = document.body;
+    const scrollbar = window.innerWidth - root.clientWidth;
+    const prev = { overflow: root.style.overflow, paddingRight: body.style.paddingRight };
+    root.style.overflow = "hidden";
+    if (scrollbar > 0) body.style.paddingRight = `${scrollbar}px`; // no layout shift when the scrollbar goes
+    const inerted: Element[] = [];
+    for (const el of Array.from(body.children)) {
+      if (el === backdrop.current || el.hasAttribute("inert")) continue;
+      el.setAttribute("inert", "");
+      inerted.push(el);
+    }
+    const first = panel.current ? focusablesIn(panel.current)[0] : undefined;
+    (initialFocusRef?.current ?? first ?? panel.current)?.focus();
+    return () => {
+      for (const el of inerted) el.removeAttribute("inert");
+      root.style.overflow = prev.overflow;
+      body.style.paddingRight = prev.paddingRight;
+      if (opener?.isConnected) opener.focus();
+    };
+    // Once per mount by design: the dialog is open for exactly as long as it is mounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancel.current();
+      return;
+    }
+    const box = panel.current;
+    if (e.key !== "Tab" || !box) return;
+    const items = focusablesIn(box);
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) {
+      e.preventDefault();
+      box.focus();
+      return;
+    }
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !box.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !box.contains(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      ref={backdrop}
+      className="modal-backdrop"
+      onKeyDown={onKeyDown}
+      onMouseDown={(e) => { pressedBackdrop.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        if (dismissOnBackdrop && pressedBackdrop.current && e.target === e.currentTarget) cancel.current();
+      }}
+    >
+      <div ref={panel} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+        <div className="modal-head">
+          <h2 id={titleId} className="modal-title">{title}</h2>
+          <button type="button" className="modal-close" aria-label="Close" onClick={() => cancel.current()}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+              <path d="M2 2l10 10M12 2L2 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+        {footer && <div className="modal-foot">{footer}</div>}
+      </div>
+    </div>,
+    document.body,
   );
 }

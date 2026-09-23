@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.10.0",
+    date: "2026-09-23",
+    summary:
+      "Uploading an icon image now works: a picture that isn't square opens a crop window where you drag to position it and zoom in or out to choose the square that's used, and you can re-open it with Adjust crop. Images up to 10 MB are accepted. The icon controls, including Keep / Replace / Remove on a new version, now match the rest of the app in light and dark themes.",
+  },
+  {
     version: "2.9.0",
     date: "2026-09-17",
     summary:
