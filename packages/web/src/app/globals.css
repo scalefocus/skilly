@@ -1487,7 +1487,9 @@ a.mention-chip:hover { text-decoration: underline; }
 .rum-row { cursor: pointer; transition: background 0.16s; }
 .rum-row:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
 .rum-row.open { background: color-mix(in oklab, var(--accent) 9%, transparent); }
-.rum-all td { font-weight: 600; background: color-mix(in oklab, var(--anchor) 4%, transparent); }
+/* "All routes" is the totals row, outside the sort (§32.7): tinted, bold, a heavier divider below. */
+.rum-all td { font-weight: 600; background: color-mix(in oklab, var(--anchor) 9%, transparent); border-bottom: 2px solid var(--line-strong); }
+.rum-row.rum-all:hover { background: color-mix(in oklab, var(--anchor) 4%, transparent); }
 .rum-expand td { text-align: left; padding: 12px 14px 16px; background: color-mix(in oklab, var(--anchor) 3%, transparent); white-space: normal; }
 
 /* ── §33.4 Icon field, shared Modal, crop dialog ─────────────────────────────────────────────────

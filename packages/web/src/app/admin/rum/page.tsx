@@ -13,6 +13,7 @@ import { readPref, writePref, PREF_RUM_RANGE, adminCardPrefKey } from "../../../
 import { OnlineUsersCard } from "../OnlineUsersCard";
 import { bandFor, bandTone, formatCls, formatMs, VITAL_THRESHOLDS } from "../../../lib/rum/bands";
 import { labelForRoute, RUM_ROUTE_ALL } from "../../../lib/rum/routes";
+import { sortRouteRows } from "../../../lib/rum/sort";
 import type { RumVital } from "../../../lib/rum/validate";
 
 // recharts is heavy (d3) — code-split it out of the route's initial bundle.
@@ -218,22 +219,8 @@ export default function RumPage() {
       .catch(() => setUsers((u) => ({ ...u, [route]: "error" })));
   };
 
-  const sortedRoutes = useMemo(() => {
-    if (!summary) return [];
-    const all = summary.routes.find((r) => r.route === RUM_ROUTE_ALL);
-    const rest = summary.routes.filter((r) => r.route !== RUM_ROUTE_ALL);
-    const dir = sort.dir === "asc" ? 1 : -1;
-    rest.sort((a, b) => {
-      const av = a[sort.key];
-      const bv = b[sort.key];
-      // Nulls always sink to the bottom regardless of direction.
-      if (av == null && bv == null) return a.label.localeCompare(b.label);
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      return (av - bv) * dir || a.label.localeCompare(b.label);
-    });
-    return all ? [all, ...rest] : rest;
-  }, [summary, sort]);
+  // "All routes" is the totals row: pinned first, outside the sort (lib/rum/sort.ts).
+  const sortedRoutes = useMemo(() => (summary ? sortRouteRows(summary.routes, sort.key, sort.dir) : []), [summary, sort]);
 
   const sortedErrors = useMemo(() => {
     const rows = [...errors];

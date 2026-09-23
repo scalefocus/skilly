@@ -5345,12 +5345,17 @@ and both the presence route→label map (§4) and the RUM known-route table (§3
    (right axis, ms, lines). Bucketing is **span-adaptive** with the same rule and thresholds as §21/§4
    (day ≤ ~92 days, week ≤ ~730, month beyond); fewer than 3 points render visible markers.
 3. **Routes table** — one row per route with samples in the range, plus a pinned **"All routes"**
-   row on top. Columns: **Route** (the human label, template on hover), **Views**, **Sessions**,
+   row on top. "All routes" is the **platform-wide totals row**, not a ranked route: it is **excluded
+   from the sort** and always stays first, and it is styled as a distinct summary row (tinted
+   background, bold text, a heavier divider below it) so a sorted column never reads as out of order
+   because of it. Columns: **Route** (the human label, template on hover), **Views**, **Sessions**,
    **p75 LCP**, **p75 INP**, **p75 CLS**, **p75 TTFB**, **p75 nav**, **p75 API**, **API errors %**,
    **Client errors** (count, and per 100 views on hover). Vitals columns render as **coloured pills**
    in the Google **good / needs-improvement / poor** bands (LCP 2.5 s / 4 s · INP 200 ms / 500 ms ·
    CLS 0.1 / 0.25 · TTFB 0.8 s / 1.8 s) using the existing pill styles; cells with no samples show
-   "—". Sortable by any column, default **Views desc**. **Expanding a row** loads the **per-user
+   "—". Sortable by any column, default **Views desc**; the sort orders the route rows **by the
+   column's numeric value**, ties broken by route label A→Z, and rows with no value ("—") always
+   sink to the bottom (A→Z among themselves) in either direction. **Expanding a row** loads the **per-user
    drill-down** (§32.8): the top 20 people by sample count on that route with their own p75 LCP / INP
    and client-error count — **only for 7d / 30d** (the rollup has no user dimension); on 90d / All the
    expander explains *"Switch to 7d or 30d to see who was affected"*.
