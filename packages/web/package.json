@@ -16,7 +16,7 @@
     "e2e": "playwright test -c e2e/playwright.config.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1127.0",
+    "@aws-sdk/client-s3": "^3.1136.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/montserrat": "^5.3.0",
     "@fontsource-variable/open-sans": "^5.3.0",
@@ -26,25 +26,25 @@
     "@tiptap/extension-text-style": "^3.31.3",
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
-    "adm-zip": "^0.6.0",
-    "next": "^16.3.4",
+    "adm-zip": "^0.6.1",
+    "next": "^16.3.5",
     "next-auth": "^4.24.15",
     "pg": "^8.23.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "recharts": "^3.10.1",
-    "sharp": "^0.34",
+    "sharp": "^0.35",
     "tar": "^7.5.22",
     "web-vitals": "^6"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/adm-zip": "^0.5.5",
-    "@types/node": "^26.5.0",
+    "@types/node": "^26.6.2",
     "@types/pg": "^8.23.1",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
-    "tsx": "^4.23.13",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3"
   }
 }
