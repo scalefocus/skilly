@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.11.1",
+    date: "2026-09-23",
+    summary:
+      "Monitoring: the “All routes” row in the routes table is now styled as a distinct totals row, so it no longer looks like it breaks a sorted column — it stays pinned on top while the routes below it sort by the column’s value.",
+  },
+  {
     version: "2.11.0",
     date: "2026-09-23",
     summary:
