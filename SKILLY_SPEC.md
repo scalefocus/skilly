@@ -1425,7 +1425,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
     are stored and served whole (no length cap, no API field, no validation change) and the detail
     page still renders the full Markdown.
     - **Zone budget.** The constant height is spent as: a **two-row-capped** top meta row → a
-      **2-line-clamped** title → a **4-line-clamped, 4-line-reserved** description → a
+      **2-line-clamped** title → a **4-line-reserved, bottom-faded** description → a
       **one-line-clipped** categories row → the ratings/installs row. The description keeps its
       `flex: 1`, so a card whose top meta fits on one row hands the spare space to the description
       box rather than changing the card's height. **Every zone is bounded**, which is what makes the
@@ -1447,10 +1447,20 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
         than as truncation. The cap sits between the measured second-row bottom and third-row top, so
         a third row is hidden **whole** and no pill is ever partially painted — which is also why
         this row needs no fade mask, unlike the categories row.
-    - **Description: clamp 4 lines, reserve 4 lines.** Clamped by **line count** (`line-clamp`), never
-      by character count — the grid is `auto-fill minmax(290px, 1fr)`, so a character budget would be
-      wrong at every width. The reserve means a one-line description occupies the same box as a
-      clamped one. A `title` tooltip carries the plain-text description **capped at ~300 characters**
+    - **Description: reserve 4 lines, fill the slack, fade the bottom edge — no ellipsis clamp.** The
+      box reserves four lines (`min-height`) and keeps `flex: 1`, so it also absorbs whatever height
+      the other zones leave (e.g. a one-row top meta). Overflow is `hidden`, and a **bottom-edge
+      `mask-image` fade over the last ~1 line** of the box dissolves the text into the card instead of
+      cutting a line through its glyphs. It deliberately does **not** use `line-clamp`: combined with
+      `flex: 1` the box is often taller than four lines, and the browser then puts the `…` on line 4
+      *while still painting lines 5+* until the box edge hard-slices one mid-glyph — the ellipsis and
+      the slice together read as a broken render. Truncation is by **box height**, never by character
+      count — the grid is `auto-fill minmax(290px, 1fr)`, so a character budget would be wrong at every
+      width. The fade is **always on** (no overflow detection): a description that ends before the
+      fade band is unaffected, and like the categories mask it is colour-agnostic, so it needs no
+      light/dark token. **Accepted edge:** a description whose final line happens to land inside the
+      fade band is faded even though it fits — the price of no per-card measurement. The reserve
+      means a one-line description occupies the same box as a truncated one. A `title` tooltip carries the plain-text description **capped at ~300 characters**
       (a native tooltip holding a whole Markdown body is unreadable and renders differently per OS)
       and is set **unconditionally** — no truncation detection, no per-card measurement, no resize
       observer on a grid that can hold hundreds of cards.
@@ -1462,8 +1472,14 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       counter requires per-card JS measurement that CSS cannot express, and this row is a preview,
       not the skill's taxonomy of record. A right-edge `mask-image` fade makes the cut read as
       deliberate rather than as a chip guillotined mid-border; the mask is colour-agnostic, so it
-      needs no light/dark token. **Accepted loss:** a skill with more chips than fit shows only the
-      leading ones, and the rest are visible only on its detail page.
+      needs no light/dark token. **Every chip in the row is a single unbroken line** — chips here are
+      `flex-shrink: 0` + `white-space: nowrap`. Without that, flex squeezes the trailing chips and a
+      chip's text wraps *inside* the chip at its hyphen or space (`business-` / `analysis`), making
+      that chip two lines tall and the row visibly two-tiered even though the row itself never
+      wraps. A chip that does not fit is instead pushed past the edge and cut by the fade, whole-line.
+      This applies to the tool chip and the category chips alike, on catalog and §26 request cards.
+      **Accepted loss:** a skill with more chips than fit shows only the leading ones, and the rest
+      are visible only on its detail page.
     - **Reserves are kept at every viewport, phones included.** No breakpoint relaxes them. A
       single-column phone card with a short description therefore shows its unused reserve as
       whitespace — accepted, in exchange for one rule with no width-dependent behaviour. Verified at
@@ -1477,7 +1493,9 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       a `.card-grid` reports the same `offsetHeight`** — the regression that actually matters.
       Per-zone line-height arithmetic is deliberately **not** asserted: it breaks whenever a font or
       type scale changes, without any user-visible regression having occurred. The assertion runs at
-      **both** desktop and 375px, and also asserts the catalog does not scroll horizontally. The
+      **both** desktop and 375px, and also asserts the catalog does not scroll horizontally, and that
+      **every chip in every `.skill-card-cats` row reports the same height** (a chip that wrapped
+      inside itself is roughly twice as tall — font-agnostic, like the card-height check). The
       tooltip cap is covered separately by **unit tests** over the shared card-text helpers
       (`lib/cardText.ts`, which the catalog cards and the §26 request cards both import — there is
       no second copy of the Markdown-stripping or capping rule).
@@ -3000,7 +3018,7 @@ the requester is notified, and the fulfiller earns leaderboard credit.
   requests in the catalog's card/row visual language (cards ⇄ list toggle, same persisted view
   preference pattern): title, categories, tool chip, requester (name + avatar), and posted date.
   Because the request card reuses the catalog card's own class, it inherits §14 *Fixed-height
-  catalog cards* wholesale — same constant height, same 2-line title / 4-line description clamps,
+  catalog cards* wholesale — same constant height, same 2-line title clamp / bottom-faded description,
   same one-line clipped categories row, same two-row top meta cap. Its zones differ (no version
   chip, a requester/date footer) so it carries different slack at the same height, which is what
   matters: uniform within its own grid.

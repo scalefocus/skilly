@@ -604,8 +604,8 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 
 /* §14 Fixed-height catalog cards (no ragged grids). Every card in a `.card-grid` is exactly as tall
    as every other, so one long description can never inflate its row and leave its siblings with a
-   dead gap. The height is spent as: 2-line-capped top meta → 2-line title → 4-line reserved
-   description → 1-line clipped categories → stats row. `.desc` keeps `flex: 1`, so a card whose
+   dead gap. The height is spent as: 2-line-capped top meta → 2-line title → 4-line reserved,
+   bottom-faded description → 1-line clipped categories → stats row. `.desc` keeps `flex: 1`, so a card whose
    top meta fits on one line hands the spare space to the description box instead of changing the
    card's height. Every zone below the top meta is bounded, so the card's footer (rating + install
    count) can never be clipped away — measured: an UNBOUNDED top meta costs ~30px per wrapped line
@@ -617,9 +617,15 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .skill-card h3 { font-family: var(--font-display); font-size: 20px; font-weight: 500; line-height: 1.15;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
   overflow: hidden; overflow-wrap: anywhere; min-height: calc(20px * 1.15 * 2); }
+/* Description: reserve 4 lines, absorb the slack (`flex: 1`), fade the bottom edge. Deliberately NOT
+   `line-clamp`: with `flex: 1` the box is often taller than 4 lines, and the browser then puts the
+   "…" on line 4 while still painting lines 5+ until the box edge slices one mid-glyph. The mask
+   fades the last ~1 line (1.5em = one line at line-height 1.5) instead; it is always on — a
+   description ending above the band is untouched — and colour-agnostic, so no light/dark token. */
 .skill-card .desc { color: var(--muted); font-size: 13.5px; line-height: 1.5; flex: 1;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4;
-  overflow: hidden; overflow-wrap: anywhere; min-height: calc(13.5px * 1.5 * 4); }
+  overflow: hidden; overflow-wrap: anywhere; min-height: calc(13.5px * 1.5 * 4);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5em), transparent); }
 .skill-card .meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Top meta: at most TWO rows. Governance pills (restricted / archived / external / Official) are
    the priority here, so this row gets first claim on the height budget and is capped only after
@@ -638,6 +644,10 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .skill-card .skill-card-cats { flex-wrap: nowrap; overflow: hidden; min-height: 30px;
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+/* Each chip stays ONE line: without this, flex squeezes the trailing chips and the text wraps inside
+   the chip at its hyphen/space ("business-" / "analysis"), doubling that chip's height. A chip that
+   doesn't fit is pushed past the edge and cut by the fade above instead. */
+.skill-card .skill-card-cats > * { flex-shrink: 0; white-space: nowrap; }
 /* Stats row must never wrap — a second line would be clipped by the card's fixed height. `nowrap` on
    the ROW alone is not enough: its badges are themselves flex boxes, so a squeezed "1.2K installs"
    breaks internally and silently doubles the row's height — hence nothing in here wraps at all. The

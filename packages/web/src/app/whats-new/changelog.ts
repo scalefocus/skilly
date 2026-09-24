@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.12.1",
+    date: "2026-09-24",
+    summary:
+      "Catalog cards tidy-up: long descriptions now fade out gently at the bottom of the card instead of being cut through a line of text, and category chips always stay on a single line — a long chip such as business-analysis no longer wraps into two.",
+  },
+  {
     version: "2.12.0",
     date: "2026-09-24",
     summary:
