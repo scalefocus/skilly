@@ -15,6 +15,7 @@ import {
   setUserDiscussionNotifications,
   setUserDirectoryHidden,
   setUserAchievementsHidden,
+  setUserAllowFollows,
 } from "../../../lib/settings";
 import { invalidateLeaderboard } from "../../../lib/leaderboard";
 import { invalidateLevels } from "../../../lib/levels";
@@ -53,11 +54,12 @@ export async function GET() {
             discussion_notifications: boolean;
             directory_hidden: boolean;
             achievements_hidden: boolean;
+            allow_follows: boolean;
             time_zone: string | null;
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, achievements_hidden, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, achievements_hidden, allow_follows, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -101,6 +103,8 @@ export async function GET() {
     directoryHidden: prefs?.directory_hidden ?? false,
     // §31 achievements opt-out: hide earned badges from other people (the hall + hover card).
     achievementsHidden: prefs?.achievements_hidden ?? false,
+    // §35.3 "Allow others to follow me" — off pauses every follow on the user.
+    allowFollows: prefs?.allow_follows ?? true,
     // §31.3 the browser-reported IANA zone (null until the web UI reports one). The app shell
     // compares it with the browser's own zone and PATCHes when they differ.
     timeZone: prefs?.time_zone ?? null,
@@ -149,6 +153,7 @@ export async function PATCH(req: Request) {
     discussionNotifications?: boolean;
     directoryHidden?: boolean;
     achievementsHidden?: boolean;
+    allowFollows?: boolean;
     timeZone?: string;
   };
   if ("dateFormat" in body) {
@@ -184,6 +189,11 @@ export async function PATCH(req: Request) {
     // Membership of the level map changed (§31.10) — drop it so the ring disappears from, or
     // returns to, other people's views on their next page load instead of after the TTL.
     invalidateLevels();
+  }
+  if (typeof body.allowFollows === "boolean") {
+    await setUserAllowFollows(access.userId, body.allowFollows);
+    // The followers stat reads 0 while paused (§35.7) — drop the cached boards and badges.
+    invalidateLeaderboard();
   }
   // §31.3 timezone capture: validated as a real IANA zone; an invalid value is ignored, never an
   // error. The FIRST capture also runs the deferred Night Shift / Weekend Warrior backfill.

@@ -4,7 +4,7 @@
 // point `main` at it. Idempotent: an already-existing tag is treated as published.
 // SKILLY_SPEC.md §6, §7, §16 (Phase 2 step 6/7).
 import type { Pool } from "pg";
-import { resolveLatest, validateBundle, versionTag, bundleContentCap } from "@skilly/shared";
+import { resolveLatest, validateBundle, versionTag, bundleContentCap, fanOutToFollowers } from "@skilly/shared";
 import { getMaxBundleBytes } from "../settings.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { repoPath } from "./repoStore.js";
@@ -67,10 +67,17 @@ interface PendingRow {
   skill_slug: string;
 }
 
+interface PendingPublishRow extends PendingRow {
+  created_by: string | null;
+  namespace_id: string;
+  visibility: string;
+}
+
 export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Promise<number> {
-  const { rows } = await pool.query<PendingRow>(
+  const { rows } = await pool.query<PendingPublishRow>(
     `select sv.id, sv.skill_id, sv.semver, sv.artifact_object_key,
-            n.slug as ns_slug, s.slug as skill_slug
+            n.slug as ns_slug, s.slug as skill_slug,
+            sv.created_by, s.namespace_id, s.visibility
        from skill_versions sv
        join skills s on s.id = sv.skill_id
        join namespaces n on n.id = s.namespace_id
@@ -121,6 +128,12 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
       }
     }
 
+    // §35.6: is this the skill's FIRST published version (follow.new_skill) or a later one
+    // (follow.new_version)? Read before the flag flips so this version doesn't count itself.
+    const { rows: prior } = await pool.query<{ n: number }>(
+      `select count(*)::int as n from skill_versions where skill_id = $1 and git_published and id <> $2`,
+      [row.skill_id, row.id],
+    );
     await pool.query(`update skill_versions set git_published = true where id = $1`, [row.id]);
     // §34.3: the bytes are in hand, so index the SKILL.md text now (write-once, advisory).
     if (files) await fillSearchText(pool, row.id, files);
@@ -131,7 +144,7 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
     // The per-user new_version_notifications opt-out gates ONLY the maintainer-derived half —
     // an explicit watch always wins (its off-switch is unwatch), so a maintainer who watches
     // keeps getting notified with the toggle off. Row-level: opted-out users get no row at all.
-    await pool.query(
+    const { rows: notified } = await pool.query<{ user_id: string }>(
       `insert into notifications (user_id, type, payload)
        select uid, 'skill.new_version',
               jsonb_build_object('namespaceSlug',$2::text,'skillSlug',$3::text,'semver',$4::text)
@@ -149,9 +162,27 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
                 where s.id = $1
              ) m
              join users u on u.id = m.uid and u.new_version_notifications
-         ) recipients`,
+         ) recipients
+       returning user_id`,
       [row.skill_id, row.ns_slug, row.skill_slug, row.semver],
     );
+
+    // §35.6: tell the SUBMITTER's followers — visibility-gated at insert (invariant #3), and
+    // deduped against everyone the skill.new_version insert just notified (a watch/maintainer
+    // notification for the same event wins). Advisory: a failure never un-publishes the version.
+    if (row.created_by) {
+      try {
+        await fanOutToFollowers(pool, {
+          type: (prior[0]?.n ?? 0) > 0 ? "follow.new_version" : "follow.new_skill",
+          actorId: row.created_by,
+          payload: { namespaceSlug: row.ns_slug, skillSlug: row.skill_slug, semver: row.semver, skillId: row.skill_id },
+          skill: { namespaceId: row.namespace_id, visibility: row.visibility },
+          excludeUserIds: notified.map((r) => r.user_id),
+        });
+      } catch (err) {
+        console.error(JSON.stringify({ level: "warn", msg: "follower fan-out failed (non-fatal)", versionId: row.id, err: String(err) }));
+      }
+    }
 
     published++;
   }

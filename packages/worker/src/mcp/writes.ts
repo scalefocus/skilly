@@ -12,7 +12,7 @@
 //      author-and-self-approve hole (§29 Excluded surface) at the code level, not in a doc.
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { categorySlug, checkCategoryNames, normalizeCategoryNames, type KnownCategory } from "@skilly/shared";
+import { categorySlug, checkCategoryNames, fanOutToFollowers, normalizeCategoryNames, type KnownCategory } from "@skilly/shared";
 import {
   MAX_MENTIONS_PER_MESSAGE,
   PURE_SCANNERS,
@@ -525,6 +525,8 @@ export async function createSkillRequest(
       clientName,
     });
     await awardAchievement(client, userId, "first_request"); // §31 Wishful Thinker
+    // §35.6: the requester's followers hear about it. Requests are org-visible — no skill gate.
+    await fanOutToFollowers(client, { type: "follow.request_created", actorId: userId, payload: { requestId: id, requestTitle: title }, skill: null });
     await client.query("commit");
     M.mcpWrites.inc({ kind: "request" });
     return { ok: true, id };

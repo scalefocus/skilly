@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.12.0",
+    date: "2026-09-24",
+    summary:
+      "Follow colleagues: a Follow button on the leaderboard, hover cards, achievement halls, skill maintainers and the marketplace directory tells you in-app when they publish a skill or version, post or fulfil a request, or earn a badge — only for skills you can see. Manage whom you follow, or stop people following you, under Profile → Following; the leaderboard gains a Followed ranking and two new badges.",
+  },
+  {
     version: "2.11.1",
     date: "2026-09-23",
     summary:

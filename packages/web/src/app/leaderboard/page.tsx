@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useApi, EmptyState, ScrollToTop, formatCount } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
+import { FollowButton } from "../../components/FollowButton";
 
 interface Entry {
   userId: string;
@@ -15,12 +16,15 @@ interface Entry {
   requestsFulfilled: number;
   skillsWatched: number;
   skillsRequested: number;
+  /** Active followers (§35.7) — 0 while the person has paused follows. */
+  followers: number;
+  followable: boolean;
 }
 
 function Leaderboard() {
   const [window, setWindow] = useState<"all" | "30d">("all");
-  // Ranking metric (§26): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested.
-  const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested">("installs");
+  // Ranking metric (§26/§35.7): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested / followers.
+  const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested" | "followed">("installs");
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
   // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills and "Requests" to Mine).
   const { data: me } = useApi<{ userId: string | null }>("/api/me");
@@ -58,6 +62,7 @@ function Leaderboard() {
           <button type="button" className={`sort-opt${sort === "requests" ? " sort-on" : ""}`} onClick={() => setSort("requests")}>Requests fulfilled</button>
           <button type="button" className={`sort-opt${sort === "watched" ? " sort-on" : ""}`} onClick={() => setSort("watched")}>Watched</button>
           <button type="button" className={`sort-opt${sort === "requested" ? " sort-on" : ""}`} onClick={() => setSort("requested")}>Requested</button>
+          <button type="button" className={`sort-opt${sort === "followed" ? " sort-on" : ""}`} onClick={() => setSort("followed")}>Followed</button>
         </div>
         <div className="sort-toggle" role="group" aria-label="Leaderboard window">
           <button type="button" className={`sort-opt${window === "all" ? " sort-on" : ""}`} onClick={() => setWindow("all")}>All time</button>
@@ -94,14 +99,15 @@ function Leaderboard() {
                   {e.requestsFulfilled > 0 && <> · {e.requestsFulfilled} request{e.requestsFulfilled === 1 ? "" : "s"} fulfilled</>}
                   {e.skillsWatched > 0 && <> · {e.skillsWatched} skill{e.skillsWatched === 1 ? "" : "s"} watched</>}
                   {e.skillsRequested > 0 && <> · {e.skillsRequested} skill{e.skillsRequested === 1 ? "" : "s"} requested</>}
+                  {e.followers > 0 && <> · {e.followers} follower{e.followers === 1 ? "" : "s"}</>}
                 </div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 600 }}>
-                  {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : sort === "requested" ? e.skillsRequested : e.installs)}
+                  {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : sort === "requested" ? e.skillsRequested : sort === "followed" ? e.followers : e.installs)}
                 </div>
                 <div className="muted mono" style={{ fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : sort === "requested" ? "requested" : "installs"}
+                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : sort === "requested" ? "requested" : sort === "followed" ? "followers" : "installs"}
                 </div>
               </div>
               <div className="lb-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -112,6 +118,8 @@ function Leaderboard() {
                     {reaching === e.userId ? "…" : "Reach out"}
                   </button>
                 )}
+                {/* §35.4 — right of Reach out; renders nothing on your own row or for the unfollowable. */}
+                <FollowButton userId={e.userId} followable={e.followable} name={e.displayName} />
               </div>
             </div>
             );

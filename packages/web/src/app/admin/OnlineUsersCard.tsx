@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import nextDynamic from "next/dynamic";
 import { LoadMoreSentinel } from "../../components/ui";
 import { UserBubble } from "../../components/UserBubble";
+import { FollowButton } from "../../components/FollowButton";
 import { readPref, writePref, PREF_DAU_RANGE, PREF_ONLINE_WINDOW } from "../../lib/prefs";
 import { CollapsibleCard } from "./CollapsibleCard";
 
@@ -41,7 +42,7 @@ const ONLINE_WINDOWS: { mins: number; label: string; long: string }[] = [
 ];
 const toOnlineWindow = (s: string): number => (ONLINE_WINDOWS.some((w) => w.mins === Number(s)) ? Number(s) : 5);
 
-interface OnlineUser { userId: string; displayName: string; email: string; avatar: string | null; lastSeen: string; lastSeenPage: string | null }
+interface OnlineUser { userId: string; displayName: string; email: string; avatar: string | null; lastSeen: string; lastSeenPage: string | null; followable?: boolean }
 const ONLINE_PAGE = 100;
 
 /** Everyone shown is active within the selected window, which can now reach 24h — so up to hours. */
@@ -251,6 +252,8 @@ export function OnlineUsersCard({ open, onToggle }: { open: boolean; onToggle: (
                     {reaching === u.userId ? "…" : "Reach out"}
                   </button>
                 )}
+                {/* §35.4 — right of Reach out; nothing on your own row or for the unfollowable. */}
+                <FollowButton userId={u.userId} followable={u.followable === true} name={u.displayName} />
               </div>
             </div>
           ))}

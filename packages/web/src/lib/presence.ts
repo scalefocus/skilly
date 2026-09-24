@@ -61,6 +61,8 @@ export interface OnlineUser {
   avatar: string | null;
   lastSeen: string; // UTC ISO
   lastSeenPage: string | null;
+  /** §35.4 — Follow eligibility (active by construction here, so = allow_follows). */
+  followable: boolean;
 }
 
 const ONLINE_WHERE = `u.status = 'active' and u.last_seen > now() - make_interval(mins => $1)`;
@@ -69,8 +71,9 @@ const likeArg = (q: string) => `%${q.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}
 /** Online users, most-recently-active first, optional name/email search, paginated. */
 export async function listOnlineUsers(offset: number, limit: number, q?: string, windowMins: number = ONLINE_WINDOW_MINUTES): Promise<OnlineUser[]> {
   const search = q && q.trim() ? q : null;
-  const { rows } = await pool.query<{ id: string; display_name: string; email: string; avatar: string | null; last_seen: string; last_seen_page: string | null }>(
-    `select u.id, u.display_name, u.email, u.avatar, u.last_seen, u.last_seen_page
+  const { rows } = await pool.query<{ id: string; display_name: string; email: string; avatar: string | null; last_seen: string; last_seen_page: string | null; followable: boolean }>(
+    `select u.id, u.display_name, u.email, u.avatar, u.last_seen, u.last_seen_page,
+            (u.erased_at is null and u.allow_follows) as followable
        from users u
       where ${ONLINE_WHERE}
         ${search ? `and (u.display_name ilike $4 escape '\\' or u.email ilike $4 escape '\\')` : ""}
@@ -85,6 +88,7 @@ export async function listOnlineUsers(offset: number, limit: number, q?: string,
     avatar: r.avatar,
     lastSeen: new Date(r.last_seen).toISOString(),
     lastSeenPage: r.last_seen_page,
+    followable: r.followable === true,
   }));
 }
 

@@ -17,6 +17,8 @@ export interface AchievementsView {
   total: number;
   /** §31.10 — when they first held the whole catalog, or null. Null while `hidden`. */
   heroAt: string | null;
+  /** §35.4 — the hall's Follow button shows only when true (and never on your own hall). */
+  followable?: boolean;
 }
 
 const GROUP_COLOR: Record<AchievementGroup, string> = {

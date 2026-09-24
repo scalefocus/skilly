@@ -171,9 +171,22 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     await pool.query(`update users set new_version_notifications = false where id = $1`, [user]);
     await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1,$2) on conflict do nothing`, [hosted, user]);
 
+    // §35.6 following people: a plain follower of the submitter (E2E) gets follow.new_skill; the
+    // explicit maintainer ALSO follows them but already gets skill.new_version for the same publish,
+    // so the dedup rule gives them no follow row.
+    const fan = (await pool.query<{ id: string }>(
+      `insert into users (entra_object_id, email, display_name) values ('e2e-fan','fan@org','Fan')
+       on conflict (entra_object_id) do update set email = excluded.email returning id`,
+    )).rows[0]!.id;
+    await pool.query(`insert into user_follows (follower_id, followee_id) values ($1,$3), ($2,$3) on conflict do nothing`, [fan, maintainer, user]);
+
     // Publish sweep handles hosted (tar.gz + zip) + both pointers.
     const repoRoot = join(work, "repos");
     const n = await publishPendingVersions(pool, { store, repoRoot });
+    const followRows = async (uid: string) =>
+      (await pool.query<{ skill: string }>(`select payload->>'skillSlug' as skill from notifications where user_id = $1 and type = 'follow.new_skill'`, [uid])).rows.map((r) => r.skill);
+    assert.ok((await followRows(fan)).includes("pdf"), "the submitter's follower hears about the new skill");
+    assert.ok(!(await followRows(maintainer)).includes("pdf"), "skill.new_version for the same publish wins over the follow row");
     assert.ok(n >= 4, `published >= 4 versions (got ${n})`);
 
     // The zip-delivered skill is cloneable with the right content.

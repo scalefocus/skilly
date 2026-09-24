@@ -40,8 +40,10 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: "first_message", name: "Icebreaker", blurb: "You said something. It counts.", howToEarn: "Send a message — a direct chat, a review thread, a request or skill discussion.", glyph: "🧊", group: "Talk" },
   { key: "first_reply", name: "Conversationalist", blurb: "You joined a conversation someone else started.", howToEarn: "Reply in a thread that another person opened.", glyph: "💬", group: "Talk" },
   { key: "first_mention", name: "Name Dropper", blurb: "You @mentioned a person or #mentioned a skill.", howToEarn: "Use @person or #skill in a message.", glyph: "📣", group: "Talk" },
+  { key: "followers_10", name: "Cult Following", blurb: "Ten people follow what you do. Lead wisely.", howToEarn: "Have 10 colleagues follow you.", glyph: "🕯️", group: "Talk" },
   // Explore
   { key: "first_watch", name: "Stalker, but Nicely", blurb: "You are keeping an eye on a skill.", howToEarn: "Watch a skill to be told about new versions.", glyph: "👀", group: "Explore" },
+  { key: "first_follow", name: "Right Behind You", blurb: "You followed someone. They will never know.", howToEarn: "Follow a colleague from the leaderboard, a hover card or their achievements.", glyph: "👣", group: "Explore" },
   { key: "first_rating", name: "Critic", blurb: "You told the org what a skill is worth.", howToEarn: "Rate a skill on its page.", glyph: "⭐", group: "Explore" },
   { key: "onboarded", name: "Read the Manual", blurb: "You actually read Quick start. Respect.", howToEarn: "Complete the Quick start guide.", glyph: "📖", group: "Explore" },
   // Habits

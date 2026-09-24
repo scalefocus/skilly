@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useApi, EmptyState, ScrollToTop, ShareButton } from "../../../components/ui";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { UserBubble } from "../../../components/UserBubble";
+import { FollowButton } from "../../../components/FollowButton";
 import { AchievementGrid, type AchievementsView } from "../../../components/AchievementGrid";
 import { LevelBar } from "../../../components/LevelBar";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
@@ -75,6 +76,8 @@ function HallInner() {
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <ShareButton label="Share" title="Copy a link to this hall" />
+          {/* §35.4 — next to Share on someone else's hall; shown even when their trophies are private. */}
+          {!isSelf && <FollowButton userId={data.userId} followable={data.followable === true} name={data.displayName} />}
           {isSelf && <Link href="/profile#achievements" className="btn-ghost mono" style={{ fontSize: 12 }}>Manage →</Link>}
         </div>
       </section>

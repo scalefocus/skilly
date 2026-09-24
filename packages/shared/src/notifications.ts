@@ -34,6 +34,12 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "system.error": { title: "System log events", tone: "danger" },
   "request.fulfilled": { title: "Skill request fulfilled", tone: "ok" },
   "achievement.earned": { title: "Badge earned", tone: "ok" },
+  // Following people (§35.6) — in-app only, like achievement.earned.
+  "follow.new_skill": { title: "New skill from someone you follow", tone: "ok" },
+  "follow.new_version": { title: "New version from someone you follow", tone: "ok" },
+  "follow.achievement": { title: "Badge earned by someone you follow", tone: "ok" },
+  "follow.request_created": { title: "New request from someone you follow", tone: "muted" },
+  "follow.request_fulfilled": { title: "Request fulfilled by someone you follow", tone: "ok" },
 };
 
 /** The subject-line title for a type; a generic fallback so no unknown type ever leaks its key. */

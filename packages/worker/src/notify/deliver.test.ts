@@ -283,3 +283,24 @@ test("renderNotification: achievement.earned carries the level it moved you to (
   assert.doesNotMatch(legacy, /Level|Hero/);
   assert.match(legacy, /You earned a badge: Stalker, but Nicely\./);
 });
+
+test("renderNotification: follow.* — the shared sentence + CTA, never the generic line (§35.6)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const r = renderNotification({
+    type: "follow.new_version",
+    payload: { actorId: "u1", actorName: "Ada Lovelace", namespaceSlug: "team", skillSlug: "pdf", semver: "1.3.0" },
+  });
+  assert.equal(r.subject, "Skilly - New version from someone you follow");
+  assert.match(r.text, /^Ada Lovelace published version 1\.3\.0 of team\/pdf\. \[View the skill\]\(https:\/\/skilly\.test\/skills\/team\/pdf\)$/);
+  assert.equal(r.webhook.event, "follow.new_version");
+  const badge = renderNotification({ type: "follow.achievement", payload: { actorId: "u1", actorName: "Ada", badgeKey: "first_watch", badgeName: "Stalker, but Nicely" } });
+  assert.match(badge.text, /Ada earned the Stalker, but Nicely badge\. \[See their badges\]\(https:\/\/skilly\.test\/achievements\/u1\?badge=first_watch\)/);
+});
+
+test("sweep: follow.* rows are in-app only — delivered without any email (§35.6)", async () => {
+  const { pool, delivered } = fakePool([row({ id: "f1", type: "follow.new_skill" }), row({ id: "n2" })]);
+  const email = captureEmail();
+  await deliverPendingNotifications(pool, { email });
+  assert.deepEqual(delivered.sort(), ["f1", "n2"]);
+  assert.equal(email.sent.length, 1); // only the non-follow row emailed
+});

@@ -10,8 +10,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cachedGet } from "./ui";
-import { BADGE_META, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
+import { BADGE_META, badgeIcon, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
 import { levelLabel } from "@skilly/shared/achievements";
+import { FollowButton } from "./FollowButton";
 
 /** `GET /api/users/:id/card`. Badges are NOT here — they come from the `/api/leaders` map the
  *  bubble already holds (§28). */
@@ -28,6 +29,8 @@ export interface UserCardData {
   achievementCount?: number | null;
   /** §31.10 — `hero_at` is stamped. Not derivable from the count once the catalog has grown. */
   achievementHero?: boolean;
+  /** §35.4 — viewer-independent; the Follow ↔ Unfollow state comes from the page-wide store. */
+  followable?: boolean;
 }
 
 const OPEN_DELAY_MS = 300; // hover intent — a pointer crossing a dense table must not fire cards
@@ -349,13 +352,21 @@ function DirectoryCardBody({
           {badges.map((b) => (
             <div key={`${b.metric}:${b.window}`} className="dircard-badge">
               <span aria-hidden style={{ background: BADGE_META[b.metric].color }} className="dircard-badge-dot">
-                {BADGE_META[b.metric].icon}
+                {badgeIcon(b)}
               </span>
               <span>{badgeLabel(b)}</span>
             </div>
           ))}
         </div>
       )}
+
+      {data?.followable ? (
+        // §35.4 — the card's one state-changing control, as its last row. FollowButton renders
+        // nothing on your own card.
+        <div className="dircard-follow">
+          <FollowButton userId={data.userId} followable name={data.displayName} />
+        </div>
+      ) : null}
     </>
   );
 }

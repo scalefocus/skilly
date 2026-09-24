@@ -13,6 +13,7 @@ import {
   isAchievementKey,
   tripleThreatDue,
 } from "@skilly/shared/achievements";
+import { fanOutToFollowers } from "@skilly/shared/follows";
 
 type Db = Pool | PoolClient;
 
@@ -65,8 +66,28 @@ export async function awardAchievement(db: Db, userId: string, key: string | nul
         [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
       );
     }
+    await notifyFollowersOfBadges(db, userId, earned);
   }
   return earned;
+}
+
+/**
+ * §35.6 `follow.achievement` — one row per new badge per follower, riding the same guard as the
+ * earner's own `achievement.earned` (never on a backfill, never while the platform toggle is off).
+ * Skipped entirely while the earner keeps their trophies private (`achievements_hidden`); the
+ * shared fan-out applies the pause and the status filters. No skill identity, so no visibility gate.
+ */
+async function notifyFollowersOfBadges(db: Db, userId: string, earned: string[]): Promise<void> {
+  const { rows } = await db.query<{ achievements_hidden: boolean }>(`select achievements_hidden from users where id = $1`, [userId]);
+  if (rows[0]?.achievements_hidden !== false) return;
+  for (const k of earned) {
+    await fanOutToFollowers(db, {
+      type: "follow.achievement",
+      actorId: userId,
+      payload: { badgeKey: k, badgeName: achievementDef(k)!.name },
+      skill: null,
+    });
+  }
 }
 
 /**
@@ -152,6 +173,8 @@ export interface AchievementsView {
   /** §31.10 — when they first held the whole catalog, or null. Never derived from `earned.length`
    *  (a grown catalog must not un-Hero anyone); null while `hidden`, like the badges themselves. */
   heroAt: string | null;
+  /** §35.4 — viewer-independent Follow eligibility. */
+  followable: boolean;
 }
 
 /**
@@ -159,8 +182,8 @@ export interface AchievementsView {
  * inactive — consistent with the leaderboard hiding deprovisioned users, §31.5).
  */
 export async function getAchievements(targetId: string, viewerId: string, db: Db = pool): Promise<AchievementsView | null> {
-  const { rows } = await db.query<{ id: string; display_name: string; avatar: string | null; hidden: boolean; hero_at: Date | null }>(
-    `select id, display_name, avatar, achievements_hidden as hidden, hero_at
+  const { rows } = await db.query<{ id: string; display_name: string; avatar: string | null; hidden: boolean; hero_at: Date | null; allow_follows: boolean }>(
+    `select id, display_name, avatar, achievements_hidden as hidden, hero_at, allow_follows
        from users where id = $1 and erased_at is null and status = 'active'`,
     [targetId],
   );
@@ -187,6 +210,9 @@ export async function getAchievements(targetId: string, viewerId: string, db: Db
     // Hidden from a non-self viewer means hidden entirely: the level bar and the "Hero since" line
     // would restate the very count the opt-out exists to withhold (§31.5).
     heroAt: hidden ? null : (u.hero_at?.toISOString() ?? null),
+    // §35.4 — the hall only exists for active, non-erased people, so followable = allow_follows.
+    // Independent of `hidden`: keeping trophies private does not gate follows.
+    followable: u.allow_follows === true,
   };
 }
 

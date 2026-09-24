@@ -15,7 +15,7 @@ export async function GET(req: Request) {
     .split(",")
     .map((t) => t.trim())
     .filter((t) => /^[a-z_]+\.[a-z_]+$/.test(t))
-    .slice(0, 20);
+    .slice(0, 40); // comfortably above the number of notification types (22 with §35)
   // Bound storage: when the inbox is loaded, keep only the most recent 1000 per user and
   // delete the rest (§12). Runs on the first page / unread poll, concurrently with the reads —
   // the newest page is never pruned, so it can't race; a no-op for users under the cap.

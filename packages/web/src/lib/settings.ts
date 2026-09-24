@@ -446,6 +446,12 @@ export async function setUserAchievementsHidden(userId: string, hidden: boolean)
   await pool.query(`update users set achievements_hidden = $2, updated_at = now() where id = $1`, [userId, hidden]);
 }
 
+/** §35.3 "Allow others to follow me". Off PAUSES every follow on the user (rows kept, button
+ *  hidden, no follower notifications, followers stat reads 0). Self-service — no audit. */
+export async function setUserAllowFollows(userId: string, allow: boolean): Promise<void> {
+  await pool.query(`update users set allow_follows = $2, updated_at = now() where id = $1`, [userId, allow]);
+}
+
 /** The §12 email-channel opt-out: on = receive notification email (default), off = in-app
  *  only. Governs email as a channel — both transports respect it. Self-service — no audit. */
 export async function setUserEmailNotifications(userId: string, enabled: boolean): Promise<void> {

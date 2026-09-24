@@ -7,6 +7,7 @@
 import { pool } from "./db";
 import { userLabel } from "./userLabel";
 import { ONLINE_WINDOW_MINUTES } from "./presence";
+import { followableSql } from "@skilly/shared/follows";
 
 /** What `GET /api/users/:id/card` returns. Badges are deliberately NOT here — the bubble already
  *  holds the whole `/api/leaders` map for the page (§21) and reads them from memory. */
@@ -27,6 +28,9 @@ export interface UserCard {
   /** §31.10 — `users.hero_at` is stamped. The count alone cannot say "Hero": once the catalog
    *  grows past a Hero's tally the level stops equalling the total, and they are still a Hero. */
   achievementHero: boolean;
+  /** §35.4 — active, not erased, allows follows. Viewer-independent: whether THIS viewer follows
+   *  the person comes from `/api/me/following`, never from here. */
+  followable: boolean;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -56,9 +60,10 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     achievement_count: string;
     achievement_hero: boolean;
     achievements_enabled: boolean;
+    followable: boolean;
   }>(
     `select id, display_name, email, job_title, office_location, department, directory_hidden,
-            erased_at, last_seen,
+            erased_at, last_seen, ${followableSql("users")} as followable,
             (last_seen is not null and last_seen > now() - make_interval(mins => $2::int)) as online,
             achievements_hidden,
             (select count(*) from user_achievements ua where ua.user_id = users.id) as achievement_count,
@@ -88,6 +93,7 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     online: r.online === true,
     achievementCount: achievementsVisible ? Number(r.achievement_count) : null,
     achievementHero: achievementsVisible && r.achievement_hero === true,
+    followable: r.followable === true,
   };
 }
 
