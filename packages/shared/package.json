@@ -78,6 +78,10 @@
     "./icon": {
       "types": "./dist/icon.d.ts",
       "default": "./dist/icon.js"
+    },
+    "./follows": {
+      "types": "./dist/follows.d.ts",
+      "default": "./dist/follows.js"
     }
   },
   "scripts": {

@@ -5,12 +5,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeLeaderBadges, type BoardReader } from "./leaders";
-import type { LeaderboardEntry, LeaderboardSort, LeaderboardWindow } from "./leaderboard";
+import { leaderboardOrderBy, type LeaderboardEntry, type LeaderboardSort, type LeaderboardWindow } from "./leaderboard";
 
 function entry(userId: string, over: Partial<LeaderboardEntry> = {}): LeaderboardEntry {
   return {
     userId, displayName: userId, email: `${userId}@org`, avatar: null,
     skillCount: 0, installs: 0, requestsFulfilled: 0, skillsWatched: 0, skillsRequested: 0,
+    followers: 0, followable: true,
     ...over,
   };
 }
@@ -21,6 +22,7 @@ const VALUE: Record<LeaderboardSort, (e: LeaderboardEntry) => number> = {
   requests: (e) => e.requestsFulfilled,
   watched: (e) => e.skillsWatched,
   requested: (e) => e.skillsRequested,
+  followed: (e) => e.followers,
 };
 
 /** A fake board: the same rows for every window, sorted desc by the requested metric — exactly the
@@ -68,4 +70,20 @@ test("a metric with nobody above zero has no leader, per window", async () => {
 
 test("empty boards produce an empty map", async () => {
   assert.deepEqual(await computeLeaderBadges(reader([])), {});
+});
+
+test("followers (§35.7): the most-followed person leads 'followed' per window — Influencer-in-Chief / Trendsetter", async () => {
+  const map = await computeLeaderBadges(reader(
+    [entry("star", { followers: 12 }), entry("newcomer", { followers: 3 })],
+    [entry("star", { followers: 1 }), entry("newcomer", { followers: 3 })],
+  ));
+  assert.deepEqual(map["star"], [{ metric: "followed", window: "all" }]);
+  assert.deepEqual(map["newcomer"], [{ metric: "followed", window: "30d" }]);
+});
+
+test("leaderboardOrderBy: the existing five chains are unchanged plus followers last; Followed leads with followers (§35.7)", () => {
+  assert.equal(leaderboardOrderBy("installs"), "installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, followers desc, display_name asc");
+  assert.equal(leaderboardOrderBy("requested"), "skills_requested desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, followers desc, display_name asc");
+  assert.equal(leaderboardOrderBy("watched"), "skills_watched desc, installs desc, skill_count desc, requests_fulfilled desc, skills_requested desc, followers desc, display_name asc");
+  assert.equal(leaderboardOrderBy("followed"), "followers desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, display_name asc");
 });

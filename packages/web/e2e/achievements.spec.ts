@@ -22,12 +22,12 @@ test("profile: the Achievements card — the level bar, every badge, locked hint
   // §31.10: the level bar replaced the old "N of M earned" text line and reports the same fact.
   const bar = page.getByTestId("level-bar");
   await expect(bar).toBeVisible();
-  await expect(bar).toContainText(/(Level \d+|Hero) — \d+ of 20/);
+  await expect(bar).toContainText(/(Level \d+|Hero) — \d+ of 22/);
   const level = Number(await bar.getAttribute("data-level"));
   expect(level).toBeGreaterThanOrEqual(1); // "Read the Manual" was just stamped above
-  await expect(bar.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "20");
+  await expect(bar.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "22");
   await expect(bar.getByRole("progressbar")).toHaveAttribute("aria-valuenow", String(level));
-  await expect(card.locator("[data-badge]")).toHaveCount(20);
+  await expect(card.locator("[data-badge]")).toHaveCount(22);
   await expect(card.locator('[data-badge="onboarded"]')).toHaveAttribute("data-earned", "1");
   await expect(card.locator('[data-badge="onboarded"]')).toContainText("Read the Manual");
   // Catalog groups render as headings in order.
@@ -58,10 +58,10 @@ test("hall: own view with ?badge= spotlight and the level bar; an unknown id is 
   await expect(tile).toBeVisible();
   await expect(tile).toHaveAttribute("data-earned", "1");
   // The header's level bar carries the N-of-M count — the body no longer repeats a total (§31.5).
-  await expect(page.getByTestId("level-bar")).toContainText(/(Level \d+|Hero) — \d+ of 20/);
+  await expect(page.getByTestId("level-bar")).toContainText(/(Level \d+|Hero) — \d+ of 22/);
   await expect(page.getByTestId("hall-count")).toHaveCount(0);
   // The owner sees locked badges here too (same content as the profile card).
-  await expect(page.locator("[data-badge]")).toHaveCount(20);
+  await expect(page.locator("[data-badge]")).toHaveCount(22);
   await expect(page.getByRole("button", { name: "Share", exact: true })).toBeVisible();
 
   await page.goto(`/achievements/${NIL}`, { timeout: 20_000 });
@@ -78,7 +78,7 @@ test("opt-out round-trips through /api/me and never hides the owner's own view",
     // Self still gets the full list (hidden applies to OTHER viewers only).
     const own = await (await page.request.get(`/api/users/${me.userId}/achievements`)).json();
     expect(own.hidden).toBe(false);
-    expect(own.total).toBe(20);
+    expect(own.total).toBe(22);
     expect(own.earned.map((e: { key: string }) => e.key)).toContain("onboarded");
     await page.goto("/profile", { timeout: 20_000 });
     const group = page.getByRole("group", { name: "Achievements visibility" });
@@ -142,7 +142,7 @@ test("levels: the bulk map drives the bubble ring, and the opt-out removes the c
 
   // The ring itself: the profile page's own bubble is labelled with the level.
   await page.goto("/profile", { timeout: 20_000 });
-  await expect(page.getByRole("img", { name: /^(Level \d+ of 20|Hero — \d+ of 20)$/ }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("img", { name: /^(Level \d+ of 22|Hero — \d+ of 22)$/ }).first()).toBeVisible({ timeout: 20_000 });
 });
 
 test("levels: the ring never appears on a bubble whose owner has no badges", async ({ page }) => {

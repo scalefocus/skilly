@@ -27,6 +27,8 @@ export interface DirectoryRow {
   /** When the sweep last evaluated this marketplace; null = not since it was enabled (§30.5). */
   syncedAt: string | null;
   contact: DirectoryContact;
+  /** §35.4 — the resolved contact person allows follows (false for the none/email states). */
+  contactFollowable: boolean;
   added: AddedState;
 }
 
@@ -54,12 +56,14 @@ export async function listMarketplaceDirectory(
   const { rows: nsRows } = await pool.query<{
     id: string; slug: string; display_name: string; maintainer_contact: string | null; marketplace_synced_at: Date | string | null;
     contact_user_id: string | null; contact_display_name: string | null; contact_avatar: string | null;
+    contact_allow_follows: boolean | null;
   }>(
     `select n.id, n.slug, n.display_name, n.maintainer_contact, n.marketplace_synced_at,
-            u.id as contact_user_id, u.display_name as contact_display_name, u.avatar as contact_avatar
+            u.id as contact_user_id, u.display_name as contact_display_name, u.avatar as contact_avatar,
+            u.allow_follows as contact_allow_follows
        from namespaces n
        left join lateral (
-         select id, display_name, avatar from users
+         select id, display_name, avatar, allow_follows from users
           where n.maintainer_contact is not null
             and lower(email) = lower(n.maintainer_contact)
             and status = 'active' and erased_at is null
@@ -121,6 +125,7 @@ export async function listMarketplaceDirectory(
       pluginCount,
       syncedAt: typeof raw === "string" ? toIso(raw) : null,
       contact: { kind: "none" }, // the platform owns it — no person to reach (§30.3)
+      contactFollowable: false,
       added: addedState(used.get("public") ?? []),
     });
   }
@@ -138,6 +143,8 @@ export async function listMarketplaceDirectory(
         n.maintainer_contact,
         n.contact_user_id ? { userId: n.contact_user_id, displayName: n.contact_display_name ?? "", avatar: n.contact_avatar } : null,
       ),
+      // The lateral join already resolved an ACTIVE, non-erased user, so followable = allow_follows.
+      contactFollowable: n.contact_user_id !== null && n.contact_allow_follows === true,
       added: addedState(used.get(`ns:${n.id}`) ?? []),
     });
   }

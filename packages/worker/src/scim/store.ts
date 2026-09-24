@@ -295,6 +295,9 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // RUM samples (§32.3): anonymise in place — rows stay for the aggregates, the person goes.
     // The tombstone never deletes the users row, so the FK's ON DELETE SET NULL cannot do this.
     await client.query(`update rum_samples set user_id = null where user_id = $1`, [userId]);
+    // Follows (§35.9) are personal data in BOTH directions: whom they followed, and who followed
+    // them. Mirrored in web lib/eraseUser.ts — keep the two in sync.
+    await client.query(`delete from user_follows where follower_id = $1 or followee_id = $1`, [userId]);
     // Scrub + detach the row (tombstone). Display label retains the former email
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";
@@ -304,7 +307,7 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     await client.query(
       `update users set display_name = $2, email = '', avatar = null,
               job_title = null, office_location = null, department = null, directory_hidden = false,
-              achievements_hidden = false, time_zone = null, hero_at = null,
+              achievements_hidden = false, time_zone = null, hero_at = null, allow_follows = true,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [userId, deletedLabel],

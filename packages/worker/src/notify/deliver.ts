@@ -15,7 +15,7 @@
 // (in-app/webhook), never queuing up to burst-send later.
 import type { Pool } from "pg";
 import { GraphSendError } from "@skilly/shared/email";
-import { notificationTitle } from "@skilly/shared";
+import { followNotificationContent, isFollowNotificationType, notificationTitle } from "@skilly/shared";
 
 const MAX_ATTEMPTS = Number(process.env.NOTIFY_MAX_ATTEMPTS ?? 5);
 const BATCH = Number(process.env.NOTIFY_BATCH ?? 50);
@@ -238,6 +238,18 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
+  // follow.* (§35.6) — in-app only like achievements; rendered from the sentence the in-app
+  // page shares, so the two can never disagree.
+  const follow = followNotificationContent(n.type, p);
+  if (follow) {
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${follow.sentence} ${cta(follow.ctaLabel, follow.path)}`,
+      webhook: { event: n.type, title: s, actor: typeof p.actorName === "string" ? p.actorName : null, url: abs(follow.path) },
+    };
+  }
+
   // Generic fallback — ALWAYS human, NEVER JSON (§12): any unknown/new type gets a sane email
   // instead of leaking its payload to the recipient.
   const s = subj("Notification");
@@ -291,8 +303,9 @@ export async function deliverPendingNotifications(pool: Pool, channels: Delivery
   let failed = 0;
 
   for (const row of rows) {
-    // §31.4: achievements never ride the email/webhook channels — in-app is the delivery.
-    if (!hasExternal || row.type === "achievement.earned") {
+    // §31.4 / §35.6: achievements and follower notifications never ride the email/webhook
+    // channels — in-app is the delivery.
+    if (!hasExternal || row.type === "achievement.earned" || isFollowNotificationType(row.type)) {
       // In-app only: nothing to send, just record that the queue handled it.
       await pool.query(`update notifications set delivered_at = now() where id = $1`, [row.id]);
       delivered++;

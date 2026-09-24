@@ -4,6 +4,7 @@ import Link from "next/link";
 import { EmptyState, LoadMoreSentinel, Pill, ScrollToTop } from "../../components/ui";
 import { useDateFmt } from "../../components/DateFormat";
 import { NOTIFICATION_LABELS } from "@skilly/shared/notifications";
+import { followNotificationContent } from "@skilly/shared/follows";
 
 const PAGE = 100;
 
@@ -158,6 +159,9 @@ export default function NotificationsPage() {
                     : null
                 : null;
             const eventCount = typeof n.payload.count === "number" ? n.payload.count : null;
+            // §35.6 follow.* — the shared sentence + CTA (the email renderer uses the same one), in
+            // place of the generic per-field links below.
+            const follow = followNotificationContent(n.type, n.payload);
             return (
               <div className="row" key={n.id} style={{ alignItems: "flex-start", gap: 12, opacity: n.readAt ? 0.62 : 1 }}>
                 {!n.readAt && <span aria-hidden className="glow-accent" style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--accent)", marginTop: 7, flexShrink: 0 }} />}
@@ -178,17 +182,25 @@ export default function NotificationsPage() {
                     <span className="muted mono" style={{ fontSize: 11, marginLeft: "auto" }}>{fmt.dateTime(n.createdAt)}</span>
                   </div>
                   {note && <p className="muted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>“{note}”</p>}
-                  {proposalId && (
+                  {follow && (
+                    <>
+                      <p style={{ fontSize: 13.5, margin: "8px 0 0" }}>{follow.sentence}</p>
+                      <Link href={follow.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                        {follow.ctaLabel.toLowerCase()} →
+                      </Link>
+                    </>
+                  )}
+                  {!follow && proposalId && (
                     <Link href={`/proposals/${proposalId}`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                       view proposal →
                     </Link>
                   )}
-                  {requestId && (
+                  {!follow && requestId && (
                     <Link href={`/requests/${requestId}`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                       view request →
                     </Link>
                   )}
-                  {skillHref && (
+                  {!follow && skillHref && (
                     <Link href={skillHref} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginLeft: proposalId || requestId ? 12 : 0 }}>
                       view skill →
                     </Link>

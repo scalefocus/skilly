@@ -15,6 +15,7 @@ import { resolvePredecessor } from "@skilly/shared/semver";
 import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
+import { FollowButton } from "../../../../components/FollowButton";
 
 // recharts is heavy (d3) and owner-only — code-split it out of the route's initial bundle.
 // ssr:false since the chart measures the DOM; a skeleton holds its height while it loads.
@@ -36,7 +37,7 @@ interface SkillSeries { range: SeriesRange; bucket: "day" | "week" | "month"; po
 
 interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked"; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null }
 interface RatingView { avg: number; count: number; distribution: number[]; mine: number | null }
-interface MaintainerView { userId: string; displayName: string; email: string; avatar: string | null; source: "admin" | "explicit" }
+interface MaintainerView { userId: string; displayName: string; email: string; avatar: string | null; source: "admin" | "explicit"; followable?: boolean }
 
 /** Profile bubble: Entra photo (captured at the user's own sign-in) or initials when absent. */
 function MaintainerBubble({ m }: { m: MaintainerView }) {
@@ -844,6 +845,8 @@ function MaintainersPanel({ ns, slug }: { ns: string; slug: string }) {
                     {reaching === m.userId ? "…" : "Reach out"}
                   </button>
                 )}
+                {/* §35.4 — right of Reach out; nothing on your own card or for the unfollowable. */}
+                <FollowButton userId={m.userId} followable={m.followable === true} name={m.displayName} />
               </div>
               {/* Remove: a platform admin, the namespace admin, or any of the skill's maintainers
                   can remove an explicit maintainer; self-removal always allowed (§19). */}

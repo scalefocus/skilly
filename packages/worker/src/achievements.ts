@@ -3,7 +3,7 @@
 // like `eraseUserByExternalId` mirrors `lib/eraseUser.ts`. The catalog and the pure rules are the
 // shared module's, so the two tiers cannot disagree about what a key means.
 import type { Pool, PoolClient } from "pg";
-import { ACHIEVEMENT_TOTAL, TRIPLE_THREAT_PARTS, achievementDef, habitKeysFor, isAchievementKey, tripleThreatDue } from "@skilly/shared";
+import { ACHIEVEMENT_TOTAL, TRIPLE_THREAT_PARTS, achievementDef, fanOutToFollowers, habitKeysFor, isAchievementKey, tripleThreatDue } from "@skilly/shared";
 
 type Db = Pool | PoolClient;
 
@@ -41,8 +41,28 @@ export async function awardAchievement(db: Db, userId: string, key: string | nul
         [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
       );
     }
+    await notifyFollowersOfBadges(db, userId, earned);
   }
   return earned;
+}
+
+/**
+ * §35.6 `follow.achievement` — one row per new badge per follower, riding the same guard as the
+ * earner's own `achievement.earned` (never on a backfill, never while the platform toggle is off).
+ * Skipped entirely while the earner keeps their trophies private (`achievements_hidden`); the
+ * shared fan-out applies the pause and the status filters. No skill identity, so no visibility gate.
+ */
+async function notifyFollowersOfBadges(db: Db, userId: string, earned: string[]): Promise<void> {
+  const { rows } = await db.query<{ achievements_hidden: boolean }>(`select achievements_hidden from users where id = $1`, [userId]);
+  if (rows[0]?.achievements_hidden !== false) return;
+  for (const k of earned) {
+    await fanOutToFollowers(db, {
+      type: "follow.achievement",
+      actorId: userId,
+      payload: { badgeKey: k, badgeName: achievementDef(k)!.name },
+      skill: null,
+    });
+  }
 }
 
 /** Best-effort variant for bare-pool write paths: never throws (logs and returns []). */

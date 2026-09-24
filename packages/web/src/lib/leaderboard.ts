@@ -24,6 +24,12 @@
 // request's created_at. No self-credit rule applies (there is no other party to exclude) and no
 // threshold gates it; the check on gaming is that requests are org-visible and admin-removable.
 //
+// followers (§35.7) counts user_follows rows on the user whose follower is active and not erased
+// (a deactivated follower drops out; re-enabling restores them). All-time = the current count; 30d =
+// follows created in the trailing 30 days that still exist. A user who PAUSED follows
+// (allow_follows = false) reads 0 — not shown, not ranked, no follow leader badge. Aggregate only:
+// the board never says WHO follows anyone.
+//
 // The board exposes only per-person AGGREGATES (display name, total installs, skill count) —
 // never skill identities, slugs, or namespaces — so it can't be used to enumerate or identify
 // restricted skills (the concern behind invariant #3). It is therefore identical for every
@@ -33,8 +39,8 @@ import { pool } from "./db";
 import { createTtlCache } from "./ttlCache";
 
 export type LeaderboardWindow = "all" | "30d";
-/** Ranking metric (§26): installs credited (default) / distinct skills / skill requests fulfilled / skills watched / skills requested. */
-export type LeaderboardSort = "installs" | "skills" | "requests" | "watched" | "requested";
+/** Ranking metric (§26/§35.7): installs credited (default) / distinct skills / skill requests fulfilled / skills watched / skills requested / followers. */
+export type LeaderboardSort = "installs" | "skills" | "requests" | "watched" | "requested" | "followed";
 
 export interface LeaderboardEntry {
   userId: string;
@@ -50,6 +56,10 @@ export interface LeaderboardEntry {
   skillsWatched: number;
   /** Skill requests this user posted, in any persisting state (open/fulfilled), by created_at. §26. */
   skillsRequested: number;
+  /** Active followers (§35.7) — 0 while the user has paused follows. */
+  followers: number;
+  /** §35.4 — viewer-independent, so the per-(window,sort) cache stays shared. */
+  followable: boolean;
 }
 
 // The board is viewer-independent and runs a heavy 3-CTE aggregate over proposals + access_log,
@@ -88,25 +98,17 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
   const sinceFulfilled = window === "30d" ? "and fulfilled_at >= now() - interval '30 days'" : "";
   const sinceWatched = window === "30d" ? "and sw.created_at >= now() - interval '30 days'" : "";
   const sinceRequested = window === "30d" ? "and created_at >= now() - interval '30 days'" : "";
+  const sinceFollowed = window === "30d" ? "and uf.created_at >= now() - interval '30 days'" : "";
   // A user appears with ANY kind of credit, so a pure request-fulfiller or a maintainer whose only
   // credit is a watched skill still ranks when sorting by that metric. Ties break by the other
   // metrics, then name (§26). NOTE: these bare names bind to the SELECT output aliases (Postgres
   // resolves ORDER BY names against output columns first), so every metric column must stay
   // numeric — a text-typed alias would sort lexicographically ("9" above "80").
-  // Every chain ends with skills_requested desc as the last numeric tie-breaker before name (§26).
-  const orderBy =
-    sort === "requests"
-      ? "requests_fulfilled desc, installs desc, skill_count desc, skills_watched desc, skills_requested desc, display_name asc"
-      : sort === "skills"
-        ? "skill_count desc, installs desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, display_name asc"
-        : sort === "watched"
-          ? "skills_watched desc, installs desc, skill_count desc, requests_fulfilled desc, skills_requested desc, display_name asc"
-          : sort === "requested"
-            ? "skills_requested desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, display_name asc"
-            : "installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, display_name asc";
+  const orderBy = leaderboardOrderBy(sort);
   const { rows } = await pool.query<{
     user_id: string; display_name: string; email: string; avatar: string | null;
     skill_count: number; installs: number; requests_fulfilled: number; skills_watched: number; skills_requested: number;
+    followers: number; followable: boolean;
   }>(
     // Each install_credits row = one credited install; skillCount = distinct skills behind them.
     // requests_fulfilled = fulfilled skill_requests where this user built the skill and the
@@ -137,20 +139,29 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
          from skill_requests
         where state in ('open', 'fulfilled') ${sinceRequested}
         group by requester_user_id
+     ), followed as (
+       select uf.followee_id as user_id, count(*) as followers
+         from user_follows uf
+         join users fu on fu.id = uf.follower_id and fu.status = 'active' and fu.erased_at is null
+        where true ${sinceFollowed}
+        group by uf.followee_id
      )
      select u.id as user_id, u.display_name, u.email, u.avatar,
             coalesce(c.skill_count, 0)::int as skill_count,
             coalesce(c.installs, 0)::int as installs,
             coalesce(f.requests_fulfilled, 0)::int as requests_fulfilled,
             coalesce(w.skills_watched, 0)::int as skills_watched,
-            coalesce(rq.skills_requested, 0)::int as skills_requested
+            coalesce(rq.skills_requested, 0)::int as skills_requested,
+            (case when u.allow_follows then coalesce(fo.followers, 0) else 0 end)::int as followers,
+            (u.status = 'active' and u.erased_at is null and u.allow_follows) as followable
        from users u
        left join credits c on c.user_id = u.id
        left join fulfilled f on f.user_id = u.id
        left join watched w on w.user_id = u.id
        left join requested rq on rq.user_id = u.id
+       left join followed fo on fo.user_id = u.id and u.allow_follows
       where u.status = 'active' and u.leaderboard_hidden = false
-        and (c.user_id is not null or f.user_id is not null or w.user_id is not null or rq.user_id is not null)
+        and (c.user_id is not null or f.user_id is not null or w.user_id is not null or rq.user_id is not null or fo.user_id is not null)
       order by ${orderBy}
       limit $1`,
     [LEADERBOARD_LIMIT],
@@ -165,5 +176,28 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
     requestsFulfilled: r.requests_fulfilled,
     skillsWatched: r.skills_watched,
     skillsRequested: r.skills_requested,
+    followers: r.followers,
+    followable: r.followable === true,
   }));
+}
+
+/**
+ * The ORDER BY for a sort (§26 / §35.7): the chosen metric first, then the other metrics in the
+ * fixed order installs, skills adopted, requests fulfilled, skills watched, skills requested,
+ * followers, then name. NOTE: these bare names bind to the SELECT output aliases (Postgres resolves
+ * ORDER BY names against output columns first), so every metric column must stay numeric — a
+ * text-typed alias would sort lexicographically ("9" above "80"). Exported for the unit test.
+ */
+export function leaderboardOrderBy(sort: LeaderboardSort): string {
+  const chain = ["installs", "skill_count", "requests_fulfilled", "skills_watched", "skills_requested", "followers"];
+  const primary: Record<LeaderboardSort, string> = {
+    installs: "installs",
+    skills: "skill_count",
+    requests: "requests_fulfilled",
+    watched: "skills_watched",
+    requested: "skills_requested",
+    followed: "followers",
+  };
+  const first = primary[sort] ?? "installs";
+  return [first, ...chain.filter((c) => c !== first)].map((c) => `${c} desc`).concat("display_name asc").join(", ");
 }

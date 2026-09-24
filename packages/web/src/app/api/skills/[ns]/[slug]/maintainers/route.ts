@@ -7,6 +7,7 @@ import { authOptions } from "../../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../../lib/access";
 import { findSkill } from "../../../../../../lib/catalog";
 import { getEffectiveMaintainers, canManageMaintainers, canRemoveMaintainer, addMaintainer, removeMaintainer } from "../../../../../../lib/maintainers";
+import { followableMap } from "../../../../../../lib/follows";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { isSkillVisible } from "@skilly/shared";
 
@@ -32,7 +33,10 @@ async function authorize(ns: string, slug: string) {
 export async function GET(_req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
   const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
   if ("error" in a) return a.error;
-  const maintainers = await getEffectiveMaintainers(a.skill);
+  const list = await getEffectiveMaintainers(a.skill);
+  // §35.4 — viewer-independent Follow eligibility per maintainer (for the button right of Reach out).
+  const followable = await followableMap(list.map((m) => m.userId));
+  const maintainers = list.map((m) => ({ ...m, followable: followable[m.userId] === true }));
   const canManage = await canManageMaintainers(a.access, a.skill, a.userId);
   // Anyone who can manage the list (platform admin / ns admin / a maintainer of this skill) may
   // remove any explicit maintainer (§19); the UI also shows the remove button on the caller's own

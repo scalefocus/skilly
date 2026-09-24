@@ -9,7 +9,7 @@
 // spelled out (§28).
 import { useApi } from "./ui";
 import { useDirectoryCard } from "./DirectoryCard";
-import { BADGE_META, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
+import { BADGE_META, badgeIcon, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
 import { ACHIEVEMENT_TOTAL, levelAriaLabel } from "@skilly/shared/achievements";
 import { ringDashArray, ringGeometry, showRing } from "./levelRing";
 
@@ -99,7 +99,7 @@ function LeaderBadgeIcon({ badge, bubbleSize }: { badge: LeaderBadgeInfo; bubble
         overflow: "visible",
       }}
     >
-      <span aria-hidden style={{ transform: "translateY(0.5px)" }}>{meta.icon}</span>
+      <span aria-hidden style={{ transform: "translateY(0.5px)" }}>{badgeIcon(badge)}</span>
       {badge.window === "all" && (
         <span
           aria-hidden

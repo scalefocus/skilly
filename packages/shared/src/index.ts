@@ -31,3 +31,4 @@ export * from "./whats-new.js";
 export * from "./achievements.js";
 export * from "./icon.js";
 export * from "./search.js";
+export * from "./follows.js";

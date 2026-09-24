@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useApi, ScrollToTop, ShareButton } from "../../components/ui";
@@ -7,6 +7,9 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
 import { AchievementGrid, type AchievementsView } from "../../components/AchievementGrid";
 import { LevelBar } from "../../components/LevelBar";
+import { CollapsibleCard } from "../admin/CollapsibleCard";
+import { useFollowStore, setFollow, loadFollowing } from "../../components/FollowButton";
+import { useDateFmt } from "../../components/DateFormat";
 
 interface Me {
   userId: string | null;
@@ -21,6 +24,7 @@ interface Me {
   directoryHidden: boolean;
   achievementsHidden: boolean;
   achievementsEnabled: boolean;
+  allowFollows: boolean;
 }
 
 const FORMAT_HINT: Record<"eu" | "us", string> = { eu: "dd/mm/yyyy · 24h", us: "mm/dd/yyyy · AM/PM" };
@@ -371,6 +375,111 @@ function AchievementsPref() {
   );
 }
 
+// §35.3 — "Allow others to follow me". Off PAUSES every follow on you: your Follow button is hidden
+// everywhere and your followers get no notifications about you, but the follows are kept and resume
+// when you turn it back on. Your own ability to follow others is unaffected.
+function FollowingPref() {
+  const { data, reload } = useApi<Me>("/api/me");
+  const [busy, setBusy] = useState(false);
+  if (!data) return <div className="skeleton" style={{ height: 120, borderRadius: "var(--radius)" }} />;
+  const choose = async (allow: boolean) => {
+    if (allow === data.allowFollows) return;
+    setBusy(true);
+    try {
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ allowFollows: allow }) });
+      reload();
+    } finally { setBusy(false); }
+  };
+  return (
+    <section className="reveal" style={{ marginBottom: 30 }} id="following">
+      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Following</h2>
+      <p className="page-sub" style={{ marginBottom: 16 }}>
+        Colleagues can follow you to be told, in-app, when you publish a skill or a new version, earn a badge, or post or
+        fulfil a skill request. Only you see whom you follow; nobody sees who follows them.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 130, fontWeight: 600, fontSize: 14 }}>Allow others to follow me</div>
+        <div className="sort-toggle" role="group" aria-label="Allow others to follow me">
+          {[{ label: "On", allow: true }, { label: "Off", allow: false }].map((o) => {
+            const active = o.allow === data.allowFollows;
+            return (
+              <button key={o.label} type="button" className={`sort-opt${active ? " sort-on" : ""}`} aria-pressed={active} disabled={busy} onClick={() => void choose(o.allow)}>
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12, margin: "0 0 16px" }}>
+        {data.allowFollows
+          ? "People can follow you and get notified when you publish, request or earn a badge."
+          : "Your Follow button is hidden and your followers get no notifications about you. They’re kept, and resume if you turn this back on."}
+      </p>
+      <FollowingPane />
+    </section>
+  );
+}
+
+const FOLLOWING_PANE_KEY = "skilly.profile.following.open";
+
+// §35.5 — "People I follow (N)": a single collapsible pane, collapsed by default and remembered per
+// browser. Newest follow first; Paused / Inactive tags; Unfollow removes the row immediately.
+function FollowingPane() {
+  const store = useFollowStore();
+  const fmt = useDateFmt();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  // Always re-read on mount: the page-wide store may have been loaded before a follow elsewhere.
+  useEffect(() => { void loadFollowing(true); }, []);
+  useEffect(() => {
+    try { setOpen(window.localStorage.getItem(FOLLOWING_PANE_KEY) === "1"); } catch { /* storage blocked → collapsed */ }
+  }, []);
+  const toggle = () => {
+    setOpen((o) => {
+      try { window.localStorage.setItem(FOLLOWING_PANE_KEY, o ? "0" : "1"); } catch { /* per-browser convenience only */ }
+      return !o;
+    });
+  };
+  const list = store.list;
+  const unfollow = async (userId: string) => {
+    setBusy(userId);
+    try { await setFollow(userId, false); } finally { setBusy(null); }
+  };
+  return (
+    // No count until the list has loaded — a transient "(0)" would be a lie.
+    <CollapsibleCard cardId="following" title={store.loaded ? `People I follow (${list.length})` : "People I follow"} open={open} onToggle={toggle}>
+      {!store.loaded ? (
+        <div className="skeleton" style={{ height: 60, borderRadius: "var(--radius)" }} />
+      ) : list.length === 0 ? (
+        <div className="muted" style={{ fontSize: 13.5 }} data-testid="following-empty">
+          You’re not following anyone yet — look for the Follow button on the leaderboard, a hover card or someone’s achievements.
+        </div>
+      ) : (
+        <div className="rows">
+          {list.map((f) => (
+            <div className="maintainer-item" key={f.userId} data-testid="following-row">
+              <div className="m-av"><UserBubble name={f.displayName} avatar={f.avatar} userId={f.userId} /></div>
+              <div className="m-name">
+                <div className="ttl">
+                  {f.state === "inactive" ? f.displayName : <Link href={`/achievements/${f.userId}`}>{f.displayName}</Link>}
+                </div>
+                <div className="sub mono" style={{ fontSize: 11 }}>Following since {fmt.date(f.since)}</div>
+              </div>
+              <div className="m-meta">
+                {f.state === "paused" && <span className="chip" title="They’ve turned follows off — you get no notifications about them for now.">Paused</span>}
+                {f.state === "inactive" && <span className="chip" title="Their account is inactive.">Inactive</span>}
+                <button type="button" className="btn btn-sm" disabled={busy === f.userId} onClick={() => void unfollow(f.userId)} title={`Stop following ${f.displayName}`}>
+                  {busy === f.userId ? "…" : "Unfollow"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </CollapsibleCard>
+  );
+}
+
 function ProfileInner() {
   const { data: session } = useSession();
   const { data: me } = useApi<Me>("/api/me");
@@ -402,6 +511,7 @@ function ProfileInner() {
       <AchievementsPref />
       <EmailNotificationsPref />
       <MaintainerNotificationsPref />
+      <FollowingPref />
     </div>
   );
 }

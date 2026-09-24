@@ -113,7 +113,7 @@ test("achievements: hall read model — self / other / hidden / inactive / unkno
   assert.ok(asViewer);
   assert.equal(asViewer.hidden, false);
   assert.deepEqual(asViewer.earned.map((e) => e.key).sort(), ["first_message", "first_request"]);
-  assert.equal(asViewer.total, 20);
+  assert.equal(asViewer.total, 22);
   assert.equal(await achievementCountForCard(owner), 2);
 
   // Opt-out: others get the private shape; the owner still sees everything.
@@ -263,7 +263,7 @@ test("levels: the notification carries the level the badge moved you to", { skip
   )).rows.map((r) => r.payload);
   assert.deepEqual(payloads.map((p) => p.level), [1, 2]);
   assert.deepEqual(payloads.map((p) => p.hero), [false, false]);
-  assert.equal(payloads[0]!.total, 20);
+  assert.equal(payloads[0]!.total, 22);
 });
 
 test("levels: the hall payload carries heroAt, and withholds it from a non-self viewer", { skip: !enabled }, async () => {
@@ -273,7 +273,7 @@ test("levels: the hall payload carries heroAt, and withholds it from a non-self 
 
   const asViewer = await getAchievements(owner, viewer);
   assert.equal(asViewer?.heroAt, "2025-06-01T12:00:00.000Z");
-  assert.equal(asViewer?.earned.length, 20);
+  assert.equal(asViewer?.earned.length, ACHIEVEMENT_KEYS.length);
 
   // Opted out: no badges AND no heroAt — the bar would restate the count the opt-out withholds.
   await pool.query(`update users set achievements_hidden = true where id = $1`, [owner]);
@@ -296,7 +296,7 @@ test("levels: the bulk map omits hidden / inactive / erased / level-0 — but ne
 
   const map = await getLevelMapFor(me, true, FRESH);
   assert.equal(map.levels[me], 1);
-  assert.equal(map.levels[peer], 20);
+  assert.equal(map.levels[peer], ACHIEVEMENT_KEYS.length);
   assert.ok(map.heroes.includes(peer), "a full-house user draws the crowned ring");
   assert.equal(map.levels[zero], undefined, "level 0 renders no ring, so it is not in the map");
 
@@ -305,7 +305,7 @@ test("levels: the bulk map omits hidden / inactive / erased / level-0 — but ne
   assert.equal((await getLevelMapFor(me, true, FRESH)).levels[peer], undefined);
   // … but the owner still sees the ring on their OWN avatar (§31.5).
   const own = await getLevelMapFor(peer, true, FRESH);
-  assert.equal(own.levels[peer], 20);
+  assert.equal(own.levels[peer], ACHIEVEMENT_KEYS.length);
   assert.ok(own.heroes.includes(peer));
   await pool.query(`update users set achievements_hidden = false where id = $1`, [peer]);
 

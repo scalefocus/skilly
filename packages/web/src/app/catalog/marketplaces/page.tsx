@@ -9,6 +9,7 @@ import { useSearchParams } from "next/navigation";
 import { useApi, Pill, EmptyState, ScrollToTop, LoadMoreSentinel, formatCount } from "../../../components/ui";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { UserBubble } from "../../../components/UserBubble";
+import { FollowButton } from "../../../components/FollowButton";
 import { ExpiryPicker } from "../../../components/ExpiryPicker";
 import { MarketplaceAddCommand, type MarketplaceMint } from "../../../components/MarketplaceAddCommand";
 import { useDateFmt } from "../../../components/DateFormat";
@@ -23,6 +24,8 @@ interface Row {
   pluginCount: number;
   syncedAt: string | null;
   contact: DirectoryContact;
+  /** §35.4 — the resolved contact allows follows. */
+  contactFollowable?: boolean;
   added: AddedState;
 }
 
@@ -252,6 +255,10 @@ function MarketplacesInner() {
                       <button type="button" className="btn btn-sm" disabled={reaching === r.contact.userId} onClick={() => reachOut(r.contact.kind === "user" ? r.contact.userId : "")} title={`Message ${r.contact.displayName}`}>
                         {reaching === r.contact.userId ? "…" : "Reach out"}
                       </button>
+                    )}
+                    {/* §35.4 — right of Reach out, only for a contact that resolves to a skilly user. */}
+                    {r.contact.kind === "user" && !isSelf && (
+                      <FollowButton userId={r.contact.userId} followable={r.contactFollowable === true} name={r.contact.displayName} />
                     )}
                     {r.contact.kind === "email" && (
                       <a className="btn btn-sm" href={`mailto:${r.contact.email}`} title={`Email ${r.contact.email}`}>Reach out</a>

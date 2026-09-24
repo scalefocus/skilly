@@ -10,6 +10,7 @@ import { normalizeCategoryNames } from "@skilly/shared";
 import { createTtlCache } from "./ttlCache";
 import { appendAudit } from "./audit";
 import { awardAchievement } from "./achievements";
+import { fanOutToFollowers } from "@skilly/shared/follows";
 
 export type RequestState = "open" | "fulfilled" | "withdrawn" | "removed";
 
@@ -265,6 +266,13 @@ export async function createRequest(
       after: { title: input.title.trim(), toolHarness: input.toolHarness, categories: input.categories },
     });
     await awardAchievement(client, requesterUserId, "first_request"); // §31 Wishful Thinker
+    // §35.6: the requester's followers hear about it. Requests are org-visible — no skill gate.
+    await fanOutToFollowers(client, {
+      type: "follow.request_created",
+      actorId: requesterUserId,
+      payload: { requestId: id, requestTitle: input.title.trim() },
+      skill: null,
+    });
     await client.query("commit");
     return { id };
   } catch (e) {
@@ -408,6 +416,22 @@ export async function fulfilOriginRequest(
     await awardAchievement(client, opts.fulfilledByUserId, "first_fulfilment");
     await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true });
   }
+  // §35.6: the fulfiller's followers — gated on the fulfilling skill's visibility (a follower who
+  // can't see a restricted skill hears nothing), and never the requester, who gets
+  // request.fulfilled below (the dedup rule).
+  const { rows: gate } = await client.query<{ slug: string; ns: string; namespace_id: string; visibility: string }>(
+    `select s.slug, n.slug as ns, s.namespace_id, s.visibility from skills s join namespaces n on n.id = s.namespace_id where s.id = $1`,
+    [opts.skillId],
+  );
+  if (gate[0]) {
+    await fanOutToFollowers(client, {
+      type: "follow.request_fulfilled",
+      actorId: opts.fulfilledByUserId,
+      payload: { requestId: opts.originRequestId, requestTitle: r.title, namespaceSlug: gate[0].ns, skillSlug: gate[0].slug },
+      skill: { namespaceId: gate[0].namespace_id, visibility: gate[0].visibility },
+      excludeUserIds: [r.requester_user_id],
+    });
+  }
   if (r.requester_user_id !== opts.fulfilledByUserId) {
     const { rows: sk } = await client.query<{ slug: string; ns: string; by_name: string }>(
       `select s.slug, n.slug as ns, (select display_name from users where id = $2) as by_name
@@ -455,8 +479,8 @@ export async function fulfilWithExistingSkill(
     const r = reqRows[0];
     if (!r) { await client.query("rollback"); return { error: "not found", status: 404 }; }
     if (r.state !== "open") { await client.query("rollback"); return { error: "This request was already fulfilled, withdrawn, or removed.", status: 409 }; }
-    const { rows: skillRows } = await client.query<{ id: string }>(
-      `select s.id from skills s join namespaces n on n.id = s.namespace_id
+    const { rows: skillRows } = await client.query<{ id: string; namespace_id: string; visibility: string }>(
+      `select s.id, s.namespace_id, s.visibility from skills s join namespaces n on n.id = s.namespace_id
         where n.slug = $1 and s.slug = $2 and s.status = 'active' and s.visibility = 'org'`,
       [namespaceSlug, skillSlug],
     );
@@ -479,6 +503,15 @@ export async function fulfilWithExistingSkill(
       await awardAchievement(client, actorUserId, "first_fulfilment"); // §31 Genie
       await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true }); // §31 Wish Granted
     }
+    // §35.6: the fulfiller's followers (the skill is org-visible by construction; gated anyway),
+    // minus the requester, who gets request.fulfilled.
+    await fanOutToFollowers(client, {
+      type: "follow.request_fulfilled",
+      actorId: actorUserId,
+      payload: { requestId, requestTitle: r.title, namespaceSlug, skillSlug },
+      skill: { namespaceId: sk.namespace_id, visibility: sk.visibility },
+      excludeUserIds: [r.requester_user_id],
+    });
     if (r.requester_user_id !== actorUserId) {
       const { rows: byRows } = await client.query<{ display_name: string }>(
         `select display_name from users where id = $1`,

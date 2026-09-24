@@ -110,7 +110,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -239,6 +239,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `skill_watches` (migration 0009)
 - `user_id`, `skill_id`, `created_at` (composite PK). Watch/follow list; the publish sweep notifies watchers of new versions (`skill.new_version`, §12). Maintains `skills.watcher_count`.
 
+### `user_follows` (migration 0078, detailed in §35)
+- `follower_id`, `followee_id` (both FK → `users`, CASCADE), `created_at`. **PK `(follower_id, followee_id)`**, plus `CHECK (follower_id <> followee_id)`, with an index on `(followee_id, created_at)`. Following a *person*, the counterpart of `skill_watches`. Unfollow hard-deletes the row. The rows drive the §35.6 follower notifications, the §35.7 leaderboard *followers* stat and the §35.8 badges. They are deleted in both directions on GDPR erasure (§4) and kept on deprovision.
+
 ### `skill_maintainers` is documented above (§19); `skill_ratings` above (§18).
 
 ### `pending_mirrors` (migration 0005)
@@ -328,7 +331,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Presence is activity-window based, not session-based** (sessions are stateless JWTs with no server-side store, so there is nothing to enumerate). Every authenticated request resolves the user through the single `currentAccess()` choke point, which **stamps `users.last_seen = now()`** as a **fire-and-forget, best-effort** write: it never blocks or fails the request, and is **throttled in-process per user (~60s)** so the high call volume (page renders + the app's 60s background polls) doesn't translate into a write per request. A backgrounded tab stops refreshing (client polling pauses when hidden), which is the intended semantics.
 - **Last-seen page.** Alongside `last_seen`, presence also tracks **which page the user was last on**, shown in the online list between the identity block and the "active … ago" pill (below). Captured **client-side**: the app shell watches the route (`usePathname`) and fires on every navigation (and on initial mount), resolving the current route to a short **human-readable label** — never a raw pathname or query string (invariant #6) — via a **static route→label map** for fixed pages (Overview, Catalog, Marketplaces, Propose a skill, Requests, Proposals, Leaderboard, Installed skills, Notifications, Profile, Usage, Audit, System log, Admin, Quick start, What's new), while the three dynamic-title pages **override** that default label once they've fetched their own data: `/skills/[ns]/[slug]` → `"Skill: <display name>"`, `/requests/[id]` → `"Request: <title>"`, `/proposals/[id]` → `"Proposal: <skill title>"`. The resolved label is POSTed to `POST /api/presence/page {label}` (auth required; a no-op — silent 401, no error surfaced — for a signed-out caller), which calls `touchLastSeen(userId, label)`, the **same choke point and same ~60s per-user throttle** `currentAccess()` uses: a beacon call inside another call's throttle window is dropped just like an extra plain stamp, so the shown page can lag the real navigation by up to the throttle window — an accepted trade-off, consistent with `last_seen`'s existing staleness. Plain `currentAccess()` stamps (no label) update `last_seen` only and never clear a previously-stamped `last_seen_page`. Rows with no page yet (pre-upgrade or never-beaconed) show **"—"** in that slot.
 - **Online = `last_seen` within a selectable activity window.** A **window selector** — **5 min (default) / 1 h / 8 h / 24 h / 30 d** — sits **just above the search box**, right-aligned in a header row that mirrors the trend chart's range toggle (the "Users active within the last …; reach out to start a direct message" caption is that row's left-hand label), so the viewing admin decides how generous "online" is (5 min comfortably absorbs the 60s poll cadence; the long windows turn the card into "active today"/"active this month"). The choice is a **per-admin view preference, remembered in the browser** (`skilly.online-window`, same localStorage mechanism as the chart windows) — it is *not* a platform setting and never affects other admins. The server accepts the window as a `window=<minutes>` query param but **validates it against the fixed option set** (anything else falls back to 5) — never an arbitrary interval from the client. Changing the window re-queries the list and count; the **DAU/WAU/MAU counters and the trend chart are unaffected** (their windows are fixed by definition). Only `status = 'active'` users appear (SCIM-deprovisioned users never show). The viewing admin sees themselves.
-- The section reuses the **maintainer card** (avatar + name + email), with the **last-seen page** label inserted between the name/email block and the tag slot — same row, muted/secondary text, truncated with an ellipsis (full value on hover via `title`) so a long resolved label never pushes the pill or breaks the row — then the relative activity ("active … ago") in the tag slot and the **"Reach out"** DM action kept; there is no remove control. It shows a **live count**, a **search box** (ILIKE over name/email, debounced), and loads **100 at a time with infinite scroll**, ordered most-recently-active first. It polls every **60s** (visibility-aware): the count always refreshes, and the list refreshes only when it's safe to (scrolled to top, no active search) so it never yanks the admin's view mid-scroll/search.
+- The section reuses the **maintainer card** (avatar + name + email), with the **last-seen page** label inserted between the name/email block and the tag slot — same row, muted/secondary text, truncated with an ellipsis (full value on hover via `title`) so a long resolved label never pushes the pill or breaks the row — then the relative activity ("active … ago") in the tag slot and the **"Reach out"** DM action kept, with **Follow / Unfollow** to its right (§35.4); there is no remove control. It shows a **live count**, a **search box** (ILIKE over name/email, debounced), and loads **100 at a time with infinite scroll**, ordered most-recently-active first. It polls every **60s** (visibility-aware): the count always refreshes, and the list refreshes only when it's safe to (scrolled to top, no active search) so it never yanks the admin's view mid-scroll/search.
 - **DAU / WAU / MAU counters** sit directly above the online list, inside the same card. Three **rolling** trailing-window counts — `last_seen` within the last **24h / 7d / 30d** respectively — computed live off the **same `last_seen` signal** as presence above (deliberately not a narrower "real navigation only" signal, for consistency) and the same `status = 'active'` filter. They are a **live snapshot only, not a historical trend**: `last_seen` holds each user's most-recent activity, not a log, so there is no way to ask "what was DAU on a past date" — only "how many right now". They **piggyback on the same 60s poll** as the online list (one round trip, not a second endpoint) and always reflect the platform-wide total regardless of the list's search/pagination state.
 - Backed by `GET /api/admin/users/online?offset=&limit=&q=&window=` → `{ users, total, hasMore, dau, wau, mau }` (403 for non-platform-admins), each user now also carrying `lastSeenPage: string | null`. `window` is minutes from the fixed option set above; omitted/invalid → 5.
 - The page beacon is a separate, narrowly-scoped endpoint: `POST /api/presence/page {label}` — any authenticated user (not platform-admin-gated; every signed-in user beacons their own presence), 401 if unauthenticated, silently ignores a missing/oversized `label` rather than erroring.
@@ -375,7 +378,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Delete user info (GDPR erasure)
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), after **Maintenance** and directly before **Namespaces** (Currently online, which used to follow it, now lives on the Monitoring page — §4 *Currently online*). Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
-- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
+- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
@@ -481,7 +484,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Self-heal:** on sign-in, if no row owns the authenticated `oid`, login relinks the row matched by email/UPN (excluding erased users, at most one row, idempotent) to the real `oid`. This recovers users provisioned under a wrong `externalId` mapping without manual DB surgery; the correct mapping remains the real fix.
 
 ### Leaver handling
-- **Disable (reversible) — `PATCH active:false`:** SCIM deprovision → user `status = inactive`, **all PATs/tokens revoked**. Entra can re-enable the user; their data survives. Unchanged.
+- **Disable (reversible) — `PATCH active:false`:** SCIM deprovision → user `status = inactive`, **all PATs/tokens revoked**. Entra can re-enable the user; their data survives. Unchanged. (Follows in both directions are kept, but go dormant while inactive: the user is unfollowable, sends and receives no follower notifications, and counts toward nobody's followers, §35.9.)
 - **Serve-time owner-status gate (belt-and-suspenders):** independently of the deletion above, the
   git gateway **refuses any personal install token whose owning user is not `status = 'active'`**
   (§23 Gateway). This covers every path that can flip a user inactive *without* the token-deleting
@@ -490,7 +493,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   (maps `accountEnabled → status` on upsert), and any other drift. The PATCH path keeps
   hard-deleting tokens (defense in depth); the gate is what guarantees an inactive user's minted
   URLs stop serving even when deletion didn't happen.
-- **Permanent removal — `DELETE /Users/:id`:** runs the **full GDPR erasure** (the same as the admin "Delete User Info" flow, §4) **without a maintainer transfer** — scrub + detach the row (`entra_object_id → null`, so a later re-provision yields a fresh account), delete the user's personal data (group memberships, ratings, watches, notifications, tokens, explicit maintainerships), and de-identify messages/proposals/reviews to "`<email> - Deleted`". **Idempotent** (no-op if already erased) and still returns **204**. Records a `user.erased` audit row with a **null actor** and **`source = 'scim'`**. The worker's `eraseUserByExternalId` mirrors web's `lib/eraseUser.ts` (kept in sync).
+- **Permanent removal — `DELETE /Users/:id`:** runs the **full GDPR erasure** (the same as the admin "Delete User Info" flow, §4) **without a maintainer transfer** — scrub + detach the row (`entra_object_id → null`, so a later re-provision yields a fresh account), delete the user's personal data (group memberships, ratings, watches, follows in both directions (§35.9), notifications, tokens, explicit maintainerships), and de-identify messages/proposals/reviews to "`<email> - Deleted`". **Idempotent** (no-op if already erased) and still returns **204**. Records a `user.erased` audit row with a **null actor** and **`source = 'scim'`**. The worker's `eraseUserByExternalId` mirrors web's `lib/eraseUser.ts` (kept in sync).
 - **Authored skills remain** (owned by the namespace, not the individual).
 - **Audit log preserves identity** (provenance survives personnel changes; immutable per invariant #5 — deliberately exempt from erasure, §4).
 
@@ -1075,6 +1078,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
+  - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
 - **Retention:** configurable, **default indefinite**. **SIEM export via syslog/stdout** (structured JSON).
 - **Hash-chaining deferred.**
@@ -1123,6 +1127,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
+  - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only**, have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
 - **Deferred:** —
@@ -1176,10 +1181,12 @@ current or future type can ever leak JSON to a user.
   | `proposal.accept` | Proposal accepted | Your skill proposal was accepted. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `proposal.reject` | Proposal rejected | Your skill proposal was rejected. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `system.error` † | System log events | There are {count} new system log events. | View the system log → `/system-log` |
+  | `follow.*` † (5 types) | *see §35.6* | *see §35.6* | *see §35.6* |
   | *fallback (any other type)* | Notification | You have a new notification in skilly. | Open skilly → base URL *(CTA omitted when no base URL)* |
 
-  † `system.error` stays **in-app only** (never emailed, §25); its row exists so the renderer is
-  **total** and no path can emit JSON even if delivery rules later change.
+  † `system.error` stays **in-app only** (never emailed, §25), and so do the five `follow.*`
+  types (§35.6). Their rows exist so the renderer is **total** and no path can emit JSON even if
+  delivery rules later change.
 
 - **No schema change.** Every field above already lives in the notification `payload` (§3
   `notifications`; §24 `message.new` coalescing) — this is a **rendering** change (plus the §24
@@ -1557,7 +1564,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
@@ -1623,6 +1630,24 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Phase 9 — Full-text search**
 28. **The PostgreSQL FTS engine (§34):** one shared engine (`@skilly/shared` parser + SQL builder) behind the header dropdown, the catalog grid and MCP `search_skills`, replacing the substring `ILIKE`; a weighted vector over title/slug, description, category names and the indexed version's usage + `SKILL.md` body (extracted into `skill_version_search`, backfilled by a leader-only worker sweep); `"phrase"` / `-exclude` / capital-`OR` syntax with a last-word prefix; platform-admin synonym groups; typo (`pg_trgm`) and substring fallback tiers; match-quality tier ranking; an any-word fallback flagged by `matchMode`; MCP `matchedIn` + `snippet`; an admin-selectable search language with a background reindex; the Administration **Search** card and a Maintenance index line; migration 0077. **DONE.**
+
+**Phase 10 — Following people**
+29. **Follow a person (§35):**
+    - **Data:** `user_follows` + `users.allow_follows` (migration 0078).
+    - **Button:** one shared Follow/Unfollow button on the achievements hall, the hover card, the
+      leaderboard, skill maintainer cards, the marketplace directory and admin *Currently online*.
+    - **Notifications:** five in-app-only `follow.*` types (new skill, new version, badge, request
+      posted or fulfilled), visibility-filtered and deduped at insert through one shared recipient
+      builder used by web and worker.
+    - **Profile:** an *Allow others to follow me* toggle (default on; off pauses the button, the
+      notifications and the stat, and keeps the rows) and a collapsible *People I follow (N)* pane
+      with Unfollow.
+    - **Leaderboard:** a public *followers* stat and *Followed* sort, plus the 📣
+      *Influencer-in-Chief* / 📈 *Trendsetter* leader badges.
+    - **Achievements:** *Right Behind You* (first follow) and *Cult Following* (10 followers).
+    - **Lifecycle:** erasure deletes follows both ways; deprovision keeps them dormant.
+
+    *(Spec'd 2026-09-24; not yet built.)*
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -1701,7 +1726,7 @@ Per-skill **ownership + notification** layer. Designed to name accountable owner
 
 ### Notifications, display & lifecycle
 - Maintainers are **implicit watchers** of their skill: `skill.new_version` on publish (deduped vs explicit watchers) and `skill.drift` on detected pointer drift. Both are gated by the per-user **maintainer notification preferences** (§12) — suppressed at insert time for opted-out users, with an explicit `skill_watches` row always outranking the new-version opt-out — and drift pings fire **once per drift onset**, not per refresh pass (§12). No un-actionable review notifications.
-- The skill detail page shows maintainers as `display_name` + `email` to **anyone who can see the skill** (not only admins/maintainers) — the list is read-only for viewers, who can **Reach out** (direct message) to a maintainer; only platform admins, namespace admins, and the skill's own maintainers see the add field and the remove (✕) control. Coexists with the namespace `maintainer_contact` (namespace scope vs skill scope). Maintainer names are **not** in FTS (§10).
+- The skill detail page shows maintainers as `display_name` + `email` to **anyone who can see the skill** (not only admins/maintainers) — the list is read-only for viewers, who can **Reach out** (direct message) to a maintainer, and **Follow** them (right of Reach out, §35.4); only platform admins, namespace admins, and the skill's own maintainers see the add field and the remove (✕) control. Coexists with the namespace `maintainer_contact` (namespace scope vs skill scope). Maintainer names are **not** in FTS (§10).
 - **Deprovision:** `ON DELETE CASCADE` (the implicit-admin half self-heals from live `role_mappings`).
 - **Visibility downgrade (`org→namespace`):** the effective-maintainer resolver always re-filters through `isSkillVisible` (defense-in-depth, so a stale row can never leak); a future visibility-downgrade path must additionally prune now-ineligible explicit rows (audited). v1 has no downgrade path, so read-filtering fully covers it.
 
@@ -1763,7 +1788,7 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 - **Erasure removes credit — unless transferred.** GDPR erasure (§4, both the admin and SCIM paths) **deletes the erased user's `install_credits`** — credits-only: the shared `access_log` row, `skills.install_count`, and co-maintainers' credit are untouched (the install still happened and still counts for everyone else). **Exception:** the admin erasure path with a "Replace maintainer to" target **reassigns** the credits to that target instead of deleting them (§4 — would-be self-credits and duplicates excepted; those are deleted as usual), so the standing survives on the board under the successor. Either way, a deleted user holds zero credits and never appears. A reversible **deprovision** (leaver → `status='inactive'`) does **not** delete credits — the board's `status='active'` filter hides them, and re-enabling restores their standing.
 - **Privacy (invariant #3).** The board exposes only per-person aggregates (display name, avatar, total installs, skill count) — **never skill identities, slugs, or namespaces** — so it cannot enumerate or identify restricted skills, and is identical for every viewer. Users may opt out via `leaderboard_hidden` (§13).
 - **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other four metrics descending, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
-- **Row actions.** Each row offers three actions, on every row and under every sort: **Skills**, **Requests**, and **Reach out**.
+- **Row actions.** Each row offers four actions, on every row and under every sort: **Skills**, **Requests**, **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow).
   - **Skills** links to the catalog scoped to the skills that person **maintains** — `/catalog?maintainer=<userId>&by=<name>` for another person (the catalog shows a dismissible "Skills maintained by &lt;name&gt;" banner), or `/catalog?mine=1` for **your own** row (reuses the "My Skills" filter). This does **not** break invariant #3: the catalog independently visibility-filters to what the *viewer* may see (`searchSkills`), so it only ever lists skills the viewer could already browse — the leaderboard itself still reveals no skill identities. On arrival the maintainer view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) and shows everything by that maintainer the viewer can see.
   - **Requests** links to the Requested-skills page scoped to the requests that person **posted** — `/requests?requester=<userId>&by=<name>` for another person (the page shows a dismissible "Requested by &lt;name&gt;" banner, §26), or `/requests?mine=1` for **your own** row (reuses the "Mine" toggle). Requests have no namespace and are org-visible, so there is no visibility concern; the link is shown even when the person's requested count is 0 (consistent with **Skills**, which shows at 0 adopted).
   - **Reach out** opens a 1:1 direct chat (`POST /api/messages/direct` → `skilly:open-conversation`), the same mechanism as the skill-detail maintainer list and the admin online-users list. It is **hidden on the viewer's own row** (you can't message yourself).
@@ -1773,10 +1798,11 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 A small marker under a user's avatar bubble — **everywhere one appears** — showing they currently
 top a leaderboard metric. Purely derived from the leaderboard's own data; no new user action.
 
-- **Five metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
+- **Six metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
   leader (skills adopted), Fulfillment leader (requests fulfilled), Watch leader (skills watched),
-  Request leader (skills requested, §26) — each in **two windows**, all-time and last-30-days,
-  for up to 10 badges per user.
+  Request leader (skills requested, §26), and the follow leader (followers, §35.7), which has
+  window-specific names: 📣 **Influencer-in-Chief** (all time) and 📈 **Trendsetter** (last 30
+  days). Each metric is in **two windows**, all-time and last-30-days, for up to 12 badges per user.
 - **Who's a leader:** whoever is **tied for the single highest value** of a metric in a window. A
   tie is a tie — everyone at the top value gets the badge, not just one canonical winner. A metric
   with nobody above zero in that window has **no leader** (nobody gets it). Computed in
@@ -1786,7 +1812,9 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
 - **Visual:** each badge is a small colored circle with a glyph, sized proportionally to the avatar
   it sits under (floored so it stays legible on the smallest bubbles): 📥 installs (accent), 📝
   adoption (accent-2), 🎁 fulfillment (ok/green), 👁 watched (warn/orange), 💡 requested
-  (violet — the one hue the other four don't use, so it stays distinguishable at badge size). The **all-time**
+  (violet — the one hue the other four don't use, so it stays distinguishable at badge size), and
+  📣 / 📈 followed (a new pink `--badge-follow` token, §35.7; the only metric whose two windows use
+  different glyphs). The **all-time**
   variant is the identical icon with a small crown overlaid on top; the **30-day** variant has no
   crown. **Every badge a user currently holds renders** (no cap, wrapping if needed) — most users
   have zero; a dominant contributor may show several.
@@ -1814,7 +1842,7 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   request); omitting `userId` renders the bubble with no badges and no extra request, unchanged
   from before this feature. The map itself is cached for ~30s server-side, layered on top of the
   leaderboard's own 60s per-(window,sort) cache. `metric` is one of `installs` | `skills` |
-  `requests` | `watched` | `requested`.
+  `requests` | `watched` | `requested` | `followed` (§35.7).
 
 ---
 
@@ -3193,6 +3221,9 @@ skill that **already** satisfies it.
   other columns), exactly as a pure request-fulfiller does today. Erased users vanish through the
   `status = 'active'` filter; **"skills requested" is never transferred** to a "Replace maintainer to"
   target (§4 — it records who actually asked).
+- A sixth stat and sort, **"followers"** / *Followed*, arrived with following people. §35.7 has its
+  definition, windows, pause rule and tie-break chain. Every existing sort appends followers desc as
+  its last numeric tie-breaker before name.
 
 ### API surface (indicative)
 - `POST /api/requests` (create; text-only — rejects file parts) · `GET /api/requests` (open list;
@@ -3292,8 +3323,9 @@ deletable, no-notification broadcast. It gets its own table and never touches th
 ## 28. Directory hover card
 
 Hovering (or, on touch, long-pressing) **any user avatar bubble anywhere in the app** opens a small
-floating card with that person's Entra directory information. It is a **read-only, display-only**
-surface: no action it exposes changes state, and nothing it shows participates in authorization.
+floating card with that person's Entra directory information. It is a **display-only**
+surface with **one exception**, the **Follow / Unfollow** button (§35.4): nothing else it exposes
+changes state, and nothing it shows participates in authorization.
 
 The data behind it — `job_title`, `office_location`, `department` — is **new** (§3, §5); until this
 feature skilly stored only name, email, status and avatar for a user.
@@ -3332,6 +3364,10 @@ Top to bottom, in a fixed max-width (~260px) card:
    imports.
 6. **Leader badges** — every badge the person currently holds, spelled out with its icon and full
    label (§21). Absent for the overwhelming majority of users, who hold none.
+7. **Follow / Unfollow** — the shared `FollowButton` (§35.4) as the card's last row. Absent on
+   your own card and when the person isn't followable (`followable: false`: paused, inactive,
+   erased, unknown). Its state comes from the page-wide `/api/me/following` cache, so it always
+   agrees with any other Follow button for the same person on the page.
 
 - **"No directory information."** When **all three** directory fields are empty the block collapses
   to that single muted line. Same for a user who has **opted out** (below), and for every
@@ -3343,8 +3379,8 @@ Top to bottom, in a fixed max-width (~260px) card:
 
 ### Data & delivery
 - `GET /api/users/:id/card` → `{ userId, displayName, email, jobTitle, officeLocation, department,
-  lastSeen, online, achievementCount, achievementHero }` (§31.5 — `number | null` and
-  `boolean`). **Any signed-in user** may call it for **any** user id (there is no per-user
+  lastSeen, online, achievementCount, achievementHero, followable }` (§31.5 — `number | null` and
+  `boolean`; `followable` is viewer-independent, §35.4). **Any signed-in user** may call it for **any** user id (there is no per-user
   visibility model — invariant #7 governs *skills*); **401** unauthenticated, **404** for an unknown
   id. `online` is computed server-side against the fixed 5-minute window so the client never has to
   know the rule.
@@ -3397,7 +3433,7 @@ Top to bottom, in a fixed max-width (~260px) card:
 - **Focus opens** the card with **no delay** (hover-intent is a pointer concept); **blur closes** it;
   **Escape** closes it and leaves focus on the bubble.
 - The card is a **non-modal `role="dialog"`** labelled with the person's name — not `role="tooltip"`,
-  because it contains an interactive `mailto:` link. Focus is **not trapped**: Tab from the bubble
+  because it contains interactive controls: the `mailto:` link and the Follow button (§35.4). Focus is **not trapped**: Tab from the bubble
   moves into the card, then out of it and on through the page.
 
 ### Privacy & governance
@@ -4445,7 +4481,8 @@ per marketplace, a bubble for the namespace's contact, and per-row actions. Avai
        standard `UserBubble` with the user id: avatar or initials, leader badges, the §28
        directory hover card, and **Reach out** opening a 1:1 conversation via
        `POST /api/messages/direct`, exactly as the leaderboard. **The viewer's own row hides
-       Reach out**, mirroring the leaderboard.
+       Reach out**, mirroring the leaderboard. A **Follow / Unfollow** button sits right of Reach
+       out when the contact is followable (§35.4). Cases 1 and 3 never get one.
     3. **Contact set but resolves to nobody** (distribution list, external address, inactive
        user) → an inert bubble carrying a **group glyph** (not initials — there is no person),
        the name slot shows the **email address**, and **Reach out is a `mailto:` link** to it.
@@ -4704,6 +4741,8 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | `first_reply` | **Conversationalist** | Posted in a conversation whose **first message was authored by someone else**. | Talk |
 | `first_mention` | **Name Dropper** | A message of theirs carried a first `@person` or `#skill` mention (`message_mentions`, §24). | Talk |
 | `first_watch` | **Stalker, but Nicely** | Watched a first skill (`skill_watches`). | Explore |
+| `first_follow` | **Right Behind You** | Followed a first person (`user_follows`, §35.8). | Explore |
+| `followers_10` | **Cult Following** | Reached 10 active followers (§35.8). The one count-tier badge. | Talk |
 | `first_rating` | **Critic** | Rated a first skill (`skill_ratings`, §18). | Explore |
 | `onboarded` | **Read the Manual** | Completed Quick start (`users.onboarded_at`, §23). | Explore |
 | `night_shift` | **Night Shift** | Any achievement event (below) at **00:00–04:59 in the user's own timezone** (§31.3). | Habits |
@@ -4715,7 +4754,8 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
   the table (`request_fulfilled` / `first_fulfilment` require two distinct people, because the
   event itself is defined as one person helping another).
 - **No role-gated badges** (reviewing, enabling a marketplace, etc.): most users could never earn
-  them, which defeats "collect them all". **No count tiers** in v1 (no "10 installs"); the
+  them, which defeats "collect them all". **No count tiers** in v1 (no "10 installs"), **with one
+  exception: `followers_10`** (§35.8), the one badge a person cannot earn by exploring alone. The
   `key` scheme leaves room for `installs_10`-style keys later without touching existing rows.
 - **MCP-originated actions count** exactly like web ones — a proposal submitted through the MCP
   `propose_*` tools is a proposal (§29 attribution) and earns `first_hosted_proposal` /
@@ -4868,6 +4908,8 @@ sign-in redirect** like every page):
   is honest about layout while still useful.
 - **Share** button (same copy-toast), for anyone viewing — sharing someone else's hall is fine;
   it is the same URL.
+- **Follow / Unfollow** (§35.4) next to Share on **someone else's** hall when they are followable.
+  It shows even when they keep their trophies private: `achievements_hidden` does not gate follows.
 - **`?badge=<key>` spotlight:** when present and the badge is earned, that tile is scrolled into
   view and briefly highlighted (the leaderboard's "flash" treatment); an unknown or unearned key is
   ignored silently.
@@ -4902,7 +4944,7 @@ around the bubble itself (§31.10) — one number, never which badges earned it.
 ### 31.10 Level (the badge count, worn on the bubble)
 
 A **level** is nothing more than *how many of the catalog's badges a user has earned* — one number
-from 0 to the catalog size (20 today). It introduces no new event, no new award rule and no new
+from 0 to the catalog size (22 today, after §35.8 added two). It introduces no new event, no new award rule and no new
 disclosure: everything it shows, the §31.5 achievements count already showed. What it adds is
 **reach** — the number travels with the avatar, so progress is legible at a glance instead of only
 on a page someone has to go and open.
@@ -5045,7 +5087,7 @@ migration 0041's credit backfill.
 ### 31.8 API surface
 
 - `GET /api/users/:id/achievements` → `{ userId, displayName, avatar, hidden, earned: [{ key,
-  earnedAt }], total, heroAt }` — any signed-in user; `total` = catalog size; for a hidden
+  earnedAt }], total, heroAt, followable }` (`followable`, §35.4) — any signed-in user; `total` = catalog size; for a hidden
   non-self target
   `hidden: true, earned: []`; **404** for unknown / erased / inactive; **404-shaped disabled
   notice** (`{ disabled: true }` with 200, mirroring `/api/mcp`'s pattern) when the toggle is off.
@@ -6129,3 +6171,338 @@ popularity keys **within** each tier:
 8. **No "why it matched" in the UI** in v1 — `snippet` and `matchedIn` are MCP-only.
 9. **No query analytics** — counts only. A zero-result query log (the natural input for curating
    synonyms) is **deferred**, not rejected.
+
+---
+
+## 35. Following people
+
+A signed-in user can **follow another person** and is then told, in-app, when that person
+**publishes a new skill**, **publishes a new version**, **earns an achievement**, **posts a skill
+request** or **fulfils one**. Following a *person* is the counterpart of watching a *skill*
+(`skill_watches`, §3/§12): an explicit, per-target opt-in whose only off-switch is to undo it.
+
+Every person decides whether they can be followed. One profile toggle, *Allow others to follow
+me* (default **on**), hides their Follow button everywhere and **pauses** every follow on them.
+Nothing is deleted, so turning it back on resumes the old followers. Every follower notification
+is **visibility-filtered at insert time**: an action on a skill the follower cannot see never
+reaches them (invariant #3).
+
+### 35.1 Semantics
+- **One-way, per pair, no approval.** A follow is `follower → followee`. The followee is **never
+  notified** that someone followed them, and never sees who does.
+- **Who can be followed:** any user who is `status = 'active'`, not erased, has
+  `allow_follows = true`, and is not the viewer. **You cannot follow yourself** (DB `CHECK` + 400).
+  **Directory-hidden** (§28) and **leaderboard-hidden** (§21) users remain followable: those opt-outs
+  govern what the card and the board show, and only `allow_follows` governs follows.
+- **Independent directions.** A user's own `allow_follows` has **no effect on their ability to
+  follow others**. A paused user can still follow, and be notified by, anyone who allows it.
+- **No cap** on how many people a user follows, and **no per-type mute**. To stop hearing from
+  someone you unfollow them. The same stance as watching a skill.
+- **What is private and what is public.**
+  - **Private:** *who* follows *whom*. Only the follower sees their own list (§35.5). There is no
+    follower list anywhere, for the followee or for admins; there is no admin surface in v1.
+  - **Public:** *how many* follow a person. The follower count appears on the leaderboard
+    (§35.7), and the *Cult Following* milestone badge (§35.8) implies "at least 10". Both are
+    aggregates only, like every other leaderboard number.
+
+### 35.2 Data model (migration 0078)
+- **`user_follows`**:
+  - Columns: `follower_id` (FK → `users`, `ON DELETE CASCADE`), `followee_id` (FK → `users`,
+    `ON DELETE CASCADE`), `created_at` (`timestamptz`, default `now()`).
+  - Keys: **PK `(follower_id, followee_id)`**, plus `CHECK (follower_id <> followee_id)`.
+  - Index `(followee_id, created_at)` for the notification fan-out and the leaderboard metric.
+  - The follower's list reads through the PK prefix.
+  - **Unfollow hard-deletes the row.** Re-following creates a fresh row with a new `created_at`.
+- **`users.allow_follows`** (`BOOLEAN NOT NULL DEFAULT true`). Existing users are backfilled ON by
+  the column default.
+
+### 35.3 The "Allow others to follow me" toggle (pausing)
+- **Where:** a new **Following** preference section on the Profile page (`/profile`), placed after
+  *Skills I maintain or watch*. It uses the same On/Off `sort-toggle` control as the other
+  preference blocks. Helper copy:
+  - **On:** *"People can follow you and get notified when you publish, request or earn a badge."*
+  - **Off:** *"Your Follow button is hidden and your followers get no notifications about you.
+    They're kept, and resume if you turn this back on."*
+- **Persistence:** `GET|PATCH /api/me { allowFollows }`. **Silent** (not audited), like every
+  profile preference.
+- **While off (paused):**
+  - **Follow button:** hidden on every surface, for **everyone**, including existing followers.
+    `followable: false` in every payload that carries it.
+  - **Follow API:** `PUT /api/users/:id/follow` returns **409 `follows_disabled`**. Unfollow still
+    works, so existing followers can leave.
+  - **Notifications:** no follower notification is created for any of the user's actions.
+  - **Leaderboard:** the user's followers stat is treated as **0** (not shown, not ranked on the
+    *Followed* sort, no follow leader badge, §35.7).
+  - **Rows:** every existing `user_follows` row on them is **kept**. Followers still see them in
+    their *People I follow* pane, tagged **Paused**.
+- **Turning it back on** restores all of the above at once. There is **no backfill**: actions taken
+  while paused are never notified.
+
+### 35.4 The Follow button
+- **One shared component** (`FollowButton`, props: target `userId` and the target's `followable`
+  flag) renders on every surface. It renders **nothing** when the target is the viewer, or when
+  `followable` is false (paused, inactive, erased, unknown).
+- **Label:** **Follow** when not following. After a successful click it becomes **Unfollow**, and
+  clicking **Unfollow** unfollows immediately (**no confirmation**), switching back to **Follow**.
+  The button is disabled while its request is in flight.
+- **Updates are optimistic and page-wide.** The viewer's followed set comes from one shared,
+  client-cached `GET /api/me/following` (§35.10), deduped via `cachedGet`. A click updates that
+  cache, so every `FollowButton` for the same person on the page flips together (e.g. a leaderboard
+  row *and* its open hover card). A failed request reverts the change and shows the shared error
+  toast.
+- **Race with a pause:** a `409 follows_disabled` reverts the change, removes the button, and
+  toasts *"&lt;name&gt; isn't accepting followers."*
+- **Surfaces.** Where a Reach out button exists, Follow sits **immediately to its right**:
+
+  | Surface | Placement |
+  |---|---|
+  | **Achievements hall** `/achievements/[userId]` (§31.5) | Next to **Share** in the header. Not on your own hall. Shown even when the person keeps their trophies private (`achievements_hidden` is unrelated). |
+  | **Directory hover card** (§28) | A new last row of the card, below the leader badges. Absent on your own card. |
+  | **Leaderboard rows** (§21) | Right of **Reach out**. Hidden on your own row, like Reach out. |
+  | **Skill-detail maintainer cards** (§19) | Right of **Reach out**. |
+  | **Marketplace directory** (§30.6) | Right of **Reach out**. **Only when the contact resolves to a skilly user.** A `mailto:`-only or disabled contact gets no Follow button. |
+  | **Admin *Currently online*** (§4) | Right of **Reach out**. |
+
+- **Payloads.** Every endpoint that feeds these surfaces gains a per-person, **viewer-independent**
+  `followable` boolean (`status = 'active' AND erased_at IS NULL AND allow_follows`):
+  - `GET /api/users/:id/card`
+  - `GET /api/users/:id/achievements`
+  - `GET /api/leaderboard`
+  - the skill-detail maintainers list
+  - the marketplace contacts
+  - the admin online-users list
+
+  Viewer-independence keeps the leaderboard's shared per-(window,sort) cache valid (§21). Whether
+  *this viewer* follows the person always comes from `/api/me/following`, never from these payloads.
+
+### 35.5 Profile: the "People I follow" pane
+- **Placement:** directly **below the toggle**, inside the Following section. A single
+  **collapsible pane** with the header **"People I follow (N)"**, where N counts every row
+  including Paused and Inactive ones.
+- **Open/closed state:** **collapsed by default**. The state is remembered per browser in
+  `localStorage` (wrapped in try/catch, falling back to collapsed). It reuses the admin
+  collapsible-card pattern (the body stays mounted).
+- **Rows**, newest follow first, **no paging, no search**:
+  - the person's `UserBubble` (level ring, leader badges and hover card as usual);
+  - their display name, linking to their hall when they are active;
+  - *"Following since &lt;date&gt;"* via `useDateFmt()`;
+  - a muted **Paused** tag (`allow_follows = false`) or **Inactive** tag (`status = 'inactive'`);
+  - an **Unfollow** button.
+- **Unfollow** removes the row immediately (optimistic, no confirmation) and decrements N. A paused
+  or inactive person, once unfollowed, cannot be re-followed until they are followable again.
+- **Empty state:** *"You're not following anyone yet — look for the Follow button on the
+  leaderboard, a hover card or someone's achievements."*
+- **Scope:** the pane lists **only whom *you* follow**. There is no "followers" pane (§35.1).
+
+### 35.6 Notifications to followers
+Five new notification types, **in-app only**: the bell and the inbox, never email or webhook,
+regardless of `email_notifications`, exactly like `achievement.earned` (§31.4). None is
+coalesced; each is one row per event per follower.
+
+| Type | Fires when (the followee's action) | Visibility gate |
+|---|---|---|
+| `follow.new_skill` | The followee's submitted version is **published** as the skill's **first** version: review acceptance, direct publish in a no-review namespace, or an MCP-submitted proposal. The fan-out runs at the publish sweep's go-live point, the same moment and transaction as `skill.new_version` (§12), so hosted and pointer skills behave alike. | Skill |
+| `follow.new_version` | The same, for a version published to a skill that **already had** a published version. The actor is the version's **submitter**, not every maintainer of the skill. | Skill |
+| `follow.achievement` | The followee earns a badge **and** an `achievement.earned` row is created for them: not a backfill (§31.6), and the platform toggle is on (§31.7). **Skipped entirely while the followee has `achievements_hidden`.** | — (no skill identity) |
+| `follow.request_created` | The followee posts a skill request (§26), via the web or the MCP `request_skill` tool. | — (requests are org-visible) |
+| `follow.request_fulfilled` | The followee fulfils a request, by either path (proposal acceptance or *fulfil with an existing skill*, §26). | Skill (the fulfilling skill) |
+
+- **Recipients** = the followee's followers who pass all of these:
+  - the follower is `status = 'active'` and not erased;
+  - the followee is active and has `allow_follows = true` at event time;
+  - **the visibility gate:** the skill is `'org'`, **or** the follower is in a group mapped to the
+    skill's namespace, **or** the follower is a platform admin. This is the same predicate
+    `fanOutSkillDiscussion` uses (§24). The watcher half of today's `skill.new_version` insert
+    has no such filter, and the follow fan-out must not copy it;
+  - **one notification per event per person** (next bullet).
+- **Dedup: an existing notification for the same event wins.**
+  - A follower who receives **`skill.new_version`** for the same publish (as a watcher, or as a
+    maintainer not opted out, §12) gets **no** `follow.new_skill` / `follow.new_version`.
+  - The **requester** of a fulfilled request gets `request.fulfilled` and **no**
+    `follow.request_fulfilled`.
+  - A maintainer who opted out of `new_version_notifications` but follows the submitter **does**
+    receive the follow row. The follow is an explicit opt-in, the same way an explicit watch
+    outranks that opt-out (§12).
+- **One shared statement.** The recipient `SELECT` (the follower join, status checks, visibility
+  gate and dedup exclusion) is built by **one shared SQL builder in `@skilly/shared`**
+  (`follows.ts`), like `skillVisibilityWhere`. Both processes use it:
+  - **web:** request creation and fulfilment, and `awardAchievement()`;
+  - **worker:** the publish sweep, the MCP write tools, and the mirrored award helper.
+
+  Each insert is a single `INSERT … SELECT`, inside the triggering transaction where one exists.
+- **Payload:** `actorId` and `actorName`, plus the subject fields: `skillId` / `ns` / `slug` /
+  `semver` for the skill types, `badgeKey` for achievements, `requestId` / `requestTitle` (and
+  `ns` / `slug` for a fulfilment). No schema change to `notifications`.
+- **Evaluated at insert time.** A later visibility narrowing, unfollow or pause does not retract a
+  row already created. This is the existing posture of every §12 type. Pruning is unchanged (the
+  1000-row cap).
+
+**Content** (the §12 renderer stays total; these rows join its table; subject labels join the
+shared `NOTIFICATION_LABELS` map):
+
+| Type | Label | Body sentence | CTA → link |
+|---|---|---|---|
+| `follow.new_skill` | New skill from someone you follow | {actorName} published a new skill, {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
+| `follow.new_version` | New version from someone you follow | {actorName} published version {semver} of {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
+| `follow.achievement` | Badge earned by someone you follow | {actorName} earned the {badgeName} badge. | See their badges → `/achievements/{actorId}?badge={badgeKey}` |
+| `follow.request_created` | New request from someone you follow | {actorName} requested a skill: "{requestTitle}". | View the request → `/requests/{requestId}` |
+| `follow.request_fulfilled` | Request fulfilled by someone you follow | {actorName} fulfilled the request "{requestTitle}" with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
+
+The delivery sweep marks every `follow.*` row **delivered as in-app only**, the `achievement.earned`
+rule (§12). The renderer still has cases for all five, so no path can emit JSON (§12 *Notification
+content*).
+
+### 35.7 Leaderboard & leader badges (§21 / §26 extension)
+- **A sixth stat per row: "followers".**
+  - **Counts:** `user_follows` rows whose `followee_id` is the user and whose follower is
+    `status = 'active'` and not erased. A deactivated follower drops out; re-enabling restores them.
+  - **All-time** = the current follower count. **30d** = follows created in the last 30 days that
+    still exist (new followers still following).
+  - **Pausing reads 0** (§35.3). Leaderboard-hidden users are absent as for every stat.
+  - Rendered in the row's stat line as `N follower(s)`, after "skills requested", and only when
+    greater than 0.
+  - A user whose only standing is being followed appears on the board, with 0 in the other columns.
+  - No self-credit rule applies, since self-follow is impossible. **Not transferred** on erasure
+    (§4): follows are deleted, not reassigned.
+- **A sixth sort: *Followed*.** It is appended to the toggle: *Installs / Skills adopted / Requests
+  fulfilled / Watched / Requested / Followed*.
+  - **Tie-break chain** for the Followed sort: followers desc, installs desc, skills adopted desc,
+    requests fulfilled desc, skills watched desc, skills requested desc, name asc.
+  - The five existing sorts append **followers desc** as their last numeric tie-breaker, before name.
+  - The top-100 cap and the deterministic cutoff are unchanged.
+- **Leader badges gain metric `followed`**, in both windows, computed from the Followed sort's
+  cached rows exactly like the other five (tied-for-first prefix; nobody above zero means no
+  leader). This is the only metric whose two windows carry **distinct names and glyphs**:
+  - **All time: 📣 *Influencer-in-Chief*.** The icon carries the standard all-time crown overlay.
+  - **Last 30 days: 📈 *Trendsetter*.**
+  - Both use a new pink hue token (`--badge-follow`, defined for light and dark themes), distinct
+    from the existing five.
+  - The hover card spells them out as *"Influencer-in-Chief — most followed, all time"* and
+    *"Trendsetter — most new followers, last 30 days"*. `aria-label`s follow the same text.
+  - `GET /api/leaders` gains `followed` in its `metric` union. Up to **12** badges per user.
+- **Row actions** gain **Follow** as the fourth action, right of Reach out (§35.4).
+
+### 35.8 Achievements (§31 extension)
+Two new catalog badges (the catalog grows from 20 to **22**):
+
+| Key | Name | Earned when | Group |
+|---|---|---|---|
+| `first_follow` | **Right Behind You** | Followed a first person. A genuinely new `user_follows` row whose follower is the user. | Explore |
+| `followers_10` | **Cult Following** | Reached **10 followers**. The followee's count of active followers (the §35.7 all-time definition, ignoring the pause, which blocks new follows anyway) reaches 10 on a follow insert. | Talk |
+
+- **Awarding:** best-effort `tryAward` right after the follow insert, which is a bare statement,
+  as for watches (§31.2).
+  - `first_follow` goes to the follower. **The follow is a Habits event for the follower only.**
+  - `followers_10` goes to the followee and is **not** a Habits event for them: the action was
+    someone else's.
+- **Once earned, kept.** Falling back below 10 followers (unfollows, deactivations) never revokes
+  *Cult Following* (§31: badges are never lost).
+- **The only count tier.** §31.1's "no count tiers in v1" is amended to allow exactly this one:
+  it is the one badge a person cannot earn by exploring alone. Its key follows the reserved
+  `…_10` scheme.
+- **No backfill:** `user_follows` starts empty, so migration 0078 seeds nothing.
+- **Existing Heroes stay Heroes** (`hero_at` is permanent, §31.10). Their bars read 20/22 until they
+  earn the two new badges.
+- Earning either badge fires `achievement.earned` as usual, and therefore `follow.achievement` to
+  the earner's own followers (§35.6).
+
+### 35.9 Lifecycle
+- **Deprovision (`status = 'inactive'`, §5):** every follow row, in both directions, is **kept**.
+  - As **followee:** `followable` is false (no button anywhere), no notifications, and the
+    followers stat is absent (the board already filters inactive users). Followers see an
+    **Inactive** tag in their pane and can unfollow.
+  - As **follower:** they get no follower notifications and don't count toward anyone's followers
+    stat or the milestone.
+  - Re-enabling restores everything.
+- **GDPR erasure (§4, both the admin and SCIM `DELETE` paths):** `user_follows` rows where the user
+  is the follower **or** the followee are **deleted**, and `allow_follows` is reset to `true` (so a
+  re-provisioned account starts at the default). **Kept, de-identified by the scrub:**
+  `follow.*` rows already in other people's inboxes. Like `message.new`'s `fromName`, their
+  payload's `actorName` is a snapshot, which the §4 trade-off already accepts for notification
+  payloads. The web `lib/eraseUser.ts` and worker `eraseUserByExternalId` delete lists both gain
+  the table (kept in sync, §5).
+- **Skill deletion or archive** retracts nothing already delivered, the standard §12 posture.
+
+### 35.10 API surface
+- **`PUT /api/users/:id/follow`** follows; idempotent, returns `{ following: true }`.
+  - **400** for self.
+  - **404** for an unknown, erased or inactive target.
+  - **409 `follows_disabled`** when the target has `allow_follows = false`.
+  - Rate limit **120 / min** per user, the watch endpoint's limit.
+  - Awards `first_follow` / `followers_10` (§35.8).
+- **`DELETE /api/users/:id/follow`** unfollows; idempotent (a missing row is still 200 and
+  `{ following: false }`). It is **always allowed** whatever the target's state, so paused and
+  inactive people can be left. Same rate limit.
+- **`GET /api/me/following`** →
+  `{ following: [{ userId, displayName, avatar, since, state: 'active' | 'paused' | 'inactive' }] }`,
+  newest first, the caller's own list only. It feeds the §35.5 pane and the page-wide
+  `FollowButton` state (§35.4).
+- **`GET|PATCH /api/me`** gains `allowFollows`.
+- **`followable` joins these payloads:** `GET /api/users/:id/card`, `GET /api/users/:id/achievements`,
+  `GET /api/leaderboard` (per row, alongside the new `followers` count), the skill-detail
+  maintainers list, the marketplace contacts, and the admin online-users list.
+- **`GET /api/leaderboard`** accepts `sort=followed`. **`GET /api/leaders`** may return
+  `metric: 'followed'`.
+- All endpoints require auth (401 otherwise). There is **no MCP tool** for following in v1: it is
+  a UI-only social affordance.
+
+### 35.11 Governance & invariants
+- **Not audited.** Follow and unfollow are personal, like watches, ratings and achievements (§11).
+  The `allow_follows` toggle is a silent profile preference.
+- **Invariant #1** is untouched: nothing in RBAC reads follows. **Invariant #3** is enforced at
+  insert time by the §35.6 visibility gate. The leaderboard and badge surfaces expose per-person
+  aggregates only, never a skill identity or a follower identity.
+- **No admin surface**, no follower lists and no per-follow statistics in v1.
+
+### 35.12 Tests (ship with the change — §16 discipline)
+- **Unit:**
+  - the shared recipient-SQL builder: visibility gate, status filters, pause, dedup exclusion;
+  - the `followable` predicate;
+  - the leaderboard tie-break chains with the sixth metric;
+  - `computeLeaderBadges` with `followed`, both windows;
+  - the catalog additions (unique keys, all fields).
+- **Integration:**
+  - follow and unfollow idempotency; the 400 / 404 / 409 responses; unfollow of paused and
+    inactive targets;
+  - `first_follow` and `followers_10` awarded exactly once, and not revoked on falling below 10;
+  - each follower notification type fires to the right recipients, and **not** to:
+    - a follower who can't see a restricted skill;
+    - a follower who already got `skill.new_version`;
+    - the requester of a fulfilled request;
+    - anyone while the followee is paused;
+    - inactive followers;
+    - achievements of an `achievements_hidden` followee;
+    - backfilled awards;
+  - `follow.*` never emails;
+  - the worker paths (publish sweep, MCP `request_skill`) fan out through the same builder;
+  - erasure deletes follows in both directions on both paths; deprovision keeps them;
+  - `GET /api/me/following` states; `followable` on every listed payload.
+- **E2e:**
+  1. User A follows B from the leaderboard; the button reads Unfollow, and the hover card agrees.
+  2. B publishes an org skill; A's bell shows `follow.new_skill`.
+  3. B publishes into a namespace A can't see; A gets nothing.
+  4. B turns *Allow others to follow me* off; A's buttons vanish, and A's pane shows B as Paused.
+  5. A unfollows B from the collapsed pane; N decrements.
+
+### 35.13 Migration 0078
+- Creates `user_follows` (PK, `CHECK`, `(followee_id, created_at)` index) and adds
+  `users.allow_follows BOOLEAN NOT NULL DEFAULT true`.
+- Grants `skilly_app` SELECT / INSERT / DELETE on `user_follows`. There is no UPDATE path: a
+  follow is created or deleted, never edited.
+- No backfill.
+
+### 35.14 Accepted trade-offs
+1. **Counts are public, identities private.** The leaderboard stat and *Cult Following* disclose
+   *how many*, never *who*. A person can hide from the board, but the milestone badge still shows
+   on their hall unless trophies are hidden.
+2. **Pause, don't purge.** A paused person's followers keep the relationship silently. Pausing
+   tells a follower only a "Paused" tag in their own pane.
+3. **Insert-time evaluation.** Unfollowing, pausing or narrowing visibility after the fact never
+   retracts a delivered row.
+4. **Two notifications for one gesture are possible.** When a followee's proposal both publishes a
+   new skill and fulfils a request, the follower may get `follow.request_fulfilled` (at acceptance)
+   and `follow.new_skill` (at go-live). They are two distinct events at two different moments.
+5. **No paging** in *People I follow*. A user following hundreds of people gets a long list,
+   accepted for v1.
+6. **Gaming** by mutual-follow rings can inflate the Followed board. It is accepted: it is a
+   social, cosmetic metric that nothing in governance reads.
