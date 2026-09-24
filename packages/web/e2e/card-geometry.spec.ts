@@ -7,6 +7,8 @@
 // Categories are not seeded: they are a controlled vocabulary (§10) so the names would have to be
 // discovered at runtime, and the categories row is structurally height-bounded anyway
 // (.skill-card-cats is one line, min-height 30px) — the description was the variable-height zone.
+// Chip heights ARE asserted: every card carries its tool chip, and none of its chips (tool or
+// category) may wrap inside itself.
 // Runs against the dev stack (SKILLY_DEV_AUTH=1, platform-admin dev user); opt-in, not part of the
 // default `pnpm -r test`. Self-cleaning: both seeded skills are archived + deleted at the end.
 import { test, expect, devSignIn, type Page } from "./fixtures";
@@ -44,6 +46,13 @@ async function cardHeights(page: Page): Promise<number[]> {
     cards.map((c) => Math.round(c.getBoundingClientRect().height)));
 }
 
+/** Every chip height in every card's categories row, rounded. The tool chip is always present, so
+ *  this is non-empty even though no categories are seeded. */
+async function chipHeights(page: Page): Promise<number[]> {
+  return page.$$eval(".card-grid .skill-card .skill-card-cats > *", (chips) =>
+    chips.map((c) => Math.round(c.getBoundingClientRect().height)));
+}
+
 test.describe.serial("catalog cards are fixed-height (§14)", () => {
   const stamp = Date.now().toString(36);
   const maximal = `e2e-card-max-${stamp}`;
@@ -64,12 +73,20 @@ test.describe.serial("catalog cards are fixed-height (§14)", () => {
       expect(wide.length).toBeGreaterThanOrEqual(2);
       expect(new Set(wide).size, `card heights should be identical, got ${wide.join(", ")}`).toBe(1);
 
+      // Every chip in a categories row stays one line (§14): a chip that wrapped inside itself at a
+      // hyphen/space is roughly twice as tall as its siblings. Font-agnostic, like the height check.
+      const chips = await chipHeights(page);
+      expect(chips.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(chips).size, `category chip heights should be identical, got ${chips.join(", ")}`).toBe(1);
+
       // The same invariant must hold in a single-column phone layout — no breakpoint relaxes the
       // reserves (§14), so the heights stay locked together there too.
       await page.setViewportSize({ width: 375, height: 900 });
       await expect(page.locator(`a[href="/skills/global/${maximal}"]`)).toBeVisible();
       const narrow = await cardHeights(page);
       expect(new Set(narrow).size, `heights at 375px should be identical, got ${narrow.join(", ")}`).toBe(1);
+      const narrowChips = await chipHeights(page);
+      expect(new Set(narrowChips).size, `chip heights at 375px should be identical, got ${narrowChips.join(", ")}`).toBe(1);
 
       // And no horizontal spill at the phone width (§14 Narrow-viewport containment).
       const spills = await page.evaluate(() =>
