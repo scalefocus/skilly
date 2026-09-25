@@ -167,6 +167,9 @@ test.describe("Feedback survey (§36)", () => {
     await gotoReady(page, "/leaderboard");
     const card = page.getByTestId("survey-card");
     await expect(card).toBeVisible({ timeout: 20_000 });
+    // Let the slide-up entry animation settle — mid-flight the card is translated a few px down,
+    // which would misreport its resting bounding box.
+    await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
     const box = (await card.boundingBox())!;
     expect(box.x).toBeLessThanOrEqual(1);
     expect(Math.round(box.width)).toBeGreaterThanOrEqual(374);
