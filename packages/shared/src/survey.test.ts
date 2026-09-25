@@ -9,13 +9,18 @@ import {
   SURVEY_RETIRED_QUESTIONS,
   SURVEY_ROTATING_QUESTIONS,
   SURVEY_FREE_TEXT_MAX,
+  SURVEY_SELF_COOLDOWN_DAYS,
   composeSurveyOffer,
   isSurveyEligible,
   isSurveyFallbackDue,
   isSurveyFeature,
   isSurveyOfferExpired,
+  isSurveySource,
   parseStoredOffer,
   pickFallbackFeature,
+  selfSurveyGate,
+  selfSurveyNextAt,
+  surveyFeatureQuestions,
   surveyOfferKeys,
   surveyOfferView,
   surveyQuestionText,
@@ -125,9 +130,9 @@ test("stored offers: parse round-trip, other catalog versions dropped, expiry at
 test("submission validation: keys against the offer, star range, empty and the text cap", () => {
   const offer: StoredSurveyOffer = composeSurveyOffer("feature", "search", () => 0);
   const ok = validateSurveySubmission(offer, { answers: { "general.overall": 4, "feature.ease": 2 }, freeText: "  nice  ", via: "menu" });
-  assert.deepEqual(ok, { ok: true, answers: { "general.overall": 4, "feature.ease": 2 }, freeText: "nice", via: "menu" });
+  assert.deepEqual(ok, { ok: true, answers: { "general.overall": 4, "feature.ease": 2 }, freeText: "nice", via: "menu", feature: "search" });
   // Text alone is enough; via defaults to popup.
-  assert.deepEqual(validateSurveySubmission(offer, { freeText: "just text" }), { ok: true, answers: {}, freeText: "just text", via: "popup" });
+  assert.deepEqual(validateSurveySubmission(offer, { freeText: "just text" }), { ok: true, answers: {}, freeText: "just text", via: "popup", feature: "search" });
   assert.equal(validateSurveySubmission(offer, { answers: {}, freeText: "   " }).ok, false); // nothing answered
   assert.equal(validateSurveySubmission(offer, { answers: { "general.overall": 0 } }).ok, false);
   assert.equal(validateSurveySubmission(offer, { answers: { "general.overall": 6 } }).ok, false);
@@ -141,6 +146,68 @@ test("submission validation: keys against the offer, star range, empty and the t
   // The cap counts characters (code points), not UTF-16 units.
   assert.equal(validateSurveySubmission(offer, { freeText: "😀".repeat(SURVEY_FREE_TEXT_MAX) }).ok, true);
   assert.equal(validateSurveySubmission(offer, { freeText: "x".repeat(SURVEY_FREE_TEXT_MAX + 1) }).ok, false);
+});
+
+test("eligibility: no random roll while an on-demand offer is open (§36.16)", () => {
+  assert.equal(isSurveyEligible(user({ selfOfferOpen: true }), true, NOW), false);
+  assert.equal(isSurveyEligible(user({ selfOfferOpen: false }), true, NOW), true);
+});
+
+test("on-demand gate: platform switch, status and the 7-day cooldown; nothing else (§36.16)", () => {
+  const u = (over: Partial<{ status: string; erased: boolean; selfShownAt: Date | null }> = {}) => ({ status: "active", erased: false, selfShownAt: null, ...over });
+  assert.deepEqual(selfSurveyGate(u(), true, NOW), { ok: true });
+  assert.deepEqual(selfSurveyGate(u(), false, NOW), { ok: false, error: "surveys_off" });
+  assert.deepEqual(selfSurveyGate(u({ status: "inactive" }), true, NOW), { ok: false, error: "inactive" });
+  assert.deepEqual(selfSurveyGate(u({ erased: true }), true, NOW), { ok: false, error: "inactive" });
+  const six = selfSurveyGate(u({ selfShownAt: ago(6) }), true, NOW);
+  assert.equal(six.ok, false);
+  assert.equal(!six.ok && six.error, "cooldown");
+  assert.equal(!six.ok && six.nextAt?.toISOString(), new Date(ago(6).getTime() + SURVEY_SELF_COOLDOWN_DAYS * DAY).toISOString());
+  assert.deepEqual(selfSurveyGate(u({ selfShownAt: ago(7) }), true, NOW), { ok: true });
+  // The gate has no opt-out / grace / 30-day-floor inputs at all: those are bypassed by design.
+  assert.equal(selfSurveyNextAt(null, NOW), null);
+  assert.equal(selfSurveyNextAt(ago(8), NOW), null);
+});
+
+test("on-demand offers: no feature, general questions only, 7-day expiry (§36.16)", () => {
+  const o = composeSurveyOffer("self", null, () => 0);
+  assert.deepEqual(parseStoredOffer(JSON.parse(JSON.stringify(o))), o);
+  assert.equal(parseStoredOffer({ ...o, feature: "search" }), null); // a self offer never stores a feature
+  const shownAt = ago(1);
+  const view = surveyOfferView(o, shownAt);
+  assert.equal(view.trigger, "self");
+  assert.equal(view.feature, null);
+  assert.equal(view.questions.length, 5);
+  assert.ok(view.questions.every((q) => q.section === "general"));
+  assert.equal(view.expiresAt, new Date(shownAt.getTime() + 7 * DAY).toISOString());
+  assert.equal(isSurveyOfferExpired(ago(6), NOW, "self"), false);
+  assert.equal(isSurveyOfferExpired(ago(7), NOW, "self"), true);
+  assert.deepEqual(surveyFeatureQuestions("mcp").map((q) => q.text), ["How useful is the MCP server for your work?", "How easy was the MCP server to use?"]);
+});
+
+test("submission validation with a picked feature (§36.16)", () => {
+  const self = composeSurveyOffer("self", null, () => 0);
+  // Required for a self offer.
+  assert.equal(validateSurveySubmission(self, { answers: { "general.overall": 3 } }).ok, false);
+  // General only.
+  assert.deepEqual(validateSurveySubmission(self, { answers: { "general.overall": 3 }, feature: null }), { ok: true, answers: { "general.overall": 3 }, freeText: null, via: "popup", feature: null });
+  // Feature keys are accepted only once a feature is picked.
+  assert.equal(validateSurveySubmission(self, { answers: { "feature.useful": 3 }, feature: null }).ok, false);
+  const picked = validateSurveySubmission(self, { answers: { "feature.useful": 3 }, feature: "follow" });
+  assert.equal(picked.ok && picked.feature, "follow");
+  // Unknown feature.
+  assert.equal(validateSurveySubmission(self, { answers: { "general.overall": 3 }, feature: "bogus" }).ok, false);
+  // Rejected for the random triggers, even as null.
+  const random = composeSurveyOffer("feature", "search", () => 0);
+  assert.equal(validateSurveySubmission(random, { answers: { "general.overall": 3 }, feature: "search" }).ok, false);
+  assert.equal(validateSurveySubmission(random, { answers: { "general.overall": 3 }, feature: null }).ok, false);
+  assert.equal(validateSurveySubmission(composeSurveyOffer("visit", null, () => 0), { answers: { "general.overall": 3 }, feature: null }).ok, false);
+});
+
+test("source filter values", () => {
+  assert.ok(isSurveySource("prompted"));
+  assert.ok(isSurveySource("self"));
+  assert.ok(!isSurveySource("all"));
 });
 
 test("segment: admin outranks maintainer outranks consumer", () => {

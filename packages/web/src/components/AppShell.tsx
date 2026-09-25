@@ -19,7 +19,7 @@ import { CHANGELOG } from "../app/whats-new/changelog";
 import { achievementDef } from "@skilly/shared/achievements";
 import type { SurveyOfferView, SurveyVia } from "@skilly/shared/survey";
 import { SurveyCard } from "./SurveyCard";
-import { SURVEY_OFFER_EVENT, SURVEY_PREF_EVENT, SURVEY_REOPEN_EVENT, setSurveyCanShow, setSurveyReady } from "../lib/surveyClient";
+import { SURVEY_OFFER_EVENT, SURVEY_PREF_EVENT, SURVEY_REOPEN_EVENT, SURVEY_START_EVENT, SURVEY_STATE_EVENT, setSurveyCanShow, setSurveyReady } from "../lib/surveyClient";
 
 const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "review" | "requests" }[] = [
   { href: "/", label: "Overview", icon: "M3 12 12 4l9 8M5 10v9h14v-9" },
@@ -78,6 +78,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [openSurvey, setOpenSurvey] = useState<SurveyOfferView | null>(null);
   const [surveyCard, setSurveyCard] = useState<{ offer: SurveyOfferView; via: SurveyVia } | null>(null);
   const [surveyToast, setSurveyToast] = useState<string | null>(null);
+  // §36.16 on-demand feedback: null while the platform switch is off; `nextAt` null = available now.
+  const [selfSurvey, setSelfSurvey] = useState<{ nextAt: string | null } | null>(null);
   const surveyChecked = useRef(false);
   const surveyGate = useRef({ whatsNew: false, onboarded: false, card: false, quickStart: false });
   // §31: timezone beacon sent once per mount; the transient "badge earned" toast.
@@ -267,7 +269,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null; timeZone?: string | null; openSurvey?: SurveyOfferView | null }>("/api/me")
+    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null; timeZone?: string | null; openSurvey?: SurveyOfferView | null; selfSurvey?: { nextAt: string | null } | null }>("/api/me")
       .then((j) => {
         setMyUserId(j.userId ?? null);
         setIsPlatformAdmin(Boolean(j.isPlatformAdmin));
@@ -280,6 +282,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         // forces it once. Tri-state (null = unknown until /api/me resolves) so we never bounce
         // a user before we know their status.
         setOnboarded(j.onboardedAt != null);
+        setSelfSurvey(j.selfSurvey ?? null);
         // Timezone capture (§31.3): report the browser's IANA zone when it differs from the stored
         // one. Once per shell mount; best-effort; the server validates and ignores junk.
         if (!tzReported.current) {
@@ -357,14 +360,41 @@ export function AppShell({ children }: { children: ReactNode }) {
     const reopen = () => {
       if (openSurveyRef.current) setSurveyCard({ offer: openSurveyRef.current, via: "menu" });
     };
-    // The profile toggle flipped the opt-out: off ends any open offer at once (§36.7).
+    // The profile toggle flipped the opt-out: off ends an open RANDOM offer at once (§36.7). An
+    // on-demand offer survives it (§36.16).
     const pref = (e: Event) => {
-      if ((e as CustomEvent<{ enabled: boolean }>).detail?.enabled === false) { setSurveyCard(null); setOpenSurvey(null); }
+      if ((e as CustomEvent<{ enabled: boolean }>).detail?.enabled === false && openSurveyRef.current?.trigger !== "self") {
+        setSurveyCard(null);
+        setOpenSurvey(null);
+      }
+    };
+    // "Give feedback now" (§36.16). The click overrides canShow: a What's new notice on screen is
+    // hidden WITHOUT being stamped, so it comes back on the next full load.
+    const start = () => {
+      fetch("/api/me/survey/start", { method: "POST" })
+        .then(async (r) => {
+          const j = (await r.json().catch(() => ({}))) as { survey?: SurveyOfferView; created?: boolean; error?: string; nextAt?: string };
+          if (r.ok && j.survey) {
+            setWhatsNewNotice(null);
+            setOpenSurvey(j.survey);
+            setSurveyCard({ offer: j.survey, via: j.created ? "popup" : "menu" });
+            if (j.created) setSelfSurvey({ nextAt: j.survey.expiresAt });
+          } else if (j.error === "cooldown") {
+            setSelfSurvey({ nextAt: j.nextAt ?? null });
+          } else if (j.error === "surveys_off") {
+            setSelfSurvey(null);
+          }
+          invalidateApi("/api/me");
+          window.dispatchEvent(new Event(SURVEY_STATE_EVENT));
+        })
+        .catch(() => {});
     };
     window.addEventListener(SURVEY_OFFER_EVENT, offered);
     window.addEventListener(SURVEY_REOPEN_EVENT, reopen);
     window.addEventListener(SURVEY_PREF_EVENT, pref);
+    window.addEventListener(SURVEY_START_EVENT, start);
     return () => {
+      window.removeEventListener(SURVEY_START_EVENT, start);
       window.removeEventListener(SURVEY_OFFER_EVENT, offered);
       window.removeEventListener(SURVEY_REOPEN_EVENT, reopen);
       window.removeEventListener(SURVEY_PREF_EVENT, pref);
@@ -384,6 +414,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     setSurveyCard(null);
     setOpenSurvey(null);
     invalidateApi("/api/me");
+    window.dispatchEvent(new Event(SURVEY_STATE_EVENT));
   }, []);
   const optOutOfSurveys = useCallback(() => {
     setSurveyCard(null);
@@ -745,6 +776,21 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </svg>
                     My marketplaces
                   </Link>
+                  {!openSurvey && selfSurvey && (selfSurvey.nextAt === null || Date.parse(selfSurvey.nextAt) <= Date.now()) && (
+                    // §36.16 on-demand feedback; hidden during its cooldown and while an offer is open.
+                    <button
+                      type="button"
+                      className="user-menu-item"
+                      role="menuitem"
+                      data-testid="give-feedback"
+                      onClick={() => { setUserMenuOpen(false); window.dispatchEvent(new Event(SURVEY_START_EVENT)); }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      </svg>
+                      Give feedback
+                    </button>
+                  )}
                   <Link href="/profile" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" />

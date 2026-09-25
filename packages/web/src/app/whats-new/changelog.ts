@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.14.0",
+    date: "2026-09-25",
+    summary:
+      "Give feedback whenever you like: Profile → Feedback now has a Give feedback now button, also in the account menu, that opens the anonymous survey right away and lets you pick which feature to talk about. You can use it once a week, even with random prompts switched off. Admins can tell self-initiated answers apart on Monitoring.",
+  },
+  {
     version: "2.13.0",
     date: "2026-09-25",
     summary:

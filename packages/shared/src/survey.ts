@@ -15,6 +15,8 @@ export const SURVEY_FLOOR_DAYS = 30;
 export const SURVEY_GRACE_DAYS = 14;
 /** §36.1 with no offer for this long, any full page load may roll (the long-time-user fallback). */
 export const SURVEY_FALLBACK_DAYS = 90;
+/** §36.16 an on-demand survey can be started again this long after the last one was OPENED. */
+export const SURVEY_SELF_COOLDOWN_DAYS = 7;
 /** §36.3 the free-text cap, in characters (code points — what Postgres char_length counts). */
 export const SURVEY_FREE_TEXT_MAX = 2000;
 /** §36.9 any figure over fewer than this many responses is withheld. */
@@ -24,10 +26,14 @@ export const SURVEY_MIN_GROUP = 5;
 export const SURVEY_FEATURE_USED_RATE_PER_MIN = 120;
 export const SURVEY_CHECK_RATE_PER_MIN = 30;
 export const SURVEY_SUBMIT_RATE_PER_MIN = 10;
+export const SURVEY_START_RATE_PER_MIN = 10;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type SurveyTrigger = "feature" | "visit";
+/** `self` = on-demand, started by the user (§36.16); `feature` / `visit` = the random prompt. */
+export type SurveyTrigger = "feature" | "visit" | "self";
+/** The admin results' Source filter (§36.16): `prompted` covers `feature` and `visit`. */
+export type SurveySource = "prompted" | "self";
 export type SurveySegment = "consumer" | "maintainer" | "admin";
 export type SurveyVia = "popup" | "menu";
 export const SURVEY_SEGMENTS: readonly SurveySegment[] = ["consumer", "maintainer", "admin"];
@@ -122,11 +128,13 @@ export interface SurveyUserState {
   onboardedAt: Date | null;
   surveysEnabled: boolean;
   lastShownAt: Date | null;
+  /** §36.16 an on-demand offer is open: no random roll is made meanwhile. */
+  selfOfferOpen?: boolean;
 }
 
 /** Every §36.1 eligibility condition except `canShow`, which only the browser knows. */
 export function isSurveyEligible(u: SurveyUserState, platformEnabled: boolean, now: Date): boolean {
-  if (!platformEnabled || u.status !== "active" || u.erased || !u.surveysEnabled) return false;
+  if (!platformEnabled || u.status !== "active" || u.erased || !u.surveysEnabled || u.selfOfferOpen) return false;
   if (!u.onboardedAt || now.getTime() - u.onboardedAt.getTime() < SURVEY_GRACE_DAYS * DAY_MS) return false;
   return !u.lastShownAt || now.getTime() - u.lastShownAt.getTime() >= SURVEY_FLOOR_DAYS * DAY_MS;
 }
@@ -137,6 +145,34 @@ export function isSurveyFallbackDue(u: Pick<SurveyUserState, "onboardedAt" | "la
   return !!since && now.getTime() - since.getTime() >= SURVEY_FALLBACK_DAYS * DAY_MS;
 }
 
+/**
+ * §36.16 when the next on-demand survey can be started: null = now. The cooldown runs from the last
+ * on-demand OPEN (`survey_self_shown_at`), never from a submit.
+ */
+export function selfSurveyNextAt(selfShownAt: Date | null, now: Date): Date | null {
+  if (!selfShownAt) return null;
+  const next = new Date(selfShownAt.getTime() + SURVEY_SELF_COOLDOWN_DAYS * DAY_MS);
+  return next.getTime() > now.getTime() ? next : null;
+}
+
+export type SelfSurveyGate = { ok: true } | { ok: false; error: "surveys_off" | "inactive" | "cooldown"; nextAt?: Date };
+
+/**
+ * §36.16 may this user start an on-demand survey now? It bypasses the roll, the 30-day floor, the
+ * 14-day grace period and the random opt-out; it respects the platform switch, `active` and its own
+ * 7-day cooldown.
+ */
+export function selfSurveyGate(
+  u: { status: string; erased: boolean; selfShownAt: Date | null },
+  platformEnabled: boolean,
+  now: Date,
+): SelfSurveyGate {
+  if (!platformEnabled) return { ok: false, error: "surveys_off" };
+  if (u.status !== "active" || u.erased) return { ok: false, error: "inactive" };
+  const nextAt = selfSurveyNextAt(u.selfShownAt, now);
+  return nextAt ? { ok: false, error: "cooldown", nextAt } : { ok: true };
+}
+
 /** One 1-in-3 roll. `rng` returns [0, 1) like Math.random (injectable for tests). */
 export function surveyRollWins(rng: () => number = Math.random): boolean {
   return rng() * SURVEY_ROLL_ODDS < 1;
@@ -144,7 +180,11 @@ export function surveyRollWins(rng: () => number = Math.random): boolean {
 
 // ---- offers (§36.2 / §36.10) ---------------------------------------------------------------------
 
-/** The open offer as stored in `users.survey_offer`. Its shown time is `survey_last_shown_at`. */
+/**
+ * The open offer as stored in `users.survey_offer`. Its shown time is `survey_last_shown_at` for a
+ * random offer and `survey_self_shown_at` for an on-demand (`self`) one, whose feature is always
+ * null: the user picks it in the card (§36.16).
+ */
 export interface StoredSurveyOffer {
   catalogVersion: number;
   trigger: SurveyTrigger;
@@ -182,18 +222,24 @@ export function parseStoredOffer(raw: unknown): StoredSurveyOffer | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   if (o.catalogVersion !== SURVEY_CATALOG_VERSION) return null;
-  if (o.trigger !== "feature" && o.trigger !== "visit") return null;
-  if (o.feature !== null && !isSurveyFeature(o.feature)) return null;
+  if (o.trigger !== "feature" && o.trigger !== "visit" && o.trigger !== "self") return null;
+  if (o.feature !== null && (o.trigger === "self" || !isSurveyFeature(o.feature))) return null;
   if (typeof o.rotating !== "string" || !SURVEY_ROTATING_QUESTIONS.some((q) => q.key === o.rotating)) return null;
   return { catalogVersion: SURVEY_CATALOG_VERSION, trigger: o.trigger, feature: o.feature as SurveyFeatureKey | null, rotating: o.rotating, closed: o.closed === true };
 }
 
-export function surveyOfferExpiresAt(shownAt: Date): Date {
-  return new Date(shownAt.getTime() + SURVEY_FLOOR_DAYS * DAY_MS);
+/** A random offer lives 30 days (§36.1); an on-demand one lives out its 7-day cooldown (§36.16). */
+export function surveyOfferExpiresAt(shownAt: Date, trigger: SurveyTrigger = "feature"): Date {
+  return new Date(shownAt.getTime() + (trigger === "self" ? SURVEY_SELF_COOLDOWN_DAYS : SURVEY_FLOOR_DAYS) * DAY_MS);
 }
 
-export function isSurveyOfferExpired(shownAt: Date, now: Date): boolean {
-  return now.getTime() >= surveyOfferExpiresAt(shownAt).getTime();
+export function isSurveyOfferExpired(shownAt: Date, now: Date, trigger: SurveyTrigger = "feature"): boolean {
+  return now.getTime() >= surveyOfferExpiresAt(shownAt, trigger).getTime();
+}
+
+/** §36.16 the two feature questions for a feature picked in an on-demand card. */
+export function surveyFeatureQuestions(feature: SurveyFeatureKey): SurveyOfferView["questions"] {
+  return SURVEY_FEATURE_QUESTIONS.map((q) => ({ key: q.key, text: surveyQuestionText(q.key, feature), section: "feature" as const }));
 }
 
 /** The keys an offer asks, in display order. */
@@ -216,14 +262,21 @@ export function surveyOfferView(offer: StoredSurveyOffer, shownAt: Date): Survey
       section: key.startsWith("feature.") ? "feature" : "general",
     })),
     shownAt: shownAt.toISOString(),
-    expiresAt: surveyOfferExpiresAt(shownAt).toISOString(),
+    expiresAt: surveyOfferExpiresAt(shownAt, offer.trigger).toISOString(),
   };
 }
 
 // ---- submissions (§36.6) -------------------------------------------------------------------------
 
 export type SurveySubmission =
-  | { ok: true; answers: Record<string, number>; freeText: string | null; via: SurveyVia }
+  | {
+      ok: true;
+      answers: Record<string, number>;
+      freeText: string | null;
+      via: SurveyVia;
+      /** The feature the response is about: the offer's, or the one picked in a `self` card. */
+      feature: SurveyFeatureKey | null;
+    }
   | { ok: false; error: string };
 
 /** Trimmed free text, or null when empty. Does not enforce the cap. */
@@ -233,10 +286,22 @@ export function normalizeSurveyText(raw: unknown): string | null {
   return t.length > 0 ? t : null;
 }
 
-/** Validate a submission body against the open offer. Nothing answered is an error. */
+/**
+ * Validate a submission body against the open offer. Nothing answered is an error. A `self` offer
+ * REQUIRES `feature` (a catalog key, or null for "skilly in general", §36.16); any other offer
+ * rejects it, since its feature was fixed when it was shown.
+ */
 export function validateSurveySubmission(offer: StoredSurveyOffer, body: unknown): SurveySubmission {
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
-  const allowed = new Set(surveyOfferKeys(offer));
+  let feature = offer.feature;
+  if (offer.trigger === "self") {
+    if (!("feature" in b)) return { ok: false, error: "feature is required" };
+    if (b.feature !== null && !isSurveyFeature(b.feature)) return { ok: false, error: "unknown feature" };
+    feature = b.feature as SurveyFeatureKey | null;
+  } else if ("feature" in b) {
+    return { ok: false, error: "feature is only accepted for an on-demand survey" };
+  }
+  const allowed = new Set(surveyOfferKeys({ ...offer, feature }));
   const answers: Record<string, number> = {};
   const raw = b.answers ?? {};
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ok: false, error: "answers must be an object" };
@@ -250,7 +315,7 @@ export function validateSurveySubmission(offer: StoredSurveyOffer, body: unknown
   if (freeText && [...freeText].length > SURVEY_FREE_TEXT_MAX) return { ok: false, error: `freeText is limited to ${SURVEY_FREE_TEXT_MAX} characters` };
   if (Object.keys(answers).length === 0 && !freeText) return { ok: false, error: "answer at least one question" };
   const via: SurveyVia = b.via === "menu" ? "menu" : "popup";
-  return { ok: true, answers, freeText, via };
+  return { ok: true, answers, freeText, via, feature };
 }
 
 // ---- segment and withholding (§36.6 / §36.9) -----------------------------------------------------
@@ -262,6 +327,10 @@ export function surveySegment(a: { isPlatformAdmin: boolean; isNamespaceAdmin: b
 
 export function isSurveySegment(v: unknown): v is SurveySegment {
   return v === "consumer" || v === "maintainer" || v === "admin";
+}
+
+export function isSurveySource(v: unknown): v is SurveySource {
+  return v === "prompted" || v === "self";
 }
 
 /** §36.9 is a figure over `n` responses withheld? */

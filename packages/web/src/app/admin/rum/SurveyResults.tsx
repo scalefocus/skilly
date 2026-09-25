@@ -9,7 +9,7 @@ import { EmptyState, Switch } from "../../../components/ui";
 import { useDateFmt } from "../../../components/DateFormat";
 import { readPref, writePref, adminCardPrefKey } from "../../../lib/prefs";
 import { CollapsibleCard } from "../CollapsibleCard";
-import { SURVEY_MIN_GROUP, surveyFeatureLabel, type SurveySegment } from "@skilly/shared/survey";
+import { SURVEY_MIN_GROUP, surveyFeatureLabel, type SurveySegment, type SurveySource, type SurveyTrigger } from "@skilly/shared/survey";
 
 const SurveyChart = nextDynamic(() => import("./SurveyChart").then((m) => m.SurveyChart), {
   ssr: false,
@@ -32,7 +32,7 @@ interface Summary {
   lastDate: string | null;
   bucket: "day" | "week" | "month";
   responses: number;
-  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number };
+  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number; shownSelf: number; submittedSelf: number };
   series: { date: string; n: number | null; overallAvg: number | null; withheld: boolean }[];
   questions: QuestionStat[];
   features: { key: string; label: string; n: number | null }[];
@@ -42,6 +42,7 @@ interface Comment {
   answeredOn: string;
   feature: string | null;
   segment: SurveySegment;
+  trigger: SurveyTrigger;
   text: string;
 }
 
@@ -51,6 +52,12 @@ const SEGMENTS: { key: SurveySegment | null; label: string }[] = [
   { key: "consumer", label: "Consumer" },
   { key: "maintainer", label: "Maintainer" },
   { key: "admin", label: "Admin" },
+];
+// §36.16 the Source filter: random prompts vs on-demand ("Give feedback now").
+const SOURCES: { key: SurveySource | null; label: string }[] = [
+  { key: null, label: "All" },
+  { key: "prompted", label: "Prompted" },
+  { key: "self", label: "Self-initiated" },
 ];
 const segmentLabel = (s: SurveySegment) => SEGMENTS.find((x) => x.key === s)?.label ?? s;
 const CARD_KEY = adminCardPrefKey("survey");
@@ -70,6 +77,7 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
 
   const [segment, setSegment] = useState<SurveySegment | null>(null);
   const [feature, setFeature] = useState<string | null>(null);
+  const [source, setSource] = useState<SurveySource | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -87,8 +95,9 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
     const p = new URLSearchParams({ range: String(range) });
     if (segment) p.set("segment", segment);
     if (feature) p.set("feature", feature);
+    if (source) p.set("source", source);
     return p.toString();
-  }, [range, segment, feature]);
+  }, [range, segment, feature, source]);
 
   // The header summary + switch need the summary even while collapsed, so it loads on mount too.
   useEffect(() => {
@@ -149,7 +158,7 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
 
   const f = summary?.funnel;
   const rate = f && f.shown > 0 ? Math.round((f.submitted / f.shown) * 100) : null;
-  const empty = !!summary && summary.responses === 0 && (f?.shown ?? 0) === 0;
+  const empty = !!summary && summary.responses === 0 && (f?.shown ?? 0) === 0 && (f?.shownSelf ?? 0) === 0;
   const general = summary?.questions.filter((q) => !q.key.startsWith("feature.")) ?? [];
   const featureQs = summary?.questions.filter((q) => q.key.startsWith("feature.")) ?? [];
 
@@ -191,12 +200,23 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
               <Figure label="Response rate" value={rate == null ? "—" : `${rate} %`} />
               <Figure label="Opted out" value={f!.optedOut} hint="current, not range-bound" />
             </div>
+            {/* §36.16 on-demand surveys, counted apart so the response rate stays about random prompts. */}
+            <div className="muted" style={{ fontSize: 13, marginTop: -12 }} data-testid="survey-funnel-self">
+              Self-initiated: {f!.shownSelf.toLocaleString()} opened · {f!.submittedSelf.toLocaleString()} submitted
+            </div>
 
             {/* Filters — apply to the stats, the trend and the feed. */}
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
               <div className="sort-toggle" role="group" aria-label="Segment">
                 {SEGMENTS.map((s) => (
                   <button key={s.label} type="button" className={`sort-opt${segment === s.key ? " sort-on" : ""}`} onClick={() => setSegment(s.key)}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+              <div className="sort-toggle" role="group" aria-label="Source">
+                {SOURCES.map((s) => (
+                  <button key={s.label} type="button" className={`sort-opt${source === s.key ? " sort-on" : ""}`} onClick={() => setSource(s.key)}>
                     {s.label}
                   </button>
                 ))}
@@ -258,6 +278,7 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
                         <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{c.text}</div>
                         <div className="sub" style={{ fontSize: 11.5, marginTop: 4 }}>
                           {fmt.date(`${c.answeredOn}T12:00:00Z`)} · {c.feature ? surveyFeatureLabel(c.feature) : "General"} · {segmentLabel(c.segment)}
+                          {c.trigger === "self" && <span className="chip" style={{ marginLeft: 6 }}>Self-initiated</span>}
                         </div>
                       </div>
                       {confirming === c.id ? (

@@ -80,3 +80,13 @@ function send(feature: SurveyFeatureKey): void {
 export function reopenSurvey(): void {
   window.dispatchEvent(new Event(SURVEY_REOPEN_EVENT));
 }
+
+/** The profile's "Give feedback now" asking the shell to start an on-demand survey (§36.16). */
+export const SURVEY_START_EVENT = "skilly:survey-start";
+/** The shell's survey state changed (an offer opened or ended, the cooldown moved): re-read /api/me. */
+export const SURVEY_STATE_EVENT = "skilly:survey-state";
+
+/** Ask the shell to start an on-demand survey ("Give feedback now", §36.16). */
+export function startFeedback(): void {
+  window.dispatchEvent(new Event(SURVEY_START_EVENT));
+}

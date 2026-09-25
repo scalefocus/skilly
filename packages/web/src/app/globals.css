@@ -1130,6 +1130,8 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .survey-q { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .survey-q-text { flex: 1 1 200px; min-width: 0; font-size: 13px; }
 .survey-q .star { font-size: 21px; }
+.survey-picker { display: flex; flex-direction: column; gap: 6px; }
+.survey-picker select { width: 100%; box-sizing: border-box; font-size: 13px; }
 .survey-text { display: flex; flex-direction: column; gap: 6px; }
 .survey-text textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; font-size: 13px; }
 .survey-count { align-self: flex-end; font-size: 11px; color: var(--faint); }

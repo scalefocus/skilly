@@ -24,7 +24,7 @@ Every decision below was explicitly confirmed.
 | Visibility | **Per-skill**: org-wide OR scoped to one namespace. No per-individual private, no per-version visibility |
 | Search | **PostgreSQL full-text search only** (§34): stemmed and weighted (title/slug › description › categories › usage + `SKILL.md` body), admin-curated synonyms, typo + substring fallback tiers, `"phrase"` / `-exclude` / `OR` syntax, admin-selectable language. **No vector store, no new extension.** One engine for the catalog, the header search and MCP |
 | Skill icons | **Optional, skill-level** image or emoji (§33): resolved from the bundle (`icon:` frontmatter → root `icon.png`) before the proposer's upload/emoji; re-encoded to 256×256 PNG; default = the skilly wordmark. Shown on every skill surface and on the **signed share link's** Open Graph card — the only per-skill unfurl, gated by a 7-day token minted by a signed-in viewer |
-| Feedback survey | **Anonymous in-app survey** (§36): general satisfaction + two questions on a feature the user just used for the first time, 1–5 stars + optional free text. A 1-in-3 random roll on an eligible first use, **at most once per 30 days**, 14-day grace for new users, never alongside What's new. Profile opt-out + platform switch; results for platform admins on Monitoring, with any figure over fewer than 5 responses withheld |
+| Feedback survey | **Anonymous in-app survey** (§36): general satisfaction + two questions on a feature the user just used for the first time, 1–5 stars + optional free text. A 1-in-3 random roll on an eligible first use, **at most once per 30 days**, 14-day grace for new users, never alongside What's new. Profile opt-out + platform switch; users can also **give feedback on demand** (profile / account menu, once per 7 days, feature of their choice, §36.16); results for platform admins on Monitoring, with any figure over fewer than 5 responses withheld |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
@@ -111,7 +111,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -292,9 +292,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `user_feature_uses` / `survey_responses` / `survey_answers` / `survey_daily` (migration 0079, detailed in §36)
 - **`user_feature_uses`** — `user_id` (FK → `users`, CASCADE), `feature` (a key from `@skilly/shared/survey`), `first_used_at`; **PK `(user_id, feature)`**. The per-user first-use ledger behind the survey trigger; backfilled from history by the migration; deleted on GDPR erasure (§4).
-- **`survey_responses`** — `id` (random uuid), `answered_on` (**UTC date only**), `catalog_version`, `trigger` (`feature` | `visit`), `feature` (nullable), `segment` (`consumer` | `maintainer` | `admin`), `via` (`popup` | `menu`), `free_text` (≤ 2000, nullable). **No user reference and no time of day, by design** (anonymous, §36.12). Immutable; the only delete is an audited admin delete.
+- **`survey_responses`** — `id` (random uuid), `answered_on` (**UTC date only**), `catalog_version`, `trigger` (`feature` | `visit` | `self` — `self` = on-demand, migration 0080, §36.16), `feature` (nullable), `segment` (`consumer` | `maintainer` | `admin`), `via` (`popup` | `menu`), `free_text` (≤ 2000, nullable). **No user reference and no time of day, by design** (anonymous, §36.12). Immutable; the only delete is an audited admin delete.
 - **`survey_answers`** — `response_id` (FK, CASCADE), `question_key`, `stars` (1–5); PK `(response_id, question_key)`; one row per *answered* question.
-- **`survey_daily`** — `day` (PK), `shown`, `closed`, `submitted`, `submitted_from_menu`: aggregate funnel counters with no user or feature dimension.
+- **`survey_daily`** — `day` (PK), `shown`, `closed`, `submitted`, `submitted_from_menu`, plus `shown_self` / `submitted_self` for on-demand surveys (migration 0080, §36.16): aggregate funnel counters with no user or feature dimension.
 
 ---
 
@@ -388,7 +388,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
-- **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
+- **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
 - **Leaderboard credit transfer (same optional target):** with a "Replace maintainer to" target, the erased user's `install_credits` rows are **reassigned to the target** instead of deleted, so their contributor-leaderboard standing (installs + "skills adopted", §21) is retained under the successor. Two classes of row are **excepted and deleted** (as plain erasure would): **would-be self-credits** — credits for installs the *target* performed themselves; the no-self-credit rule (§21) holds even through transfer — and **duplicates** — the target already holds a credit for the same install (they co-maintained the skill); one install never counts twice for one person. Credit transfer is **independent of the maintainer-transfer eligibility check**: **all** remaining credits move, including those on restricted skills the target can't see — no leak, because the board exposes only per-person aggregates and never skill identities (invariant #3 holds); the target's "skills adopted" may therefore count skills their leaderboard "Skills" catalog link won't show (that link visibility-filters independently). Reassigned rows keep their original `access_log` timestamps, so both windows stay faithful (the target's 30d numbers may jump). **"Requests fulfilled" and "skills requested" are deliberately NOT transferred** — `fulfilled_by_user_id` / `requester_user_id` record who actually did the work / actually asked, and rewriting either would misattribute history on the request record itself (and change who appears as the requester in threads and detail pages); both stay on the tombstone, hidden from the board as today. **"Skills watched" needs no transfer** — it derives from *current* explicit maintainership, so it already follows the maintainer transfer for eligible skills. With **no target** (including the SCIM erasure path, which never has one), credits are deleted exactly as before (§21 "Erasure removes credit").
@@ -1592,7 +1592,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
@@ -2572,7 +2572,9 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   **Profile**, **Sign out**. The menu labels are the possessive short forms; the page titles
   keep their own headings ("Installed skills.", "Added marketplaces."). **While a feedback-survey
   offer is open**, **Take the survey** is prepended as the first item, marked with the accent dot
-  (§36.5).
+  (§36.5). **Give feedback** (an on-demand survey, §36.16) sits directly above **Profile**. It is
+  hidden during its 7-day cooldown, while any survey offer is open, and while the platform survey
+  switch is off.
 - **Opens and closes with a brief animation** (fade + slight scale/translate from the trigger,
   ~150ms) rather than appearing/disappearing instantly; the close reverses the same transition
   before the menu unmounts. Uses the shared `.menu-pop` animation classes (also used by the
@@ -6551,7 +6553,9 @@ skilly in general and with **one feature they just started using**. It floats li
 notice (§23) and can be closed at any time. It appears **at random, at most once every 30 days**
 per user. Users opt out with a profile toggle; platform admins can switch it off platform-wide.
 The results are shown to platform admins in a collapsible **Survey results** section on the
-Monitoring page (§32.7).
+Monitoring page (§32.7). Users can also **ask for the survey themselves**, at most once every 7
+days. That on-demand path, with its own rules, is §36.16. §36.1–§36.15 describe the random prompt
+unless they say otherwise.
 
 ### 36.1 Semantics
 - **Trigger: the first use of a feature.** A fixed **feature catalog** (§36.3) names the features
@@ -6756,7 +6760,8 @@ release.
   above Quick start, marked with the accent dot. It reopens the card with the same questions and
   feature, starting blank, and a submission from it carries `via = 'menu'`.
 - The Profile page's survey section (§36.7) shows the same **Take the survey** button while an offer
-  is open.
+  is open (in place of *Give feedback now*, §36.16).
+- An open **on-demand** offer (§36.16) gets the same two entries.
 - Both disappear once the offer ends (§36.1 expiry). `GET /api/me` carries the open offer as
   `openSurvey` (resolved questions included, or `null`), so the menu needs no extra request.
 
@@ -6778,13 +6783,15 @@ release.
   - **`consumer`**: everyone else.
 
 ### 36.7 Opting out
-- **Profile toggle.** A new **Feedback surveys** section on `/profile`, after **Following**, using
-  the same On/Off `sort-toggle`. Helper copy:
+- **Profile toggle.** A **Feedback** section on `/profile`, after **Following**. Its first row,
+  **Ask me for feedback**, uses the same On/Off `sort-toggle`. Its second row, **Give feedback now**,
+  is the on-demand button (§36.16). The toggle governs **random prompts only**. Helper copy:
   - **On:** *"Now and then, at most once a month, skilly asks how it's doing. Answers are anonymous."*
   - **Off:** *"You won't be asked to take surveys."*
 - **Default on.** Every existing and new user starts opted in (the column default).
 - **Instant.** Switching off (`PATCH /api/me { surveysEnabled: false }`) **clears the open offer**
-  and hides any open card, the menu item and the profile button right away.
+  and hides any open card, the menu item and the profile button right away. An open **on-demand**
+  offer is the exception: it is kept (§36.16).
 - **Switching back on** does **not** reset `survey_last_shown_at`: the 30-day floor still applies.
 - **"Don't ask me again"** in the card makes the same PATCH, closes the card, and toasts *"Got it,
   no more surveys. You can turn them back on in your profile."*
@@ -7000,3 +7007,143 @@ There is **no MCP tool** for surveys: they are a web-UI affordance.
    the user is asked again in the next cycle.
 6. **The funnel can't be filtered** by segment or feature. That is the cost of keeping it free of
    per-user rows.
+7. **On-demand feedback is self-selected** (§36.16). People who ask to give feedback tend to feel
+   strongly one way or the other, so their answers are stored as `trigger = 'self'`, counted apart
+   from the random funnel, and filterable on Monitoring. The 7-day cooldown caps one person at
+   about 52 on-demand responses a year; it limits stuffing but doesn't stop it.
+
+### 36.16 On-demand feedback ("Give feedback now", migration 0080)
+Besides the random prompt, a user can **ask for the survey themselves** at any time from the
+profile or the account menu. The on-demand survey uses the same card, questions and anonymous
+storage as the random one. It differs in the points below.
+
+- **Gates.** An on-demand survey **bypasses** the 1-in-3 roll, the 30-day floor, the 14-day grace
+  period and the random-survey opt-out (`users.surveys_enabled`). It **respects**:
+  - the platform switch `survey_enabled` (§36.8): while it is off, the button and the menu item are
+    hidden and `start` answers **409 `surveys_off`**;
+  - `status = 'active'` and not erased;
+  - its own **7-day cooldown** (below).
+- **The cooldown: 7 days, stamped on open.** Opening an on-demand survey stamps
+  **`users.survey_self_shown_at = now()`**. Another one can be started once 7 days have passed since
+  that stamp. The stamp records only that the card was **opened**. It is never written on submit, so
+  it says nothing about whether or when the user answered (§36.12). Closing without answering still
+  uses up the 7 days.
+- **Independent clocks.** The on-demand cooldown and the random 30-day floor are separate:
+  - an on-demand survey **does not** touch `survey_last_shown_at`, so it doesn't delay a random
+    prompt;
+  - a random survey doesn't touch `survey_self_shown_at`.
+- **One open offer at a time.** `users.survey_offer` still holds at most one offer:
+  - **a random offer is open:** the profile shows the existing **Take the survey** button in place
+    of *Give feedback now*, the menu shows only *Take the survey*, and `start` returns that random
+    offer unchanged (no stamp, nothing counted);
+  - **an on-demand offer is open:** a random roll is not made while it is open. As with a
+    `canShow = false` trigger (§36.1), the first use is recorded and consumed. The visit fallback
+    doesn't roll either.
+- **The offer.** `{ catalogVersion, trigger: 'self', feature: null, rotating, closed }`. The rotating
+  question is picked as usual (§36.3). The feature is left open because the **user picks it in the
+  card** (below). The shown time is `survey_self_shown_at`, and the offer **expires 7 days** after
+  it. It also ends on submit, when the platform switch goes off, and when the catalog version
+  changes. The random opt-out does **not** end it (below).
+- **Closing is "not now"**, as for random offers (§36.1): the offer stays open, and **Take the
+  survey** appears in the account menu and on the profile until the offer expires. Reopening starts
+  blank, **feature choice included**.
+- **The card** (§36.4), with these differences:
+  - **A feature picker** heads the question list: a labelled select, *"What would you like to tell us
+    about?"*, with **skilly in general** (the default) and then every catalog feature by label
+    (§36.3), in catalog order. Choosing a feature adds the **"About {feature}"** section with its two
+    feature questions. Changing or clearing the choice removes that section and **discards its
+    stars**. With *skilly in general* there is no feature section.
+  - The general section (four general questions plus the rotating one) and the free-text box are
+    unchanged.
+  - **No "Don't ask me again" link.** The user asked for this card.
+  - **`canShow` is overridden by the click.** If the What's new notice is on screen, it is hidden
+    **without being stamped** (it comes back on the next full load, §23). The survey card then
+    opens. The Quick start gate can't be on screen when the button is reachable.
+- **Submit** uses the same endpoint (§36.10) with one extra field, **`feature`** (a catalog key or
+  `null`), which is **required for a `self` offer and rejected (422) for any other**. The server
+  validates it against the catalog and then validates the answers as in §36.6, using that feature.
+  The response is stored with `trigger = 'self'` and the chosen `feature` (or `null`). `via` keeps
+  its meaning: `popup` for the card opened by the button, `menu` when it was reopened with *Take the
+  survey*.
+- **The profile section** (§36.7), renamed **Feedback**, has two rows:
+  1. **Ask me for feedback**: the existing On/Off `sort-toggle` (`users.surveys_enabled`),
+     relabelled, with the §36.7 helper copy. It governs **random prompts only**.
+  2. **Give feedback now**: a `btn btn-sm` with the helper *"Tell us what you think, any time. Once a
+     week at most."* It is shown **whatever the toggle says**.
+     - While the cooldown runs, it is **disabled**, and the helper reads *"You can share feedback
+       again on {date}."* (the viewer's date format, `useDateFmt()`).
+     - While any offer is open, it is replaced by the §36.5 **Take the survey** button.
+     - It is hidden while the platform switch is off.
+     - `data-testid="profile-give-feedback"`.
+- **The account menu** gains **Give feedback**, directly above **Profile**. It opens an on-demand
+  survey the same way as the profile button. It is **hidden** during the cooldown (a disabled menu
+  item explains nothing), while any offer is open (*Take the survey* is already the first item,
+  §36.5), and while the platform switch is off.
+- **The random opt-out doesn't end an on-demand offer.** `PATCH /api/me { surveysEnabled: false }`
+  (and *Don't ask me again*) clears the open offer **only when it is a random one**. An open
+  on-demand offer, and its *Take the survey* entries, survive.
+- **Funnel & results** (§36.9):
+  - `survey_daily` gains **`shown_self`** (on-demand cards opened) and **`submitted_self`**
+    (on-demand submissions). An on-demand survey **never** bumps `shown`, `closed`, `submitted` or
+    `submitted_from_menu`, so the random funnel and its response rate stay about random prompts.
+  - The funnel shows a separate line, **Self-initiated: N opened · M submitted**, range-bound and
+    unfiltered like the rest of the funnel.
+  - A new **Source** filter (**All** / **Prompted** / **Self-initiated**) sits beside Segment and
+    Feature. *Prompted* covers `feature` and `visit`. It applies to the question cards, the trend and
+    the feed; the funnel stays unfiltered. The size-5 withholding applies to the filtered set as
+    before.
+  - Feed items show a **Self-initiated** tag on `self` responses.
+- **API** (§36.10):
+  - **`POST /api/me/survey/start`** → `{ survey, created }` (the offer payload, and whether this
+    call opened it; the card uses `via = 'popup'` when it did, `'menu'` otherwise):
+    - an open offer, random or on-demand, is returned as is (200, `created: false`);
+    - otherwise, in **one guarded transaction** (the user row locked, the gates re-checked), it
+      stamps `survey_self_shown_at`, stores the `self` offer and bumps `shown_self`;
+    - **409 `surveys_off`** when the platform switch is off, and **409 `cooldown`** `{ nextAt }`
+      while the cooldown runs;
+    - rate limit **10 / min**.
+  - **`POST /api/me/survey/responses`** gains `feature` (above). A `self` submission bumps
+    `submitted_self`.
+  - **`POST /api/me/survey/close`** on a `self` offer sets `closed` and bumps nothing.
+  - **`GET /api/me`** gains **`selfSurvey`**: `null` while the platform switch is off; otherwise
+    `{ nextAt }`, where `nextAt` is `null` when a survey can be started now, or else the UTC ISO time
+    the cooldown ends. `openSurvey` also carries open `self` offers, with `trigger: 'self'`.
+  - `GET /api/admin/survey/summary` and `…/comments` gain **`source=all|prompted|self`**. The summary's
+    funnel gains `shownSelf` and `submittedSelf`, and each comment gains `trigger`.
+- **Governance.** As §36.11: opening, closing and submitting are **never audited or logged with an
+  identity**, and the submit endpoint stays excluded from RUM sampling. `/api/me/survey/start` is
+  sampled normally, since it carries no answers and its time is already stored as
+  `survey_self_shown_at`.
+- **GDPR erasure** (§36.12) also clears `survey_self_shown_at`.
+- **Migration 0080:**
+  - adds `users.survey_self_shown_at TIMESTAMPTZ NULL`, with no backfill;
+  - adds `survey_daily.shown_self` and `survey_daily.submitted_self` (`int NOT NULL DEFAULT 0`);
+  - widens the `survey_responses.trigger` CHECK to `('feature', 'visit', 'self')`.
+
+  No grant changes are needed, since the existing grants cover the new columns.
+- **Tests** (ship with the change, as §36.14):
+  - **Unit:**
+    - the on-demand gate: platform off, inactive, the cooldown at 6 vs 7 days, and the bypassed
+      opt-out, grace period and 30-day floor;
+    - `self` offer composition, with no feature;
+    - response validation with a picked feature: `feature` is required for `self` and rejected for
+      the other triggers, feature keys are accepted only when a feature is picked, and unknown
+      feature keys give 422;
+    - the Source filter in the summary and feed builders.
+  - **Integration:**
+    - `start` returns an open random offer unchanged, stamps and counts exactly once for two
+      concurrent calls, and gives 409 `cooldown` / `surveys_off`;
+    - no random roll or visit fallback while a `self` offer is open;
+    - the random opt-out keeps a `self` offer and clears a random one;
+    - a `self` submit stores `trigger = 'self'` and the picked feature, bumps only
+      `submitted_self`, and leaves `survey_last_shown_at` alone;
+    - the admin `source` filter;
+    - erasure clears `survey_self_shown_at`;
+    - the migration's CHECK widening.
+  - **E2e:**
+    1. With the random toggle **Off** (the e2e default), the profile's **Give feedback now** opens
+       the card. Picking a feature shows its two questions, and submitting shows the thank-you. The
+       button is then disabled with the next date, and the menu's *Give feedback* is gone.
+    2. Closing an on-demand card shows *Take the survey* in the menu, and reopening starts with
+       *skilly in general*.
+    3. An admin sees the **Self-initiated** funnel line and the **Source** filter on Monitoring.

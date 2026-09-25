@@ -8,7 +8,9 @@
 // reference, clearing the offer, 409 after expiry / opt-out / switch-off and 422 on bad keys; the
 // admin summary and comments (filters + the size-5 withholding) on an isolated dataset; the delete
 // cascade with a text-free audit row; and the GDPR erasure sweep clearing per-user state while
-// leaving responses untouched.
+// leaving responses untouched. On-demand feedback (§36.16): start returning an open offer unchanged,
+// stamping and counting once under concurrency, the cooldown and switch-off 409s, no random roll
+// while it is open, surviving the opt-out, and a `self` submit counted only in its own funnel.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { Pool } from "pg";
@@ -22,6 +24,7 @@ import {
   getSurveySummary,
   recordFeatureUse,
   setUserSurveysEnabled,
+  startSelfSurvey,
   submitSurvey,
 } from "./survey";
 import { eraseUser } from "./eraseUser";
@@ -41,7 +44,7 @@ async function mkUser(tag: string): Promise<string> {
     [oid, `${oid}@org`, oid],
   )).rows[0]!.id;
   await pool.query(
-    `update users set onboarded_at = now() - interval '60 days', surveys_enabled = true, survey_last_shown_at = null, survey_offer = null where id = $1`,
+    `update users set onboarded_at = now() - interval '60 days', surveys_enabled = true, survey_last_shown_at = null, survey_self_shown_at = null, survey_offer = null where id = $1`,
     [id],
   );
   await pool.query(`delete from user_feature_uses where user_id = $1`, [id]);
@@ -59,8 +62,8 @@ after(async () => {
   await pool.query(`delete from survey_daily`);
   for (const r of dailySnapshot) {
     await pool.query(
-      `insert into survey_daily (day, shown, closed, submitted, submitted_from_menu) values ($1, $2, $3, $4, $5)`,
-      [r.day, r.shown, r.closed, r.submitted, r.submitted_from_menu],
+      `insert into survey_daily (day, shown, closed, submitted, submitted_from_menu, shown_self, submitted_self) values ($1, $2, $3, $4, $5, $6, $7)`,
+      [r.day, r.shown, r.closed, r.submitted, r.submitted_from_menu, r.shown_self, r.submitted_self],
     );
   }
 });
@@ -68,8 +71,8 @@ after(async () => {
 const respondent = (userId: string) => ({ userId, isPlatformAdmin: false, namespaceRoles: new Map<string, string>() });
 
 async function userRow(id: string) {
-  return (await pool.query<{ survey_offer: Record<string, unknown> | null; survey_last_shown_at: Date | null; surveys_enabled: boolean }>(
-    `select survey_offer, survey_last_shown_at, surveys_enabled from users where id = $1`,
+  return (await pool.query<{ survey_offer: Record<string, unknown> | null; survey_last_shown_at: Date | null; survey_self_shown_at: Date | null; surveys_enabled: boolean }>(
+    `select survey_offer, survey_last_shown_at, survey_self_shown_at, surveys_enabled from users where id = $1`,
     [id],
   )).rows[0]!;
 }
@@ -257,10 +260,10 @@ test("admin summary + comments: filters and the size-5 withholding (isolated dat
       )).rows[0]!.id;
       await client.query(`insert into survey_answers values ($1, 'general.overall', 1)`, [id]);
     }
-    await client.query(`insert into survey_daily (day, shown, closed, submitted, submitted_from_menu) values (${today}, 9, 3, 6, 0)`);
+    await client.query(`insert into survey_daily (day, shown, closed, submitted, submitted_from_menu, shown_self, submitted_self) values (${today}, 9, 3, 6, 0, 7, 5)`);
 
     // 30 days: only the 6 consumer responses.
-    const s30 = await getSurveySummary({ range: 30, segment: null, feature: null }, db);
+    const s30 = await getSurveySummary({ range: 30, segment: null, feature: null, source: null }, db);
     assert.equal(s30.responses, 6);
     assert.deepEqual({ shown: s30.funnel.shown, closed: s30.funnel.closed, submitted: s30.funnel.submitted }, { shown: 9, closed: 3, submitted: 6 });
     const overall = s30.questions.find((q) => q.key === "general.overall")!;
@@ -269,24 +272,46 @@ test("admin summary + comments: filters and the size-5 withholding (isolated dat
     assert.equal(s30.features.find((f) => f.key === "search")?.n, 6);
 
     // All time, admin segment: 2 responses → every figure withheld.
-    const sAdmin = await getSurveySummary({ range: "all", segment: "admin", feature: null }, db);
+    const sAdmin = await getSurveySummary({ range: "all", segment: "admin", feature: null, source: null }, db);
     const adminOverall = sAdmin.questions.find((q) => q.key === "general.overall")!;
     assert.deepEqual({ n: adminOverall.n, avg: adminOverall.avg, distribution: adminOverall.distribution, withheld: adminOverall.withheld }, { n: null, avg: null, distribution: null, withheld: true });
     assert.ok(sAdmin.series.every((p) => p.withheld && p.n === null && p.overallAvg === null));
-    const cAdmin = await getSurveyComments({ range: "all", segment: "admin", feature: null }, 0, 50, db);
+    const cAdmin = await getSurveyComments({ range: "all", segment: "admin", feature: null, source: null }, 0, 50, db);
     assert.deepEqual(cAdmin, { comments: [], total: 0, hasMore: false, withheld: true });
 
     // All time, unfiltered: 8 responses → the feed shows both texts, newest date first.
-    const cAll = await getSurveyComments({ range: "all", segment: null, feature: null }, 0, 50, db);
+    const cAll = await getSurveyComments({ range: "all", segment: null, feature: null, source: null }, 0, 50, db);
     assert.equal(cAll.withheld, false);
     assert.equal(cAll.total, 3);
     assert.equal(cAll.comments[0]!.text, "consumer comment");
     assert.equal(cAll.comments.at(-1)!.segment, "admin");
 
     // Feature filter: search.
-    const sSearch = await getSurveySummary({ range: "all", segment: null, feature: "search" }, db);
+    const sSearch = await getSurveySummary({ range: "all", segment: null, feature: "search", source: null }, db);
     assert.equal(sSearch.questions.find((q) => q.key === "feature.useful")?.avg, 5);
     assert.match(sSearch.questions.find((q) => q.key === "feature.useful")!.text, /catalog search/);
+
+    // §36.16 the Source filter: 5 self-initiated responses about following people (overall = 2).
+    for (let i = 0; i < 5; i++) {
+      const id = (await client.query<{ id: string }>(
+        `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text)
+         values (${today}, 1, 'self', 'follow', 'consumer', 'popup', $1) returning id`,
+        [i === 0 ? "self comment" : null],
+      )).rows[0]!.id;
+      await client.query(`insert into survey_answers values ($1, 'general.overall', 2)`, [id]);
+    }
+    const sAll = await getSurveySummary({ range: 30, segment: null, feature: null, source: null }, db);
+    assert.equal(sAll.responses, 11);
+    assert.deepEqual({ shownSelf: sAll.funnel.shownSelf, submittedSelf: sAll.funnel.submittedSelf, shown: sAll.funnel.shown }, { shownSelf: 7, submittedSelf: 5, shown: 9 });
+    const sSelf = await getSurveySummary({ range: 30, segment: null, feature: null, source: "self" }, db);
+    assert.deepEqual(sSelf.questions.find((q) => q.key === "general.overall")!.distribution, [0, 5, 0, 0, 0]);
+    assert.deepEqual(sSelf.features.map((f) => f.key), ["follow"]);
+    const sPrompted = await getSurveySummary({ range: 30, segment: null, feature: null, source: "prompted" }, db);
+    assert.equal(sPrompted.questions.find((q) => q.key === "general.overall")!.avg, 4);
+    const cSelf = await getSurveyComments({ range: "all", segment: null, feature: null, source: "self" }, 0, 50, db);
+    assert.deepEqual(cSelf.comments.map((c) => [c.text, c.trigger, c.feature]), [["self comment", "self", "follow"]]);
+    const cPrompted = await getSurveyComments({ range: "all", segment: null, feature: null, source: "prompted" }, 0, 50, db);
+    assert.ok(cPrompted.comments.every((c) => c.trigger !== "self"));
   } finally {
     await client.query("rollback").catch(() => {});
     client.release();
@@ -302,13 +327,150 @@ test("GDPR erasure clears the per-user survey state and leaves responses untouch
     assert.deepEqual(await submitSurvey(respondent(u), { freeText: marker }), { ok: true });
     await recordFeatureUse(u, "follow", false);
     await pool.query(`update users set surveys_enabled = false where id = $1`, [u]);
+    assert.equal((await startSelfSurvey(u)).ok, true); // stamps survey_self_shown_at
 
     const r = await eraseUser(admin, u, null);
     assert.equal(r.ok, true);
     assert.equal((await pool.query(`select 1 from user_feature_uses where user_id = $1`, [u])).rowCount, 0);
     const row = await userRow(u);
-    assert.deepEqual({ offer: row.survey_offer, shown: row.survey_last_shown_at, enabled: row.surveys_enabled }, { offer: null, shown: null, enabled: true });
+    assert.deepEqual(
+      { offer: row.survey_offer, shown: row.survey_last_shown_at, self: row.survey_self_shown_at, enabled: row.surveys_enabled },
+      { offer: null, shown: null, self: null, enabled: true },
+    );
     assert.equal((await pool.query(`select 1 from survey_responses where free_text = $1`, [marker])).rowCount, 1);
     await pool.query(`delete from survey_responses where free_text = $1`, [marker]);
   });
+});
+
+const daily = async (col: string) =>
+  (await pool.query<{ n: number }>(`select coalesce(sum(${col}),0)::int as n from survey_daily`)).rows[0]!.n;
+
+test("on-demand start: returns an open offer unchanged, stamps once, cooldown and switch-off 409s", { skip: !enabled }, async () => {
+  await withSurveySwitch(true, async () => {
+    // An open random offer is returned as is: no stamp, nothing counted.
+    const r = await mkUser("self-random");
+    const random = (await recordFeatureUse(r, "search", true, WIN)).survey!;
+    const selfBefore = await daily("shown_self");
+    const same = await startSelfSurvey(r);
+    assert.ok(same.ok && !same.created && same.survey.trigger === "feature" && same.survey.shownAt === random.shownAt);
+    assert.equal((await userRow(r)).survey_self_shown_at, null);
+    assert.equal(await daily("shown_self"), selfBefore);
+
+    // Bypassed gates: inside the 14-day grace, opted out, and inside the random 30-day floor.
+    const u = await mkUser("self");
+    await pool.query(
+      `update users set onboarded_at = now() - interval '2 days', surveys_enabled = false, survey_last_shown_at = now() - interval '3 days' where id = $1`,
+      [u],
+    );
+    const lastShownBefore = (await userRow(u)).survey_last_shown_at;
+    // Two concurrent starts: one stamp, one count, the same offer.
+    const [a, b] = await Promise.all([startSelfSurvey(u), startSelfSurvey(u)]);
+    assert.ok(a.ok && b.ok);
+    assert.equal([a, b].filter((x) => x.ok && x.created).length, 1);
+    assert.equal(a.ok && b.ok && a.survey.shownAt === b.survey.shownAt, true);
+    assert.equal(await daily("shown_self"), selfBefore + 1);
+    const offer = a.ok ? a.survey : null;
+    assert.equal(offer?.trigger, "self");
+    assert.equal(offer?.feature, null);
+    assert.equal(offer?.questions.length, 5);
+    assert.equal(Date.parse(offer!.expiresAt) - Date.parse(offer!.shownAt), 7 * 24 * 60 * 60 * 1000);
+    assert.deepEqual((await userRow(u)).survey_last_shown_at, lastShownBefore, "the random floor's stamp is untouched");
+    // GET /api/me's openSurvey reads it back despite the opt-out.
+    assert.equal((await getOpenSurvey(u))?.trigger, "self");
+
+    // The cooldown: after the offer ends, a new start inside 7 days is a 409 with nextAt.
+    await pool.query(`update users set survey_offer = null, survey_self_shown_at = now() - interval '6 days' where id = $1`, [u]);
+    const cool = await startSelfSurvey(u);
+    assert.equal(cool.ok, false);
+    assert.equal(!cool.ok && cool.error, "cooldown");
+    assert.ok(!cool.ok && cool.nextAt && Date.parse(cool.nextAt) > Date.now());
+    await pool.query(`update users set survey_self_shown_at = now() - interval '7 days' where id = $1`, [u]);
+    assert.equal((await startSelfSurvey(u)).ok, true);
+
+    // Switch-off: no start, and the open self offer reads as none.
+    await withSurveySwitch(false, async () => {
+      assert.deepEqual(await startSelfSurvey(u), { ok: false, error: "surveys_off" });
+      assert.equal(await getOpenSurvey(u), null);
+    });
+  });
+});
+
+test("on-demand open: no random roll or visit fallback; survives the opt-out; a random offer doesn't", { skip: !enabled }, async () => {
+  await withSurveySwitch(true, async () => {
+    const u = await mkUser("self-block");
+    assert.equal((await startSelfSurvey(u)).ok, true);
+    // A winning first use is consumed without replacing the self offer.
+    assert.deepEqual(await recordFeatureUse(u, "install", true, WIN), { firstUse: true, survey: null });
+    // The visit fallback is due (never shown, onboarded 120 days ago) but doesn't roll.
+    await pool.query(`update users set onboarded_at = now() - interval '120 days' where id = $1`, [u]);
+    assert.equal(await checkVisitSurvey(u, true, WIN), null);
+    assert.equal((await userRow(u)).survey_offer?.trigger, "self");
+    assert.equal((await userRow(u)).survey_last_shown_at, null);
+
+    // The random opt-out keeps the self offer…
+    await setUserSurveysEnabled(u, false);
+    assert.equal((await userRow(u)).survey_offer?.trigger, "self");
+    // …and closing it counts nowhere.
+    const closedBefore = await daily("closed");
+    assert.equal(await closeSurvey(u), true);
+    assert.equal(await daily("closed"), closedBefore);
+    assert.ok(await getOpenSurvey(u), "a closed self offer stays open for the menu");
+
+    // A random offer is still cleared by the opt-out.
+    const v = await mkUser("self-optout");
+    assert.ok((await recordFeatureUse(v, "search", true, WIN)).survey);
+    await setUserSurveysEnabled(v, false);
+    assert.equal((await userRow(v)).survey_offer, null);
+  });
+});
+
+test("on-demand submit: the picked feature, trigger 'self', counted only in its own funnel", { skip: !enabled }, async () => {
+  await withSurveySwitch(true, async () => {
+    const u = await mkUser("self-submit");
+    assert.equal((await startSelfSurvey(u)).ok, true);
+    // feature is required for a self offer; feature keys need a picked feature; unknown features fail.
+    assert.equal((await submitSurvey(respondent(u), { answers: { "general.overall": 3 } })).ok, false);
+    assert.equal((await submitSurvey(respondent(u), { answers: { "feature.useful": 3 }, feature: null })).ok, false);
+    assert.equal((await submitSurvey(respondent(u), { answers: { "general.overall": 3 }, feature: "bogus" })).ok, false);
+
+    const before = { submitted: await daily("submitted"), fromMenu: await daily("submitted_from_menu"), self: await daily("submitted_self") };
+    const marker = `srv-self-${Date.now()}`;
+    assert.deepEqual(
+      await submitSurvey(respondent(u), { answers: { "general.overall": 5, "feature.ease": 4 }, feature: "marketplaces", freeText: marker, via: "menu" }),
+      { ok: true },
+    );
+    const row = (await pool.query(`select * from survey_responses where free_text = $1`, [marker])).rows[0] as Record<string, unknown>;
+    assert.equal(row.trigger, "self");
+    assert.equal(row.feature, "marketplaces");
+    assert.equal(row.via, "menu");
+    assert.equal(await daily("submitted"), before.submitted);
+    assert.equal(await daily("submitted_from_menu"), before.fromMenu);
+    assert.equal(await daily("submitted_self"), before.self + 1);
+    const after = await userRow(u);
+    assert.equal(after.survey_offer, null);
+    assert.equal(after.survey_last_shown_at, null);
+    assert.ok(after.survey_self_shown_at, "the cooldown stamp is kept");
+    await pool.query(`delete from survey_responses where free_text = $1`, [marker]);
+
+    // A random offer rejects a feature field.
+    const v = await mkUser("self-reject");
+    assert.ok((await recordFeatureUse(v, "search", true, WIN)).survey);
+    assert.equal((await submitSurvey(respondent(v), { answers: { "general.overall": 3 }, feature: "search" })).ok, false);
+  });
+});
+
+test("migration 0080: the trigger CHECK accepts 'self' and still rejects junk", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const ins = (t: string) =>
+      client.query(`insert into survey_responses (answered_on, catalog_version, trigger, segment, via) values (current_date, 1, $1, 'consumer', 'popup')`, [t]);
+    await ins("self");
+    await client.query("savepoint s");
+    await assert.rejects(ins("bogus"));
+    await client.query("rollback to savepoint s");
+  } finally {
+    await client.query("rollback").catch(() => {});
+    client.release();
+  }
 });

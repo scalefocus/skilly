@@ -148,7 +148,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
       `update users set display_name = $2, email = '', avatar = null,
               job_title = null, office_location = null, department = null, directory_hidden = false,
               achievements_hidden = false, time_zone = null, hero_at = null, allow_follows = true,
-              surveys_enabled = true, survey_last_shown_at = null, survey_offer = null,
+              surveys_enabled = true, survey_last_shown_at = null, survey_offer = null, survey_self_shown_at = null,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [targetUserId, deletedLabel],

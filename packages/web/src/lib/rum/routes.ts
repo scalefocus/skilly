@@ -101,6 +101,7 @@ export const RUM_API_ROUTES: readonly string[] = [
   "/api/me/onboarded",
   "/api/me/survey/check",
   "/api/me/survey/close",
+  "/api/me/survey/start",
   "/api/me/whats-new-seen",
   "/api/messages",
   "/api/messages/[id]",
