@@ -211,7 +211,9 @@ test("achievements: original-proposer rule + GDPR erasure sweep", { skip: !enabl
   // still credited to the old tombstone. That is exactly how this test used to fail on its second
   // run against a persistent database.
   const victim = await mkUser("ach-erase-victim", "UTC");
-  await awardAchievement(pool, victim, "first_published", { backfill: true });
+  // noHabits: the victim has a zone (UTC), so an award at "now" during the Night Shift window (or
+  // on a weekend) would also grant a Habits badge and make the count below clock-dependent.
+  await awardAchievement(pool, victim, "first_published", { backfill: true, noHabits: true });
   await pool.query(`update users set achievements_hidden = true where id = $1`, [victim]);
   assert.equal((await heldKeys(victim)).length, 1);
   await eraseUser(admin, victim, null);
