@@ -18,6 +18,7 @@ export function CollapsibleCard({
   title,
   summary,
   accessory,
+  action,
   open,
   onToggle,
   children,
@@ -26,6 +27,8 @@ export function CollapsibleCard({
   title: string;
   summary?: ReactNode;
   accessory?: ReactNode;
+  /** An interactive control shown in the header row, outside the toggle button. */
+  action?: ReactNode;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
@@ -47,26 +50,44 @@ export function CollapsibleCard({
   const flash = watchCtx?.flashId === cardId;
   return (
     <section className={`card reveal admin-card${flash ? " card-flash" : ""}`} style={{ marginBottom: 26 }} data-last-card={cardId}>
-      <button
-        type="button"
-        className="admin-card-head"
-        data-card-header
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-controls={bodyId}
-      >
-        <h2 className="admin-card-title">{title}</h2>
-        {summary != null && <span className="admin-card-summary muted mono">{summary}</span>}
-        {accessory != null && <span className="admin-card-accessory">{accessory}</span>}
-        <span style={{ flex: 1 }} />
-        <svg
-          width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden
-          className="admin-card-chevron" data-open={open}
+      {action == null ? (
+        <button
+          type="button"
+          className="admin-card-head"
+          data-card-header
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={bodyId}
         >
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </button>
+          <h2 className="admin-card-title">{title}</h2>
+          {summary != null && <span className="admin-card-summary muted mono">{summary}</span>}
+          {accessory != null && <span className="admin-card-accessory">{accessory}</span>}
+          <span style={{ flex: 1 }} />
+          <Chevron open={open} />
+        </button>
+      ) : (
+        // An interactive header control (e.g. the survey's on/off switch, §36.8) can't live inside
+        // the toggle button, so it sits beside it; the chevron stays clickable as a second, hidden
+        // toggle target. Clicking the action never toggles the card.
+        <div className="admin-card-headrow">
+          <button
+            type="button"
+            className="admin-card-head"
+            data-card-header
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-controls={bodyId}
+          >
+            <h2 className="admin-card-title">{title}</h2>
+            {summary != null && <span className="admin-card-summary muted mono">{summary}</span>}
+            {accessory != null && <span className="admin-card-accessory">{accessory}</span>}
+          </button>
+          <span className="admin-card-action">{action}</span>
+          <button type="button" className="admin-card-chevron-btn" onClick={onToggle} aria-hidden tabIndex={-1}>
+            <Chevron open={open} />
+          </button>
+        </div>
+      )}
       {/* Body interaction = "watching" (§5): capture-phase so any control inside counts, pointer or
           keyboard (focus landing in the body). The collapsed body is aria-hidden + zero-height, so
           nothing in it can be pressed or focused while collapsed. */}
@@ -80,5 +101,17 @@ export function CollapsibleCard({
         </div>
       </div>
     </section>
+  );
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden
+      className="admin-card-chevron" data-open={open}
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
   );
 }

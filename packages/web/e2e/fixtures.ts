@@ -13,7 +13,7 @@ import { APP_VERSION } from "@skilly/shared/version";
  * token, then POST the credentials callback. `page.request` shares the page's cookie jar, so
  * every subsequent page navigation AND `page.request` call is authenticated as the dev user.
  */
-export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean } = {}): Promise<void> {
+export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean; surveys?: boolean } = {}): Promise<void> {
   const csrf = await (await page.request.get("/api/auth/csrf")).json();
   const res = await page.request.post("/api/auth/callback/dev", {
     form: { csrfToken: csrf.csrfToken, json: "true" },
@@ -31,6 +31,11 @@ export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean } = 
   // out to exercise the notice itself. Forward-only, so this never hides a notice a spec seeded.
   if (opts.stampWhatsNew !== false) {
     await page.request.post("/api/me/whats-new-seen", { data: { version: APP_VERSION } });
+  }
+  // Opt the dev user out of the feedback survey (§36.14) so its card never lands mid-spec. The
+  // survey spec opts back in (`surveys: true`) to exercise the card itself.
+  if (opts.surveys !== true) {
+    await page.request.patch("/api/me", { data: { surveysEnabled: false } });
   }
 }
 

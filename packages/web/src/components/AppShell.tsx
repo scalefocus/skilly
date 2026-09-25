@@ -1,5 +1,5 @@
 "use client";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -17,6 +17,9 @@ import { RumCollector, markRumNavIntent } from "./RumCollector";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
 import { CHANGELOG } from "../app/whats-new/changelog";
 import { achievementDef } from "@skilly/shared/achievements";
+import type { SurveyOfferView, SurveyVia } from "@skilly/shared/survey";
+import { SurveyCard } from "./SurveyCard";
+import { SURVEY_OFFER_EVENT, SURVEY_PREF_EVENT, SURVEY_REOPEN_EVENT, setSurveyCanShow, setSurveyReady } from "../lib/surveyClient";
 
 const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "review" | "requests" }[] = [
   { href: "/", label: "Overview", icon: "M3 12 12 4l9 8M5 10v9h14v-9" },
@@ -69,6 +72,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   // reload before dismissing shows it again. Evaluated once per page load (the ref).
   const [whatsNewNotice, setWhatsNewNotice] = useState<{ since: string | null } | null>(null);
   const whatsNewHandled = useRef(false);
+  // The feedback survey (§36): the open offer (drives the account menu's "Take the survey"), the
+  // card on screen (popup = just offered, menu = reopened), and the opt-out confirmation toast.
+  // `surveyChecked` makes the §36.1 visit-fallback roll once per full page load.
+  const [openSurvey, setOpenSurvey] = useState<SurveyOfferView | null>(null);
+  const [surveyCard, setSurveyCard] = useState<{ offer: SurveyOfferView; via: SurveyVia } | null>(null);
+  const [surveyToast, setSurveyToast] = useState<string | null>(null);
+  const surveyChecked = useRef(false);
+  const surveyGate = useRef({ whatsNew: false, onboarded: false, card: false, quickStart: false });
   // §31: timezone beacon sent once per mount; the transient "badge earned" toast.
   const tzReported = useRef(false);
   const [badgeToast, setBadgeToast] = useState<{ id: string; name: string; glyph: string; level: string | null } | null>(null);
@@ -256,7 +267,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null; timeZone?: string | null }>("/api/me")
+    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null; timeZone?: string | null; openSurvey?: SurveyOfferView | null }>("/api/me")
       .then((j) => {
         setMyUserId(j.userId ?? null);
         setIsPlatformAdmin(Boolean(j.isPlatformAdmin));
@@ -292,6 +303,25 @@ export function AppShell({ children }: { children: ReactNode }) {
           if (action === "toast") setWhatsNewNotice({ since: j.whatsNewSeenVersion ?? null });
           else if (action === "advance") stampWhatsNewSeen();
         }
+        // Feedback survey (§36.1): What's new always wins. Otherwise, once per full page load and
+        // only when no offer is open, the long-time-user fallback may roll server-side.
+        if (!surveyChecked.current) {
+          surveyChecked.current = true;
+          const whatsNewDue = whatsNewAction(j.whatsNewSeenVersion ?? null, APP_VERSION, j.onboardedAt != null) === "toast";
+          // The gate must reflect this decision BEFORE queued first-use reports are sent: the state
+          // updates above only reach surveyGate on the next render.
+          surveyGate.current = { ...surveyGate.current, whatsNew: whatsNewDue, onboarded: j.onboardedAt != null, quickStart: window.location.pathname === "/quick-start" };
+          setSurveyReady();
+          if (j.openSurvey) setOpenSurvey(j.openSurvey);
+          else if (!whatsNewDue && j.onboardedAt != null && window.location.pathname !== "/quick-start") {
+            fetch("/api/me/survey/check", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canShow: true }) })
+              .then((r) => (r.ok ? (r.json() as Promise<{ survey: SurveyOfferView | null }>) : null))
+              .then((k) => {
+                if (k?.survey) { setOpenSurvey(k.survey); setSurveyCard({ offer: k.survey, via: "popup" }); }
+              })
+              .catch(() => {});
+          }
+        }
       })
       .catch(() => {});
   }, [status]);
@@ -302,6 +332,70 @@ export function AppShell({ children }: { children: ReactNode }) {
     const t = setTimeout(() => setBadgeToast(null), 7000);
     return () => clearTimeout(t);
   }, [badgeToast]);
+
+  // Feedback survey (§36): can this tab show a card right now? What's new wins, the Quick start gate
+  // blocks it, and one card at a time. Read by lib/surveyClient's reportFeatureUse at call time.
+  // `ready` holds until the /api/me handler has made the What's new decision (it seeds the gate).
+  if (surveyChecked.current) {
+    surveyGate.current = { whatsNew: whatsNewNotice !== null, onboarded: onboarded === true, card: surveyCard !== null, quickStart: pathname === "/quick-start" };
+  }
+  useEffect(() => {
+    setSurveyCanShow(() => {
+      const g = surveyGate.current;
+      return !g.whatsNew && g.onboarded && !g.card && !g.quickStart;
+    });
+    return () => setSurveyCanShow(() => false);
+  }, []);
+  const openSurveyRef = useRef<SurveyOfferView | null>(null);
+  openSurveyRef.current = openSurvey;
+  useEffect(() => {
+    const offered = (e: Event) => {
+      const offer = (e as CustomEvent<SurveyOfferView>).detail;
+      setOpenSurvey(offer);
+      setSurveyCard({ offer, via: "popup" });
+    };
+    const reopen = () => {
+      if (openSurveyRef.current) setSurveyCard({ offer: openSurveyRef.current, via: "menu" });
+    };
+    // The profile toggle flipped the opt-out: off ends any open offer at once (§36.7).
+    const pref = (e: Event) => {
+      if ((e as CustomEvent<{ enabled: boolean }>).detail?.enabled === false) { setSurveyCard(null); setOpenSurvey(null); }
+    };
+    window.addEventListener(SURVEY_OFFER_EVENT, offered);
+    window.addEventListener(SURVEY_REOPEN_EVENT, reopen);
+    window.addEventListener(SURVEY_PREF_EVENT, pref);
+    return () => {
+      window.removeEventListener(SURVEY_OFFER_EVENT, offered);
+      window.removeEventListener(SURVEY_REOPEN_EVENT, reopen);
+      window.removeEventListener(SURVEY_PREF_EVENT, pref);
+    };
+  }, []);
+  useEffect(() => {
+    if (!surveyToast) return;
+    const t = setTimeout(() => setSurveyToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [surveyToast]);
+  const dismissSurvey = useCallback(() => {
+    setSurveyCard(null);
+    fetch("/api/me/survey/close", { method: "POST" }).catch(() => null); // optimistic, never retried
+  }, []);
+  const finishSurvey = useCallback(() => {
+    // Submitted, or the offer turned out to have ended: either way nothing is left to take.
+    setSurveyCard(null);
+    setOpenSurvey(null);
+    invalidateApi("/api/me");
+  }, []);
+  const optOutOfSurveys = useCallback(() => {
+    setSurveyCard(null);
+    setOpenSurvey(null);
+    fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveysEnabled: false }) })
+      .catch(() => null)
+      .then(() => {
+        invalidateApi("/api/me");
+        window.dispatchEvent(new CustomEvent(SURVEY_PREF_EVENT, { detail: { enabled: false } }));
+      });
+    setSurveyToast("Got it, no more surveys. You can turn them back on in your profile.");
+  }, []);
 
   // The /whats-new page is the read receipt (§23): it stamps the marker on mount and fires this
   // event — close the notice without a second stamp.
@@ -605,6 +699,22 @@ export function AppShell({ children }: { children: ReactNode }) {
               </button>
               {userMenuPresence && (
                 <div className={`user-menu menu-pop${userMenuPresence === "closing" ? " menu-pop-closing" : ""}`} role="menu">
+                  {openSurvey && (
+                    // §36.5 while a feedback-survey offer is open: reopen the card, same questions.
+                    <button
+                      type="button"
+                      className="user-menu-item"
+                      role="menuitem"
+                      data-testid="take-survey"
+                      onClick={() => { setUserMenuOpen(false); setSurveyCard({ offer: openSurvey, via: "menu" }); }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z" />
+                      </svg>
+                      Take the survey
+                      <span className="user-menu-dot" aria-hidden />
+                    </button>
+                  )}
                   <Link href="/quick-start" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2 0-2.8a2 2 0 0 0-3 0zM12 15l-3-3a12 12 0 0 1 8-9 12 12 0 0 1-9 8zM15 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" />
@@ -883,6 +993,24 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Link href="/profile#achievements" className="badge-toast-link" onClick={() => setBadgeToast(null)}>See your achievements →</Link>
           </div>
         </div>,
+        document.body,
+      )}
+      {/* Feedback survey card (§36.4): floats like the update notice (never alongside it — What's new
+          wins), survives navigation, and is hidden (not unmounted) while the mobile nav is open. */}
+      {status === "authenticated" && surveyCard && typeof document !== "undefined" && createPortal(
+        <SurveyCard
+          key={`${surveyCard.offer.shownAt}-${surveyCard.via}`}
+          offer={surveyCard.offer}
+          via={surveyCard.via}
+          hidden={navOpen}
+          onDismiss={dismissSurvey}
+          onFinished={finishSurvey}
+          onOptOut={optOutOfSurveys}
+        />,
+        document.body,
+      )}
+      {status === "authenticated" && surveyToast && typeof document !== "undefined" && createPortal(
+        <div className="toast" role="status" data-testid="survey-toast" style={{ whiteSpace: "normal", width: "max-content", maxWidth: "calc(100vw - 32px)", textAlign: "center" }}>{surveyToast}</div>,
         document.body,
       )}
       {status === "authenticated" && whatsNewNotice && typeof document !== "undefined" && createPortal(

@@ -5,7 +5,7 @@
 // one-line `CopyCommand` the skill install panel uses.
 import { useState } from "react";
 
-export function CopyLine({ label, value, hint }: { label: string; value: string; hint?: string }) {
+export function CopyLine({ label, value, hint, onCopied }: { label: string; value: string; hint?: string; onCopied?: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
     <div style={{ marginTop: 10 }}>
@@ -18,6 +18,7 @@ export function CopyLine({ label, value, hint }: { label: string; value: string;
             try {
               await navigator.clipboard.writeText(value);
               setCopied(true);
+              onCopied?.();
               setTimeout(() => setCopied(false), 1500);
             } catch {
               setCopied(false);

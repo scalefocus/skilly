@@ -722,6 +722,11 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .admin-card-summary { font-size: 12px; }
 .admin-card-accessory { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .admin-card-chevron { color: var(--muted); transition: transform 0.2s ease; }
+/* Header row with an interactive action beside the toggle button (CollapsibleCard `action`). */
+.admin-card-headrow { display: flex; align-items: center; gap: 10px; padding-right: 22px; }
+.admin-card-headrow .admin-card-head { flex: 1; min-width: 0; padding-right: 0; flex-wrap: wrap; }
+.admin-card-action { flex-shrink: 0; display: inline-flex; align-items: center; }
+.admin-card-chevron-btn { flex-shrink: 0; display: inline-grid; place-items: center; padding: 6px 0 6px 4px; border: 0; background: none; cursor: pointer; color: inherit; }
 .admin-card-chevron[data-open="true"] { transform: rotate(180deg); }
 .admin-card-body {
   display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.2s ease;
@@ -1098,6 +1103,61 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
     padding: 14px 18px calc(16px + env(safe-area-inset-bottom)) 18px;
   }
 }
+
+/* Feedback survey card (SKILLY_SPEC.md §36.4): the update notice's card language, bottom-right but
+   wider, height-capped at 80vh with the header and footer pinned and the question list the only
+   scrolling child. Same layer as the notice (the two never show together: What's new wins). A
+   full-width bottom sheet on mobile. */
+.survey-card {
+  position: fixed; right: 22px; bottom: 22px; z-index: 85; width: min(440px, calc(100vw - 44px));
+  max-height: 80vh; box-sizing: border-box;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--accent); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px 16px 14px 18px; display: flex; flex-direction: column; gap: 10px;
+  font-size: 13.5px; line-height: 1.45; animation: update-notice-in 0.24s ease;
+}
+.survey-card-head { display: flex; align-items: flex-start; gap: 10px; flex-shrink: 0; }
+.survey-card-sub { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
+.survey-card-body {
+  flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 14px; padding-right: 6px;
+}
+.survey-section { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.survey-section legend {
+  padding: 0; margin-bottom: 6px; font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--faint);
+}
+.survey-q { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.survey-q-text { flex: 1 1 200px; min-width: 0; font-size: 13px; }
+.survey-q .star { font-size: 21px; }
+.survey-text { display: flex; flex-direction: column; gap: 6px; }
+.survey-text textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; font-size: 13px; }
+.survey-count { align-self: flex-end; font-size: 11px; color: var(--faint); }
+.survey-error { font-size: 12.5px; color: var(--danger); }
+.survey-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0; }
+.survey-optout {
+  border: 0; background: none; padding: 2px 0; cursor: pointer; color: var(--muted); font-size: 12px;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.survey-optout:hover { color: var(--ink); }
+.survey-card-done { margin: 0; color: var(--muted); }
+@media (max-width: 560px) {
+  .survey-card {
+    left: 0; right: 0; bottom: 0; width: auto; border-radius: var(--radius) var(--radius) 0 0;
+    border-left: 1px solid var(--line-strong); border-top: 4px solid var(--accent); border-bottom: 0;
+    padding: 14px 18px calc(14px + env(safe-area-inset-bottom)) 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .survey-card { animation: none; } }
+/* The account menu's "Take the survey" entry carries the accent dot (§36.5). */
+.user-menu-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: auto; flex-shrink: 0; }
+/* Survey results (Monitoring, §36.9). */
+.survey-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.survey-stat { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.survey-stat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.survey-stat-avg { font-family: var(--font-mono); font-size: 20px; font-weight: 600; white-space: nowrap; }
+.survey-funnel { display: flex; gap: 22px; flex-wrap: wrap; }
+.survey-funnel-n { font-family: var(--font-mono); font-size: 20px; font-weight: 600; }
 
 /* Maintainer cards (skill detail, §19). Desktop: one row [avatar | name | tag+reach | remove].
    Mobile (≤560px): the tag + Reach out wrap to a second row below the name, and the remove (✕)

@@ -2,6 +2,7 @@
 // The achievements hall (SKILLY_SPEC.md §31.5): a person's earned badges, shareable by URL with any
 // signed-in colleague. Others see earned badges only; the owner also sees the locked ones with
 // their hints (the same content as the profile card). `?badge=<key>` spotlights one tile.
+import { useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useApi, EmptyState, ScrollToTop, ShareButton } from "../../../components/ui";
@@ -11,10 +12,13 @@ import { FollowButton } from "../../../components/FollowButton";
 import { AchievementGrid, type AchievementsView } from "../../../components/AchievementGrid";
 import { LevelBar } from "../../../components/LevelBar";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
+import { reportFeatureUse } from "../../../lib/surveyClient";
 
 interface CardData { jobTitle: string | null; officeLocation: string | null; department: string | null }
 
 function HallInner() {
+  // §36.3 opening an achievements hall is the `achievements` feature's first use.
+  useEffect(() => { reportFeatureUse("achievements"); }, []);
   const { userId } = useParams<{ userId: string }>();
   const params = useSearchParams();
   const spotlight = params.get("badge");

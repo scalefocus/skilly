@@ -15,6 +15,7 @@ import type { MentionMap } from "../../../components/MentionChips";
 import { useChatPollIntervals } from "../../../components/useChatPoll";
 import { agentLabel } from "@skilly/shared/agents";
 import { usePageLabelOverride } from "../../../components/PageLabelOverride";
+import { reportFeatureUse } from "../../../lib/surveyClient";
 
 interface RequestView {
   id: string;
@@ -299,6 +300,7 @@ function RequestDiscussion({ requestId }: { requestId: string }) {
     if (res.ok) {
       const { message } = await res.json();
       setThread((t) => (t ? { ...t, messages: [...t.messages, message] } : t));
+      reportFeatureUse("messaging"); // §36.3
       void load();
     }
   };

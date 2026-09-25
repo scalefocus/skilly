@@ -6,6 +6,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { cachedGet } from "./ui";
+import { reportFeatureUse } from "../lib/surveyClient";
 
 export type FollowState = "active" | "paused" | "inactive";
 
@@ -100,6 +101,7 @@ export async function setFollow(userId: string, on: boolean): Promise<{ ok: true
     }
     // Re-read so the list rows (name, avatar, since, state) are the server's, not the placeholder.
     void loadFollowing(true);
+    if (on) reportFeatureUse("follow"); // §36.3
     return { ok: true };
   } catch {
     set({ list: before });

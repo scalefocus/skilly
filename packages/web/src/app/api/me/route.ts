@@ -21,6 +21,7 @@ import { invalidateLeaderboard } from "../../../lib/leaderboard";
 import { invalidateLevels } from "../../../lib/levels";
 import { setUserTimeZone } from "../../../lib/achievements";
 import { validateTimeZone } from "@skilly/shared/achievements";
+import { getOpenSurvey, setUserSurveysEnabled } from "../../../lib/survey";
 
 export const dynamic = "force-dynamic";
 
@@ -55,11 +56,13 @@ export async function GET() {
             directory_hidden: boolean;
             achievements_hidden: boolean;
             allow_follows: boolean;
+            surveys_enabled: boolean;
+            has_survey_offer: boolean;
             time_zone: string | null;
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, achievements_hidden, allow_follows, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -71,6 +74,9 @@ export async function GET() {
   const dfo = prefs?.date_format;
   const dateFormatOverride = dfo === "eu" || dfo === "us" ? dfo : null;
   const leaderboardHidden = prefs?.leaderboard_hidden ?? false;
+  // §36.5 the open feedback-survey offer behind the account-menu entry (read only when one is
+  // stored; an ended offer is cleared there, lazily).
+  const openSurvey = access.userId && prefs?.has_survey_offer ? await getOpenSurvey(access.userId, settings.surveyEnabled) : null;
 
   return Response.json({
     userId: access.userId,
@@ -105,6 +111,10 @@ export async function GET() {
     achievementsHidden: prefs?.achievements_hidden ?? false,
     // §35.3 "Allow others to follow me" — off pauses every follow on the user.
     allowFollows: prefs?.allow_follows ?? true,
+    // §36.7 the feedback-survey opt-out, and §36.5 the open offer (resolved questions, or null —
+    // always null while the platform switch is off).
+    surveysEnabled: prefs?.surveys_enabled ?? true,
+    openSurvey,
     // §31.3 the browser-reported IANA zone (null until the web UI reports one). The app shell
     // compares it with the browser's own zone and PATCHes when they differ.
     timeZone: prefs?.time_zone ?? null,
@@ -154,6 +164,7 @@ export async function PATCH(req: Request) {
     directoryHidden?: boolean;
     achievementsHidden?: boolean;
     allowFollows?: boolean;
+    surveysEnabled?: boolean;
     timeZone?: string;
   };
   if ("dateFormat" in body) {
@@ -194,6 +205,10 @@ export async function PATCH(req: Request) {
     await setUserAllowFollows(access.userId, body.allowFollows);
     // The followers stat reads 0 while paused (§35.7) — drop the cached boards and badges.
     invalidateLeaderboard();
+  }
+  // §36.7 the feedback-survey opt-out. Off clears any open offer at once; the 30-day stamp stays.
+  if (typeof body.surveysEnabled === "boolean") {
+    await setUserSurveysEnabled(access.userId, body.surveysEnabled);
   }
   // §31.3 timezone capture: validated as a real IANA zone; an invalid value is ignored, never an
   // error. The FIRST capture also runs the deferred Night Shift / Weekend Warrior backfill.

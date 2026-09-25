@@ -1,6 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { reportFeatureUse } from "../../lib/surveyClient";
 import Link from "next/link";
 import { useApi, useEnterKey, SkeletonGrid, EmptyState, ScrollToTop, formatCount } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
@@ -27,6 +28,8 @@ function Catalog() {
   useEnterKey(() => window.dispatchEvent(new Event("skilly:focus-search")));
   // Search comes from the topbar box (it navigates to /catalog?q=…) — no page-local input.
   const submitted = params.get("q") ?? "";
+  // §36.3 a non-empty search is the `search` feature's first use.
+  useEffect(() => { if (submitted.trim()) reportFeatureUse("search"); }, [submitted]);
   // "Maintained by" view (from the leaderboard's Skills action, §21): a focused list of one person's
   // maintained skills (viewer-visibility-scoped). When set, it overrides the other filters and shows
   // a dismissible banner; `by` carries the display name for the banner (no extra lookup).

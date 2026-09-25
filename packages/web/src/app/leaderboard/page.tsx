@@ -1,10 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useApi, EmptyState, ScrollToTop, formatCount } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
 import { FollowButton } from "../../components/FollowButton";
+import { reportFeatureUse } from "../../lib/surveyClient";
 
 interface Entry {
   userId: string;
@@ -22,6 +23,8 @@ interface Entry {
 }
 
 function Leaderboard() {
+  // §36.3 opening the leaderboard is the `leaderboard` feature's first use.
+  useEffect(() => { reportFeatureUse("leaderboard"); }, []);
   const [window, setWindow] = useState<"all" | "30d">("all");
   // Ranking metric (§26/§35.7): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested / followers.
   const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested" | "followed">("installs");

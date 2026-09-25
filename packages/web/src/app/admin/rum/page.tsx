@@ -11,6 +11,7 @@ import { UserBubble } from "../../../components/UserBubble";
 import { useDateFmt } from "../../../components/DateFormat";
 import { readPref, writePref, PREF_RUM_RANGE, adminCardPrefKey } from "../../../lib/prefs";
 import { OnlineUsersCard } from "../OnlineUsersCard";
+import { SurveyResults } from "./SurveyResults";
 import { bandFor, bandTone, formatCls, formatMs, VITAL_THRESHOLDS } from "../../../lib/rum/bands";
 import { labelForRoute, RUM_ROUTE_ALL } from "../../../lib/rum/routes";
 import { sortRouteRows } from "../../../lib/rum/sort";
@@ -459,6 +460,10 @@ export default function RumPage() {
           </section>
         </>
       )}
+
+      {/* 6. Survey results (§36.9): follows the page range and Refresh; renders regardless of the
+          RUM empty state and of rum_enabled. */}
+      {me?.isPlatformAdmin && <SurveyResults range={range} refreshTick={tick} />}
     </div>
   );
 }

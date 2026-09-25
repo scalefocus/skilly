@@ -16,6 +16,7 @@ import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
 import { FollowButton } from "../../../../components/FollowButton";
+import { reportFeatureUse } from "../../../../lib/surveyClient";
 
 // recharts is heavy (d3) and owner-only — code-split it out of the route's initial bundle.
 // ssr:false since the chart measures the DOM; a skeleton holds its height while it loads.
@@ -238,6 +239,7 @@ export default function SkillDetail() {
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "Failed to mint command");
       setInstall(await r.json());
+      reportFeatureUse("install"); // §36.3
     } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusy(false); }
   };
 
@@ -250,6 +252,7 @@ export default function SkillDetail() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error ?? `Failed (${r.status})`);
       setMsg({ kind: "ok", text: stars == null ? "Rating cleared." : `Rated ${stars} ★.` });
+      if (stars != null) reportFeatureUse("rating"); // §36.3
       reload();
     } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusy(false); }
   };
@@ -334,6 +337,7 @@ export default function SkillDetail() {
             const r = await fetch(`/api/skills/${ns}/${slug}/share`, { method: "POST" });
             if (!r.ok) return null;
             const j = await r.json();
+            reportFeatureUse("share_link"); // §36.3
             return j.url ?? null;
           }}
         />

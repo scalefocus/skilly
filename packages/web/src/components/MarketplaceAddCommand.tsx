@@ -18,6 +18,10 @@ import {
 } from "@skilly/shared/plugin-marketplace"; // client-safe subpath: the root export pulls in node-only modules
 import { CopyLine } from "./CopyLine";
 import { PREF_MARKETPLACE_ADD_ROUTE, readPref, writePref } from "../lib/prefs";
+import { reportFeatureUse } from "../lib/surveyClient";
+
+/** §36.3 copying a marketplace add command is the `marketplaces` feature's first use. */
+const reportMarketplaceUse = () => reportFeatureUse("marketplaces");
 
 /** The mint response (`POST /api/marketplaces/tokens`, §30.8) — every route's text for one token. */
 export interface MarketplaceMint {
@@ -70,13 +74,13 @@ export function MarketplaceAddCommand({ minted }: { minted: MarketplaceMint }) {
 
       {route === "terminal" && (
         <>
-          <CopyLine
+          <CopyLine onCopied={reportMarketplaceUse}
             label="Run in any terminal — including the Claude desktop app's Terminal panel"
             value={minted.shellCommand}
           />
           <details style={{ marginTop: 8 }}>
             <summary className="muted" style={{ fontSize: 12.5, cursor: "pointer" }}>If background updates fail</summary>
-            <CopyLine
+            <CopyLine onCopied={reportMarketplaceUse}
               label="Run the git config line once, then add with the credential-free URL"
               value={`${minted.gitConfigCommand}\n${minted.plainShellCommand}`}
               hint={DISCLOSURE_HINT}
@@ -87,10 +91,10 @@ export function MarketplaceAddCommand({ minted }: { minted: MarketplaceMint }) {
 
       {route === "cli" && (
         <>
-          <CopyLine label="Run inside an interactive Claude Code session" value={minted.command} />
+          <CopyLine onCopied={reportMarketplaceUse} label="Run inside an interactive Claude Code session" value={minted.command} />
           <details style={{ marginTop: 8 }}>
             <summary className="muted" style={{ fontSize: 12.5, cursor: "pointer" }}>If background updates fail</summary>
-            <CopyLine
+            <CopyLine onCopied={reportMarketplaceUse}
               label="Run the git config line once, then add with the credential-free URL"
               value={`${minted.gitConfigCommand}\n${minted.plainCommand}`}
               hint={DISCLOSURE_HINT}
@@ -100,7 +104,7 @@ export function MarketplaceAddCommand({ minted }: { minted: MarketplaceMint }) {
       )}
 
       {route === "settings" && (
-        <CopyLine
+        <CopyLine onCopied={reportMarketplaceUse}
           label="Run the git config line once, then add the entry to your settings file"
           value={`${minted.gitConfigCommand}\n${minted.settingsSnippet}`}
           hint="The entry carries no key on purpose — settings files get committed. Put it in ~/.claude/settings.json for yourself, or in the project's .claude/settings.json to share it with the team; the git config line supplies the key on this machine."

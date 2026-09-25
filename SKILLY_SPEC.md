@@ -24,6 +24,7 @@ Every decision below was explicitly confirmed.
 | Visibility | **Per-skill**: org-wide OR scoped to one namespace. No per-individual private, no per-version visibility |
 | Search | **PostgreSQL full-text search only** (§34): stemmed and weighted (title/slug › description › categories › usage + `SKILL.md` body), admin-curated synonyms, typo + substring fallback tiers, `"phrase"` / `-exclude` / `OR` syntax, admin-selectable language. **No vector store, no new extension.** One engine for the catalog, the header search and MCP |
 | Skill icons | **Optional, skill-level** image or emoji (§33): resolved from the bundle (`icon:` frontmatter → root `icon.png`) before the proposer's upload/emoji; re-encoded to 256×256 PNG; default = the skilly wordmark. Shown on every skill surface and on the **signed share link's** Open Graph card — the only per-skill unfurl, gated by a 7-day token minted by a signed-in viewer |
+| Feedback survey | **Anonymous in-app survey** (§36): general satisfaction + two questions on a feature the user just used for the first time, 1–5 stars + optional free text. A 1-in-3 random roll on an eligible first use, **at most once per 30 days**, 14-day grace for new users, never alongside What's new. Profile opt-out + platform switch; results for platform admins on Monitoring, with any figure over fewer than 5 responses withheld |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
@@ -110,7 +111,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -248,7 +249,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -288,6 +289,12 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `rum_samples` / `rum_errors` / `rum_daily` (migration 0074, detailed in §32)
 - **Operational client-side telemetry (NOT audit — mutable, no hash chain, bounded retention).** `rum_samples` — raw browser samples, 30-day retention: `id`, `created_at` (server-stamped), `user_id` (nullable FK → `users`, `ON DELETE SET NULL`), `session_id` (opaque per-tab id), `route` (a **template** from the known-route table or `other` — never a concrete path), `kind` (`page_view` | `vital` | `nav` | `api` | `error`), `name`, `value`, `ok`. `rum_errors` — the client-error fingerprint index (`fingerprint` PK, `type`, `message` ≤ 500, `frame` ≤ 300, `count`, `first_seen`, `last_seen`; pruned after 90 idle days). `rum_daily` — the per-`(day, route)` rollup (views, sessions, p75 of each metric, API calls/errors, error count), written hourly by a leader-only worker sweep for today + yesterday, kept indefinitely.
+
+### `user_feature_uses` / `survey_responses` / `survey_answers` / `survey_daily` (migration 0079, detailed in §36)
+- **`user_feature_uses`** — `user_id` (FK → `users`, CASCADE), `feature` (a key from `@skilly/shared/survey`), `first_used_at`; **PK `(user_id, feature)`**. The per-user first-use ledger behind the survey trigger; backfilled from history by the migration; deleted on GDPR erasure (§4).
+- **`survey_responses`** — `id` (random uuid), `answered_on` (**UTC date only**), `catalog_version`, `trigger` (`feature` | `visit`), `feature` (nullable), `segment` (`consumer` | `maintainer` | `admin`), `via` (`popup` | `menu`), `free_text` (≤ 2000, nullable). **No user reference and no time of day, by design** (anonymous, §36.12). Immutable; the only delete is an audited admin delete.
+- **`survey_answers`** — `response_id` (FK, CASCADE), `question_key`, `stars` (1–5); PK `(response_id, question_key)`; one row per *answered* question.
+- **`survey_daily`** — `day` (PK), `shown`, `closed`, `submitted`, `submitted_from_menu`: aggregate funnel counters with no user or feature dimension.
 
 ---
 
@@ -381,6 +388,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
+- **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
 - **Leaderboard credit transfer (same optional target):** with a "Replace maintainer to" target, the erased user's `install_credits` rows are **reassigned to the target** instead of deleted, so their contributor-leaderboard standing (installs + "skills adopted", §21) is retained under the successor. Two classes of row are **excepted and deleted** (as plain erasure would): **would-be self-credits** — credits for installs the *target* performed themselves; the no-self-credit rule (§21) holds even through transfer — and **duplicates** — the target already holds a credit for the same install (they co-maintained the skill); one install never counts twice for one person. Credit transfer is **independent of the maintainer-transfer eligibility check**: **all** remaining credits move, including those on restricted skills the target can't see — no leak, because the board exposes only per-person aggregates and never skill identities (invariant #3 holds); the target's "skills adopted" may therefore count skills their leaderboard "Skills" catalog link won't show (that link visibility-filters independently). Reassigned rows keep their original `access_log` timestamps, so both windows stay faithful (the target's 30d numbers may jump). **"Requests fulfilled" and "skills requested" are deliberately NOT transferred** — `fulfilled_by_user_id` / `requester_user_id` record who actually did the work / actually asked, and rewriting either would misattribute history on the request record itself (and change who appears as the requester in threads and detail pages); both stay on the tombstone, hidden from the board as today. **"Skills watched" needs no transfer** — it derives from *current* explicit maintainership, so it already follows the maintainer transfer for eligible skills. With **no target** (including the SCIM erasure path, which never has one), credits are deleted exactly as before (§21 "Erasure removes credit").
@@ -1079,6 +1087,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
+  - **Feedback survey (§36.11):** submissions, closes and first uses are **never audited** (an audit row would tie a person to an anonymous response). Audited: `settings.updated` for `survey_enabled`, and **`survey.response_deleted`** (the admin; `before` = date, feature, segment, catalog version, answer count and text length — **never the text**).
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
 - **Retention:** configurable, **default indefinite**. **SIEM export via syslog/stdout** (structured JSON).
 - **Hash-chaining deferred.**
@@ -1576,13 +1585,14 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Administration**
 - `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
+- **Feedback survey (§36.10, all platform-admin):** `GET /api/admin/survey/summary`, `GET /api/admin/survey/comments`, `DELETE /api/admin/survey/responses/:id` (audited `survey.response_deleted`); `survey_enabled` on `GET|PATCH /api/admin/settings`.
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), …).
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
@@ -2560,7 +2570,9 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   **Quick start**, **What's new**, **MCP server**, **My skills** (→ `/installed`, the Installed
   skills page, §23), **My marketplaces** (→ `/marketplaces`, the Added marketplaces page, §30.6),
   **Profile**, **Sign out**. The menu labels are the possessive short forms; the page titles
-  keep their own headings ("Installed skills.", "Added marketplaces.").
+  keep their own headings ("Installed skills.", "Added marketplaces."). **While a feedback-survey
+  offer is open**, **Take the survey** is prepended as the first item, marked with the accent dot
+  (§36.5).
 - **Opens and closes with a brief animation** (fade + slight scale/translate from the trigger,
   ~150ms) rather than appearing/disappearing instantly; the close reverses the same transition
   before the menu unmounts. Uses the shared `.menu-pop` animation classes (also used by the
@@ -5284,7 +5296,9 @@ on and the session won the sampling draw (§32.6):
   fetch, so the §17 air-gap posture holds. INP is deliberately not hand-rolled.
 - **API latency**: a `PerformanceObserver({ type: 'resource', buffered: true })` filtered to
   same-origin URLs under `/api/` with `fetch`/`xmlhttprequest` initiators; **`/api/rum` and
-  `/api/presence/page` are excluded** (the monitor must not measure itself). The URL is reduced to
+  `/api/presence/page` are excluded** (the monitor must not measure itself), and so is
+  **`/api/me/survey/responses`**: a user-attributed, timestamped sample of it would de-anonymize the
+  feedback survey (§36.11). The URL is reduced to
   its template client-side (§32.3).
 - **Errors**: `window.addEventListener('error' | 'unhandledrejection')`, scrubbed and fingerprinted
   client-side (§32.2).
@@ -5426,6 +5440,9 @@ and both the presence route→label map (§4) and the RUM known-route table (§3
 5. **Empty state** — a fresh deployment (or a range with no samples) renders the standard
    `EmptyState` with *"Samples appear a few minutes after users start browsing"*. **No zero-filling,
    no placeholder points.**
+6. **Survey results**: the feedback-survey section specified in §36.9. It is a collapsible card,
+   collapsed by default, with the `survey_enabled` switch in its header. It follows the page range
+   above, and renders **regardless of the RUM empty state and of `rum_enabled`**.
 
 **Range → source.** **7d and 30d** are computed **on the fly** from `rum_samples` (true `p75` over raw
 samples). **90d and All** read `rum_daily`; there the vitals columns are the **views-weighted mean of
@@ -6524,3 +6541,462 @@ Two new catalog badges (the catalog grows from 20 to **22**):
    accepted for v1.
 6. **Gaming** by mutual-follow rings can inflate the Followed board. It is accepted: it is a
    social, cosmetic metric that nothing in governance reads.
+
+---
+
+## 36. User satisfaction survey
+
+An occasional, **anonymous** in-app survey asks signed-in users how satisfied they are with
+skilly in general and with **one feature they just started using**. It floats like the What's new
+notice (§23) and can be closed at any time. It appears **at random, at most once every 30 days**
+per user. Users opt out with a profile toggle; platform admins can switch it off platform-wide.
+The results are shown to platform admins in a collapsible **Survey results** section on the
+Monitoring page (§32.7).
+
+### 36.1 Semantics
+- **Trigger: the first use of a feature.** A fixed **feature catalog** (§36.3) names the features
+  that can trigger a survey. The first time a user performs a feature's defining action in the web
+  UI, that first use is recorded (`user_feature_uses`, §36.2). **Only a fresh first use counts.**
+  Repeat uses never trigger, and a first use made while the user is ineligible is recorded and
+  **consumed**: it never triggers later.
+- **Eligibility.** A user is eligible when **all** of these hold:
+  - the platform switch `survey_enabled` is on (§36.8);
+  - the user is `status = 'active'` and not erased;
+  - the user is onboarded, and `onboarded_at` is **at least 14 days ago** (the grace period);
+  - `users.surveys_enabled` is true (the opt-out, §36.7);
+  - `users.survey_last_shown_at` is `null` **or at least 30 days ago** (the floor);
+  - the browser can show the survey right now: **`canShow`** (below).
+- **The random roll.** An eligible fresh first use rolls **1 in 3**. The roll is made
+  **server-side**, so the client can't steer it and a reload can't re-roll. A lost roll consumes
+  the trigger.
+- **The fallback for long-time users.** A user who has already used most features may never make a
+  fresh first use again. So once **90 days** have passed since `survey_last_shown_at` (or, if they
+  have never been shown one, since `onboarded_at`), **each full page load** of the app, while
+  eligible, also rolls **1 in 3**. A fallback survey's feature questions cover **one random
+  feature the user has already used** (from `user_feature_uses`). A user with no recorded feature
+  use gets the **general questions only**.
+- **`canShow`, and the What's new collision.** The browser reports whether it could display a
+  survey this instant. `canShow` is false while:
+  - the What's new notice is on screen, or is due on this load (§23 `whatsNewAction` returned
+    `"toast"`);
+  - the Quick start gate is rendering;
+  - a survey card is already open in this tab.
+
+  A trigger that arrives with `canShow = false` is **not rolled and not carried over**: the first
+  use is recorded and consumed, and the next eligible trigger rolls again. **What's new always wins.**
+- **Winning a roll opens an offer.** In one guarded `UPDATE` (the eligibility predicate re-checked
+  in its `WHERE`, so two tabs or two requests can't both win), the server stamps
+  `survey_last_shown_at = now()` and stores the **open offer** in `users.survey_offer` (§36.2).
+  It returns the offer to the browser, which shows the survey card immediately. The 30-day floor
+  runs from this stamp, **whatever the user then does**.
+- **Closing is "not now".** The ✕ closes the card. The offer stays open, and a **Take the survey**
+  item appears in the account menu (§36.5) until the offer expires, so the user can answer later
+  without being asked again. Closing never restarts or extends anything.
+- **Offer expiry.** An open offer ends when:
+  - the user **submits** it;
+  - **30 days** pass since it was shown (the next cycle begins, and a new offer may replace it);
+  - the user **opts out**;
+  - the platform switch goes **off**;
+  - the survey catalog version changes in a release (an offer for an older catalog version is
+    dropped on read).
+
+  Expiry clears `survey_offer`; `survey_last_shown_at` is kept.
+- **Audience.** Every signed-in human user of the web UI, **platform admins included** (their
+  answers carry the `admin` segment). System installations, MCP / OAuth clients and token-only git
+  access never see a survey: they have no UI session.
+- **Anonymous by construction.** A response row has **no user reference** (§36.2). The per-user
+  state (the first-use ledger, the 30-day stamp and the open offer) lives on the user's side, and
+  the open offer is **cleared in the same transaction that stores the response**. What a response
+  keeps and why is in §36.6 and §36.12.
+
+### 36.2 Data model (migration 0079)
+- **`user_feature_uses`**: `user_id` (FK → `users`, `ON DELETE CASCADE`), `feature` (text, a
+  catalog key from `@skilly/shared/survey`), `first_used_at` (`timestamptz`, default `now()`).
+  **PK `(user_id, feature)`**. It is written by `INSERT … ON CONFLICT DO NOTHING`; a fresh insert
+  is a first use. It is **deleted on GDPR erasure** (§4).
+- **`users` columns:**
+  - `surveys_enabled` (`BOOLEAN NOT NULL DEFAULT true`): the opt-out (§36.7);
+  - `survey_last_shown_at` (`TIMESTAMPTZ NULL`): the last offer's stamp, which drives the 30-day
+    floor and the 90-day fallback;
+  - `survey_offer` (`JSONB NULL`): the open offer, `{ catalogVersion, trigger: 'feature' | 'visit',
+    feature: <key> | null, rotating: <question key>, closed: boolean }`. The offer's shown time is
+    `survey_last_shown_at`, and it expires at that time + 30 days.
+- **`survey_responses`** (**no user column, no timestamp**):
+  - `id` (`uuid` PK, `gen_random_uuid()`: random, so ordering by id reveals nothing);
+  - `answered_on` (`date`, the **UTC date** of submission; never a time of day);
+  - `catalog_version` (int);
+  - `trigger` (`'feature' | 'visit'`);
+  - `feature` (text NULL: the feature the feature questions were about);
+  - `segment` (`'consumer' | 'maintainer' | 'admin'`, §36.6);
+  - `via` (`'popup' | 'menu'`: answered from the pop-up, or later from the account menu);
+  - `free_text` (text NULL, `CHECK (char_length(free_text) <= 2000)`).
+  - Index on `answered_on`. Rows are **immutable** (no UPDATE path). The only delete is an admin's
+    single-response delete (§36.9).
+- **`survey_answers`**: `response_id` (FK → `survey_responses`, `ON DELETE CASCADE`),
+  `question_key` (text), `stars` (`smallint`, `CHECK (stars BETWEEN 1 AND 5)`). **PK
+  `(response_id, question_key)`**. There is one row per **answered** question; an unanswered
+  question has no row (never a 0).
+- **`survey_daily`** (the funnel counters, aggregate-only): `day` (`date` PK), `shown`, `closed`,
+  `submitted`, `submitted_from_menu` (all `int NOT NULL DEFAULT 0`). Bumped by
+  `INSERT … ON CONFLICT (day) DO UPDATE SET x = x + 1`. It has **no user or feature dimension**, so
+  the funnel can't be joined back to a person.
+- **`platform_settings`** gains **`survey_enabled`** (default `true`, §36.8).
+
+### 36.3 The question catalog (`@skilly/shared/survey`)
+The questions and the feature list are **hard-coded and versioned** in a client-safe shared module
+(`@skilly/shared/survey`, exporting `SURVEY_CATALOG_VERSION`, starting at `1`). A change needs a
+release.
+- **Versioning rules:**
+  - any change to the catalog bumps `SURVEY_CATALOG_VERSION`;
+  - a question's **key is permanent**. Rewording a question in a way that changes its meaning
+    requires a **new key**; the old key is retired. Typo fixes may keep the key;
+  - a retired key's answers stay in the results, labelled *retired* (§36.9).
+- **General questions:** four asked in every survey, plus **one rotating question** picked at random
+  from a pool when the offer is created and stored in the offer. All use 1–5 stars.
+
+  | Key | Question |
+  |---|---|
+  | `general.overall` | Overall, how satisfied are you with skilly? |
+  | `general.discovery` | How easy is it to find the skills you need? |
+  | `general.trust` | How much do you trust the quality of the skills in the catalog? |
+  | `general.recommend` | How likely are you to recommend skilly to a colleague? |
+  | `rotating.performance` | How happy are you with how fast skilly feels? |
+  | `rotating.look` | How much do you like the way skilly looks and feels? |
+  | `rotating.docs` | How helpful are Quick start and the in-app guidance? |
+  | `rotating.install` | How smooth is getting a skill into your tools? |
+
+- **Feature questions:** two, asked about the offer's feature, 1–5 stars. The feature's label is
+  substituted into the text.
+
+  | Key | Question |
+  |---|---|
+  | `feature.useful` | How useful is {feature} for your work? |
+  | `feature.ease` | How easy was {feature} to use? |
+
+  The response records `feature`, so each feature's answers aggregate separately under these two
+  keys.
+- **Free text:** one optional box, *"Anything you'd change, fix or add?"*, ≤ 2000 characters.
+- **The feature catalog.** Each feature has a key, a label, and **the defining action that records
+  its first use**. The browser reports the action only after it **succeeds**:
+
+  | Key | Label | First use = |
+  |---|---|---|
+  | `search` | catalog search | a non-empty search submitted in the catalog or the header search (§10) |
+  | `install` | installing a skill | an install command generated on a skill-detail page (§23) |
+  | `propose` | proposing a skill | a proposal submitted (§8) |
+  | `review` | reviewing proposals | a review decision recorded: accept, reject or request changes (§8) |
+  | `request` | requesting a skill | a skill request posted (§26) |
+  | `messaging` | messaging | a message sent, in a conversation or a skill discussion (§24) |
+  | `mcp` | the MCP server | an MCP connection approved on the consent page (§29), recorded server-side (below) |
+  | `marketplaces` | plugin marketplaces | a marketplace add command copied (§30) |
+  | `rating` | rating skills | a skill rated (§18) |
+  | `share_link` | share links | a share link created (§33) |
+  | `achievements` | achievements | an achievements hall opened (§31) |
+  | `leaderboard` | the leaderboard | the leaderboard opened (§21) |
+  | `follow` | following people | a person followed (§35) |
+
+- **Detection is client-reported, on purpose.** The browser calls `POST /api/me/features/used`
+  (§36.10) at those moments; only there can it also report `canShow`. A spoofed call can only
+  affect the caller's own survey, so the endpoint validates the key against the catalog and
+  rate-limits, and needs nothing more.
+  - **The one exception is `mcp`.** Approving the consent form redirects the browser straight to
+    the MCP client, so no skilly page is left to show a card. The consent handler records the first
+    use server-side with `canShow = false`: it never rolls, but it feeds the fallback's
+    used-feature pick (§36.1).
+  - **Reports wait for the shell.** Page-view features (`leaderboard`, `achievements`, a `search`
+    arriving in the URL) report on mount, before the app shell has read `/api/me` and decided about
+    What's new. Their reports are queued in the tab until that decision is made, so `canShow` is
+    evaluated against the real state instead of consuming the trigger on a blind "no".
+  - Each tab reports a feature at most once per browser session (`sessionStorage`); the server
+    records a first use only once anyway.
+
+### 36.4 The survey card
+- **Owned by AppShell and portaled to `<body>`**, like the What's new notice (§23), so it survives
+  client-side navigation. `data-testid="survey-card"`.
+- **Placement and style:** the What's new notice's card language, bottom-right, but wider (max-width
+  ≈ 440px). On mobile (≤ 560px) it is a full-width bottom sheet. **Height cap `80vh`**: the header
+  and the footer are pinned, and the question list between them is the only scrolling child (thin,
+  visible scrollbar, as §23). Slide-up entry, none under `prefers-reduced-motion`. It uses the same
+  layers as the notice: above page content, below modal dialogs, and hidden (not unmounted) while
+  the mobile nav drawer is open.
+- **Accessibility:** `role="dialog"`, **`aria-modal="false"`** (non-modal: the page stays usable),
+  `aria-labelledby` = the heading. **It never steals focus on appearance.** **Escape** closes it only
+  when focus is inside it.
+- **Content, top to bottom:**
+  - **Header:** *"How are we doing?"*, the sub-line *"About a minute. Anonymous: your name isn't
+    stored with your answers. Answer as many as you like."*, and a **✕** (`aria-label="Close
+    survey"`).
+  - **"skilly overall":** the four general questions and the rotating one.
+  - **"About {feature}":** the two feature questions. The section is omitted when the offer has no
+    feature.
+  - **Free text:** the box, with a live `N / 2000` counter. Input beyond 2000 characters is blocked.
+  - **Footer:** a **Submit** button (disabled until at least one star is set or the text box holds
+    non-whitespace), and a quiet **"Don't ask me again"** link (§36.7).
+- **The star control.** It looks like the skill-detail rating control (§18): the `.star-input` /
+  `.star` / `.star-on` classes, with a hover preview. It lives in a shared `StarInput` component,
+  and the rating panel keeps its own behaviour. Differences from the skill rating:
+  - **nothing is saved on click**: the value is local form state until Submit;
+  - clicking the selected star again **clears** that question (so every question stays optional);
+  - **keyboard:** each question is a `role="radiogroup"` labelled by its text, with five
+    `role="radio"` stars (roving tabindex; arrows move and select; Space / Enter selects). A
+    visually hidden *"Not answered"* state is announced when the question is cleared.
+- **Submit** sends the answers (§36.10). While the request runs the card is locked. On success
+  the body is replaced with *"Thanks, your feedback helps shape skilly."* and the card closes
+  itself after ~4 s (or on ✕). A **409** (the offer expired meanwhile) shows *"This survey has
+  expired. Thanks anyway!"* and closes. Any other failure keeps the answers and shows an inline
+  error with a retry.
+- **Closing** (✕ or Escape) calls `POST /api/me/survey/close`. The close is **optimistic**: a failed
+  call is not retried or surfaced.
+- **Multiplicity:** at most one card per tab. Two tabs can't both *win* an offer (§36.1). A second
+  tab that opens the same offer from the menu is fine: the first submit wins, and the other gets the
+  409 path.
+
+### 36.5 The "Take the survey" entry
+- While an offer is open, the **account menu** gains **Take the survey** as its **first item**,
+  above Quick start, marked with the accent dot. It reopens the card with the same questions and
+  feature, starting blank, and a submission from it carries `via = 'menu'`.
+- The Profile page's survey section (§36.7) shows the same **Take the survey** button while an offer
+  is open.
+- Both disappear once the offer ends (§36.1 expiry). `GET /api/me` carries the open offer as
+  `openSurvey` (resolved questions included, or `null`), so the menu needs no extra request.
+
+### 36.6 Response content & segment
+- **Stored on submit**, in one transaction:
+  1. re-read the open offer (**409 `no_open_survey`** if there is none, or it has expired);
+  2. validate every submitted `question_key` against the offer: it must be one of the four general
+     keys, the offer's rotating key, or (when the offer has a feature) the two feature keys. Stars
+     must be integers 1–5. **422** for anything else, or when nothing was answered;
+  3. insert the `survey_responses` row (with `answered_on = current UTC date`) and its
+     `survey_answers`;
+  4. clear `users.survey_offer`;
+  5. bump `survey_daily.submitted`, and `submitted_from_menu` when `via = 'menu'`.
+- **Free text** is trimmed; empty becomes `null`. It is stored and **always rendered as plain text**,
+  never as HTML or markdown.
+- **Segment**, computed server-side at submit time, highest wins:
+  - **`admin`**: a platform admin, or a namespace admin of any namespace;
+  - **`maintainer`**: an explicit or implicit maintainer of at least one skill (§19);
+  - **`consumer`**: everyone else.
+
+### 36.7 Opting out
+- **Profile toggle.** A new **Feedback surveys** section on `/profile`, after **Following**, using
+  the same On/Off `sort-toggle`. Helper copy:
+  - **On:** *"Now and then, at most once a month, skilly asks how it's doing. Answers are anonymous."*
+  - **Off:** *"You won't be asked to take surveys."*
+- **Default on.** Every existing and new user starts opted in (the column default).
+- **Instant.** Switching off (`PATCH /api/me { surveysEnabled: false }`) **clears the open offer**
+  and hides any open card, the menu item and the profile button right away.
+- **Switching back on** does **not** reset `survey_last_shown_at`: the 30-day floor still applies.
+- **"Don't ask me again"** in the card makes the same PATCH, closes the card, and toasts *"Got it,
+  no more surveys. You can turn them back on in your profile."*
+- Silent, like every profile preference (not audited).
+
+### 36.8 The platform switch
+- **`survey_enabled`** (`platform_settings`, default **`true`**). It is written through `PATCH
+  /api/admin/settings`, platform admins only, and audited as `settings.updated` like every setting.
+- **Location:** the shared `Switch` in the **header of the Survey results section** on the Monitoring
+  page (§36.9), like the RUM collect switch (§32.6). It is visible and usable while the section is
+  collapsed, and clicking it doesn't toggle the section.
+- **Off:** no offer is created. Open offers are treated as expired (the menu item, the profile button
+  and any open card disappear on the next `/api/me` read), and submissions answer **409
+  `no_open_survey`**. Collected results stay visible under the note *"Surveys are off. Showing
+  responses collected until {last date}."*
+- **On again:** nothing is backfilled; users become eligible under the normal rules.
+
+### 36.9 Survey results on the Monitoring page
+A new **collapsible section**, item **6** of the §32.7 page, after *Client errors*. It uses the admin
+`CollapsibleCard`, **collapsed by default**, with its open state kept under
+`skilly.admin.card.survey-open`. Platform admins only; the API is hard-gated with 403.
+- **It renders regardless of RUM:** whether `rum_enabled` is on or off, and whether or not the RUM
+  empty state is showing.
+- **Header:** the title *"Survey results"*, a compact summary (*"N responses in range"*) and the
+  `survey_enabled` switch (§36.8).
+- **Range:** it follows the page-level **7d / 30d / 90d / All** range toggle (§32.7 item 1).
+- **Data fetching:** the summary loads **on mount**, because it feeds the header's response count and
+  the switch; the free-text feed loads **on first expand**. Both reload on range or filter change and
+  on the page's **Refresh**. Nothing is polled.
+- **The switch sits beside the header's toggle button**, not inside it: `CollapsibleCard` gains an
+  `action` slot for interactive header controls, since a switch can't be nested in a button.
+- **Filters** in the section: **Segment** (All / Consumer / Maintainer / Admin) and **Feature** (All
+  features / each catalog feature with responses in range). They apply to the question stats, the
+  trend and the feed. **The funnel is unfiltered** (it has no such dimensions).
+- **Minimum group size: 5.** Any figure computed over **fewer than 5 responses** is withheld and shows
+  *"Not enough responses yet (fewer than 5)."* This applies:
+  - per question card, counting responses that answered that question;
+  - per trend bucket, where a small bucket is left as a gap;
+  - to the free-text feed as a whole, when the filtered response set is under 5.
+
+  The rule protects anonymity (§36.12); the server applies it, so a withheld figure never reaches the
+  browser.
+- **Contents:**
+  1. **Response funnel** (range-bound, unfiltered): **Shown**, **Closed on sight**, **Submitted**
+     (with *"… of which later, from the menu"*), and the **response rate** (submitted ÷ shown). Next
+     to it, the **opted out** count: users with `surveys_enabled = false`, a current figure, not
+     range-bound. A closed survey that is later submitted counts in both *Closed* and *Submitted*.
+  2. **Satisfaction trend** (recharts): the average of `general.overall` per bucket, with the
+     response count as bars on the second axis. It uses the §32.7 span-adaptive bucketing (day / week
+     / month), and fewer than 3 points get visible markers.
+  3. **Question cards:** one per question with answers in range, in catalog order. General questions
+     come first, then rotating, then the feature questions (per the selected feature, or pooled
+     across features under *All features*). Each card shows the question text, the **average** (one
+     decimal, ★), **n**, and the 1–5 **distribution histogram** of the skill-detail rating panel
+     (§18, `.rating-hist-*`). Retired keys show a *retired* tag.
+  4. **Free-text feed:** the comments, **newest date first**, ordered by the random id within a day,
+     so the feed never reveals intra-day order. Each item shows the text, the **date only**
+     (`useDateFmt()` date form), the feature (or *General*) and the segment. **Paged 50 at a time.**
+     Each item has a **Delete** action (confirm: *"Delete this response? Its star answers are
+     removed too."*). It deletes the whole response, answers included (cascade), and is audited as
+     **`survey.response_deleted`** (§36.11).
+- **Empty state:** the standard `EmptyState`, *"Responses appear here as people answer the survey."*
+  No zero-filling.
+
+### 36.10 API surface
+All endpoints require auth (401 otherwise).
+
+**User endpoints**
+- **`POST /api/me/features/used { feature, canShow }`** → `{ firstUse, survey }`.
+  - Records the first use (`ON CONFLICT DO NOTHING`). On a fresh insert with an eligible user and
+    `canShow`, it rolls 1 in 3 and, on a win, opens the offer.
+  - `survey` is the offer payload or `null`.
+  - **422** for an unknown feature key. Rate limit **120 / min** per user.
+  - The eligibility checks and the roll run **after** the insert, so `firstUse` is truthful whatever
+    the outcome.
+- **`POST /api/me/survey/check { canShow }`** → `{ survey }`. The §36.1 visit fallback. AppShell calls
+  it **once per full page load**, after `/api/me` has resolved and the What's new decision is made,
+  only when `canShow` is true and no offer is open. Rate limit **30 / min**.
+- **`POST /api/me/survey/close`** → `{ ok }`. On the offer's **first** close, it sets
+  `survey_offer.closed = true` and bumps `survey_daily.closed`; later closes are no-ops. **409
+  `no_open_survey`** when nothing is open.
+- **`POST /api/me/survey/responses { answers: { [questionKey]: 1..5 }, freeText?, via }`** →
+  `{ ok }`. Stores the response as in §36.6. **409 `no_open_survey`**, **422** on validation. Rate
+  limit **10 / min**.
+- **Offer payload:** `{ catalogVersion, trigger, feature: { key, label } | null, questions: [{ key,
+  text, section: 'general' | 'feature' }], shownAt, expiresAt }`. The questions are resolved
+  server-side from the shared catalog.
+- **`GET|PATCH /api/me`** gains `surveysEnabled`. `GET` also carries **`openSurvey`** (the offer
+  payload, or `null`), which is `null` whenever the platform switch is off.
+
+**Admin endpoints** (platform admin, 403 otherwise)
+- **`GET /api/admin/survey/summary?range=7|30|90|all&segment=&feature=`** → `{ enabled, lastDate,
+  bucket, funnel: { shown, closed, submitted, submittedFromMenu, optedOut }, series: [{ date, n,
+  overallAvg | null }], questions: [{ key, text, retired, n, avg | null, distribution | null,
+  withheld }], features: [{ key, label, n }] }`. Withheld figures are `null`, with `withheld: true`.
+- **`GET /api/admin/survey/comments?range=&segment=&feature=&offset=&limit=`** → `{ comments: [{ id,
+  answeredOn, feature, segment, text }], total, hasMore, withheld }`. `limit` ≤ 50.
+- **`DELETE /api/admin/survey/responses/:id`** → `{ ok }`. **404** unknown. Audited (§36.11).
+- **`GET|PATCH /api/admin/settings`** gains `survey_enabled` (PATCH key `surveyEnabled`).
+
+There is **no MCP tool** for surveys: they are a web-UI affordance.
+
+### 36.11 Governance & invariants
+- **Submissions are never audited or logged with an identity.** No audit row, no `system_event` row
+  on success, and the submit endpoint is **excluded from RUM API sampling** (§32.4). A RUM `api`
+  sample would otherwise tie a user to the moment of submission. Opening, closing and first uses
+  are not audited either: they are personal, like watches and ratings.
+- **Audited:** `settings.updated` for `survey_enabled`, and **`survey.response_deleted`** (actor = the
+  admin; `before` = `{ answeredOn, feature, segment, catalogVersion, answerCount, textLength }`).
+  **The text itself is never copied into the audit log**, because a deleted abusive comment must not
+  survive in an immutable table.
+- **Invariant #3:** the survey exposes no skill identity anywhere. Features are product areas, never
+  skills or namespaces.
+- **Invariant #1:** untouched. The segment is derived from the resolved RBAC state; nothing in RBAC
+  reads survey data.
+- **Retention:** responses are kept **indefinitely**. The only removal is the admin delete.
+
+### 36.12 Lifecycle & anonymity
+- **GDPR erasure (§4, both the admin and SCIM `DELETE` paths):**
+  - `user_feature_uses` rows are deleted;
+  - `surveys_enabled` is reset to `true`, and `survey_last_shown_at` and `survey_offer` are cleared;
+  - **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase.
+  - The web `lib/eraseUser.ts` and the worker `eraseUserByExternalId` lists both gain these steps
+    (kept in sync, §5).
+- **Deprovision** (`status = 'inactive'`): all state is kept. An inactive user is never eligible.
+- **What "anonymous" guarantees.** The guarantee is against **the application**: no screen, API
+  payload, export, audit row or log line links a response to a person, and the size-5 threshold
+  stops the filters from singling one out. It is **not** a guarantee against someone with direct
+  database access. That person could match a response's date, segment and feature against
+  `users.survey_last_shown_at` in a small population. And **free text can identify its author**
+  whatever the storage. Both are accepted (§36.15).
+
+### 36.13 Migration 0079
+- Creates `user_feature_uses`, `survey_responses`, `survey_answers` and `survey_daily`, and adds the
+  three `users` columns.
+- **Grants to `skilly_app`:**
+  - `user_feature_uses`: SELECT / INSERT / DELETE;
+  - `survey_responses` and `survey_answers`: SELECT / INSERT / DELETE, **no UPDATE**;
+  - `survey_daily`: SELECT / INSERT / UPDATE.
+- **Backfill `user_feature_uses`** from existing history, taking the earliest known timestamp per
+  user × feature:
+
+  | Feature | Source |
+  |---|---|
+  | `install` | install tokens owned by the user, `skill_downloads.first_at`, and install fetches attributed to the user in `access_log` |
+  | `propose` | `proposals.submitted_by` |
+  | `review` | review-decision rows in `audit_log` by actor |
+  | `request` | `skill_requests.requester_user_id` |
+  | `messaging` | `messages.author_id` |
+  | `mcp` | `oauth_grants.user_id` |
+  | `rating` | `skill_ratings` |
+  | `share_link` | the creator of `skill_share_links` rows |
+  | `follow` | `user_follows.follower_id` |
+
+  `search`, `marketplaces`, `achievements` and `leaderboard` leave no per-user trace and start empty.
+- **Stagger the launch.** Every existing onboarded, active user gets `survey_last_shown_at = now() −
+  random() × 30 days`. Their first 30-day window therefore ends at a random point over the month
+  after release, instead of everyone becoming eligible on day one. First uses made before a user's
+  window ends are consumed (§36.1), which also soaks up the features the backfill couldn't
+  reconstruct. These stamps are not "shown" in the funnel: `survey_daily` starts empty.
+- Sets `survey_enabled = true` in `platform_settings`.
+
+### 36.14 Tests (ship with the change, §16 discipline)
+- **Unit:**
+  - the shared eligibility predicate: opt-out, platform switch, inactive, not onboarded, the 14-day
+    grace, the 30-day floor, the 90-day fallback, and `canShow`;
+  - the roll, with an injectable RNG;
+  - offer composition: general + rotating + feature, and the no-feature fallback;
+  - response validation: keys against the offer, the star range, the empty submission, the free-text
+    cap;
+  - segment derivation;
+  - the size-5 withholding for question cards, trend buckets and the feed;
+  - catalog integrity: unique keys, every feature labelled, retired keys resolvable.
+- **Integration:**
+  - `features/used`: first use vs repeat; ineligible first uses are consumed; `canShow = false` is
+    never rolled; the guarded UPDATE lets exactly one of two concurrent winners through;
+  - `survey/check`: fallback eligibility at 89 vs 90 days, and the used-feature pick;
+  - close: the counter bumps once;
+  - submit: the response has **no user reference**, the offer is cleared, 409 after expiry, opt-out
+    or switch-off, 422 on bad keys;
+  - `PATCH /api/me` opt-out clears the offer;
+  - the admin summary and comments: range, filters, withholding, 403 for non-admins;
+  - delete: cascade, and the audit row carries no text;
+  - erasure on both paths clears the per-user state and leaves responses intact;
+  - the migration backfill and stagger on a seeded DB.
+- **E2e:**
+  1. A seeded eligible dev user with a forced-win RNG (a test-only seam, like the e2e What's new
+     marker seeding) performs a first-use action; the card appears.
+  2. ✕ closes the card; *Take the survey* is in the account menu; reopening and submitting 2 stars +
+     text shows the thank-you, and the menu item is gone.
+  3. An admin opens Monitoring → Survey results and sees the funnel. With the seed topped up past 5,
+     the question cards and the feed show the comment.
+  4. *Don't ask me again* flips the profile toggle to Off.
+  5. With the What's new notice due, a first-use action produces no survey.
+  6. At mobile width, the card is a bottom sheet with ✕ and Submit visible without scrolling.
+
+  The e2e sign-in helper and `shots.mjs` set `surveys_enabled = false` for the dev user so smoke runs
+  and screenshots stay free of the card (as they pre-stamp the What's new marker, §23).
+
+### 36.15 Accepted trade-offs
+1. **Anonymous to the app, not to the database.** Date-only stamps, the random id and the size-5
+   threshold stop the UI from identifying anyone, but a DBA correlating tables in a small population
+   could narrow a response down, and free text may identify its author. Real anonymity would need
+   dropping the segment and feature, or a separate store, and was judged not worth it.
+2. **Client-reported first uses.** A user can forge their own first uses (to be surveyed sooner) but
+   nobody else's; the roll, the floors and the opt-out are all server-side.
+3. **Consumed triggers.** A first use that lands on a blocked moment (ineligible, What's new showing,
+   a lost roll) is gone for good. Surveys are deliberately rare; the 90-day fallback keeps nobody
+   out forever.
+4. **Features without history** (`search`, `marketplaces`, `achievements`, `leaderboard`) are
+   "first used" again after release. The launch stagger absorbs most of that.
+5. **An expired offer is lost.** A catalog change in a release drops open offers. This is rare, and
+   the user is asked again in the next cycle.
+6. **The funnel can't be filtered** by segment or feature. That is the cost of keeping it free of
+   per-user rows.

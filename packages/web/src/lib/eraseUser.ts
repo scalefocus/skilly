@@ -129,6 +129,10 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // Follows (§35.9) are personal data in BOTH directions: whom they followed, and who followed
     // them. Mirrored in worker scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from user_follows where follower_id = $1 or followee_id = $1`, [targetUserId]);
+    // The feedback survey's first-use ledger (§36.12) is personal data. survey_responses are NOT
+    // touched: they carry no user reference, so there is nothing to erase. Mirrored in worker
+    // scim/store.ts eraseUserByExternalId — keep the two in sync.
+    await client.query(`delete from user_feature_uses where user_id = $1`, [targetUserId]);
 
     // Scrub + detach the row (tombstone). Detaching entra_object_id lets a returning person get a
     // brand-new account. The display label retains the former email ("<email> - Deleted") so a
@@ -144,6 +148,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
       `update users set display_name = $2, email = '', avatar = null,
               job_title = null, office_location = null, department = null, directory_hidden = false,
               achievements_hidden = false, time_zone = null, hero_at = null, allow_follows = true,
+              surveys_enabled = true, survey_last_shown_at = null, survey_offer = null,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [targetUserId, deletedLabel],

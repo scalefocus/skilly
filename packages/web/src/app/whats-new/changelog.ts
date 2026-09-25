@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.13.0",
+    date: "2026-09-25",
+    summary:
+      "Feedback surveys: now and then, at most once a month, skilly asks what you think of it and of a feature you just started using. The survey is anonymous, takes about a minute, and can be closed and answered later from the account menu. Turn it off under Profile → Feedback surveys; platform admins see the results on the Monitoring page.",
+  },
+  {
     version: "2.12.1",
     date: "2026-09-24",
     summary:
