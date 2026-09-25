@@ -10,6 +10,7 @@ import { LevelBar } from "../../components/LevelBar";
 import { CollapsibleCard } from "../admin/CollapsibleCard";
 import { useFollowStore, setFollow, loadFollowing } from "../../components/FollowButton";
 import { useDateFmt } from "../../components/DateFormat";
+import { SURVEY_PREF_EVENT, reopenSurvey } from "../../lib/surveyClient";
 
 interface Me {
   userId: string | null;
@@ -25,6 +26,8 @@ interface Me {
   achievementsHidden: boolean;
   achievementsEnabled: boolean;
   allowFollows: boolean;
+  surveysEnabled: boolean;
+  openSurvey: { shownAt: string } | null;
 }
 
 const FORMAT_HINT: Record<"eu" | "us", string> = { eu: "dd/mm/yyyy · 24h", us: "mm/dd/yyyy · AM/PM" };
@@ -420,6 +423,58 @@ function FollowingPref() {
   );
 }
 
+// §36.7 the feedback-survey opt-out: on by default; off ends any open offer at once, and turning it
+// back on does not reset the 30-day floor. While an offer is open, the section also offers "Take
+// the survey" (§36.5), which reopens the card through the app shell.
+function SurveysPref() {
+  const { data, reload } = useApi<Me>("/api/me");
+  const [busy, setBusy] = useState(false);
+  // The card's "Don't ask me again" flips the same setting from the shell.
+  useEffect(() => {
+    window.addEventListener(SURVEY_PREF_EVENT, reload);
+    return () => window.removeEventListener(SURVEY_PREF_EVENT, reload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  if (!data) return <div className="skeleton" style={{ height: 90, borderRadius: "var(--radius)" }} />;
+  const choose = async (enabled: boolean) => {
+    if (enabled === data.surveysEnabled) return;
+    setBusy(true);
+    try {
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveysEnabled: enabled }) });
+      window.dispatchEvent(new CustomEvent(SURVEY_PREF_EVENT, { detail: { enabled } }));
+    } finally { setBusy(false); }
+  };
+  return (
+    <section className="reveal" style={{ marginBottom: 30 }} id="surveys" data-testid="surveys-pref">
+      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Feedback surveys</h2>
+      <p className="page-sub" style={{ marginBottom: 16 }}>
+        A short, anonymous survey about skilly and a feature you’ve just started using.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 130, fontWeight: 600, fontSize: 14 }}>Ask me for feedback</div>
+        <div className="sort-toggle" role="group" aria-label="Feedback surveys">
+          {[{ label: "On", enabled: true }, { label: "Off", enabled: false }].map((o) => {
+            const active = o.enabled === data.surveysEnabled;
+            return (
+              <button key={o.label} type="button" className={`sort-opt${active ? " sort-on" : ""}`} aria-pressed={active} disabled={busy} onClick={() => void choose(o.enabled)}>
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+        {data.surveysEnabled && data.openSurvey && (
+          <button type="button" className="btn btn-sm" onClick={() => reopenSurvey()} data-testid="profile-take-survey">Take the survey</button>
+        )}
+      </div>
+      <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+        {data.surveysEnabled
+          ? "Now and then, at most once a month, skilly asks how it’s doing. Answers are anonymous."
+          : "You won’t be asked to take surveys."}
+      </p>
+    </section>
+  );
+}
+
 const FOLLOWING_PANE_KEY = "skilly.profile.following.open";
 
 // §35.5 — "People I follow (N)": a single collapsible pane, collapsed by default and remembered per
@@ -512,6 +567,7 @@ function ProfileInner() {
       <EmailNotificationsPref />
       <MaintainerNotificationsPref />
       <FollowingPref />
+      <SurveysPref />
     </div>
   );
 }

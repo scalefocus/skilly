@@ -298,6 +298,9 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // Follows (§35.9) are personal data in BOTH directions: whom they followed, and who followed
     // them. Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_follows where follower_id = $1 or followee_id = $1`, [userId]);
+    // The feedback survey's first-use ledger (§36.12); responses carry no user reference and stay.
+    // Mirrored in web lib/eraseUser.ts — keep the two in sync.
+    await client.query(`delete from user_feature_uses where user_id = $1`, [userId]);
     // Scrub + detach the row (tombstone). Display label retains the former email
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";
@@ -308,6 +311,7 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
       `update users set display_name = $2, email = '', avatar = null,
               job_title = null, office_location = null, department = null, directory_hidden = false,
               achievements_hidden = false, time_zone = null, hero_at = null, allow_follows = true,
+              surveys_enabled = true, survey_last_shown_at = null, survey_offer = null,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [userId, deletedLabel],

@@ -22,6 +22,7 @@ import { uploadBundle as uploadBundleRequest } from "../../../lib/uploadBundleCl
 import { EmojiPicker } from "../../../components/EmojiPicker";
 import { SkillIcon } from "../../../components/SkillIcon";
 import { useIconCropFlow } from "../../../components/IconCropDialog";
+import { reportFeatureUse } from "../../../lib/surveyClient";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string }
 interface Meta {
@@ -413,6 +414,7 @@ function ProposalDetailInner() {
         if (action === "accept" && r.status === 409 && !j.requiresOverride) reload(); // stale revision — show the current one
         throw new Error(j.error ?? `Action failed (${r.status})`);
       }
+      if (action === "accept" || action === "reject" || action === "request_changes") reportFeatureUse("review"); // §36.3
       setMsg({
         kind: "ok",
         text: action === "revise"
@@ -1111,7 +1113,7 @@ function ReviewDiscussion({ proposalId, card, initialConversationId }: { proposa
 
   const send = async (body: string) => {
     const r = await fetch(`/api/proposals/${proposalId}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body }) });
-    if (r.ok) { const { message } = await r.json(); setThread((t) => (t ? { ...t, messages: [...t.messages, message] } : t)); void load(); }
+    if (r.ok) { const { message } = await r.json(); setThread((t) => (t ? { ...t, messages: [...t.messages, message] } : t)); void load(); reportFeatureUse("messaging"); }
   };
 
   // Hide the whole section only when there's genuinely nothing to show (no card AND no thread access).

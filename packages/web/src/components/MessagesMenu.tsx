@@ -10,6 +10,7 @@ import { UserBubble } from "./UserBubble";
 import { useDateFmt } from "./DateFormat";
 import { useChatPollIntervals } from "./useChatPoll";
 import { usePopoverPresence } from "./ui";
+import { reportFeatureUse } from "../lib/surveyClient";
 
 interface ConversationSummary { id: string; title: string; href: string | null; unread: number; lastBody: string | null; lastFromName: string | null; lastAt: string | null; peerName: string | null; peerAvatar: string | null; peerUserId: string | null }
 
@@ -221,6 +222,7 @@ export function MessagesMenu() {
     if (r.ok) {
       const { message } = await r.json();
       setActive((a) => (a ? { ...a, messages: [...a.messages, message] } : a));
+      reportFeatureUse("messaging"); // §36.3
       refreshList();
       pollResetRef.current(); // sending is activity — drop the list backoff back to the floor
     }

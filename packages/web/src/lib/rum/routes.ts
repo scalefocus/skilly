@@ -69,6 +69,9 @@ export const RUM_API_ROUTES: readonly string[] = [
   "/api/admin/rum/routes/[route]/users",
   "/api/admin/rum/summary",
   "/api/admin/settings",
+  "/api/admin/survey/comments",
+  "/api/admin/survey/responses/[id]",
+  "/api/admin/survey/summary",
   "/api/admin/system-banner",
   "/api/admin/users/[id]/erase",
   "/api/admin/users/active-series",
@@ -94,7 +97,10 @@ export const RUM_API_ROUTES: readonly string[] = [
   "/api/mcp/connections",
   "/api/mcp/connections/[grantId]",
   "/api/me",
+  "/api/me/features/used",
   "/api/me/onboarded",
+  "/api/me/survey/check",
+  "/api/me/survey/close",
   "/api/me/whats-new-seen",
   "/api/messages",
   "/api/messages/[id]",
@@ -161,8 +167,10 @@ export const RUM_API_ROUTES: readonly string[] = [
   "/api/users/suggest",
 ];
 
-/** API paths the collector must never measure — the monitor must not measure itself (§32.4). */
-export const RUM_API_EXCLUDED: readonly string[] = ["/api/rum", "/api/presence/page", "/api/csp-report"];
+/** API paths the collector must never measure — the monitor must not measure itself (§32.4) — and
+ *  the feedback-survey submit, whose user-attributed, timestamped sample would de-anonymize the
+ *  response (§36.11). */
+export const RUM_API_EXCLUDED: readonly string[] = ["/api/rum", "/api/presence/page", "/api/csp-report", "/api/me/survey/responses"];
 
 const PAGE_TEMPLATES = new Set(RUM_PAGE_ROUTES.map((r) => r.template));
 const API_TEMPLATES = new Set(RUM_API_ROUTES);

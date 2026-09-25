@@ -23,6 +23,7 @@ import { useChatPollIntervals } from "../../../../components/useChatPoll";
 import { MentionComposer, type MentionComposerHandle } from "../../../../components/MentionComposer";
 import { MentionHint, type MentionMap } from "../../../../components/MentionChips";
 import { mentionCollapsedLength } from "@skilly/shared/mentions"; // subpath: keep node-only shared code out of the client bundle
+import { reportFeatureUse } from "../../../../lib/surveyClient";
 
 const MAX_LEN = 500;
 /** One GLOBAL collapse preference for every skill's Discussion card (§24). */
@@ -248,6 +249,7 @@ export function SkillDiscussion({
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(j.error ?? `Failed (${res.status})`); return; }
+      reportFeatureUse("messaging"); // §36.3
       composerRef.current?.clear();
       setDraft("");
       pollStep.current = 0; // posting resets the backoff walk to the floor (§24)

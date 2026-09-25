@@ -20,6 +20,7 @@ import { uploadBundle as uploadBundleRequest } from "../../lib/uploadBundleClien
 import { EmojiPicker } from "../../components/EmojiPicker";
 import { SkillIcon } from "../../components/SkillIcon";
 import { useIconCropFlow } from "../../components/IconCropDialog";
+import { reportFeatureUse } from "../../lib/surveyClient";
 
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
@@ -753,6 +754,7 @@ function ProposeForm() {
           }
           throw new Error(j.error ?? "Could not create proposal");
         }
+        reportFeatureUse("propose"); // §36.3
         router.push(`/proposals/${j.id}`);
       } else {
         const r = await fetch("/api/publish", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -765,6 +767,7 @@ function ProposeForm() {
           }
           throw new Error(j.error ?? "Could not publish");
         }
+        reportFeatureUse("propose"); // §36.3
         router.push(`/skills/${f.namespaceSlug}/${f.skillSlug}`);
       }
     } catch (e2) {
@@ -809,6 +812,7 @@ function ProposeForm() {
       const r = await fetch("/api/requests", { method: "POST", body: fd });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error ?? "Could not post the request");
+      reportFeatureUse("request"); // §36.3
       router.push(`/requests/${j.id}`);
       // Intentionally leave busy=true: keep the form read-only through the route transition.
     } catch (e2) {

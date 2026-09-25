@@ -78,6 +78,8 @@ async function go(page, url, waitSel) {
   console.log("signin status:", res.status());
   // Pre-stamp the What's new marker so the once-per-release update notice (§23) never lands in a screenshot.
   await ctx.request.post(BASE + "/api/me/whats-new-seen", { data: { version: APP_VERSION } }).catch(() => {});
+  // Likewise keep the feedback-survey card (§36) out of every screenshot.
+  await ctx.request.patch(BASE + "/api/me", { data: { surveysEnabled: false } }).catch(() => {});
 
   // Clear any installs left over from a prior run of this script (claimed installs are durable
   // and would otherwise pile up as duplicate "PDF Tools" rows on every re-capture). Uninstall is

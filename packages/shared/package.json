@@ -82,6 +82,10 @@
     "./follows": {
       "types": "./dist/follows.d.ts",
       "default": "./dist/follows.js"
+    },
+    "./survey": {
+      "types": "./dist/survey.d.ts",
+      "default": "./dist/survey.js"
     }
   },
   "scripts": {

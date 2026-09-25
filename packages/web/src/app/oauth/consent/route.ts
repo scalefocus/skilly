@@ -7,6 +7,7 @@ import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { getMcpEnabled } from "../../../lib/settings";
 import { approveAuthorization, denyAuthorization, findClient, takeAuthorizeRequest } from "../../../lib/mcpOauth";
+import { recordFeatureUse } from "../../../lib/survey";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 
 export const dynamic = "force-dynamic";
@@ -50,5 +51,8 @@ export async function POST(req: Request) {
   if (client.blocked) return Response.json({ error: "this client has been blocked by an administrator" }, { status: 403 });
 
   const { redirect } = await approveAuthorization(access.userId, client, pending.request);
+  // §36.3 the MCP feature's first use. The browser leaves for the client right away, so nothing
+  // could show a survey here: recorded with canShow = false (no roll), it feeds the fallback's pick.
+  await recordFeatureUse(access.userId, "mcp", false).catch(() => null);
   return Response.redirect(redirect, 303);
 }

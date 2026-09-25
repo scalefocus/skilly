@@ -153,6 +153,8 @@ export interface PlatformSettings {
   rumSampleRate: number;
   /** §32.4/§32.6 the collector's flush ladder: ascending integer seconds, `[0]` is the floor. */
   rumFlushIntervals: number[];
+  /** §36.8 the feedback survey on/off. Ships ON; OFF creates no offers and ends the open ones. */
+  surveyEnabled: boolean;
   /** §34.9 the stored search language (a PostgreSQL text-search configuration name). The database
    *  resolves what search actually uses (skilly_search_config(), falling back to english). */
   searchLanguage: string;
@@ -177,7 +179,7 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], searchLanguage: "english" };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, searchLanguage: "english" };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -207,6 +209,7 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     rumEnabled: map.get("rum_enabled") !== false,
     rumSampleRate: coerceRumSampleRate(map.get("rum_sample_rate")),
     rumFlushIntervals: coerceRumFlushIntervals(map.get("rum_flush_intervals")),
+    surveyEnabled: map.get("survey_enabled") !== false,
     searchLanguage: typeof map.get("search_language") === "string" ? (map.get("search_language") as string) : DEFAULTS.searchLanguage,
   };
 }
@@ -270,6 +273,21 @@ export async function setRumSampleRate(rate: unknown, actorUserId: string): Prom
     targetType: "platform_settings",
     targetId: "rum_sample_rate",
     after: { rumSampleRate: n },
+  });
+}
+
+/**
+ * §36.8 the feedback survey on/off. OFF: no offer is created, open offers read as ended and
+ * submissions answer 409; collected results stay visible. Audited as a setting like every toggle.
+ */
+export async function setSurveyEnabled(enabled: boolean, actorUserId: string): Promise<void> {
+  await writeSetting("survey_enabled", enabled, actorUserId);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "survey_enabled",
+    after: { surveyEnabled: enabled },
   });
 }
 
