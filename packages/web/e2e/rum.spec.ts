@@ -232,7 +232,8 @@ test.describe("real user monitoring (§32)", () => {
       page.waitForResponse((r) => r.url().includes("/api/admin/settings") && r.request().method() === "PATCH"),
       sw.click(),
     ]);
-    await expect(page.getByRole("status")).toContainText("Collection is off", { timeout: 10_000 });
+    // Filtered: other live regions (e.g. a badge-earned toast from an earlier spec) are also role=status.
+    await expect(page.getByRole("status").filter({ hasText: "Collection is off" })).toBeVisible({ timeout: 10_000 });
     await expect(sw).toHaveAttribute("aria-checked", "false");
 
     // Ingest now accepts-and-discards: 204, but nothing is written.

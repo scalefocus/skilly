@@ -35,10 +35,13 @@ test.describe("Feedback survey (§36)", () => {
   let pool: Pool;
   const MARK = `e2e-survey-${Date.now()}`;
 
-  /** Make the dev user an eligible, never-surveyed respondent with no first-use history. */
+  /** Make the dev user an eligible, never-surveyed respondent with no first-use history. Clears the
+   *  on-demand stamp too: its 7-day cooldown would otherwise carry from one on-demand test (or a
+   *  retry of it) into the next and hide "Give feedback" / disable "Give feedback now". */
   async function resetDevUser() {
     await pool.query(
-      `update users set onboarded_at = now() - interval '30 days', surveys_enabled = true, survey_last_shown_at = null, survey_offer = null
+      `update users set onboarded_at = now() - interval '30 days', surveys_enabled = true, survey_last_shown_at = null,
+              survey_self_shown_at = null, survey_offer = null
         where entra_object_id = $1`,
       [DEV_OID],
     );
@@ -54,7 +57,7 @@ test.describe("Feedback survey (§36)", () => {
   });
   test.afterAll(async () => {
     // Leave the dev user quiet for the rest of the suite, and the table free of this run's rows.
-    await pool.query(`update users set surveys_enabled = false, survey_offer = null where entra_object_id = $1`, [DEV_OID]).catch(() => {});
+    await pool.query(`update users set surveys_enabled = false, survey_self_shown_at = null, survey_offer = null where entra_object_id = $1`, [DEV_OID]).catch(() => {});
     await pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [DEV_OID, APP_VERSION]).catch(() => {});
     await pool.query(`delete from survey_responses where free_text like $1`, [`${MARK}%`]).catch(() => {});
     await pool.end();
