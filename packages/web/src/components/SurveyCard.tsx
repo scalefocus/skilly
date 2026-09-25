@@ -4,14 +4,27 @@
 // page stays usable, nothing is focused on appearance, and Escape closes it only while focus is
 // inside it. Height-capped (80vh, CSS) with the header and footer pinned and the question list the
 // only scrolling child.
+//
+// An on-demand ("Give feedback now", §36.16) card heads its questions with a feature picker, and
+// has no "Don't ask me again": the user asked for it.
 import { useEffect, useState } from "react";
-import { SURVEY_FREE_TEXT_MAX, type SurveyOfferView, type SurveyVia } from "@skilly/shared/survey";
+import {
+  SURVEY_FEATURES,
+  SURVEY_FREE_TEXT_MAX,
+  isSurveyFeature,
+  surveyFeatureLabel,
+  surveyFeatureQuestions,
+  type SurveyFeatureKey,
+  type SurveyOfferView,
+  type SurveyVia,
+} from "@skilly/shared/survey";
 import { StarInput } from "./StarInput";
 
 type Phase = "form" | "sending" | "thanks" | "expired";
 
 const qid = (key: string) => `survey-q-${key.replace(/[^a-z0-9]/gi, "-")}`;
 const chars = (s: string) => [...s].length;
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function SurveyCard({
   offer,
@@ -29,13 +42,16 @@ export function SurveyCard({
   onDismiss: () => void;
   /** The card is done: submitted, or the offer turned out to have expired. */
   onFinished: (submitted: boolean) => void;
-  /** "Don't ask me again". */
+  /** "Don't ask me again" (not offered on an on-demand card). */
   onOptOut: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<Phase>("form");
   const [error, setError] = useState<string | null>(null);
+  const self = offer.trigger === "self";
+  // §36.16 the on-demand card's feature: null = "skilly in general". Always starts blank.
+  const [picked, setPicked] = useState<SurveyFeatureKey | null>(null);
 
   // The thank-you / expired states close themselves after ~4 s.
   useEffect(() => {
@@ -46,7 +62,14 @@ export function SurveyCard({
 
   const answered = Object.keys(answers).length > 0 || text.trim().length > 0;
   const general = offer.questions.filter((q) => q.section === "general");
-  const feature = offer.questions.filter((q) => q.section === "feature");
+  const feature = self ? (picked ? surveyFeatureQuestions(picked) : []) : offer.questions.filter((q) => q.section === "feature");
+  const featureLabel = self ? (picked ? surveyFeatureLabel(picked) : null) : (offer.feature?.label ?? null);
+
+  // Changing or clearing the picked feature discards the stars of its questions.
+  const pick = (v: string) => {
+    setPicked(isSurveyFeature(v) ? v : null);
+    setAnswers((a) => Object.fromEntries(Object.entries(a).filter(([k]) => !k.startsWith("feature."))));
+  };
 
   const setAnswer = (key: string, v: number | null) =>
     setAnswers((a) => {
@@ -64,7 +87,7 @@ export function SurveyCard({
       const r = await fetch("/api/me/survey/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ answers, freeText: text, via }),
+        body: JSON.stringify(self ? { answers, freeText: text, via, feature: picked } : { answers, freeText: text, via }),
       });
       if (r.status === 409) { setPhase("expired"); return; }
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
@@ -112,6 +135,24 @@ export function SurveyCard({
       ) : (
         <>
           <div className="survey-card-body">
+            {self && (
+              <label className="survey-picker">
+                <span className="survey-q-text" id="survey-feature-pick">What would you like to tell us about?</span>
+                <select
+                  className="input"
+                  aria-labelledby="survey-feature-pick"
+                  value={picked ?? ""}
+                  disabled={phase === "sending"}
+                  onChange={(e) => pick(e.target.value)}
+                  data-testid="survey-feature-picker"
+                >
+                  <option value="">skilly in general</option>
+                  {SURVEY_FEATURES.map((f) => (
+                    <option key={f.key} value={f.key}>{capitalize(f.label)}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <fieldset className="survey-section">
               <legend>skilly overall</legend>
               {general.map((q) => (
@@ -121,9 +162,9 @@ export function SurveyCard({
                 </div>
               ))}
             </fieldset>
-            {offer.feature && feature.length > 0 && (
-              <fieldset className="survey-section">
-                <legend>About {offer.feature.label}</legend>
+            {featureLabel && feature.length > 0 && (
+              <fieldset className="survey-section" data-testid="survey-feature-section">
+                <legend>About {featureLabel}</legend>
                 {feature.map((q) => (
                   <div className="survey-q" key={q.key} data-question={q.key}>
                     <div className="survey-q-text" id={qid(q.key)}>{q.text}</div>
@@ -150,9 +191,11 @@ export function SurveyCard({
             <button type="button" className="btn btn-primary btn-sm" disabled={!answered || phase === "sending"} onClick={() => void submit()}>
               {phase === "sending" ? "Sending…" : "Submit"}
             </button>
-            <button type="button" className="survey-optout" onClick={onOptOut} disabled={phase === "sending"}>
-              Don’t ask me again
-            </button>
+            {!self && (
+              <button type="button" className="survey-optout" onClick={onOptOut} disabled={phase === "sending"}>
+                Don’t ask me again
+              </button>
+            )}
           </div>
         </>
       )}

@@ -16,6 +16,7 @@ import {
   SURVEY_FLOOR_DAYS,
   SURVEY_GRACE_DAYS,
   SURVEY_QUESTION_ORDER,
+  SURVEY_SELF_COOLDOWN_DAYS,
   composeSurveyOffer,
   isRetiredQuestion,
   isSurveyEligible,
@@ -23,6 +24,8 @@ import {
   isSurveyOfferExpired,
   parseStoredOffer,
   pickFallbackFeature,
+  selfSurveyGate,
+  selfSurveyNextAt,
   surveyFeatureLabel,
   surveyOfferView,
   surveyQuestionText,
@@ -34,6 +37,8 @@ import {
   type SurveyFeatureKey,
   type SurveyOfferView,
   type SurveySegment,
+  type SurveySource,
+  type SurveyTrigger,
 } from "@skilly/shared/survey";
 
 /** Today's UTC date — the only time a response or a funnel counter records. */
@@ -50,29 +55,33 @@ interface UserSurveyRow {
   onboarded_at: Date | null;
   surveys_enabled: boolean;
   survey_last_shown_at: Date | null;
+  survey_self_shown_at: Date | null;
   survey_offer: unknown;
 }
 
 async function loadUser(userId: string, db: Pool | PoolClient = pool, lock = false): Promise<UserSurveyRow | undefined> {
   const { rows } = await db.query<UserSurveyRow>(
-    `select status, erased_at, onboarded_at, surveys_enabled, survey_last_shown_at, survey_offer
+    `select status, erased_at, onboarded_at, surveys_enabled, survey_last_shown_at, survey_self_shown_at, survey_offer
        from users where id = $1${lock ? " for update" : ""}`,
     [userId],
   );
   return rows[0];
 }
 
-function state(u: UserSurveyRow) {
+function state(u: UserSurveyRow, platformEnabled: boolean, now: Date) {
   return {
     status: u.status,
     erased: u.erased_at !== null,
     onboardedAt: u.onboarded_at,
     surveysEnabled: u.surveys_enabled,
     lastShownAt: u.survey_last_shown_at,
+    selfOfferOpen: liveOffer(u, platformEnabled, now)?.offer.trigger === "self",
   };
 }
 
-async function bumpDaily(db: Pool | PoolClient, column: "shown" | "closed" | "submitted" | "submitted_from_menu", extra?: "submitted_from_menu"): Promise<void> {
+type DailyCounter = "shown" | "closed" | "submitted" | "submitted_from_menu" | "shown_self" | "submitted_self";
+
+async function bumpDaily(db: Pool | PoolClient, column: DailyCounter, extra?: "submitted_from_menu"): Promise<void> {
   const cols = extra ? [column, extra] : [column];
   await db.query(
     `insert into survey_daily (day, ${cols.join(", ")}) values (${TODAY}, ${cols.map(() => "1").join(", ")})
@@ -83,7 +92,7 @@ async function bumpDaily(db: Pool | PoolClient, column: "shown" | "closed" | "su
 /**
  * Open an offer in ONE guarded UPDATE: the eligibility predicate is re-checked in its WHERE, so two
  * tabs or two requests can't both win (§36.1). Returns the offer payload, or null when the race was
- * lost. Bumps the funnel's `shown` counter.
+ * lost. Bumps the funnel's `shown` counter. Never replaces an open on-demand offer (§36.16).
  */
 async function openOffer(userId: string, offer: StoredSurveyOffer): Promise<SurveyOfferView | null> {
   const client = await pool.connect();
@@ -94,8 +103,10 @@ async function openOffer(userId: string, offer: StoredSurveyOffer): Promise<Surv
         where id = $1 and status = 'active' and erased_at is null and surveys_enabled
           and onboarded_at is not null and onboarded_at <= now() - make_interval(days => $3)
           and (survey_last_shown_at is null or survey_last_shown_at <= now() - make_interval(days => $4))
+          and not (coalesce(survey_offer->>'trigger', '') = 'self'
+                   and survey_self_shown_at > now() - make_interval(days => $5))
         returning survey_last_shown_at as shown`,
-      [userId, JSON.stringify(offer), SURVEY_GRACE_DAYS, SURVEY_FLOOR_DAYS],
+      [userId, JSON.stringify(offer), SURVEY_GRACE_DAYS, SURVEY_FLOOR_DAYS, SURVEY_SELF_COOLDOWN_DAYS],
     );
     const shown = rows[0]?.shown;
     if (!shown) {
@@ -131,7 +142,8 @@ export async function recordFeatureUse(
   const firstUse = (ins.rowCount ?? 0) > 0;
   if (!firstUse || !canShow) return { firstUse, survey: null };
   const [u, settings] = await Promise.all([loadUser(userId), getPlatformSettings()]);
-  if (!u || !isSurveyEligible(state(u), settings.surveyEnabled, new Date())) return { firstUse, survey: null };
+  const now = new Date();
+  if (!u || !isSurveyEligible(state(u, settings.surveyEnabled, now), settings.surveyEnabled, now)) return { firstUse, survey: null };
   const rng = opts.rng ?? Math.random;
   if (!surveyRollWins(rng)) return { firstUse, survey: null };
   return { firstUse, survey: await openOffer(userId, composeSurveyOffer("feature", feature, rng)) };
@@ -147,7 +159,7 @@ export async function checkVisitSurvey(userId: string, canShow: boolean, opts: S
   const [u, settings] = await Promise.all([loadUser(userId), getPlatformSettings()]);
   if (!u) return null;
   const now = new Date();
-  const s = state(u);
+  const s = state(u, settings.surveyEnabled, now);
   if (!isSurveyEligible(s, settings.surveyEnabled, now) || !isSurveyFallbackDue(s, now)) return null;
   const rng = opts.rng ?? Math.random;
   if (!surveyRollWins(rng)) return null;
@@ -155,12 +167,20 @@ export async function checkVisitSurvey(userId: string, canShow: boolean, opts: S
   return openOffer(userId, composeSurveyOffer("visit", pickFallbackFeature(rows.map((r) => r.feature), rng), rng));
 }
 
-/** The open offer, parsed; expired / malformed / other-version / switched-off offers read as none. */
-function liveOffer(u: UserSurveyRow, platformEnabled: boolean, now: Date): StoredSurveyOffer | null {
-  if (!platformEnabled || !u.surveys_enabled || !u.survey_last_shown_at) return null;
+/**
+ * The open offer, parsed, with its shown time; expired / malformed / other-version / switched-off
+ * offers read as none. A random offer ends with the opt-out and lives 30 days from
+ * `survey_last_shown_at`; an on-demand one ignores the opt-out and lives 7 days from
+ * `survey_self_shown_at` (§36.16).
+ */
+function liveOffer(u: UserSurveyRow, platformEnabled: boolean, now: Date): { offer: StoredSurveyOffer; shownAt: Date } | null {
+  if (!platformEnabled) return null;
   const offer = parseStoredOffer(u.survey_offer);
-  if (!offer || isSurveyOfferExpired(u.survey_last_shown_at, now)) return null;
-  return offer;
+  if (!offer) return null;
+  const self = offer.trigger === "self";
+  const shownAt = self ? u.survey_self_shown_at : u.survey_last_shown_at;
+  if (!shownAt || (!self && !u.surveys_enabled) || isSurveyOfferExpired(shownAt, now, offer.trigger)) return null;
+  return { offer, shownAt };
 }
 
 /**
@@ -172,25 +192,82 @@ export async function getOpenSurvey(userId: string, platformEnabled?: boolean): 
   const u = await loadUser(userId);
   if (!u || u.survey_offer == null) return null;
   const enabled = platformEnabled ?? (await getPlatformSettings()).surveyEnabled;
-  const offer = liveOffer(u, enabled, new Date());
-  if (!offer) {
+  const live = liveOffer(u, enabled, new Date());
+  if (!live) {
     await pool.query(`update users set survey_offer = null where id = $1 and survey_offer is not null`, [userId]);
     return null;
   }
-  return surveyOfferView(offer, u.survey_last_shown_at!);
+  return surveyOfferView(live.offer, live.shownAt);
 }
 
-/** §36.10 `POST /api/me/survey/close` — the first close of an offer bumps the funnel once. */
+/**
+ * §36.10 `POST /api/me/survey/close` — the first close of an offer bumps the funnel once. An
+ * on-demand offer's close is recorded on the offer but counts nowhere (§36.16).
+ */
 export async function closeSurvey(userId: string): Promise<boolean> {
   const [u, settings] = await Promise.all([loadUser(userId), getPlatformSettings()]);
-  if (!u || !liveOffer(u, settings.surveyEnabled, new Date())) return false;
+  const live = u ? liveOffer(u, settings.surveyEnabled, new Date()) : null;
+  if (!live) return false;
   const { rowCount } = await pool.query(
     `update users set survey_offer = jsonb_set(survey_offer, '{closed}', 'true'::jsonb)
       where id = $1 and survey_offer is not null and coalesce((survey_offer->>'closed')::boolean, false) = false`,
     [userId],
   );
-  if ((rowCount ?? 0) > 0) await bumpDaily(pool, "closed");
+  if ((rowCount ?? 0) > 0 && live.offer.trigger !== "self") await bumpDaily(pool, "closed");
   return true;
+}
+
+/** §36.16 `GET /api/me` `selfSurvey`: null while the platform switch is off, else when it's next available. */
+export function selfSurveyStatus(selfShownAt: Date | null, platformEnabled: boolean, now = new Date()): { nextAt: string | null } | null {
+  if (!platformEnabled) return null;
+  return { nextAt: selfSurveyNextAt(selfShownAt, now)?.toISOString() ?? null };
+}
+
+export type StartResult =
+  | { ok: true; survey: SurveyOfferView; created: boolean }
+  | { ok: false; error: "surveys_off" | "inactive" | "cooldown"; nextAt?: string };
+
+/**
+ * §36.10 / §36.16 `POST /api/me/survey/start` — "Give feedback now". An open offer (random or
+ * on-demand) is returned unchanged. Otherwise, under the user-row lock (so two concurrent calls
+ * stamp and count once), the gates are re-checked, `survey_self_shown_at` is stamped, the `self`
+ * offer is stored and `shown_self` is bumped. `survey_last_shown_at` is never touched.
+ */
+export async function startSelfSurvey(userId: string, opts: SurveyRollOptions = {}): Promise<StartResult> {
+  const settings = await getPlatformSettings();
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const u = await loadUser(userId, client, true);
+    const now = new Date();
+    if (!u) {
+      await client.query("rollback");
+      return { ok: false, error: "inactive" };
+    }
+    const live = liveOffer(u, settings.surveyEnabled, now);
+    if (live) {
+      await client.query("rollback");
+      return { ok: true, survey: surveyOfferView(live.offer, live.shownAt), created: false };
+    }
+    const gate = selfSurveyGate({ status: u.status, erased: u.erased_at !== null, selfShownAt: u.survey_self_shown_at }, settings.surveyEnabled, now);
+    if (!gate.ok) {
+      await client.query("rollback");
+      return { ok: false, error: gate.error, ...(gate.nextAt ? { nextAt: gate.nextAt.toISOString() } : {}) };
+    }
+    const offer = composeSurveyOffer("self", null, opts.rng ?? Math.random);
+    const { rows } = await client.query<{ shown: Date }>(
+      `update users set survey_self_shown_at = now(), survey_offer = $2::jsonb where id = $1 returning survey_self_shown_at as shown`,
+      [userId, JSON.stringify(offer)],
+    );
+    await bumpDaily(client, "shown_self");
+    await client.query("commit");
+    return { ok: true, survey: surveyOfferView(offer, rows[0]!.shown), created: true };
+  } catch (e) {
+    await client.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 export interface SurveyRespondent {
@@ -212,7 +289,7 @@ export async function submitSurvey(r: SurveyRespondent, body: unknown): Promise<
   try {
     await client.query("begin");
     const u = await loadUser(r.userId, client, true);
-    const offer = u ? liveOffer(u, settings.surveyEnabled, new Date()) : null;
+    const offer = u ? liveOffer(u, settings.surveyEnabled, new Date())?.offer : null;
     if (!offer) {
       await client.query("rollback");
       return { ok: false, status: 409, error: "no_open_survey" };
@@ -231,7 +308,7 @@ export async function submitSurvey(r: SurveyRespondent, body: unknown): Promise<
     const { rows } = await client.query<{ id: string }>(
       `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text)
        values (${TODAY}, $1, $2, $3, $4, $5, $6) returning id`,
-      [offer.catalogVersion, offer.trigger, offer.feature, segment, v.via, v.freeText],
+      [offer.catalogVersion, offer.trigger, v.feature, segment, v.via, v.freeText],
     );
     const keys = Object.keys(v.answers);
     if (keys.length > 0) {
@@ -242,7 +319,9 @@ export async function submitSurvey(r: SurveyRespondent, body: unknown): Promise<
       );
     }
     await client.query(`update users set survey_offer = null where id = $1`, [r.userId]);
-    await bumpDaily(client, "submitted", v.via === "menu" ? "submitted_from_menu" : undefined);
+    // An on-demand submission counts only in its own funnel (§36.16).
+    if (offer.trigger === "self") await bumpDaily(client, "submitted_self");
+    else await bumpDaily(client, "submitted", v.via === "menu" ? "submitted_from_menu" : undefined);
     await client.query("commit");
     return { ok: true };
   } catch (e) {
@@ -253,10 +332,15 @@ export async function submitSurvey(r: SurveyRespondent, body: unknown): Promise<
   }
 }
 
-/** §36.7 the profile opt-out. Switching off clears the open offer at once; the 30-day stamp stays. */
+/**
+ * §36.7 the profile opt-out. Switching off clears an open RANDOM offer at once; an open on-demand
+ * offer survives (§36.16). The 30-day stamp stays.
+ */
 export async function setUserSurveysEnabled(userId: string, enabled: boolean): Promise<void> {
   await pool.query(
-    `update users set surveys_enabled = $2, survey_offer = case when $2 then survey_offer else null end, updated_at = now()
+    `update users set surveys_enabled = $2,
+            survey_offer = case when $2 or survey_offer->>'trigger' = 'self' then survey_offer else null end,
+            updated_at = now()
       where id = $1`,
     [userId, enabled],
   );
@@ -268,9 +352,11 @@ export interface SurveyFilters {
   range: RumRange;
   segment: SurveySegment | null;
   feature: string | null;
+  /** §36.16 the Source filter: prompted (`feature` / `visit`) or self-initiated; null = all. */
+  source: SurveySource | null;
 }
 
-/** `answered_on` within the last `range` UTC days (today included), plus the segment/feature filters. */
+/** `answered_on` within the last `range` UTC days (today included), plus the segment/feature/source filters. */
 function whereFor(f: SurveyFilters, alias = "r"): { sql: string; params: unknown[] } {
   const params: unknown[] = [];
   const clauses: string[] = [];
@@ -286,6 +372,7 @@ function whereFor(f: SurveyFilters, alias = "r"): { sql: string; params: unknown
     params.push(f.feature);
     clauses.push(`${alias}.feature = $${params.length}`);
   }
+  if (f.source) clauses.push(f.source === "self" ? `${alias}.trigger = 'self'` : `${alias}.trigger <> 'self'`);
   return { sql: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
@@ -304,7 +391,7 @@ export interface SurveySummary {
   lastDate: string | null;
   bucket: "day" | "week" | "month";
   responses: number;
-  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number };
+  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number; shownSelf: number; submittedSelf: number };
   series: { date: string; n: number | null; overallAvg: number | null; withheld: boolean }[];
   questions: SurveyQuestionStat[];
   features: { key: string; label: string; n: number | null }[];
@@ -314,7 +401,7 @@ const round1 = (v: number | null): number | null => (v == null ? null : Math.rou
 
 export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promise<SurveySummary> {
   const w = whereFor(f);
-  const rangeOnly = whereFor({ ...f, segment: null, feature: null });
+  const rangeOnly = whereFor({ ...f, segment: null, feature: null, source: null });
   const settings = await getPlatformSettings(db);
 
   const [meta, responses, perQuestion, perFeature, funnel, optedOut] = await Promise.all([
@@ -341,9 +428,10 @@ export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promi
         fw.params,
       );
     })(),
-    db.query<{ shown: number; closed: number; submitted: number; from_menu: number }>(
+    db.query<{ shown: number; closed: number; submitted: number; from_menu: number; shown_self: number; submitted_self: number }>(
       `select coalesce(sum(shown), 0)::int as shown, coalesce(sum(closed), 0)::int as closed,
-              coalesce(sum(submitted), 0)::int as submitted, coalesce(sum(submitted_from_menu), 0)::int as from_menu
+              coalesce(sum(submitted), 0)::int as submitted, coalesce(sum(submitted_from_menu), 0)::int as from_menu,
+              coalesce(sum(shown_self), 0)::int as shown_self, coalesce(sum(submitted_self), 0)::int as submitted_self
          from survey_daily d
         ${f.range === "all" ? "" : `where d.day > ${TODAY} - $1::int`}`,
       f.range === "all" ? [] : [f.range],
@@ -385,7 +473,15 @@ export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promi
     lastDate: meta.rows[0]?.last ?? null,
     bucket,
     responses: responses.rows[0]!.n,
-    funnel: { shown: fn.shown, closed: fn.closed, submitted: fn.submitted, submittedFromMenu: fn.from_menu, optedOut: optedOut.rows[0]!.n },
+    funnel: {
+      shown: fn.shown,
+      closed: fn.closed,
+      submitted: fn.submitted,
+      submittedFromMenu: fn.from_menu,
+      optedOut: optedOut.rows[0]!.n,
+      shownSelf: fn.shown_self,
+      submittedSelf: fn.submitted_self,
+    },
     series: series.rows.map((r) => {
       const withheld = surveyWithheld(r.n);
       return { date: r.date, n: withheld ? null : r.n, overallAvg: withheld ? null : round1(r.avg), withheld };
@@ -403,6 +499,7 @@ export interface SurveyComment {
   answeredOn: string;
   feature: string | null;
   segment: SurveySegment;
+  trigger: SurveyTrigger;
   text: string;
 }
 
@@ -422,8 +519,8 @@ export async function getSurveyComments(
   const textWhere = `${w.sql ? `${w.sql} and` : "where"} r.free_text is not null`;
   const [count, page] = await Promise.all([
     db.query<{ n: number }>(`select count(*)::int as n from survey_responses r ${textWhere}`, w.params),
-    db.query<{ id: string; answered_on: string; feature: string | null; segment: SurveySegment; free_text: string }>(
-      `select r.id, r.answered_on::text as answered_on, r.feature, r.segment, r.free_text
+    db.query<{ id: string; answered_on: string; feature: string | null; segment: SurveySegment; trigger: SurveyTrigger; free_text: string }>(
+      `select r.id, r.answered_on::text as answered_on, r.feature, r.segment, r.trigger, r.free_text
          from survey_responses r ${textWhere}
         order by r.answered_on desc, r.id
         offset $${w.params.length + 1} limit $${w.params.length + 2}`,
@@ -432,7 +529,7 @@ export async function getSurveyComments(
   ]);
   const total = count.rows[0]!.n;
   return {
-    comments: page.rows.map((r) => ({ id: r.id, answeredOn: r.answered_on, feature: r.feature, segment: r.segment, text: r.free_text })),
+    comments: page.rows.map((r) => ({ id: r.id, answeredOn: r.answered_on, feature: r.feature, segment: r.segment, trigger: r.trigger, text: r.free_text })),
     total,
     hasMore: offset + page.rows.length < total,
     withheld: false,

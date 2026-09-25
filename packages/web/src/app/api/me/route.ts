@@ -21,7 +21,7 @@ import { invalidateLeaderboard } from "../../../lib/leaderboard";
 import { invalidateLevels } from "../../../lib/levels";
 import { setUserTimeZone } from "../../../lib/achievements";
 import { validateTimeZone } from "@skilly/shared/achievements";
-import { getOpenSurvey, setUserSurveysEnabled } from "../../../lib/survey";
+import { getOpenSurvey, selfSurveyStatus, setUserSurveysEnabled } from "../../../lib/survey";
 
 export const dynamic = "force-dynamic";
 
@@ -58,11 +58,12 @@ export async function GET() {
             allow_follows: boolean;
             surveys_enabled: boolean;
             has_survey_offer: boolean;
+            survey_self_shown_at: Date | null;
             time_zone: string | null;
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -115,6 +116,8 @@ export async function GET() {
     // always null while the platform switch is off).
     surveysEnabled: prefs?.surveys_enabled ?? true,
     openSurvey,
+    // §36.16 on-demand feedback: null while the platform switch is off, else `{ nextAt }` (null = now).
+    selfSurvey: access.userId ? selfSurveyStatus(prefs?.survey_self_shown_at ?? null, settings.surveyEnabled) : null,
     // §31.3 the browser-reported IANA zone (null until the web UI reports one). The app shell
     // compares it with the browser's own zone and PATCHes when they differ.
     timeZone: prefs?.time_zone ?? null,

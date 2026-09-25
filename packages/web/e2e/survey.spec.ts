@@ -177,4 +177,86 @@ test.describe("Feedback survey (§36)", () => {
     await expect(card.getByRole("button", { name: "Close survey" })).toBeInViewport();
     await expect(card.getByRole("button", { name: "Submit" })).toBeInViewport();
   });
+
+  test("on-demand: Give feedback now with the toggle Off, a picked feature, then the cooldown", async ({ page }) => {
+    await resetDevUser();
+    // The default sign-in turns the RANDOM prompts off; on-demand feedback ignores that toggle.
+    await devSignIn(page);
+    await gotoReady(page, "/profile");
+    const pref = page.getByTestId("surveys-pref");
+    await expect(pref).toBeVisible({ timeout: 20_000 });
+    await expect(pref.getByRole("button", { name: "Off" })).toHaveAttribute("aria-pressed", "true");
+    await pref.getByTestId("profile-give-feedback").click();
+
+    const card = page.getByTestId("survey-card");
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await expect(card.getByRole("button", { name: "Don’t ask me again" })).toHaveCount(0);
+    await expect(card.getByRole("radiogroup")).toHaveCount(5);
+    const picker = card.getByTestId("survey-feature-picker");
+    await expect(picker).toHaveValue("");
+    await picker.selectOption("marketplaces");
+    await expect(card.getByTestId("survey-feature-section")).toContainText("About plugin marketplaces");
+    await expect(card.getByRole("radiogroup")).toHaveCount(7);
+    await card.locator('[data-question="feature.useful"]').getByRole("radio", { name: "4 stars" }).click();
+    await card.getByRole("textbox").fill(`${MARK} self comment`);
+    const [submit] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/api/me/survey/responses")),
+      card.getByRole("button", { name: "Submit" }).click(),
+    ]);
+    expect(submit.status()).toBe(200);
+    await expect(card.getByTestId("survey-done")).toHaveText("Thanks, your feedback helps shape skilly.");
+
+    const row = (await pool.query(`select trigger, feature, via from survey_responses where free_text = $1`, [`${MARK} self comment`])).rows[0];
+    expect(row).toEqual({ trigger: "self", feature: "marketplaces", via: "popup" });
+    const answers = (await pool.query(
+      `select a.question_key, a.stars from survey_answers a join survey_responses r on r.id = a.response_id where r.free_text = $1`,
+      [`${MARK} self comment`],
+    )).rows;
+    expect(answers).toEqual([{ question_key: "feature.useful", stars: 4 }]);
+
+    // The cooldown: the button is disabled with the next date, and the menu entry is gone.
+    await expect(card).toHaveCount(0, { timeout: 8_000 });
+    await expect(pref.getByTestId("profile-give-feedback")).toBeDisabled();
+    await expect(pref.getByTestId("profile-give-feedback-hint")).toContainText("You can share feedback again on");
+    await page.locator(".user-trigger").click();
+    await expect(page.getByRole("menuitem", { name: "Profile" })).toBeVisible();
+    await expect(page.getByTestId("give-feedback")).toHaveCount(0);
+  });
+
+  test("on-demand: closing leaves Take the survey in the menu; reopening starts blank", async ({ page }) => {
+    await resetDevUser();
+    await devSignIn(page);
+    await gotoReady(page, "/catalog");
+    await page.locator(".user-trigger").click();
+    await page.getByTestId("give-feedback").click();
+    const card = page.getByTestId("survey-card");
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await card.getByTestId("survey-feature-picker").selectOption("follow");
+    await card.getByRole("button", { name: "Close survey" }).click();
+    await expect(card).toHaveCount(0);
+
+    await page.locator(".user-trigger").click();
+    await expect(page.getByTestId("give-feedback")).toHaveCount(0);
+    await page.getByTestId("take-survey").click();
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("survey-feature-picker")).toHaveValue("");
+    await expect(card.getByTestId("survey-feature-section")).toHaveCount(0);
+  });
+
+  test("admin: the Self-initiated funnel line and the Source filter", async ({ page }) => {
+    await devSignIn(page);
+    await gotoReady(page, "/admin/rum");
+    const section = page.getByTestId("survey-results");
+    const header = section.getByRole("button", { name: /Survey results/ });
+    await expect(header).toBeVisible({ timeout: 20_000 });
+    if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
+    await expect(section.getByTestId("survey-funnel-self")).toContainText(/Self-initiated: \d+ opened · \d+ submitted/);
+    const source = section.getByRole("group", { name: "Source" });
+    await expect(source).toBeVisible();
+    const [summary] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/api/admin/survey/summary") && r.url().includes("source=self")),
+      source.getByRole("button", { name: "Self-initiated" }).click(),
+    ]);
+    expect(summary.status()).toBe(200);
+  });
 });
