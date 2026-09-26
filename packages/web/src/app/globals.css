@@ -1128,7 +1128,10 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   letter-spacing: 0.08em; color: var(--faint);
 }
 .survey-q { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.survey-q-text { flex: 1 1 200px; min-width: 0; font-size: 13px; }
+/* The 200px basis is a width only in a .survey-q row; in the column-flex picker / free-text labels it
+   would become 200px of height, so it's scoped to the row. */
+.survey-q-text { min-width: 0; font-size: 13px; }
+.survey-q .survey-q-text { flex: 1 1 200px; }
 .survey-q .star { font-size: 21px; }
 .survey-picker { display: flex; flex-direction: column; gap: 6px; }
 .survey-picker select { width: 100%; box-sizing: border-box; font-size: 13px; }

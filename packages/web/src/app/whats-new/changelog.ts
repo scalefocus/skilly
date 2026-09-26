@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.14.1",
+    date: "2026-09-26",
+    summary:
+      "The feedback survey no longer leaves a large empty gap under \"Anything you’d change, fix or add?\" and under the feature picker, so the card is more compact and needs less scrolling.",
+  },
+  {
     version: "2.14.0",
     date: "2026-09-25",
     summary:
