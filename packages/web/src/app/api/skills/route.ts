@@ -4,6 +4,7 @@ import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { searchCatalog } from "../../../lib/catalog";
 import { getNavSeen } from "../../../lib/settings";
+import { listNonEmptyCollectionsOf } from "../../../lib/collections";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { M } from "../../../lib/metrics";
 
@@ -14,6 +15,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function maintainerParam(url: URL): string | undefined {
   const m = url.searchParams.get("maintainer");
   return m && UUID_RE.test(m) ? m : undefined;
+}
+
+/** A UUID-shaped query value (else ignored — never errors the query). */
+function uuidParam(url: URL, key: string): string | undefined {
+  const v = url.searchParams.get(key);
+  return v && UUID_RE.test(v) ? v : undefined;
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -33,6 +40,9 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const archivedOnly = url.searchParams.get("archived") === "1";
+  // Collection views (§37.5). Both are viewer-visibility-scoped AND eligibility-filtered in searchCatalog.
+  const collectionId = uuidParam(url, "collection");
+  const collectionsByUserId = collectionId ? undefined : uuidParam(url, "collectionsBy");
   // Per-row "new to you" flag: skills created after the caller last opened the catalog (matches
   // the nav "new items" count). Not meaningful for the archived owner-view, so skip it there.
   // The timestamp is advanced on LEAVE (see AppShell), so it stays stable across in-visit
@@ -59,11 +69,18 @@ export async function GET(req: Request) {
     // Namespace view (§10): `?ns=<slug>` from the Marketplaces page's "Skills" action (§30.6).
     // Visibility is still enforced in searchSkills (invariant #3).
     namespaceSlug: namespaceParam(url),
+    collectionId,
+    collectionsByUserId,
     catalogSeenAt,
   });
   // §34.15: counts only — the query text is never recorded.
   M.searchRequests.inc({ surface: "catalog", mode: matchMode ?? "none" });
   if (matchMode && skills.length === 0) M.searchZeroResults.inc({ surface: "catalog" });
   // matchMode ("all" | "any", null without a query) drives the catalog's partial-matches notice (§34.12).
+  // `?collectionsBy=` also carries the banner's per-collection chips (§37.5): that person's non-empty
+  // collections. Every member is org-visible, so the chips are the same for every viewer.
+  if (collectionsByUserId) {
+    return Response.json({ skills, matchMode, collections: await listNonEmptyCollectionsOf(collectionsByUserId) });
+  }
   return Response.json({ skills, matchMode });
 }

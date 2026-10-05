@@ -298,6 +298,9 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // Follows (§35.9) are personal data in BOTH directions: whom they followed, and who followed
     // them. Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_follows where follower_id = $1 or followee_id = $1`, [userId]);
+    // Skill collections (§37.10): deleted with their items, never transferred. Mirrored in web
+    // lib/eraseUser.ts — keep the two in sync.
+    await client.query(`delete from skill_collections where owner_id = $1`, [userId]);
     // The feedback survey's first-use ledger (§36.12); responses carry no user reference and stay.
     // Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_feature_uses where user_id = $1`, [userId]);

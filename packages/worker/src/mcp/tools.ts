@@ -1,6 +1,7 @@
-// The 24 curated MCP tools (§29). Definitions (JSON Schema, for the client) + dispatch.
+// The 25 curated MCP tools (§29; `get_collections` joined in §37.9). Definitions (JSON Schema, for
+// the client) + dispatch.
 //
-// THE CEILING IS 24. A 25th tool is a spec change, not an implementation detail — the first
+// THE CEILING IS 25. A 26th tool is a spec change, not an implementation detail — the first
 // response to pressure for more surface is to fold, not add. `mcp.test.ts` in @skilly/shared
 // asserts the count, and the excluded surface (review decisions, administration, irreversible
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
@@ -33,6 +34,7 @@ import {
   type VersionRow,
 } from "./queries.js";
 import { listBundleFiles, readBundleFile, readSkillMd, recordMcpAdoption } from "./content.js";
+import { getCollectionDetail, listOwnCollections, matchCollections } from "./collections.js";
 import { listInstalls, mintInstall, reactivate, resolveExpiry, uninstall } from "./installs.js";
 import {
   createMcpProposal,
@@ -166,6 +168,20 @@ export function toolDefinitions(): ToolDefinition[] {
       description:
         "The categories (name + slug — the slug is the category's marketplace plugin name), tool/harness vocabulary, namespaces you can see (and which ones you can review), and the limits that apply to proposals. Call this before proposing a skill so you fill the fields with values the registry accepts.",
       inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "get_collections",
+      title: "Skill collections",
+      readOnly: true,
+      description:
+        "Read skill collections — named lists of org-wide skills people put together, such as an onboarding pack. With no arguments: your own collections. With `id` (the value after ?collection= in a shared link): that collection and its skills. With `query`: collections whose name, description or owner matches. This is read-only; install each skill you want with install_skill.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: str("A collection id, e.g. from a shared /catalog?collection=<id> link."),
+          query: str("Find collections by name, description or owner name (at least 2 characters)."),
+        },
+      },
     },
 
     // ── Install ───────────────────────────────────────────────────────────────────────────────
@@ -584,6 +600,21 @@ export async function callTool(
           "Review decisions (accept/reject), administration and destructive actions are not available over MCP.",
         ],
       });
+    }
+
+    case "get_collections": {
+      // §37.9 — read-only. An id wins over a query; neither lists the caller's own.
+      const id = s(args, "id");
+      if (id) {
+        const detail = await getCollectionDetail(pool, caller.access, id);
+        return detail ? toolJson(detail) : toolError("no collection with that id — it may have been deleted");
+      }
+      const query = s(args, "query");
+      if (query !== undefined) {
+        const res = await matchCollections(pool, query);
+        return "error" in res ? toolError(res.error) : toolJson({ collections: res });
+      }
+      return toolJson({ collections: await listOwnCollections(pool, caller.userId) });
     }
 
     // ── Install ───────────────────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import { UserBubble } from "../../components/UserBubble";
 import { AchievementGrid, type AchievementsView } from "../../components/AchievementGrid";
 import { LevelBar } from "../../components/LevelBar";
 import { CollapsibleCard } from "../admin/CollapsibleCard";
+import { CollectionsCard } from "../../components/CollectionsCard";
 import { useFollowStore, setFollow, loadFollowing } from "../../components/FollowButton";
 import { useDateFmt } from "../../components/DateFormat";
 import { SURVEY_PREF_EVENT, SURVEY_STATE_EVENT, reopenSurvey, startFeedback } from "../../lib/surveyClient";
@@ -595,6 +596,8 @@ function ProfileInner() {
       <EmailNotificationsPref />
       <MaintainerNotificationsPref />
       <FollowingPref />
+      {/* §37.7 after the Following section. */}
+      <CollectionsCard />
       <SurveysPref />
     </div>
   );

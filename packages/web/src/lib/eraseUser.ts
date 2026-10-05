@@ -129,6 +129,9 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // Follows (§35.9) are personal data in BOTH directions: whom they followed, and who followed
     // them. Mirrored in worker scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from user_follows where follower_id = $1 or followee_id = $1`, [targetUserId]);
+    // Skill collections (§37.10) are the person's own lists: deleted with their items, never
+    // transferred (not even with "Replace maintainer to"). Mirrored in worker scim/store.ts.
+    await client.query(`delete from skill_collections where owner_id = $1`, [targetUserId]);
     // The feedback survey's first-use ledger (§36.12) is personal data. survey_responses are NOT
     // touched: they carry no user reference, so there is nothing to erase. Mirrored in worker
     // scim/store.ts eraseUserByExternalId — keep the two in sync.

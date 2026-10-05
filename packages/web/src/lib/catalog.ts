@@ -1,6 +1,6 @@
 // Catalog read helpers (web). SKILLY_SPEC.md §6, §7, §10.
 import { pool } from "./db";
-import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, resolveSkillSearch, catalogOrderBy, type EffectiveAccess, type MatchMode } from "@skilly/shared";
+import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, resolveSkillSearch, catalogOrderBy, collectionEligibleSql, type EffectiveAccess, type MatchMode } from "@skilly/shared";
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
 
@@ -122,6 +122,8 @@ export interface CatalogEntry {
   /** Optional skill icon (§33) — image and/or emoji, or null. Present-or-absent on every
    *  catalog/list/suggest surface; the default lockup renders only on single-skill surfaces. */
   icon: SkillIconView | null;
+  /** The skill id — set on catalog listings; the collection owner's remove control needs it (§37.5). */
+  skillId?: string;
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
@@ -155,6 +157,10 @@ export interface CatalogSearchOpts {
   q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest"; limit?: number;
   archivedOnly?: boolean; officialOnly?: boolean; featuredOnly?: boolean; ownerUserId?: string | null;
   maintainerUserId?: string | null; namespaceSlug?: string | null; catalogSeenAt?: string | null;
+  /** §37.5 one collection's members (`?collection=`). */
+  collectionId?: string | null;
+  /** §37.5 the union of one person's collections (`?collectionsBy=`). */
+  collectionsByUserId?: string | null;
 }
 
 /** Visibility-filtered catalog listing — see searchCatalog. */
@@ -245,6 +251,21 @@ export async function searchCatalog(
     params.push(opts.namespaceSlug);
     where.push(`n.slug = $${params.length}`);
   }
+  // Collection views (§37.5): one collection's members, or the union of one person's collections.
+  // The eligibility predicate is re-applied on top of the visibility predicate above, so a missed
+  // eviction can never show a restricted, archived or uninstallable skill (§37.4 belt and braces).
+  if (opts.collectionId) {
+    params.push(opts.collectionId);
+    where.push(`exists (select 1 from skill_collection_items ci where ci.skill_id = s.id and ci.collection_id = $${params.length}::uuid)`);
+    where.push(collectionEligibleSql("s"));
+  } else if (opts.collectionsByUserId) {
+    params.push(opts.collectionsByUserId);
+    where.push(
+      `exists (select 1 from skill_collection_items ci join skill_collections cc on cc.id = ci.collection_id` +
+        ` where ci.skill_id = s.id and cc.owner_id = $${params.length}::uuid)`,
+    );
+    where.push(collectionEligibleSql("s"));
+  }
   // Free text (§34): the shared engine, resolved AFTER every filter above so its any-word fallback
   // probe sees exactly the rows this listing can show. The same call backs the header dropdown and
   // the worker's MCP search_skills, so the three surfaces match and rank identically.
@@ -263,6 +284,7 @@ export async function searchCatalog(
   // Categories are aggregated via a correlated subquery so the join doesn't inflate the
   // version array_agg below.
   const { rows } = await pool.query<{
+    skill_id: string;
     namespace_slug: string; skill_slug: string; title: string; description: string;
     type: "hosted" | "pointer"; visibility: "org" | "namespace"; tool_harness: string;
     categories: string[] | null; install_count: string;
@@ -270,7 +292,7 @@ export async function searchCatalog(
     created_at: string; updated_at: string; versions: string[] | null; official: boolean;
     icon_sha256: string | null; icon_emoji: string | null;
   }>(
-    `select n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
+    `select s.id as skill_id, n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
             s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
             (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji,
@@ -297,6 +319,7 @@ export async function searchCatalog(
   const skills = rows.map((r): CatalogEntry => {
     const ratingCount = Number(r.rating_count);
     return {
+      skillId: r.skill_id,
       namespaceSlug: r.namespace_slug,
       skillSlug: r.skill_slug,
       title: r.title,

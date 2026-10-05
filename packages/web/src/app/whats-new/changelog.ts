@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.15.0",
+    date: "2026-10-05",
+    summary:
+      "Skill collections: use Add to collection on any org-wide skill to group skills into a named list, like an onboarding pack, and share its link. Manage your collections from your profile, find others' through the header search, and earn the Mixtape badge for your first one.",
+  },
+  {
     version: "2.14.1",
     date: "2026-09-26",
     summary:

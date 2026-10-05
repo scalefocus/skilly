@@ -1,5 +1,5 @@
 // Contributor leaderboard — any signed-in user. ?window=all (default) | 30d;
-// ?sort=installs (default) | skills | requests | watched | requested | followed (§21/§26/§35.7).
+// ?sort=installs (default) | skills | requests | watched | requested | followed | curated (§21/§26/§35.7/§37.8).
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { getLeaderboard, type LeaderboardSort } from "../../../lib/leaderboard";
@@ -15,7 +15,7 @@ export const GET = withSystemLog("/api/leaderboard", async function GET(req: Req
   const window = url.searchParams.get("window") === "30d" ? "30d" : "all";
   const sortParam = url.searchParams.get("sort");
   const sort: LeaderboardSort =
-    sortParam === "skills" || sortParam === "requests" || sortParam === "watched" || sortParam === "requested" || sortParam === "followed"
+    sortParam === "skills" || sortParam === "requests" || sortParam === "watched" || sortParam === "requested" || sortParam === "followed" || sortParam === "curated"
       ? sortParam
       : "installs";
   const entries = await getLeaderboard(window, sort);

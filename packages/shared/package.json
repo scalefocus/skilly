@@ -86,6 +86,10 @@
     "./survey": {
       "types": "./dist/survey.d.ts",
       "default": "./dist/survey.js"
+    },
+    "./collections": {
+      "types": "./dist/collections.d.ts",
+      "default": "./dist/collections.js"
     }
   },
   "scripts": {

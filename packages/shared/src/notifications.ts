@@ -40,6 +40,7 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "follow.achievement": { title: "Badge earned by someone you follow", tone: "ok" },
   "follow.request_created": { title: "New request from someone you follow", tone: "muted" },
   "follow.request_fulfilled": { title: "Request fulfilled by someone you follow", tone: "ok" },
+  "follow.collection_created": { title: "New collection from someone you follow", tone: "ok" }, // §37.8
 };
 
 /** The subject-line title for a type; a generic fallback so no unknown type ever leaks its key. */

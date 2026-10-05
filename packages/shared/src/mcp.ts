@@ -5,8 +5,8 @@
 //   1. `resources/list` advertises TEMPLATES ONLY and never enumerates the catalog — clients pull
 //      listed resources straight into context, so a few-hundred-skill registry would flood the
 //      agent and turn every list call into a filtered catalog scan. Discovery is `search_skills`.
-//   2. The tool inventory is a CEILING of 24. A 25th tool is a spec change, not an implementation
-//      detail; the first response to pressure for more surface is to fold, not add.
+//   2. The tool inventory is a CEILING of 25 (raised from 24 by §37.9). A 26th tool is a spec
+//      change, not an implementation detail; the first response to pressure is to fold, not add.
 
 /** Protocol revision we implement (Streamable HTTP; the deprecated HTTP+SSE transport is not). */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -18,7 +18,7 @@ export const MCP_SERVER_NAME = "skilly";
 
 // ── Tool inventory (the §29 ceiling) ────────────────────────────────────────────────────────────
 
-/** Core read (6). */
+/** Core read (7) — `get_collections` joined in §37.9 (read-only; agents never curate). */
 export const MCP_TOOLS_READ = [
   "search_skills",
   "get_skill",
@@ -26,6 +26,7 @@ export const MCP_TOOLS_READ = [
   "list_skill_files",
   "get_skill_file",
   "get_registry_metadata",
+  "get_collections",
 ] as const;
 
 /** Install (4) — mints ordinary §23 install tokens; the `system` flag is refused. */
@@ -68,7 +69,7 @@ export const MCP_TOOL_NAMES = [
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
 
 /** The §29 ceiling, asserted in a test so growth has to go through the spec. */
-export const MCP_TOOL_CEILING = 24;
+export const MCP_TOOL_CEILING = 25;
 
 /** Tools that mutate state — used to pick the write rate-limit bucket and the audit path. */
 export const MCP_WRITE_TOOLS: ReadonlySet<string> = new Set<string>([
