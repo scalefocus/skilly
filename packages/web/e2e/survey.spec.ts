@@ -246,6 +246,52 @@ test.describe("Feedback survey (§36)", () => {
     await expect(card.getByTestId("survey-feature-section")).toHaveCount(0);
   });
 
+  test("colophon: Have your say is signed-in only, opens the card, reopens it, then hides in the cooldown", async ({ browser, page }) => {
+    // Signed out: the plain line, no link.
+    const anon = await browser.newPage();
+    await anon.goto("/catalog");
+    await expect(anon.getByRole("button", { name: /sign in/i })).toBeVisible({ timeout: 20_000 });
+    await expect(anon.locator(".colophon-sub")).toHaveText("powered by the community");
+    await expect(anon.getByTestId("colophon-have-your-say")).toHaveCount(0);
+    await anon.close();
+
+    await resetDevUser();
+    await devSignIn(page);
+    await gotoReady(page, "/catalog");
+    const link = page.getByTestId("colophon-have-your-say");
+    await expect(page.locator(".colophon-sub")).toHaveText("powered by the community · Have your say");
+    const [started] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/api/me/survey/start")),
+      link.click(),
+    ]);
+    expect(started.status()).toBe(200);
+    const card = page.getByTestId("survey-card");
+    await expect(card).toBeVisible({ timeout: 20_000 });
+
+    // Closed = not now: the link stays and reopens the same offer, without a new start.
+    await card.getByRole("button", { name: "Close survey" }).click();
+    await expect(card).toHaveCount(0);
+    const starts: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("/api/me/survey/start")) starts.push(r.url()); });
+    await link.click();
+    await expect(card).toBeVisible();
+    expect(starts).toEqual([]);
+
+    await card.locator('[data-question="general.overall"]').getByRole("radio", { name: "5 stars" }).click();
+    await card.getByRole("textbox").fill(`${MARK} colophon comment`);
+    const [submit] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/api/me/survey/responses")),
+      card.getByRole("button", { name: "Submit" }).click(),
+    ]);
+    expect(submit.status()).toBe(200);
+    const row = (await pool.query(`select trigger, via from survey_responses where free_text = $1`, [`${MARK} colophon comment`])).rows[0];
+    expect(row).toEqual({ trigger: "self", via: "menu" });
+
+    // The cooldown runs: back to the plain line.
+    await expect(link).toHaveCount(0, { timeout: 8_000 });
+    await expect(page.locator(".colophon-sub")).toHaveText("powered by the community");
+  });
+
   test("admin: the Self-initiated funnel line and the Source filter", async ({ page }) => {
     await devSignIn(page);
     await gotoReady(page, "/admin/rum");

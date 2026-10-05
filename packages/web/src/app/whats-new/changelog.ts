@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.16.1",
+    date: "2026-10-05",
+    summary:
+      "A new Have your say link sits at the foot of the sidebar, next to powered by the community. It opens the anonymous feedback survey, or reopens one you've already started. Like Give feedback, it's hidden during the weekly cooldown.",
+  },
+  {
     version: "2.16.0",
     date: "2026-10-05",
     summary:
