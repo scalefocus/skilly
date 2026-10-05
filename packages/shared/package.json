@@ -86,6 +86,10 @@
     "./survey": {
       "types": "./dist/survey.d.ts",
       "default": "./dist/survey.js"
+    },
+    "./freshness": {
+      "types": "./dist/freshness.d.ts",
+      "default": "./dist/freshness.js"
     }
   },
   "scripts": {

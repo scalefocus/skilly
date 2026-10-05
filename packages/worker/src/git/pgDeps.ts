@@ -1,6 +1,6 @@
 // Postgres-backed implementation of the git server's dependencies. SKILLY_SPEC.md §9.
 import type { Pool } from "pg";
-import { resolveAccess, hashToken, PUBLIC_SCOPE, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
+import { resolveAccess, hashToken, resolveLatest, PUBLIC_SCOPE, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
 import type { GitServerDeps } from "./server.js";
 import type { MarketplaceRef, SkillRef, TokenPrincipal } from "./authorize.js";
 import { M } from "../metrics.js";
@@ -155,6 +155,26 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
         [tokenId, userAgent, clientIp],
       );
       return rows[0]?.stamped ?? false;
+    },
+
+    async stampInstallServed(tokenId, skillId): Promise<void> {
+      // Every clone (§23 "Installed-version freshness"): record what this advertisement resolved to
+      // serve. Pinned → the token's own pinned_semver (what its URL names — the gateway does not
+      // enforce the pin, so this is declared intent). Latest-tracking → the skill's current latest
+      // stable, i.e. what `main` points at (invariant #2), resolved in TS with the same
+      // resolveLatest the publish sweep uses to point `main`. NULL when nothing stable is active
+      // (an advertised-but-empty clone). Never touches used_at/UA/IP — those are first-clone only.
+      const { rows } = await pool.query<{ semver: string }>(
+        `select semver from skill_versions where skill_id = $1 and status = 'active'`,
+        [skillId],
+      );
+      const latest = resolveLatest(rows.map((r) => r.semver));
+      await pool.query(
+        `update tokens
+            set last_served_semver = coalesce(pinned_semver, $2), last_cloned_at = now()
+          where id = $1 and type = 'install'`,
+        [tokenId, latest],
+      );
     },
 
     async markMarketplaceUsed(tokenId, userAgent, clientIp): Promise<boolean> {

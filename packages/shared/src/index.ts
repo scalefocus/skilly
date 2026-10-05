@@ -33,3 +33,4 @@ export * from "./icon.js";
 export * from "./search.js";
 export * from "./follows.js";
 export * from "./survey.js";
+export * from "./freshness.js";

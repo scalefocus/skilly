@@ -7,7 +7,8 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { SkillIcon } from "../../components/SkillIcon";
-import { filterInstalls } from "../../lib/installedFilter";
+import { filterBehind, filterInstalls } from "../../lib/installedFilter";
+import type { Freshness } from "@skilly/shared/freshness";
 
 interface Install {
   id: string;
@@ -25,6 +26,11 @@ interface Install {
   mintedBy?: string | null;
   /** Optional skill icon (§33) — image and/or emoji, or null. */
   icon?: { url: string | null; emoji: string | null } | null;
+  /** Freshness (§23 "Installed-version freshness"): what the gateway last served, vs latest stable. */
+  lastServedSemver: string | null;
+  lastClonedAt: string | null;
+  latestSemver: string | null;
+  freshness: Freshness;
 }
 
 /** Which installs to list: the caller's own, or (platform admins only) all system installs. §23 */
@@ -37,12 +43,47 @@ function clientLabel(ua: string | null): string {
   return m ? `git ${m[1]}` : ua.length > 40 ? `${ua.slice(0, 40)}…` : ua;
 }
 
+/**
+ * The per-row freshness line (§23 "Installed-version freshness"):
+ *   pinned + behind     → "pinned v1.2.0 · latest v1.4.0"
+ *   latest + behind     → "cloned v1.2.0 on ‹date› · latest v1.4.0"
+ *   withdrawn           → "installed v1.2.0 · withdrawn · latest v1.4.0"
+ *   current             → "installed v1.4.0 · up to date"
+ *   unknown             → "installed version unknown — re-run the install command to record it"
+ */
+function freshnessLine(i: Install, date: (iso: string) => string): string {
+  const latest = i.latestSemver ? `latest v${i.latestSemver}` : "no stable version published";
+  switch (i.freshness) {
+    case "current":
+      return `installed v${i.lastServedSemver} · up to date`;
+    case "behind":
+      return i.pinnedSemver
+        ? `pinned v${i.lastServedSemver} · ${latest}`
+        : `cloned v${i.lastServedSemver}${i.lastClonedAt ? ` on ${date(i.lastClonedAt)}` : ""} · ${latest}`;
+    case "withdrawn":
+      return `installed v${i.lastServedSemver} · withdrawn · ${latest}`;
+    default:
+      return "installed version unknown — re-run the install command to record it";
+  }
+}
+
 function InstalledInner() {
   const fmt = useDateFmt();
   const router = useRouter();
   // The app-shell header search mirrors its query into ?q= on /installed (§23). We read it here and
   // filter the already-loaded list client-side — no refetch. Empty query → full list.
-  const q = (useSearchParams().get("q") ?? "").trim();
+  const params = useSearchParams();
+  const q = (params.get("q") ?? "").trim();
+  // The "Behind latest" chip (§23 "Installed-version freshness"): default off, mirrored to
+  // ?filter=behind via router.replace (kept out of history, seeded from the URL on arrival — same
+  // treatment as ?q=), persists across the Mine/System toggle, and composes with the header search.
+  const behindOnly = params.get("filter") === "behind";
+  const setBehindOnly = (on: boolean) => {
+    const next = new URLSearchParams(params.toString());
+    if (on) next.set("filter", "behind"); else next.delete("filter");
+    const qs = next.toString();
+    router.replace(qs ? `/installed?${qs}` : "/installed", { scroll: false });
+  };
   // Admin-configured install-expiry horizon (calendar months) — bounds the reactivate picker. §23
   const { data: me } = useApi<{ installMaxTtlMonths?: number; isPlatformAdmin?: boolean }>("/api/me");
   // Platform admins can flip to the System installs view: platform-owned installs (CI/org tools),
@@ -54,7 +95,7 @@ function InstalledInner() {
   const installs = data?.installs ?? [];
   // §23: case-insensitive substring match over title + @ns/slug (see lib/installedFilter). Applies
   // in both scopes; the query persists across the Mine/System toggle (it lives in the URL).
-  const filtered = filterInstalls(installs, q);
+  const filtered = filterInstalls(filterBehind(installs, behindOnly), q);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [activateIso, setActivateIso] = useState<string | null>(null);
@@ -100,13 +141,27 @@ function InstalledInner() {
               : "Skills you’ve installed. Each carries a unique key — uninstall to revoke its URL, or reactivate an expired one."}
           </p>
         </div>
-        {me?.isPlatformAdmin && (
-          // Platform admins only (§23): flip between the personal view and all system installs.
-          <div className="sort-toggle" role="group" aria-label="Install scope">
-            <button type="button" className={`sort-opt${scope === "mine" ? " sort-on" : ""}`} onClick={() => setScope("mine")}>Mine</button>
-            <button type="button" className={`sort-opt${scope === "system" ? " sort-on" : ""}`} onClick={() => setScope("system")}>System installs</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {me?.isPlatformAdmin && (
+            // Platform admins only (§23): flip between the personal view and all system installs.
+            <div className="sort-toggle" role="group" aria-label="Install scope">
+              <button type="button" className={`sort-opt${scope === "mine" ? " sort-on" : ""}`} onClick={() => setScope("mine")}>Mine</button>
+              <button type="button" className={`sort-opt${scope === "system" ? " sort-on" : ""}`} onClick={() => setScope("system")}>System installs</button>
+            </div>
+          )}
+          {/* "Behind latest" (§23): show only installs running an older or withdrawn version. */}
+          <div className="sort-toggle" role="group" aria-label="Freshness filter">
+            <button
+              type="button"
+              className={`sort-opt${behindOnly ? " sort-on" : ""}`}
+              aria-pressed={behindOnly}
+              onClick={() => setBehindOnly(!behindOnly)}
+              title="Show only installs that are behind the latest version, or whose version was withdrawn"
+            >
+              Behind latest
+            </button>
           </div>
-        )}
+        </div>
       </div>
 
       {msg && <div style={{ marginBottom: 14, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
@@ -122,8 +177,16 @@ function InstalledInner() {
           <EmptyState title="No installs yet" hint="Generate an install command from a skill’s page and run it — it’ll show up here." />
         )
       ) : filtered.length === 0 ? (
-        // There ARE installs, but none match the header search — distinct from the empty states above. §23
-        <EmptyState title={`No installed skills match “${q}”`} hint={`Clear the search to see all ${scope === "system" ? "system installs" : "your installs"}.`} />
+        // There ARE installs, but none match the header search / the Behind-latest chip — distinct
+        // from the empty states above. With a query set, the search miss wins and names both. §23
+        q ? (
+          <EmptyState
+            title={`No installed skills match “${q}”`}
+            hint={behindOnly ? "Clear the search or switch off “Behind latest” to see more." : `Clear the search to see all ${scope === "system" ? "system installs" : "your installs"}.`}
+          />
+        ) : (
+          <EmptyState icon="✓" title="Everything is up to date." hint={`No ${scope === "system" ? "system install" : "install"} is behind the latest version. Switch off “Behind latest” to see all of them.`} />
+        )
       ) : (
         <div className="rows reveal">
           {filtered.map((i) => (
@@ -140,7 +203,10 @@ function InstalledInner() {
                   <div className="ns mono" style={{ fontSize: 11.5 }}>@{i.namespaceSlug}/{i.skillSlug}</div>
                 </div>
                 <div className="install-meta">
-                  <Pill tone="muted">{i.pinnedSemver ? `v${i.pinnedSemver}` : "latest"}</Pill>
+                  <Pill tone="muted">{i.pinnedSemver ? `pinned v${i.pinnedSemver}` : "latest"}</Pill>
+                  {/* Freshness badge (§23): behind / withdrawn only — "current" and "unknown" carry no badge. */}
+                  {i.freshness === "behind" && <Pill tone="warn">Behind</Pill>}
+                  {i.freshness === "withdrawn" && <Pill tone="danger">Withdrawn</Pill>}
                   {scope === "system" && <Pill tone="accent">System install</Pill>}
                   {i.skillArchived && <Pill tone="warn">archived</Pill>}
                   {i.inactive ? <Pill tone="danger">inactive</Pill> : <Pill tone="ok">active</Pill>}
@@ -149,6 +215,10 @@ function InstalledInner() {
                   <span className="muted mono" style={{ fontSize: 11 }}>installed {fmt.date(i.installedAt)}</span>
                   <span className="muted mono" style={{ fontSize: 11 }}>{i.expiresAt ? `expires ${fmt.date(i.expiresAt)}` : "never expires"}</span>
                   {scope === "system" && <span className="muted mono" style={{ fontSize: 11 }} title="Platform admin who generated this system install">minted by {i.mintedBy ?? "unknown"}</span>}
+                </div>
+                {/* Freshness line (§23 "Installed-version freshness"): what this install is running vs latest. */}
+                <div className="install-freshness muted mono" data-freshness={i.freshness} style={{ flexBasis: "100%", fontSize: 11, marginTop: 4 }}>
+                  {freshnessLine(i, fmt.date)}
                 </div>
               </div>
               {/* Interactive controls stop the click from bubbling to the row's navigate handler —

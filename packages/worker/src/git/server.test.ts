@@ -32,6 +32,8 @@ const used: string[] = [];
 const ips: string[] = [];
 const logged: { skillId: string; userId: string | null; isSystem: boolean; countInstall: boolean }[] = [];
 const refusals: OwnerInactiveRefusal[] = [];
+/** Freshness stamps (§23): one per clone advertisement, for every tokened skill clone. */
+const stamped: { tokenId: string; skillId: string }[] = [];
 const credits: MarketplaceCredit[] = [];
 /** Simulated `tokens.last_served_commit` per marketplace token — the §30.7 attribution cursor.
  *  creditMarketplaceFetch advances it exactly as the real transaction does, so a repeat clone
@@ -85,6 +87,9 @@ const deps: GitServerDeps = {
     used.push(tokenId);
     if (clientIp) ips.push(clientIp);
     return first;
+  },
+  async stampInstallServed(tokenId, skillId) {
+    stamped.push({ tokenId, skillId });
   },
   async logAccess(skillId, userId, isSystem, countInstall) {
     logged.push({ skillId, userId, isSystem, countInstall });
@@ -249,6 +254,33 @@ test("restricted skill: SYSTEM token clones without namespace access; first clon
   await exec("git", ["clone", `http://x-access-token:system-secret@127.0.0.1:${port}/team-a/secret.git`, dest2], { env: cloneEnv });
   assert.equal(logged.length, 2);
   assert.deepEqual(logged[1], { skillId: "s-secret", userId: null, isSystem: true, countInstall: false });
+});
+
+test("freshness stamp (§23): EVERY tokened clone stamps the token once — pinned and latest, personal and system; a HEAD/upload-pack never re-stamps", async () => {
+  stamped.length = 0;
+  used.length = 0;
+  // Latest-tracking clone, then a pinned one with the same token: two clones → two stamps, one
+  // per /info/refs advertisement (protocol v2's upload-pack POSTs don't add any).
+  await exec("git", ["clone", `http://x-access-token:good-pdf@127.0.0.1:${port}/team-a/pdf.git`, join(workDir, "c-fresh-1")], { env: cloneEnv });
+  await exec("git", ["clone", "--depth", "1", "--branch", "v1.0.0", `http://x-access-token:good-pdf@127.0.0.1:${port}/team-a/pdf.git`, join(workDir, "c-fresh-2")], { env: cloneEnv });
+  assert.deepEqual(stamped, [
+    { tokenId: "t-pdf", skillId: "s-pdf" },
+    { tokenId: "t-pdf", skillId: "s-pdf" },
+  ]);
+  // (used_at staying first-clone-only is a SQL property of markInstallUsed — covered by
+  // web/src/lib/installs.dbtest.ts; this mock just records each call.)
+  // A system token stamps too (it has an owner-less Installed row for admins to read).
+  await exec("git", ["clone", `http://x-access-token:system-secret@127.0.0.1:${port}/team-a/secret.git`, join(workDir, "c-fresh-3")], { env: cloneEnv });
+  assert.deepEqual(stamped[2], { tokenId: "t-sys", skillId: "s-secret" });
+  // A dumb-HTTP HEAD lookup is not a clone: no stamp.
+  const auth = `Basic ${Buffer.from("x-access-token:good-pdf").toString("base64")}`;
+  const head = await fetch(`${base()}/team-a/pdf.git/HEAD`, { headers: { authorization: auth } });
+  assert.equal(head.status, 200);
+  assert.equal(stamped.length, 3);
+  // A refused clone (no token) stamps nothing.
+  const anon = await fetch(`${base()}/team-a/pdf.git/info/refs?service=git-upload-pack`);
+  assert.equal(anon.status, 401);
+  assert.equal(stamped.length, 3);
 });
 
 // ---------------------------------------------------------------------------
