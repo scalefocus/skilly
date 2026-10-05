@@ -21,6 +21,26 @@ after(async () => {
   if (enabled) await pool.end();
 });
 
+/** Drop versions (and optionally the skill) under the migration-0022 delete carve-out: the
+ *  immutability guard (invariant #2) refuses a skill_versions DELETE — including the cascade from a
+ *  skill delete — unless `skilly.allow_version_delete` is set, so drive it in one transaction like
+ *  deleteSkill does. `set local` is connection-scoped, hence a dedicated client. */
+async function dropVersions(skillIds: string[], andSkills = false): Promise<void> {
+  const c = await pool.connect();
+  try {
+    await c.query("begin");
+    await c.query("set local skilly.allow_version_delete = 'on'");
+    await c.query(`delete from skill_versions where skill_id = any($1::uuid[])`, [skillIds]);
+    if (andSkills) await c.query(`delete from skills where id = any($1::uuid[])`, [skillIds]);
+    await c.query("commit");
+  } catch (e) {
+    await c.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
 /** The exact statement pgGitDeps.stampInstallServed runs (worker/src/git/pgDeps.ts), replayed here. */
 async function stamp(tokenId: string, skillId: string): Promise<void> {
   const { rows } = await pool.query<{ semver: string }>(`select semver from skill_versions where skill_id = $1 and status = 'active'`, [skillId]);
@@ -52,7 +72,7 @@ test("installs: freshness fields across current / behind / withdrawn / unknown, 
        on conflict (namespace_id, slug) do update set title = excluded.title returning id`,
       [ns, slug],
     )).rows[0]!.id;
-    await pool.query(`delete from skill_versions where skill_id = $1`, [id]);
+    await dropVersions([id]);
     for (const [semver, pre] of versions) {
       await pool.query(
         `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by)
@@ -128,6 +148,6 @@ test("installs: freshness fields across current / behind / withdrawn / unknown, 
   assert.equal(mine2.find((i) => i.id === tLegacyPinned)!.freshness, "behind");
   assert.equal(mine2.find((i) => i.id === tLegacyLatest)!.freshness, "unknown");
 
-  // cleanup (skill delete cascades tokens + versions)
-  await pool.query(`delete from skills where id in ($1,$2)`, [skillA, skillBeta]);
+  // cleanup: versions under the delete carve-out, then the skills (cascades the tokens)
+  await dropVersions([skillA, skillBeta], true);
 });
