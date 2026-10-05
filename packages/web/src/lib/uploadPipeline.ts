@@ -10,7 +10,8 @@ import { extractBundle } from "./bundle";
 import { findDuplicateSkill } from "./duplicate";
 import { getDuplicateEnforcement } from "./settings";
 import { fmtSize } from "./uploadError";
-import { validateBundle, runScanners, PURE_SCANNERS, maxSeverity, contentDigest, bundleContentCap, parseFrontmatter, type EffectiveAccess } from "@skilly/shared";
+import { validateBundle, runScanners, PURE_SCANNERS, maxSeverity, contentDigest, bundleContentCap, parseFrontmatter, countContentRiskFindings, type EffectiveAccess } from "@skilly/shared";
+import { M } from "./metrics";
 import { resolveBundleIcon } from "@skilly/shared/icon";
 import { ingestIcon, iconUrl } from "./icons";
 
@@ -50,6 +51,7 @@ export async function processBundleUpload(
 
   // ADVISORY scan (pre-accept; reviewer-visible).
   const findings = await runScanners(files, PURE_SCANNERS);
+  countContentRiskFindings(M.contentRiskFindings, findings); // §37.13
   const severity = maxSeverity(findings) ?? "info";
 
   // Packaging-independent content-set digest (§8): persisted on the version and used to detect a

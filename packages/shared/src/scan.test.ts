@@ -32,8 +32,10 @@ test("clean bundle yields no findings; binary skipped", async () => {
     { path: "img.bin", bytes: new Uint8Array([0, 1, 2, 0, 3]) }, // NUL => skipped
   ];
   const findings = await runScanners(f, PURE_SCANNERS);
-  assert.equal(findings.length, 0);
-  assert.equal(maxSeverity(findings), null);
+  // Only the content check's info-level "ran at ruleset N" marker (§37.2) — nothing that counts.
+  assert.deepEqual(findings.map((x) => x.rule), ["cr-scanned"]);
+  assert.equal(maxSeverity(findings), "info");
+  assert.equal(requiresOverride(maxSeverity(findings)), false);
 });
 
 test("requiresOverride only for high/critical", () => {

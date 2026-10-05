@@ -27,6 +27,7 @@ Every decision below was explicitly confirmed.
 | Feedback survey | **Anonymous in-app survey** (§36): general satisfaction + two questions on a feature the user just used for the first time, 1–5 stars + optional free text. A 1-in-3 random roll on an eligible first use, **at most once per 30 days**, 14-day grace for new users, never alongside What's new. Profile opt-out + platform switch; users can also **give feedback on demand** (profile / account menu, once per 7 days, feature of their choice, §36.16); results for platform admins on Monitoring, with any figure over fewer than 5 responses withheld |
 | Skill collections | **User-owned, shareable lists of org-visible skills** (§38): any user adds a skill from its detail page; a collection opens as the catalog filtered to it (`/catalog?collection=<id>`), is found through the header dropdown, and mints nothing (no bulk install). Restricted skills can never be members; a skill that narrows, archives or loses its last version is evicted |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
+| Content risk | **Rule-based content-risk scanner** (§37): flags hidden Unicode, look-alike letters, override phrasing and credential theft in a skill's text; advisory with the audited override, and a flagged **direct publish goes to review** |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
 | Deployment | **docker compose** (6 core services + git-perms init + dev proxy); **Helm/K8s now shipped** (§16 #19) |
@@ -180,7 +181,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Captures proposer resubmissions and reviewer edits (with diff for audit).
 
 ### `scan_reports`
-- `id`, `subject_type` (`skill_version` | `pointer_ref`), `subject_id`, `scanner`, `findings` (json), `severity`, `status`, `cached_for_ref` (for pointer caching), `created_at`.
+- `id`, `subject_type` (`skill_version` | `pointer_ref`), `subject_id`, `scanner`, `findings` (json), `severity`, `status`, `cached_for_ref` (for pointer caching), `created_at`. The ingest pipeline writes `subject_type = 'artifact'` (keyed by artifact object key), the subject the accept gate and the review page read. Findings may carry optional `line`, `excerpt` and `ruleset` fields (§37.3).
 
 ### `audit_log` (append-only)
 - `id`, `actor_user_id` (nullable — null for SCIM/system actions, §5), `action`, `target_type`, `target_id`, `namespace_id`, `before` (json), `after` (json), `source` (`web` | `api` | `scim` | `worker`), `request_id`, `created_at`.
@@ -297,6 +298,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`survey_answers`** — `response_id` (FK, CASCADE), `question_key`, `stars` (1–5); PK `(response_id, question_key)`; one row per *answered* question.
 - **`survey_daily`** — `day` (PK), `shown`, `closed`, `submitted`, `submitted_from_menu`, plus `shown_self` / `submitted_self` for on-demand surveys (migration 0080, §36.16): aggregate funnel counters with no user or feature dimension.
 
+### `content_risk_acknowledgements` (migration 0081, detailed in §37)
+- `id`, `skill_id` (FK → `skills`, CASCADE), `semver` — keyed to the **version**, `scan_report_id` (FK → `scan_reports`, SET NULL; provenance only), `pairs` (JSONB, the acknowledged `(rule, path)` pairs), `acknowledged_by` (FK → `users`, SET NULL), `acknowledged_at`, `note` (≤ 500 chars), `source` (`override` | `manual`). Append-only for the app role. The same migration adds `proposals.routed_reason` (`content_risk`, nullable) and `users.content_risk_notifications` (default true).
+
 ### `skill_collections` / `skill_collection_items` (migration 0082, detailed in §38)
 - **`skill_collections`** — `id` (uuid), `owner_id` (FK → `users`, CASCADE), `name` (1–60, unique per owner on `lower(name)`), `description` (≤ 500, nullable), `created_at`, `updated_at`. A user-owned list; owning one grants no authority (invariant #1). Deleted on GDPR erasure (§4).
 - **`skill_collection_items`** — `collection_id` (FK, CASCADE), `skill_id` (FK → `skills`, CASCADE), `added_at`; PK `(collection_id, skill_id)`. Members are **org-visible, active, installable** skills only; a skill that stops qualifying is evicted in the same transaction (§38.4).
@@ -330,6 +334,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Approve promotion to global | ✅ | ❌ | ❌ | ❌ |
 | Yank version / archive skill | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Override security finding on publish | ✅ | ✅ (own ns) | ❌ | ❌ |
+| Acknowledge a flagged content-risk finding (§37.6) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | View audit log | ✅ (all) | ✅ (own ns) | own proposals | own proposals |
 | Consume (search/install visible) | ✅ | ✅ | ✅ | ✅ |
 | Mint / manage **system installs** (§23) | ✅ | ❌ | ❌ | ❌ |
@@ -735,7 +740,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   log.
 
 ### Security scanning — pluggable pipeline
-- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns).
+- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns). Plus **(d) content risk** (§37): hidden Unicode, look-alike letters, override phrasing and credential theft, read as instructions to an agent.
 - **Pre-accept, for both types** (so reviewers never approve blind): **Hosted** is scanned at upload (artifact-keyed report); **Pointer** is scanned by a worker loop that clones the proposal's pinned ref while it sits in review (proposal-keyed report, deduped per ref). Until that loop runs a pointer proposal reads as **`scan pending`** (not "not scanned"); a ref that can't be fetched reads **`source unreachable`**. Pointer versions are scanned again at mirror time on accept (artifact-keyed) and periodically refreshed.
 - Report attached to proposal, surfaced in review dashboard.
 - **Validation blocks; security findings are advisory** — a reviewer may publish over a finding, **explicitly and audit-logged**.
@@ -862,6 +867,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Applies identically to the **direct-publish** path (`require_review = false` namespace members): same reuse semantics, same snapshot, same no-op guard.
 - **Duplicate detection → redirect to a new version.** A NEW-skill submission that duplicates a skill the submitter can already see is steered to **propose a new version** of the existing one instead of creating a second copy. Two identities, both **active-only** and **visibility-scoped** (invariant #3 — a duplicate the submitter can't see never blocks them, but is surfaced to the reviewer who can): **pointer** = same slug + same **normalized origin URL** (`normalizeOriginUrl`) + same subdir, cross-namespace (a *different* slug for the same repo is allowed — a deliberate fork/rename); **hosted** = a byte-identical **content set** — `content_sha256`, a packaging-independent digest (`contentDigest`: sha256 over the sorted per-file sha256 of raw bytes, filenames/layout/junk disregarded), so a re-exported bundle still matches even though its whole-archive `artifact_sha256` differs. `content_sha256` is computed at upload (hosted) and mirror (pointer), stored on `skill_versions`, and **backfilled** from object storage by a leader-only worker sweep. The same-namespace+same-slug case is handled earlier by the slug-uniqueness 409; this catches the cross-namespace and identical-content cases it misses. New-**version** proposals are exempt (they intentionally target an existing skill). **Enforcement** is a platform setting `duplicate_proposal_enforcement` (Administration → Duplicate proposals), default **`block`**: the propose form disables submit and `POST /api/proposals`/`/api/publish` return **409** with the match; **`warn`** lets it through with an advisory notice. The slug-uniqueness 409 is always hard regardless. The redirect **carries over** the source the submitter already provided — the staged bundle / pointer fields transition in place into the (slug-locked) new-version flow as an **explicitly supplied source** (so *Keep current files* is off), no re-upload. Reviewers are alerted on the review page (with a link to the existing skill) in both modes, evaluated at the reviewer's own visibility.
 - **Pointer proposals are verified at submit time.** Before a pointer (external-git) proposal or direct publish is accepted by the API, skilly confirms the source actually resolves to a `SKILL.md` at the pinned ref + folder — the same resolution the mirror uses (the literal `<subdir>/SKILL.md`, else a folder named after the skill containing one). If it doesn't (wrong URL/ref/folder, or a repo with no `SKILL.md`), the submission is **rejected with 422** and a clear message *before* the proposal is created — rather than dead-lettering at mirror time (the worker's `cloneAndPack` only throws "no SKILL.md found …" on accept). The check is a lightweight, SSRF-hardened partial clone (`--depth 1 --no-checkout --filter=blob:none` + `ls-tree`, identical transport/DNS-rebind guards to the §6 mirror and the ref pre-check) in the web tier; skills-hub registry URLs (fetched via the registry API, not git) skip it. Deeper validation (frontmatter, `name == slug`, scan) still runs at mirror/accept.
+- **A flagged direct publish goes to review (§37.4).** When a direct publish's content-risk findings trip the override gate, a submitter without override authority is routed into an ordinary proposal (`routed_reason = 'content_risk'`, **202**), and a submitter with it must confirm an audited override (**409** first). A direct pointer publish fetches the pinned folder's contents for this check; a failed fetch routes to review.
 - **Pinned-ref default is source-aware.** For a **git** origin the pinned ref defaults to the **`main` branch** — the conventional default branch, and the common case for a repo that publishes no version tags — rather than the proposed version. For a **skills-hub origin** the `main` default never applies (the registry has no branches — §6): the form pins the registry's **latest version** as soon as the pre-check resolves it, and the field's label/placeholder switch to version language. The live ref pre-check (`GET /api/pointer/refs`) validates either way: for git it lists the repo's real branches/tags, for skills-hub the registry's **published versions**; if the typed ref doesn't exist upstream the form warns (`<ref> isn't a branch or tag in this repo — mirroring will fail. Pick one that exists` / the version-flavored equivalent) and offers quick-picks. A ref the proposer typed **deliberately** is never overridden; clearing the field restores the source's default. Server-side, a skills-hub pointer whose ref is not a version is rejected with **422** (§6 `validateSkillsHubRef`).
 - **Separate `proposals` and `skills`/`skill_versions` tables.** On accept, skilly **materializes** a new `skill_version` (and a `skill` if new) from the proposal's final revision. Proposal persists in terminal state, linked to the materialized version.
 - **Maintainer auto-add on acceptance (§19).** Accepting a version — new-skill or new-version, via review or direct publish — auto-adds the submitter as an explicit maintainer of the skill, eligibility-gated; full rule in §19.
@@ -1085,6 +1091,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
   - Catalog mutations (publish, new version, yank, archive, **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive or last-version yank, §7), visibility change, namespace reassignment).
   - **Scan overrides** (`proposal.scan_override`).
+  - **Content risk (§37.12):** `proposal.routed_to_review`, `skill.publish_scan_override`, `skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
@@ -1140,6 +1147,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) in their namespace queue.
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
+  - To **effective maintainers**: `skill.content_risk` when the re-scan sweep first flags a published version (§37.5, **once per onset**), gated by `content_risk_notifications` (§37.9).
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
@@ -1210,7 +1218,7 @@ current or future type can ever leak JSON to a user.
 
 ### Maintainer notification preferences (per-type opt-outs)
 
-- **Three per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
+- **Four per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
   `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
@@ -1220,6 +1228,9 @@ current or future type can ever leak JSON to a user.
   "Discussion comments on skills I maintain or watch" when mentions shipped — same column, no
   migration). `GET /api/me` returns them; `PATCH /api/me { driftNotifications,
   newVersionNotifications, discussionNotifications }` updates them.
+  The fourth is **"Content check flags on skills I maintain"** (`users.content_risk_notifications`,
+  `BOOLEAN NOT NULL DEFAULT true`, migration 0081, §37.9); `PATCH /api/me` also accepts
+  `contentRiskNotifications`.
   Toggling is **silent** (not audited), matching the other profile prefs.
 - **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
   filtered out of the recipient set **at insert time** in the worker (the publish sweep's
@@ -1241,6 +1252,8 @@ current or future type can ever leak JSON to a user.
     at insert time (§24 *Skill discussion*). The **same toggle also gates `message.mention`** in
     all four messaging contexts (§24 *Mentions*) — a deliberate single switch, no separate
     mention toggle: opting out of discussion chatter opts out of being pinged by name too.
+  - `content_risk_notifications` gates `skill.content_risk` entirely, like the drift toggle: it
+    only ever targets effective maintainers (§37.9).
 - **No safety floor — deliberately.** Namespace admins can opt out like anyone, so a skill whose
   effective maintainers have all opted out drifts with **no one pinged**. Accepted: the toggle
   silences the *ping*, never the *record* — the `pointer.drift_detected` audit row, the
@@ -1684,6 +1697,23 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Lifecycle:** erasure deletes follows both ways; deprovision keeps them dormant.
 
     *(Spec'd 2026-09-24; not yet built.)*
+
+**Phase 11 — Content risk**
+30. **Content-risk scanner (§37):**
+    - **Scanner:** a pure `content-risk` scanner in `PURE_SCANNERS` (hidden Unicode, hidden
+      markup, look-alike letters, credential access and exfiltration, override and concealment
+      phrasing), versioned as `CONTENT_RULESET_VERSION`, with `line` / `excerpt` / `ruleset` on
+      findings.
+    - **Gate:** a flagged direct publish is routed to review for members and needs an audited
+      override for admins; direct pointer publishes fetch contents for the check.
+    - **Sweep:** a leader-only re-scan that backfills the catalog and re-runs on ruleset bumps,
+      writing superseding reports and notifying maintainers once per onset.
+    - **Surfaces:** the review page's Content risk section, a skill-page status chip for
+      everyone, an owner card with Acknowledge, and an Administration card.
+    - **Data:** migration 0081 (`content_risk_acknowledgements`, `proposals.routed_reason`,
+      `users.content_risk_notifications`).
+
+    **DONE.**
 
 **Phase 12 — Skill collections**
 31. **Skill collections (§38):**
@@ -7171,6 +7201,343 @@ storage as the random one. It differs in the points below.
     2. Closing an on-demand card shows *Take the survey* in the menu, and reopening starts with
        *skilly in general*.
     3. An admin sees the **Self-initiated** funnel line and the **Source** filter on Monitoring.
+
+---
+
+## 37. Content-risk scanner
+
+The §6 pipeline treats a bundle as files: it looks for secrets, malware and dangerous shell. A
+skill is also **a set of instructions an LLM agent will follow**, and the riskiest content in it can
+be plain prose: hidden characters the reviewer can't see, look-alike letters that disguise a
+command, phrasing that tells the agent to drop its other instructions, and steps that read
+credentials and send them somewhere. The **content-risk scanner** inspects the bundle for exactly
+that. It uses the **same advisory severity model and the same audited override** as the other
+scanners, and its findings get their **own "Content risk" panel** on the review page and the skill
+page. It adds one gate the pipeline lacked: a direct publish that trips it goes to review (§37.4).
+
+### 37.1 Semantics
+- **Rule-based and pure.** The scanner is regex and Unicode-table matching with **no I/O, no
+  network and no model**, so the §17 air-gap posture holds. It lives in `@skilly/shared` beside the
+  secret and heuristic scanners, is named **`content-risk`**, and joins **`PURE_SCANNERS`**. It
+  therefore runs on **every path that already runs them**, with no path-specific wiring: hosted
+  upload (web), MCP hosted proposals, and the worker pipeline (pointer proposal pre-scan,
+  mirror-at-accept, pointer refresh). A model-backed judge is **deferred**; the `Scanner`
+  interface already allows one to be added later.
+- **Advisory, like the others.** Findings never block an upload or the creation of a proposal.
+  Blocking validation stays the only hard stop. What findings do is defined by the existing
+  override gate (§37.4).
+- **Which files.** Every **text** file in the bundle (binary files are skipped by the existing
+  NUL-byte rule), because an agent reads `references/` and scripts as readily as `SKILL.md`. Rules
+  marked **markdown-only** in §37.2 run on `.md`, `.markdown` and `.mdx` files only, because a
+  shell script or config file legitimately says "override" or "ignore".
+- **Normalization before phrase matching.** Phrase rules match a normalized copy of the text:
+  zero-width, bidi-control and tag characters removed, Unicode **NFKC**, whitespace collapsed,
+  lower-cased. So `ign<U+200B>ore previous instructions` still matches. Hidden-character rules run
+  on the **raw** text, so the same line produces both findings.
+- **Bounded cost.** Each file is scanned up to its first **2 MB** of decoded text. A longer file
+  gets one `info` finding, `cr-truncated`. Every pattern is **linear-time** (no nested
+  quantifiers, no back-references), in line with the §22 ReDoS rule.
+
+### 37.2 Rule catalog (ruleset 1)
+
+| Rule | Class | Files | Severity | Matches |
+|---|---|---|---|---|
+| `cr-hidden-unicode` | Hidden text | all text | **high** | Zero-width characters (U+200B, U+200C, U+200D, U+2060, and U+FEFF anywhere but the first character), bidi controls (U+202A–U+202E, U+2066–U+2069), and Unicode tag characters (U+E0000–U+E007F). **Exempt:** U+200D between two emoji, and the U+FE0E/U+FE0F variation selectors, so ordinary emoji sequences are clean. |
+| `cr-hidden-markup` | Hidden text | markdown | **high** | An HTML comment `<!-- … -->` whose content matches any `cr-instruction-override`, `cr-concealment`, `cr-credential-access` or `cr-credential-exfil` pattern. The comment is invisible on the rendered page but read by the agent. A plain comment on its own is not a finding. |
+| `cr-homoglyph` | Look-alike letters | all text | **high** in code, **medium** in prose | One word that mixes Latin letters with Cyrillic, Greek or Armenian look-alikes, such as a Cyrillic `с` inside `curl`. "Code" means fenced blocks and inline code in markdown, and the whole of any non-markdown file. A word written entirely in one script never matches, so Bulgarian or Greek prose is clean. |
+| `cr-credential-exfil` | Credentials | all text | **high** | A credential-store reference (next row) **and** an outbound transmission in the same file: `curl`/`wget` with an upload or data flag, `nc`/`ncat`, `scp`, `Invoke-WebRequest`/`Invoke-RestMethod` with a body, or prose like "send / upload / post … to http(s)://". |
+| `cr-credential-access` | Credentials | all text | medium | References to credential stores or environment dumps: `~/.ssh`, `id_rsa`/`id_ed25519`, `.aws/credentials`, `.azure/`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.npmrc`, `.pypirc`, `.docker/config.json`, `.kube/config`, keychain reads (`security find-generic-password`), `printenv` or `env` piped or redirected, PowerShell `$env:` enumeration. Not reported for a file that already has `cr-credential-exfil`. |
+| `cr-instruction-override` | Override phrasing | markdown | medium | "ignore / disregard / forget (all) (the) previous / prior / above / earlier instructions / rules / prompts", "disregard your system prompt", "you are no longer", "new instructions:", "override your safety / guidelines". |
+| `cr-concealment` | Override phrasing | markdown | medium | Instructions to hide actions from the user: "do not tell / inform / show the user", "without telling / informing / asking the user", "the user must not know", "hide this from the user", "silently send / upload / run / delete / install". Plain "fail silently" does not match. |
+| `cr-prompt-reference` | Override phrasing | markdown | low | Mentions of "system prompt", "developer message", "jailbreak", "DAN mode". |
+| `cr-scanned` | Transparency | — | info | Emitted **exactly once per scan**, carrying the ruleset number. Never raises severity, like `av-clean` (§6). It is how a clean scan proves which ruleset it ran. |
+| `cr-truncated` | Transparency | — | info | The file was longer than the 2 MB scan cap. |
+
+- **No critical rules in ruleset 1.** The gate is unchanged: `requiresOverride` trips on **high or
+  critical** (§6), so `cr-hidden-unicode`, `cr-hidden-markup`, `cr-homoglyph` in code and
+  `cr-credential-exfil` trip it, and the rest are advisory notes.
+- **Occurrence cap.** At most **5** findings per rule per file. The fifth says how many more
+  matches were left out.
+- **No author suppression.** There is **no** frontmatter or in-file way to silence a rule, because
+  the author is the party under review. A skill that legitimately trips rules (for example one that
+  teaches prompt-injection defense) goes through the existing audited override.
+- **Versioned ruleset.** `CONTENT_RULESET_VERSION` (an integer, starting at **1**) lives in
+  `@skilly/shared`. Any change to a pattern, exemption or severity bumps it. A unit test pins a hash
+  of the catalog, so changing a rule without bumping the number fails the build. A bump triggers
+  the re-scan sweep (§37.5).
+- **English phrasing only.** Phrase rules match English. Hidden-text and look-alike rules are
+  language-independent.
+
+### 37.3 Finding shape
+- `ScanFinding` gains three **optional** fields; the existing scanners are untouched:
+  - `line` — 1-based line of the match within the file;
+  - `excerpt` — at most **200 characters** of the matched line, trimmed around the match, with every
+    hidden, bidi and tag character rewritten as a visible marker such as `⟨U+200B⟩`, so the excerpt
+    itself carries no invisible payload;
+  - `ruleset` — set on content-risk findings only.
+- `cr-homoglyph` messages name the scripts and code points involved, for example
+  "`curl` mixes Latin and Cyrillic (U+0441)".
+- **Excerpts are rendered as escaped plain text everywhere** — never as Markdown or HTML.
+- **Excerpts are skill content.** They are stored in `scan_reports.findings` and served only
+  through surfaces already gated by the proposal's or the skill's visibility (§37.8). Nothing new is
+  exposed to someone who could not already open the files.
+
+### 37.4 The gate
+- **Proposals: the existing override, now for pointer proposals too.** The accept gate reads the
+  latest revision's scan report: the artifact-keyed report for a hosted (or Keep-current-files)
+  proposal, and — **new** — the worker's proposal-keyed pre-scan report for a pointer proposal.
+  Before this change the gate ignored the pointer pre-scan, so a pointer proposal's high findings
+  never required a server-enforced, audited override; they do now. A pending or unreachable
+  pre-scan still has nothing to gate on. Content-risk findings are in these reports, so a high one
+  requires the existing explicit, audited override (`proposal.scan_override`, whose `after` already
+  carries the findings). On an accept over gate-tripping content findings, skilly also writes a
+  `content_risk_acknowledgements` row for the version being created (`source = 'override'`, §37.6)
+  — keyed by skill and semver, so it exists even before the worker mirrors a pointer version.
+- **Direct publish (`POST /api/publish`) gains the gate.** Before this change a direct publish ran
+  no override gate at all. Now, when the submission's content-risk findings trip the gate:
+  - **A submitter without override authority** for the target namespace (a Namespace Member in a
+    `require_review = false` namespace) is **routed to review**. skilly creates an ordinary
+    proposal from the same payload and artifact (state `proposed`, revision 1), sets
+    `proposals.routed_reason = 'content_risk'`, and answers **202 `{ routed: "review",
+    proposalId }`**. The form opens the proposal page, which carries a banner: "This was submitted
+    as a direct publish. The content check flagged it, so it needs a reviewer." Reviewers get the
+    normal new-proposal notification. A linked skill request (§26) carries over as the proposal's
+    fulfilment link and fulfils on accept, instead of fulfilling immediately. Audited as
+    `proposal.routed_to_review`.
+  - **A submitter with override authority** (a Namespace Admin of that namespace, or a Platform
+    Admin) is not routed into their own queue. The publish answers **409 `{ requiresOverride: true,
+    findings }`**, and the form shows the same confirm-with-reason dialog reviewers use. Repeating
+    the call with `override: true` and a reason publishes, writes the `source = 'override'`
+    acknowledgement, and is audited as `skill.publish_scan_override`.
+  - **Only content-risk findings route.** High secret or heuristic findings on a direct publish
+    keep today's behavior: recorded, not gated. Widening the gate to every scanner is a separate
+    decision (§37.15).
+- **Where the direct-publish findings come from.**
+  - **Hosted:** the upload's artifact-keyed report, which exists before the publish call.
+  - **Keep current files:** the reused artifact's latest report.
+  - **Pointer:** today's submit-time check fetches no file contents (`--filter=blob:none`). For a
+    **direct pointer publish only**, the web tier also fetches the pinned folder's contents with the
+    same SSRF-hardened transport (depth 1, limited to the folder, bounded by the smaller of
+    `max_bundle_bytes` and the web tier's 25 MB review-fetch limit, and by a **30 s** timeout) and
+    runs `PURE_SCANNERS` on them; registry-sourced pointers fetch through
+    the registry API as the mirror does. The result decides routing only and is not stored. If the
+    submission is routed, the proposal pre-scan loop writes the official report as for any pointer
+    proposal. **If the fetch fails or times out, the submission is routed to review**, never
+    rejected. Pointer *proposals* are unchanged.
+- **The `global` namespace** always requires review, so the routing never applies there.
+- **MCP.** The MCP surface has **no direct publish**: every agent submission already lands in
+  `proposed` (§29). Agent submissions are therefore always reviewed by a human, and their content
+  findings trip the accept gate like any other. `get_proposal` returns the findings in the extended
+  shape (§37.3), so an agent can revise its own proposal.
+
+### 37.5 Re-scan sweep (backfill and ruleset bumps)
+- **What it does.** A **leader-only** worker sweep, `contentRiskSweep`, runs at boot and then every
+  **10 minutes**. Each pass takes up to **50 active versions** (not yanked, skill not archived)
+  whose artifact's latest scan report has **no `cr-scanned` finding at the current ruleset**. For
+  each, it reads the artifact from the object store and runs **only the content-risk scanner**.
+  Several versions sharing one artifact (Keep current files) are covered by one re-scan. An artifact
+  that can't be read or extracted is logged and skipped for the rest of that worker process's life,
+  so a broken object can't starve the batch; the next worker start retries it.
+- **Superseding report, never a mutation.** It writes a **new** `scan_reports` row for the artifact
+  that carries forward every non-content finding from the prior latest report **verbatim**,
+  replaces the content-risk findings, recomputes `severity`, and keeps the prior `status`. Readers
+  that take the latest row (the accept gate, the review page) keep seeing the complete picture.
+- **This release's backfill is simply the first run.** Every version published before this change
+  has no `cr-scanned` finding, so the sweep works through the whole catalog. A later ruleset bump
+  re-runs it automatically. A restored version or un-archived skill is picked up on the next pass.
+- **Onset.** When the sweep's new report has gate-tripping content findings and the version's
+  previous report had none, that is an **onset**:
+  - audit `skill.content_risk_detected` (system actor; skill, version, rules);
+  - a `skill.content_risk` notification to the skill's maintainers (§37.9), **once per onset**;
+  - the version's status becomes **flagged** (§37.7) until someone acknowledges it.
+
+  The same onset check runs when the worker **mirrors a pointer version** (its first artifact
+  report). It fires only if nothing covers the findings — for example a pointer proposal accepted
+  while its pre-scan was still pending.
+- **No automatic state change.** A scanner never yanks, archives, hides or blocks a published
+  version. Flagged versions stay installable; deciding what to do is a human call.
+- **Pointer refresh.** The refresh job already runs the full pipeline against the upstream ref, so
+  its `pointer_ref` reports include content findings with no extra work. The bytes skilly serves
+  are the immutable mirrored artifact, so a pointer's **status** always comes from the
+  artifact-keyed report, like a hosted skill's. Upstream content findings matter when upstream has
+  changed, which is drift: the existing `skill.drift` notification gains a sentence when the
+  drifted upstream content also trips the content check. There is no second notification.
+
+### 37.6 Acknowledgement
+- **What it is.** A record that a person with authority has looked at a version's gate-tripping
+  content findings and accepted them. It moves a version from **flagged** to **noted** (§37.7). It
+  changes nothing else.
+- **Who.** Exactly the holders of **"Override security finding on publish"** (§4): Platform Admins
+  for any skill, Namespace Admins for their own namespace. Maintainers who are not namespace admins
+  can see the findings but cannot acknowledge them.
+- **How.** An **Acknowledge** button with an optional note (at most 500 characters) on the skill
+  page's Content risk card and in the Administration card (§37.8). An accept or direct publish over
+  an override acknowledges automatically (§37.4).
+- **Keyed to the version, recording pairs.** An acknowledgement belongs to one version (skill and
+  semver) and records the gate-tripping `(rule, path)` pairs it covered, plus the report it was made
+  against for provenance. Keying it to the version, not the report, lets an accept-time override
+  acknowledge a pointer version before the worker has mirrored it.
+- **Carry-forward.** A gate-tripping finding counts as acknowledged when its `(rule, path)` pair is
+  in any acknowledgement for that version. So a later report (for example after a ruleset bump)
+  that only repeats acknowledged pairs stays acknowledged, and anything new needs a new
+  acknowledgement.
+- **Audit.** `skill.content_risk_acknowledged` (actor; skill, version, report id, rules, note).
+  Automatic acknowledgements are covered by the override's own audit row.
+- **Append-only.** Acknowledgements are never edited or withdrawn. A mistaken acknowledgement is
+  answered by yanking the version or publishing a fix.
+
+### 37.7 Status (derived, never stored)
+For a version, from its artifact's latest scan report:
+
+| Status | When | Label shown to consumers |
+|---|---|---|
+| `pending` | No `cr-scanned` finding at the current ruleset yet | Content check pending |
+| `passed` | No content-risk finding at medium or above | Content check passed |
+| `noted` | Medium findings only, or every gate-tripping finding is acknowledged (directly or by carry-forward) | Content check: findings noted |
+| `flagged` | At least one gate-tripping finding is not acknowledged | Content check: flagged, awaiting review |
+
+- Low findings never change the status. Owners still see them in the full panel.
+- `flagged` is only reachable **after** publish (the sweep, or a pointer mirror, §37.5): every
+  pre-publish path either passes the gate or acknowledges through the override.
+
+### 37.8 Surfaces
+- **Review page (proposal).** A new **"Content risk"** section sits directly below **"Security
+  scan"**. The Security scan section stops listing content-risk findings, so each finding appears
+  once. The Content risk section shows:
+  - a status line;
+  - findings grouped by file and then by rule, each with a severity pill, the line number, the
+    excerpt (monospace, escaped, visible code-point markers) and the rule's one-sentence
+    explanation from the catalog;
+  - "No content risks found (ruleset N)" when clean, and the same "scan pending" and "source
+    unreachable" states the Security scan section uses.
+
+  The existing override dialog lists content findings alongside the others; its mechanics are
+  unchanged. A routed direct publish shows the routing banner (§37.4).
+- **Skill page, for everyone who can see the skill.** A **one-line status chip** in the header
+  metadata for the latest stable version (the highest active version if none is stable), using the
+  §37.7 labels, with a one-sentence explanation on hover or tap. Consumers never see findings,
+  excerpts or rule names.
+- **Skill page, for owners.** Effective maintainers, Namespace Admins of the skill's namespace and
+  Platform Admins also get a collapsible **"Content risk"** card (styled like the Maintainers and
+  Discussion cards) with:
+  - the full panel for that version;
+  - the acknowledgement, if any: who, when and the note, or "acknowledged at accept by …";
+  - an **Acknowledge** button when the version is flagged and the viewer has the authority;
+  - "Other active versions flagged:" with links to those versions.
+- **Administration → "Content risk" card (Platform Admins).** A list of active versions that are
+  **flagged** (the default filter) or **noted**, filterable by namespace slug and rule, with skill,
+  version, rules, detected-at, a link to the skill page's Content risk card and, on a flagged row, an
+  Acknowledge action (confirmed first, same audited endpoint). The **Maintenance** card gains a line:
+  "Content check: N of M active versions checked at ruleset R".
+- **Not in this change.** No catalog-card badge, no catalog filter, no search ranking signal, and
+  no content-risk field in MCP `get_skill` or `search_skills`. The status is page-level only.
+
+### 37.9 Notifications
+- **`skill.content_risk`** goes to the skill's effective maintainers (explicit maintainers and
+  namespace admins), minus users who opted out, visibility-filtered at insert, **once per onset**
+  (§37.5). Delivered in-app, by email and by webhook like `skill.drift`. Subject: "Skilly - Content
+  check flagged a skill". Body: "The content check flagged ‹skill› v‹x›: ‹rule labels›. [Review the
+  findings](‹skill page›#content-risk)."
+- **New Profile toggle**, in the *Skills I maintain* group: **"Content check flags on skills I
+  maintain"** (`users.content_risk_notifications`, `BOOLEAN NOT NULL DEFAULT true`). It has the
+  same row-level, forward-only, no-safety-floor semantics as the drift toggle (§12): opting out
+  silences the ping, never the record.
+- **Drift** notifications gain one sentence when the drifted upstream content also trips the
+  content check (§37.5).
+- **A routed direct publish** sends no special notification. The submitter sees the result inline,
+  and reviewers get the ordinary new-proposal notification.
+
+### 37.10 Data model (migration 0081)
+- **`content_risk_acknowledgements`** — `id` (UUID PK), `skill_id` (FK → `skills`,
+  `ON DELETE CASCADE`), `semver` (TEXT), `scan_report_id` (FK → `scan_reports`,
+  `ON DELETE SET NULL`), `pairs` (JSONB, the acknowledged `(rule, path)` pairs),
+  `acknowledged_by` (FK → `users`, `ON DELETE SET NULL`), `acknowledged_at` (`timestamptz`, default
+  `now()`), `note` (TEXT NULL, at most 500 characters), `source` (`'override'` | `'manual'`), indexed
+  on `(skill_id, semver)`. The app role gets SELECT and INSERT only.
+- **`proposals.routed_reason`** — TEXT NULL, CHECK `IN ('content_risk')`.
+- **`users.content_risk_notifications`** — `BOOLEAN NOT NULL DEFAULT true`; existing users default
+  on. Scrubbed with the row on erasure (§4).
+- **`scan_reports` has no schema change.** `findings` is JSONB, and the new finding fields are
+  optional. The sweep's "latest report per artifact" lookup uses the existing
+  `idx_scan_reports_subject` index.
+
+### 37.11 API surface
+- `GET /api/skills/:ns/:slug` gains `contentRisk: { semver, status, ruleset }` for the displayed
+  version, for every caller who can see the skill — no findings — plus `canSeeContentRisk`, true for
+  owners (§37.8), which tells the page to render the owner card.
+- `GET /api/skills/:ns/:slug/content-risk?semver=` — the owner panel: findings, acknowledgement and
+  other flagged versions. Owners only (§37.8); **403** for others who can see the skill, **404** if
+  the skill is not visible.
+- `POST /api/skills/:ns/:slug/content-risk/acknowledge { semver, note? }` — override authority only.
+  **409** if the version is not flagged. Audited.
+- `GET /api/admin/content-risk?status=&ns=&rule=` — Platform Admins.
+- `POST /api/publish` — new outcomes: **202** `{ routed: "review", proposalId }`; **409**
+  `{ requiresOverride: true, findings }`; with `override: true` and `overrideReason`, publishes
+  (§37.4).
+- `GET /api/proposals/:id` — the existing `scanReport` carries content findings in the extended
+  shape, plus `routedReason`.
+- `GET /api/me` and `PATCH /api/me` gain `contentRiskNotifications`.
+
+### 37.12 Audit
+New actions: `proposal.routed_to_review`, `skill.publish_scan_override`,
+`skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
+`proposal.scan_override` is unchanged. The Profile toggle is not audited, like the other
+notification preferences.
+
+### 37.13 Metrics
+- `skilly_content_risk_findings_total{rule,severity}` — a counter incremented per finding at scan
+  time.
+- `skilly_content_risk_sweep_pending` — a gauge of active versions not yet checked at the current
+  ruleset.
+
+### 37.14 Tests (ship with the change, §16 discipline)
+- **Unit (`@skilly/shared`):**
+  - a positive and a negative case for every rule;
+  - a known-benign corpus: Bulgarian and Greek prose, emoji ZWJ sequences, a leading BOM, "ignore
+    the default formatting", "fail silently", and a skill that teaches prompt-injection defense
+    (which must trip rules, proving there is no hidden allowance);
+  - normalization: a phrase split by zero-width characters, and full-width letters;
+  - excerpt escaping, the 200-character cap and the occurrence cap;
+  - the ruleset hash pin;
+  - a time bound for every rule on a 2 MB adversarial input;
+  - the §37.7 status table and the §37.6 carry-forward subset rule.
+- **Integration:**
+  - direct publish, hosted and flagged: a member is routed (proposal created, `routed_reason` set,
+    audit row, request link carried over); an admin gets 409, then publishes with an override,
+    with the acknowledgement and the audit row;
+  - direct publish, pointer: a flagged folder is routed; a fetch failure or timeout is routed;
+  - Keep current files over a flagged artifact is routed;
+  - the sweep: the superseding report carries non-content findings forward; reruns are no-ops;
+    yanked versions and archived skills are skipped; an onset notifies once and respects the
+    opt-out;
+  - acknowledgement authority: a maintainer who is not an admin gets 403, a namespace admin of the
+    skill's namespace succeeds, an admin of another namespace gets 403, and an invisible skill
+    gives 404;
+  - the consumer `GET /api/skills/:ns/:slug` never returns findings;
+  - an MCP hosted proposal's report contains content findings.
+- **E2e:** a hosted proposal whose `SKILL.md` hides a zero-width character in an instruction. The
+  review page's Content risk section shows the excerpt with its visible marker; accepting requires
+  the override; afterwards a consumer sees "Content check: findings noted" on the skill page and a
+  maintainer sees the full card.
+- **False-positive budget (one-off, not a CI gate).** A read-only worker script,
+  `pnpm --filter @skilly/worker content-risk:report`, scans every active version of a real catalog
+  and prints per-rule counts with sample excerpts. It writes nothing. It is run before release, and
+  its summary goes into the pull request.
+
+### 37.15 Accepted trade-offs
+- **A floor, not a guarantee.** Regex rules are evaded by paraphrase, other languages, images or
+  instructions split across files. Human review stays the control; the scanner makes sure the
+  reviewer sees what is hidden.
+- **English-only phrasing rules** (i18n is deferred, §16).
+- **More review load.** Flagged direct publishes by members now wait for a reviewer.
+- **The direct-publish gate covers content-risk findings only.** High secret and heuristic findings
+  keep today's ungated direct-publish behavior. Extending the gate to them is a separate spec
+  change.
+- **The web tier now fetches pointer contents** for direct pointer publishes. It uses the same
+  SSRF guards and is bounded by size and time.
+- **Excerpts store up to 200 characters of skill content** in scan reports, behind the same
+  visibility gates as the files themselves.
+- **Flagged versions stay installable.** The scanner informs; yanking stays a human decision.
 
 ---
 

@@ -10,7 +10,7 @@ import { mkdtemp, rm, readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { lookup } from "node:dns/promises";
-import { validatePointerUrl, validateGitRef, validateSubdir, isBlockedIp, isSkillsHubUrl, type BundleEntry } from "@skilly/shared";
+import { validatePointerUrl, validateGitRef, validateSubdir, isBlockedIp, isSkillsHubUrl, parseSkillsHubApiUrl, skillsHubApiUrl, buildSkillsHubSkillMd, type BundleEntry } from "@skilly/shared";
 
 const FETCH_TIMEOUT_MS = Number(process.env.POINTER_FETCH_TIMEOUT_MS ?? 60_000);
 // Bounds so a huge upstream repo can never exhaust the web tier's memory/disk while a reviewer looks.
@@ -39,13 +39,13 @@ async function resolvesToBlockedIp(rawUrl: string): Promise<string | null> {
   return null;
 }
 
-function git(args: string[], opts: { cwd?: string } = {}): Promise<string> {
+function git(args: string[], opts: { cwd?: string; timeoutMs?: number } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd: opts.cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1" } });
     let out = "";
     let err = "";
     let killed = false;
-    const timer = setTimeout(() => { killed = true; child.kill("SIGKILL"); }, FETCH_TIMEOUT_MS);
+    const timer = setTimeout(() => { killed = true; child.kill("SIGKILL"); }, opts.timeoutMs ?? FETCH_TIMEOUT_MS);
     child.stdout.on("data", (d) => (out += d.toString()));
     child.stderr.on("data", (d) => (err += d.toString()));
     child.on("error", (e) => { clearTimeout(timer); reject(e); });
@@ -78,7 +78,7 @@ async function findSkillDir(root: string, name: string, maxDepth: number): Promi
   return null;
 }
 
-async function walk(dir: string, base: string, out: BundleEntry[], acc: { total: number; count: number }): Promise<void> {
+async function walk(dir: string, base: string, out: BundleEntry[], acc: { total: number; count: number; max: number }): Promise<void> {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (entry.name === ".git") continue;
     const abs = join(dir, entry.name);
@@ -88,7 +88,7 @@ async function walk(dir: string, base: string, out: BundleEntry[], acc: { total:
       if (st.size > MAX_FILE_BYTES) throw new Error(`file too large to review-diff: ${entry.name}`);
       acc.total += st.size;
       acc.count += 1;
-      if (acc.total > MAX_TOTAL_BYTES || acc.count > MAX_ENTRIES) throw new Error("upstream repo exceeds review-diff size/entry limits");
+      if (acc.total > acc.max || acc.count > MAX_ENTRIES) throw new Error("upstream repo exceeds review-diff size/entry limits");
       out.push({ path: relative(base, abs).split(sep).join("/"), bytes: await readFile(abs) });
     }
   }
@@ -101,7 +101,12 @@ export type PointerFetchResult = { ok: true; entries: BundleEntry[] } | { ok: fa
  * becomes `SKILL.md` at the root), matching how the worker mirror packs them — so a review diff
  * lines up with what will be published on accept. Git origins only.
  */
-export async function fetchPointerReviewEntries(rawUrl: string, ref: string, subdir: string | null | undefined): Promise<PointerFetchResult> {
+export async function fetchPointerReviewEntries(
+  rawUrl: string,
+  ref: string,
+  subdir: string | null | undefined,
+  limits: { timeoutMs?: number; maxTotalBytes?: number } = {},
+): Promise<PointerFetchResult> {
   const url = rawUrl.trim();
   if (isSkillsHubUrl(url)) return { ok: false, error: "file diff isn’t available for skills-hub sources — the files are verified on accept" };
 
@@ -127,7 +132,7 @@ export async function fetchPointerReviewEntries(rawUrl: string, ref: string, sub
     let cloned = false;
     for (const candidate of refCandidates) {
       try {
-        await git([...PROTO, "clone", "--depth", "1", "--branch", candidate, "-c", "credential.helper=", "--", url, src]);
+        await git([...PROTO, "clone", "--depth", "1", "--branch", candidate, "-c", "credential.helper=", "--", url, src], { timeoutMs: limits.timeoutMs });
         cloned = true;
         break;
       } catch (err) {
@@ -151,11 +156,69 @@ export async function fetchPointerReviewEntries(rawUrl: string, ref: string, sub
     }
 
     const entries: BundleEntry[] = [];
-    await walk(base, base, entries, { total: 0, count: 0 });
+    await walk(base, base, entries, { total: 0, count: 0, max: Math.min(limits.maxTotalBytes ?? MAX_TOTAL_BYTES, MAX_TOTAL_BYTES) });
     return { ok: true, entries };
   } catch (e) {
     return { ok: false, error: String((e as Error).message ?? e) };
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
+}
+
+// ── Direct-publish content check (SKILLY_SPEC.md §37.4) ─────────────────────────────────────────
+// A direct pointer publish has no pre-accept scan, so the web tier fetches the pinned folder's
+// contents to run the pure scanners before deciding whether to publish or route to review. Same
+// transport guards as above; tighter time bound. Registry sources are read through the
+// skills-hub JSON API exactly as the worker mirror reads them (worker/git/skillsHub.ts).
+
+const CONTENT_CHECK_TIMEOUT_MS = Number(process.env.POINTER_CONTENT_CHECK_TIMEOUT_MS ?? 30_000);
+const HUB_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+async function hubJson(url: string, timeoutMs: number): Promise<Record<string, unknown>> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, headers: { accept: "application/json" }, redirect: "error" });
+    if (!res.ok) throw new Error(`skills-hub API ${res.status}`);
+    const declared = Number(res.headers.get("content-length") ?? 0);
+    if (declared > HUB_MAX_RESPONSE_BYTES) throw new Error("skills-hub API response exceeds size limit");
+    const text = await res.text();
+    if (text.length > HUB_MAX_RESPONSE_BYTES) throw new Error("skills-hub API response exceeds size limit");
+    return JSON.parse(text) as Record<string, unknown>;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchSkillsHubEntries(rawUrl: string, ref: string, skillSlug: string, timeoutMs: number): Promise<PointerFetchResult> {
+  const urlErr = validatePointerUrl(rawUrl);
+  if (urlErr) return { ok: false, error: urlErr };
+  const hubSlug = parseSkillsHubApiUrl(rawUrl);
+  if (!hubSlug) return { ok: false, error: "not a skills-hub origin URL" };
+  // Rebuilt from the constant host + validated slug, never the raw string (SSRF, §6).
+  const apiUrl = skillsHubApiUrl(hubSlug);
+  const hubVersion = ref.replace(/^v(?=\d)/, "");
+  try {
+    const [meta, version] = await Promise.all([hubJson(apiUrl, timeoutMs), hubJson(`${apiUrl}/versions/${encodeURIComponent(hubVersion)}`, timeoutMs)]);
+    const instructions = typeof version.instructions === "string" ? version.instructions : null;
+    if (!instructions) return { ok: false, error: "the registry version has no instructions" };
+    const description = typeof meta.description === "string" ? meta.description : "";
+    const md = buildSkillsHubSkillMd(skillSlug, description, instructions);
+    return { ok: true, entries: [{ path: "SKILL.md", bytes: new TextEncoder().encode(md) }] };
+  } catch (e) {
+    return { ok: false, error: String((e as Error).message ?? e) };
+  }
+}
+
+/** The pinned pointer's files for the §37.4 content check, bounded by `maxBytes` and 30 s. */
+export async function fetchPointerContentForCheck(
+  rawUrl: string,
+  ref: string,
+  subdir: string | null | undefined,
+  skillSlug: string,
+  maxBytes: number,
+): Promise<PointerFetchResult> {
+  const url = rawUrl.trim();
+  if (isSkillsHubUrl(url)) return fetchSkillsHubEntries(url, ref, skillSlug, CONTENT_CHECK_TIMEOUT_MS);
+  return fetchPointerReviewEntries(url, ref, subdir, { timeoutMs: CONTENT_CHECK_TIMEOUT_MS, maxTotalBytes: maxBytes });
 }

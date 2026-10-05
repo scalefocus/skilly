@@ -162,6 +162,13 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     overrideReason: body.overrideReason ?? null,
   });
 
-  if (!result.ok) return Response.json({ error: result.error }, { status: result.status });
+  if (!result.ok) {
+    // Pass the override gate's signal through (§6, §37.4) so a client can tell "needs the override"
+    // apart from a stale-revision 409.
+    return Response.json(
+      { error: result.error, ...(result.requiresOverride ? { requiresOverride: true, severity: result.severity ?? null } : {}) },
+      { status: result.status },
+    );
+  }
   return Response.json(result);
 });

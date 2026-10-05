@@ -2,7 +2,10 @@
 // namespaces. Hosted (uploaded artifact) or pointer (external ref). SKILLY_SPEC.md §4.
 import { currentAccess } from "../../../lib/guard";
 import { pool } from "../../../lib/db";
-import { directPublish, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, type RevisionPayload } from "../../../lib/proposals";
+import { directPublish, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, type RevisionPayload, type DirectPublishContentCheck } from "../../../lib/proposals";
+import { fetchPointerContentForCheck } from "../../../lib/pointerFetch";
+import { getMaxBundleBytes } from "../../../lib/settings";
+import { runScanners, PURE_SCANNERS, bundleContentCap } from "@skilly/shared";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { findDuplicateSkill } from "../../../lib/duplicate";
 import { verifyPointerSkill } from "../../../lib/pointerVerify";
@@ -29,6 +32,9 @@ interface Body {
   reuseCurrentFiles?: boolean;
   // Fulfilment link (§26): a direct publish is an immediate acceptance, so it fulfils too.
   originRequestId?: string | null;
+  /** §37.4: an override holder confirming a publish over gate-tripping content findings. */
+  override?: boolean;
+  overrideReason?: string | null;
 }
 
 export const POST = withSystemLog("/api/publish", async function POST(req: Request) {
@@ -108,7 +114,31 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
     );
   }
 
-  const r = await directPublish(pool, { access, actorUserId: access.userId, namespaceSlug: b.namespaceSlug, semver: b.semver, payload, originRequestId: b.originRequestId });
-  if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
+  // Content check (§37.4). Hosted and Keep-current-files read the artifact's report inside
+  // directPublish; a fresh pointer has no report yet, so fetch its pinned contents and scan them
+  // now. A fetch failure routes to review (never rejects) — the result decides routing only.
+  let contentCheck: DirectPublishContentCheck | undefined;
+  if (payload.pointer && !reuse) {
+    const fetched = await fetchPointerContentForCheck(
+      payload.pointer.url, payload.pointer.ref, payload.pointer.subdir, b.metadata.skillSlug,
+      bundleContentCap(await getMaxBundleBytes()),
+    );
+    contentCheck = fetched.ok
+      ? { findings: await runScanners(fetched.entries, PURE_SCANNERS), reportId: null, unreachable: false }
+      : { findings: [], reportId: null, unreachable: true };
+  }
+
+  const r = await directPublish(pool, {
+    access, actorUserId: access.userId, namespaceSlug: b.namespaceSlug, semver: b.semver, payload,
+    originRequestId: b.originRequestId, contentCheck,
+    override: b.override === true, overrideReason: typeof b.overrideReason === "string" ? b.overrideReason.slice(0, 2000) : null,
+  });
+  if (!r.ok) {
+    return Response.json(
+      { error: r.error, ...(r.requiresOverride ? { requiresOverride: true, contentRisk: true, severity: r.severity ?? null, findings: r.findings ?? [] } : {}) },
+      { status: r.status },
+    );
+  }
+  if ("routed" in r) return Response.json({ routed: r.routed, proposalId: r.proposalId }, { status: 202 });
   return Response.json({ skillId: r.skillId, versionId: r.versionId, pending: r.pending ?? false }, { status: 201 });
 });

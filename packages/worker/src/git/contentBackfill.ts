@@ -79,7 +79,9 @@ function extractZip(buf: Buffer): BundleEntry[] {
   return out;
 }
 
-async function extractAny(buf: Buffer): Promise<BundleEntry[]> {
+/** Extract a stored artifact (tar.gz or zip) into bundle entries, bounded. Shared with the §37.5
+ *  content-risk re-scan sweep. */
+export async function extractAny(buf: Buffer): Promise<BundleEntry[]> {
   const kind = detectArchive(buf);
   if (kind === "gzip") return extractTarGz(buf);
   if (kind === "zip") return extractZip(buf);
