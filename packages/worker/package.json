@@ -15,12 +15,12 @@
     "lint": "echo \"(configure eslint)\""
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1137.0",
+    "@aws-sdk/client-s3": "^3.1142.0",
     "@skilly/shared": "workspace:*",
     "adm-zip": "^0.6.1",
     "express": "^5.1.0",
     "express-rate-limit": "^8",
-    "nodemailer": "^10.0.10",
+    "nodemailer": "^10.0.12",
     "pg": "^8.23.0",
     "sharp": "^0.35",
     "tar": "^7.5.22"
@@ -28,11 +28,11 @@
   "devDependencies": {
     "@types/adm-zip": "^0.5.5",
     "@types/express": "^5.0.0",
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
-    "supertest": "^7.0.0",
+    "supertest": "^7.3.0",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3"
   }
