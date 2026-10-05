@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.15.0",
+    date: "2026-10-05",
+    summary:
+      "A new content check reads each skill's text the way an agent will: as instructions. It flags hidden characters, look-alike letters, instructions to ignore previous instructions or to hide things from the user, and steps that read credentials and send them out. Reviewers see the findings in a new Content risk section, high findings need the override, and a flagged direct publish now goes to review. Skill pages show the result, and existing skills are checked in the background.",
+  },
+  {
     version: "2.14.1",
     date: "2026-09-26",
     summary:

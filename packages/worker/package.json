@@ -9,6 +9,7 @@
     "dev": "tsx watch --env-file-if-exists=.env.local src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "content-risk:report": "node dist/scan/contentRiskReport.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && find dist -name '*.test.js' | xargs node --test",
     "lint": "echo \"(configure eslint)\""

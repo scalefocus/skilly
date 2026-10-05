@@ -21,6 +21,7 @@ import { EmojiPicker } from "../../components/EmojiPicker";
 import { SkillIcon } from "../../components/SkillIcon";
 import { useIconCropFlow } from "../../components/IconCropDialog";
 import { reportFeatureUse } from "../../lib/surveyClient";
+import { ContentRiskFindingsList, type ContentRiskFinding } from "../../components/ContentRisk";
 
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
@@ -182,6 +183,12 @@ function ProposeForm() {
   const dragStateRef = useRef<{ canDrop: boolean; accept: (f: File | null) => void }>({ canDrop: false, accept: () => {} });
   const [busy, setBusy] = useState(false);
   const [scan, setScan] = useState<{ severity: string; findings: unknown[] } | null>(null);
+  // §37.4: a direct publish the content check flagged, for a submitter who may override it. Any
+  // edit to the form or a different file clears the confirmation, so it can't carry over unseen files.
+  const [contentOverride, setContentOverride] = useState<{ findings: ContentRiskFinding[]; severity: string | null } | null>(null);
+  const [overrideChecked, setOverrideChecked] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
+  useEffect(() => { setContentOverride(null); setOverrideChecked(false); }, [f, file]);
   const [err, setErr] = useState<string | null>(null);
   // On a submit issue we smooth-scroll to the error banner and pulse-highlight it. `key` bumps so
   // re-submitting the same issue re-triggers the animation.
@@ -739,6 +746,8 @@ function ProposeForm() {
         ...(reusing ? { reuseCurrentFiles: true } : {}),
         // Fulfilment link (§26): accepted proposal → the originating request is fulfilled.
         ...(originRequestId && !isNewVersion ? { originRequestId } : {}),
+        // §37.4: the confirmed, audited override of a flagged direct publish.
+        ...(mode === "direct" && contentOverride && overrideChecked ? { override: true, overrideReason: overrideReason.trim() || null } : {}),
       };
 
       if (mode === "review") {
@@ -765,9 +774,20 @@ function ProposeForm() {
             flashDup();
             return;
           }
+          if (r.status === 409 && j.requiresOverride && j.contentRisk) {
+            // §37.4: an override holder must confirm publishing over gate-tripping content findings.
+            setContentOverride({ findings: (j.findings ?? []) as ContentRiskFinding[], severity: j.severity ?? null });
+            setOverrideChecked(false);
+            return;
+          }
           throw new Error(j.error ?? "Could not publish");
         }
         reportFeatureUse("propose"); // §36.3
+        if (r.status === 202 && j.routed === "review" && j.proposalId) {
+          // §37.4: the content check sent this direct publish to review instead.
+          router.push(`/proposals/${j.proposalId}`);
+          return;
+        }
         router.push(`/skills/${f.namespaceSlug}/${f.skillSlug}`);
       }
     } catch (e2) {
@@ -1365,6 +1385,30 @@ function ProposeForm() {
         )}
         {err && <div ref={errRef} style={{ color: "var(--danger)", fontSize: 13.5, borderRadius: "var(--radius-sm)" }}>{err}</div>}
 
+        {mode !== "want" && contentOverride && (
+          <div className="card card-pad" data-testid="publish-override" style={{ borderColor: "color-mix(in oklab, var(--danger) 35%, var(--line))" }}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>The content check flagged this publish</div>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              {contentOverride.findings.some((x) => x.severity !== "info")
+                ? "Review what it found. You can publish over it as an admin of this namespace; the override is audit-logged. Or submit it for review instead."
+                : "The source couldn’t be fetched for the content check. You can publish anyway as an admin of this namespace; the override is audit-logged."}
+            </p>
+            <ContentRiskFindingsList findings={contentOverride.findings} />
+            <label style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 12, fontSize: 13.5, color: "var(--danger)" }}>
+              <input type="checkbox" checked={overrideChecked} onChange={(e) => setOverrideChecked(e.target.checked)} style={{ marginTop: 2 }} />
+              Publish over {contentOverride.severity ? <strong style={{ margin: "0 4px" }}>{contentOverride.severity}</strong> : " "}content findings (audit-logged).
+            </label>
+            <textarea
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              placeholder="Reason for the override…"
+              rows={2}
+              aria-label="Override reason"
+              style={{ width: "100%", marginTop: 8, padding: 10, borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 13.5, resize: "vertical" }}
+            />
+          </div>
+        )}
+
         {mode === "want" ? (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", position: "relative", zIndex: 6 }}>
             <button className="btn btn-primary" disabled={busy} onClick={() => void submitRequest()}>
@@ -1375,7 +1419,9 @@ function ProposeForm() {
           <>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button className="btn btn-primary" disabled={busy || dup?.mode === "block"} onClick={() => submit("review")}>{busy ? "Working…" : "Submit for review →"}</button>
-              <button className="btn" disabled={busy || dup?.mode === "block"} onClick={() => submit("direct")} title="Only where you may publish without review">Publish directly</button>
+              <button className="btn" disabled={busy || dup?.mode === "block" || (!!contentOverride && !overrideChecked)} onClick={() => submit("direct")} title="Only where you may publish without review">
+                {contentOverride ? "Publish over findings" : "Publish directly"}
+              </button>
             </div>
             <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
               “Publish directly” works only in namespaces that don’t require review and where you’re a member/admin — otherwise it’s declined and you can submit for review.

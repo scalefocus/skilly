@@ -43,6 +43,10 @@
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"
     },
+    "./content-risk-status": {
+      "types": "./dist/content-risk-status.d.ts",
+      "default": "./dist/content-risk-status.js"
+    },
     "./email": {
       "types": "./dist/email.d.ts",
       "default": "./dist/email.js"

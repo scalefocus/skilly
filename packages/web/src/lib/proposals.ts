@@ -16,6 +16,9 @@ import {
   canDirectPublish,
   canInitiatePromotion,
   requiresOverride,
+  maxSeverity,
+  contentRiskFindings,
+  contentRiskTripsGate,
   resolveLatest,
   validatePointerUrl,
   validateGitRef,
@@ -29,8 +32,10 @@ import {
   type EffectiveAccess,
   type ProposalAction,
   type ProposalState,
+  type ScanFinding,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
+import { latestArtifactReport, recordAcknowledgement } from "./contentRisk";
 import { awardAchievement } from "./achievements";
 import { categoryListError, upsertCategory } from "./categories";
 import { normalizeCategoryNames } from "@skilly/shared";
@@ -135,6 +140,10 @@ export interface CreateProposalInput {
   payload: RevisionPayload;
   /** Skill request this proposal was started from (§26) — the explicit fulfilment link. */
   originRequestId?: string | null;
+  /** Set when a direct publish was routed to review by the content check (§37.4). */
+  routedReason?: "content_risk" | null;
+  /** The content-risk rules that caused the routing — audit context only. */
+  routedRules?: string[];
 }
 
 /**
@@ -461,9 +470,9 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
     const { rows } = await client.query<{ id: string }>(
       // origin_request_id: set when the proposal was started from a skill request's "Propose a
       // skill" button (§26) — the explicit fulfilment link, advisory until acceptance.
-      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id)
-       values ($1,$2,$3,'proposed',$4,$5) returning id`,
-      [input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null],
+      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, routed_reason)
+       values ($1,$2,$3,'proposed',$4,$5,$6) returning id`,
+      [input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null, input.routedReason ?? null],
     );
     const proposalId = rows[0]!.id;
     await client.query(
@@ -479,6 +488,17 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
       namespaceId: input.targetNamespaceId,
       after: { state: "proposed", semver: input.proposedSemver },
     });
+    if (input.routedReason) {
+      // §37.4: a direct publish the content check sent to review instead of publishing.
+      await appendAudit(client, {
+        actorUserId: input.submittedByUserId,
+        action: "proposal.routed_to_review",
+        targetType: "proposal",
+        targetId: proposalId,
+        namespaceId: input.targetNamespaceId,
+        after: { reason: input.routedReason, rules: input.routedRules ?? [], semver: input.proposedSemver, skill: input.payload.metadata.skillSlug },
+      });
+    }
     await notifyProposalCreated(client, {
       proposalId,
       namespaceId: input.targetNamespaceId,
@@ -555,22 +575,37 @@ export type ActionResult =
   | { ok: true; state: ProposalState; materializedVersionId?: string }
   | { ok: false; status: number; error: string; requiresOverride?: boolean; severity?: string };
 
-/** Latest revision's artifact scan severity + findings, for the override gate. */
-async function loadArtifactScan(
+/**
+ * The latest revision's scan report, for the override gate. Hosted (and Keep-current-files reuse):
+ * the artifact-keyed report. Pointer: the worker's proposal-keyed pre-scan report (§37.4) — before
+ * §37 the gate ignored it, so a pointer proposal's high findings never needed an audited override.
+ * A pending or unreachable pre-scan has nothing to gate on (unchanged).
+ */
+async function loadGateScan(
   db: PoolClient,
   proposalId: string,
-): Promise<{ severity: string | null; findings: unknown } | null> {
+): Promise<{ id: string; severity: string | null; findings: ScanFinding[] } | null> {
   const { rows: rev } = await db.query<{ payload: RevisionPayload }>(
     `select payload from proposal_revisions where proposal_id = $1 order by revision_no desc limit 1`,
     [proposalId],
   );
-  const key = rev[0]?.payload.artifactObjectKey;
-  if (!key) return null;
-  const { rows } = await db.query<{ severity: string | null; findings: unknown }>(
-    `select severity, findings from scan_reports where subject_type = 'artifact' and subject_id = $1 order by created_at desc limit 1`,
-    [key],
-  );
-  return rows[0] ?? null;
+  const payload = rev[0]?.payload;
+  const key = payload?.artifactObjectKey;
+  const { rows } = key
+    ? await db.query<{ id: string; severity: string | null; findings: ScanFinding[] | null }>(
+        `select id, severity, findings from scan_reports where subject_type = 'artifact' and subject_id = $1 order by created_at desc limit 1`,
+        [key],
+      )
+    : payload?.pointer
+      ? await db.query<{ id: string; severity: string | null; findings: ScanFinding[] | null }>(
+          `select id, severity, findings from scan_reports
+            where subject_type = 'proposal' and subject_id = $1 and status = 'scanned'
+            order by created_at desc limit 1`,
+          [proposalId],
+        )
+      : { rows: [] };
+  const r = rows[0];
+  return r ? { id: r.id, severity: r.severity, findings: Array.isArray(r.findings) ? r.findings : [] } : null;
 }
 
 /** Field-wise pointer equality (url/ref/subdir), null-tolerant. */
@@ -714,7 +749,7 @@ export async function performProposalAction(
     let materializedVersionId: string | undefined;
     if (input.action === "accept") {
       // Override gate: high/critical scan findings require an explicit, logged decision.
-      const scan = await loadArtifactScan(client, input.proposalId);
+      const scan = await loadGateScan(client, input.proposalId);
       if (scan && requiresOverride(scan.severity as never)) {
         if (!input.override) {
           await client.query("rollback");
@@ -744,6 +779,18 @@ export async function performProposalAction(
         payload,
       });
       materializedVersionId = result.versionId; // undefined for pointer (worker mirrors it)
+      // §37.6: accepting over gate-tripping content findings acknowledges them for this version.
+      if (scan && input.override && contentRiskTripsGate(scan.findings)) {
+        await recordAcknowledgement(client, {
+          skillId: result.skillId,
+          semver: p.proposed_semver,
+          reportId: scan.id,
+          findings: scan.findings,
+          byUserId: input.actorUserId,
+          note: input.overrideReason ?? null,
+          source: "override",
+        });
+      }
       // Skill-request fulfilment (§26): a proposal started from a request fulfils it on
       // acceptance — same transaction, first accepted linked proposal wins (stale links no-op).
       // Credit goes to the proposal's SUBMITTER (the fulfiller), not the accepting reviewer.
@@ -1062,16 +1109,87 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
  * Direct publish (no review) — only when the namespace has require_review=false AND the
  * caller is a Member/Admin there. Reuses materializeVersion. SKILLY_SPEC.md §4.
  */
+export type DirectPublishResult =
+  | { ok: true; skillId: string; versionId?: string; pending?: boolean }
+  | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[] }
+  | { ok: false; status: number; error: string; requiresOverride?: boolean; findings?: ScanFinding[]; severity?: string };
+
+/**
+ * The content check for a direct publish (§37.4). `findings` are the submission's scan findings;
+ * `unreachable` means a pointer's contents couldn't be fetched, which routes to review too.
+ */
+export interface DirectPublishContentCheck {
+  findings: ScanFinding[];
+  reportId: string | null;
+  unreachable: boolean;
+}
+
+/** Hosted / Keep-current-files: the artifact's latest report is the content check (§37.4). */
+export async function hostedContentCheck(db: Pool | PoolClient, payload: RevisionPayload): Promise<DirectPublishContentCheck> {
+  const report = await latestArtifactReport(db, payload.artifactObjectKey);
+  return { findings: report?.findings ?? [], reportId: report?.id ?? null, unreachable: false };
+}
+
 export async function directPublish(
   pool: Pool,
-  input: { access: EffectiveAccess; actorUserId: string; namespaceSlug: string; semver: string; payload: RevisionPayload; originRequestId?: string | null },
-): Promise<{ ok: true; skillId: string; versionId?: string; pending?: boolean } | { ok: false; status: number; error: string }> {
+  input: {
+    access: EffectiveAccess;
+    actorUserId: string;
+    namespaceSlug: string;
+    semver: string;
+    payload: RevisionPayload;
+    originRequestId?: string | null;
+    /** Pointer publishes: the route fetches and scans the contents (§37.4). Hosted: read here. */
+    contentCheck?: DirectPublishContentCheck;
+    /** Override holders confirming an audited publish over gate-tripping content findings. */
+    override?: boolean;
+    overrideReason?: string | null;
+  },
+): Promise<DirectPublishResult> {
   const ns = (await pool.query<{ id: string; require_review: boolean }>(`select id, require_review from namespaces where slug = $1`, [input.namespaceSlug])).rows[0];
   if (!ns) return { ok: false, status: 404, error: "namespace not found" };
   if (!canDirectPublish(input.access, ns.id, ns.require_review)) {
     return { ok: false, status: 403, error: "direct publish not permitted here — submit a proposal for review instead" };
   }
   const existing = (await pool.query<{ id: string }>(`select id from skills where namespace_id = $1 and slug = $2`, [ns.id, input.payload.metadata.skillSlug])).rows[0];
+
+  // §37.4: gate-tripping CONTENT-RISK findings (only those — other scanners keep the old ungated
+  // behavior) send a member's publish to review, and make an override holder confirm.
+  const check = input.contentCheck ?? (await hostedContentCheck(pool, input.payload));
+  const content = contentRiskFindings(check.findings);
+  const trips = check.unreachable || contentRiskTripsGate(content);
+  const overrideHolder = canReviewNamespace(input.access, ns.id);
+  if (trips && !overrideHolder) {
+    let originRequestId: string | null = null;
+    if (input.originRequestId && /^[0-9a-f-]{36}$/i.test(input.originRequestId)) {
+      const open = (await pool.query(`select 1 from skill_requests where id = $1 and state = 'open'`, [input.originRequestId])).rowCount;
+      if (open) originRequestId = input.originRequestId;
+    }
+    const routedRules = check.unreachable ? ["source-unreachable"] : [...new Set(content.filter((f) => f.severity === "high" || f.severity === "critical").map((f) => f.rule))];
+    const { id } = await createProposal(pool, {
+      submittedByUserId: input.actorUserId,
+      targetNamespaceId: ns.id,
+      targetSkillId: existing?.id ?? null,
+      proposedSemver: input.semver,
+      payload: input.payload,
+      originRequestId,
+      routedReason: "content_risk",
+      routedRules,
+    });
+    return { ok: true, routed: "review", proposalId: id, findings: content };
+  }
+  if (trips && !input.override) {
+    return {
+      ok: false,
+      status: 409,
+      error: check.unreachable
+        ? "the content check couldn't fetch this source — confirm the override to publish anyway"
+        : `content-risk findings (severity ${maxSeverity(content) ?? "high"}) require an explicit override to publish`,
+      requiresOverride: true,
+      findings: content,
+      severity: maxSeverity(content) ?? undefined,
+    };
+  }
 
   const client = await pool.connect();
   try {
@@ -1091,6 +1209,26 @@ export async function directPublish(
       namespaceId: ns.id,
       after: { semver: input.semver, slug: input.payload.metadata.skillSlug, pending: result.pendingMirror ?? false },
     });
+    if (trips) {
+      // §37.4: an override holder published over gate-tripping content findings.
+      await appendAudit(client, {
+        actorUserId: input.actorUserId,
+        action: "skill.publish_scan_override",
+        targetType: "skill",
+        targetId: result.skillId,
+        namespaceId: ns.id,
+        after: { semver: input.semver, reason: input.overrideReason ?? null, unreachable: check.unreachable, findings: content },
+      });
+      await recordAcknowledgement(client, {
+        skillId: result.skillId,
+        semver: input.semver,
+        reportId: check.reportId,
+        findings: content,
+        byUserId: input.actorUserId,
+        note: input.overrideReason ?? null,
+        source: "override",
+      });
+    }
     // Skill-request fulfilment (§26): a direct publish IS an immediate acceptance — same as the
     // review-accept path, fulfil any request this was started from, in the same transaction.
     if (input.originRequestId) {
@@ -1377,6 +1515,8 @@ export interface ProposalDetail {
   updatedAt: string;
   /** §29: the MCP client that submitted this, or null for a browser submission. */
   viaMcpClient: string | null;
+  /** §37.4: 'content_risk' when this was a direct publish the content check routed to review. */
+  routedReason: string | null;
   revisions: ProposalRevisionView[];
   scanReport: { severity: string | null; status: string; findings: unknown; createdAt: string } | null;
   caps: { isReviewer: boolean; isSubmitter: boolean };
@@ -1435,10 +1575,11 @@ export async function getProposalDetail(
     created_at: string;
     updated_at: string;
     via_mcp_client: string | null;
+    routed_reason: string | null;
   }>(
     `select p.id, p.state, p.target_namespace_id, n.slug as namespace_slug, p.target_skill_id,
             p.proposed_semver, p.submitted_by, p.decision_reason, p.materialized_version_id,
-            p.created_at, p.updated_at, p.via_mcp_client
+            p.created_at, p.updated_at, p.via_mcp_client, p.routed_reason
        from proposals p join namespaces n on n.id = p.target_namespace_id
       where p.id = $1`,
     [id],
@@ -1569,6 +1710,7 @@ export async function getProposalDetail(
     createdAt: p.created_at,
     updatedAt: p.updated_at,
     viaMcpClient: p.via_mcp_client,
+    routedReason: p.routed_reason,
     revisions,
     scanReport,
     caps,

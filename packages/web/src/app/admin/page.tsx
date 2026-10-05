@@ -11,6 +11,7 @@ import { EmailCard } from "./EmailCard";
 import { SystemBannerCard } from "./SystemBannerCard";
 import { McpCard } from "./McpCard";
 import { SearchCard } from "./SearchCard";
+import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
@@ -38,7 +39,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
   "systembanner", "mcp", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
-  "achievements", "search",
+  "achievements", "search", "contentrisk",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -724,6 +725,9 @@ export default function AdminPage() {
         />
       </CollapsibleCard>
 
+      {/* Content risk (§37.8) — published versions the content check flagged. */}
+      <ContentRiskAdminCard open={cards.open.contentrisk} onToggle={() => cards.toggle("contentrisk")} />
+
       {/* Maintenance / background jobs */}
       <MaintenanceCard open={cards.open.maintenance} onToggle={() => cards.toggle("maintenance")} />
 
@@ -1010,6 +1014,7 @@ function MaintenanceCard({ open, onToggle }: { open: boolean; onToggle: () => vo
         Trigger background jobs on demand. They otherwise run on their own schedule; a manual run is handy right after a burst of installs.
       </p>
       <SearchIndexLine />
+      <ContentCheckLine />
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ fontWeight: 600, fontSize: 14 }}>“Skills you might like” index</div>

@@ -20,6 +20,7 @@ import type { ArtifactStore } from "../storage/objectStore.js";
 import { runScanPipeline } from "../scan/pipeline.js";
 import { writeArtifactScanReport } from "../scan/report.js";
 import { fetchSkillsHubBundle } from "./skillsHub.js";
+import { recordContentRiskOnset } from "../scan/contentRisk.js";
 
 const GIT_CLONE_TIMEOUT_MS = Number(process.env.MIRROR_CLONE_TIMEOUT_MS ?? 120_000);
 
@@ -305,5 +306,19 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
   }
   // §34.3: the files are in hand — index the SKILL.md text now (write-once, advisory).
   await fillSearchText(pool, rows[0]!.id, files);
+  // §37.5: a pointer version is first scanned here. If it is flagged with nothing acknowledged
+  // (e.g. accepted while its pre-scan was still pending), that is an onset. Advisory: never fails
+  // the mirror.
+  try {
+    const who = (await pool.query<{ namespace_id: string; ns_slug: string; skill_slug: string }>(
+      `select s.namespace_id, n.slug as ns_slug, s.slug as skill_slug from skills s join namespaces n on n.id = s.namespace_id where s.id = $1`,
+      [input.skillId],
+    )).rows[0];
+    if (who) {
+      await recordContentRiskOnset(pool, { skillId: input.skillId, semver: input.semver, namespaceId: who.namespace_id, nsSlug: who.ns_slug, skillSlug: who.skill_slug }, findings, null);
+    }
+  } catch (err) {
+    console.error(JSON.stringify({ level: "warn", msg: "content-risk onset check failed at mirror", skillId: input.skillId, err: String(err) }));
+  }
   return { versionId: rows[0]!.id, artifactKey };
 }
