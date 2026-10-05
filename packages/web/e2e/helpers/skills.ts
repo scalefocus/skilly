@@ -8,12 +8,12 @@ import { expect, type Page } from "@playwright/test";
 
 /** A tiny valid .skill (zip) bundle whose SKILL.md name matches `slug`. A random salt makes the
  *  content digest unique per build so duplicate detection never trips across repeated runs. */
-export function buildSkillBundle(slug: string): Buffer {
+export function buildSkillBundle(slug: string, extraBody = ""): Buffer {
   const zip = new AdmZip();
   zip.addFile(
     "SKILL.md",
     Buffer.from(
-      `---\nname: ${slug}\ndescription: e2e fixture (safe to delete)\n---\n\n# ${slug}\n\nFixture bundle for the skilly e2e suite. salt=${randomBytes(8).toString("hex")}\n`,
+      `---\nname: ${slug}\ndescription: e2e fixture (safe to delete)\n---\n\n# ${slug}\n\nFixture bundle for the skilly e2e suite. salt=${randomBytes(8).toString("hex")}\n${extraBody}`,
     ),
   );
   return zip.toBuffer();
@@ -28,10 +28,10 @@ export interface UploadResult {
 }
 
 /** Single-shot upload of a fixture bundle → the upload contract fields a proposal carries. */
-export async function uploadBundle(page: Page, slug: string): Promise<UploadResult> {
+export async function uploadBundle(page: Page, slug: string, extraBody = ""): Promise<UploadResult> {
   const res = await page.request.post("/api/uploads", {
     multipart: {
-      bundle: { name: `${slug}.skill`, mimeType: "application/zip", buffer: buildSkillBundle(slug) },
+      bundle: { name: `${slug}.skill`, mimeType: "application/zip", buffer: buildSkillBundle(slug, extraBody) },
       skillSlug: slug,
     },
   });
@@ -51,9 +51,11 @@ export async function createHostedProposal(
     /** Overridable so a caller can seed a deliberately long description (§14 card geometry). */
     description?: string;
     categories?: string[];
+    /** Extra SKILL.md body text, e.g. content the §37 content check should flag. */
+    extraBody?: string;
   },
 ): Promise<string> {
-  const upload = await uploadBundle(page, opts.skillSlug);
+  const upload = await uploadBundle(page, opts.skillSlug, opts.extraBody);
   const res = await page.request.post("/api/proposals", {
     data: {
       namespaceSlug: opts.namespaceSlug,

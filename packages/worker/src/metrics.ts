@@ -28,4 +28,7 @@ export const M = {
   searchZeroResults: metrics.counter("skilly_search_zero_results_total", "Registry searches with a query that returned nothing, by surface"),
   searchIndexPending: metrics.gauge("skilly_search_index_pending", "Skill versions whose SKILL.md text awaits extraction"),
   searchIndexFailed: metrics.gauge("skilly_search_index_failed", "Skill versions whose SKILL.md text extraction gave up"),
+  // §37.13 content risk.
+  contentRiskFindings: metrics.counter("skilly_content_risk_findings_total", "Content-risk findings recorded at scan time, by rule and severity"),
+  contentRiskSweepPending: metrics.gauge("skilly_content_risk_sweep_pending", "Active versions not yet checked at the current content ruleset"),
 };

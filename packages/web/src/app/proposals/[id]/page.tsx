@@ -23,8 +23,9 @@ import { EmojiPicker } from "../../../components/EmojiPicker";
 import { SkillIcon } from "../../../components/SkillIcon";
 import { useIconCropFlow } from "../../../components/IconCropDialog";
 import { reportFeatureUse } from "../../../lib/surveyClient";
+import { ContentRiskFindingsList } from "../../../components/ContentRisk";
 
-interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string }
+interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string; line?: number; excerpt?: string; ruleset?: number }
 interface Meta {
   skillSlug: string;
   title: string;
@@ -68,6 +69,8 @@ interface Detail {
   caps: { isReviewer: boolean; isSubmitter: boolean }; allowedActions: string[];
   /** §29: the MCP client that submitted this, or null for a browser submission. */
   viaMcpClient?: string | null;
+  /** §37.4: 'content_risk' when a direct publish was routed here by the content check. */
+  routedReason?: string | null;
   submitterCard: SubmitterCard | null;
   conversationId: string | null;
   duplicate: { namespaceSlug: string; skillSlug: string; title: string } | null;
@@ -310,7 +313,15 @@ function ProposalDetailInner() {
   // Real issues (the "N findings" count) vs. the anti-virus engine's per-file output. ClamAV
   // records every file — including clean ones (severity `info`) — so reviewers can expand and see
   // exactly what it returned; only genuine detections (`malware`, critical) count as findings.
-  const issues = findings.filter((f) => f.severity !== "info");
+  // Content-risk findings get their own section (§37.8), so each finding appears exactly once.
+  const issues = findings.filter((f) => f.severity !== "info" && f.scanner !== "content-risk");
+  const contentFindings = findings.filter((f) => f.scanner === "content-risk");
+  const contentRan = contentFindings.some((f) => f.rule === "cr-scanned");
+  const contentRuleset = contentFindings.find((f) => f.rule === "cr-scanned")?.ruleset ?? null;
+  const contentIssues = contentFindings.filter((f) => f.severity !== "info");
+  const contentTop = ["critical", "high", "medium", "low"].find((s) => contentIssues.some((f) => f.severity === s)) ?? null;
+  // The Security scan pill describes its own findings; the override gate still uses the overall `sev`.
+  const securitySev = ["critical", "high", "medium", "low"].find((s) => issues.some((f) => f.severity === s)) ?? null;
   const avFindings = findings.filter((f) => f.scanner === "clamav");
   const avRan = avFindings.length > 0;
   const avUnavailable = avFindings.some((f) => f.rule === "scanner-unavailable");
@@ -485,6 +496,18 @@ function ProposalDetailInner() {
       {/* Duplicate alert (§8): this new-skill proposal matches an existing skill the reviewer can
           see. Shown regardless of enforcement mode — it may have slipped past a "warn" gate, or
           past "block" because the proposer couldn't see the (restricted) match that the reviewer can. */}
+      {data.routedReason === "content_risk" && (
+        <div
+          className="card card-pad"
+          data-testid="routed-banner"
+          style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "var(--warn-soft)", borderColor: "color-mix(in oklab, var(--warn) 35%, var(--line))" }}
+        >
+          <span aria-hidden style={{ fontSize: 18 }}>⚠</span>
+          <span style={{ fontSize: 13.5, flex: 1, minWidth: 220 }}>
+            This was submitted as a direct publish. The content check flagged it, so it needs a reviewer.
+          </span>
+        </div>
+      )}
       {data.duplicate && (
         <div
           className="card card-pad"
@@ -892,7 +915,7 @@ function ProposalDetailInner() {
           ) : data.scanReport.status === "unreachable" ? (
             <Pill tone="warn">source unreachable</Pill>
           ) : (
-            <Pill tone={SEV_TONE[sev ?? "info"] ?? "muted"}>{sev ?? "clean"}</Pill>
+            <Pill tone={SEV_TONE[securitySev ?? "info"] ?? "muted"}>{securitySev ?? "clean"}</Pill>
           )}
           <span className="muted mono" style={{ fontSize: 11, marginLeft: "auto" }}>{issues.length} finding{issues.length === 1 ? "" : "s"}</span>
         </div>
@@ -949,6 +972,40 @@ function ProposalDetailInner() {
               </div>
             )}
           </div>
+        )}
+      </div>
+
+      {/* Content risk (§37.8): the skill's text read as instructions to an agent. Same report as
+          the Security scan above; its findings are listed here instead of there. */}
+      <div className="card card-pad" style={{ marginTop: 26 }} id="content-risk" data-testid="content-risk-section">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 19 }}>Content risk</h2>
+          {!data.scanReport ? (
+            <Pill tone="muted">not scanned</Pill>
+          ) : data.scanReport.status === "pending" ? (
+            <Pill tone="muted">scan pending</Pill>
+          ) : data.scanReport.status === "unreachable" ? (
+            <Pill tone="warn">source unreachable</Pill>
+          ) : !contentRan ? (
+            <Pill tone="muted">not checked</Pill>
+          ) : (
+            <Pill tone={contentTop ? SEV_TONE[contentTop] ?? "muted" : "ok"}>{contentTop ?? "clean"}</Pill>
+          )}
+          <span className="muted mono" style={{ fontSize: 11, marginLeft: "auto" }}>{contentIssues.length} finding{contentIssues.length === 1 ? "" : "s"}</span>
+        </div>
+        {data.scanReport && data.scanReport.status !== "pending" && data.scanReport.status !== "unreachable" && (
+          !contentRan ? (
+            <p className="muted" style={{ fontSize: 13, margin: 0 }}>This report was produced before the content check existed. It runs automatically on the next upload or revision.</p>
+          ) : contentIssues.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13, margin: 0 }}>No content risks found (ruleset {contentRuleset}).</p>
+          ) : (
+            <>
+              <p className="muted" style={{ fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+                The skill’s text, read as instructions an agent will follow. High findings need the override below to accept.
+              </p>
+              <ContentRiskFindingsList findings={contentIssues} />
+            </>
+          )
         )}
       </div>
 

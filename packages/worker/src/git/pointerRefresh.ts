@@ -7,7 +7,7 @@
 // mutated. SKILLY_SPEC.md §13 (Pointer scan-on-fetch caching, "external" trust).
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import { maxSeverity, bundleContentCap, type ScanFinding } from "@skilly/shared";
+import { maxSeverity, bundleContentCap, contentRiskTripsGate, type ScanFinding } from "@skilly/shared";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { fetchPointerFiles } from "./mirror.js";
 import { extractBundle } from "./bundle.js";
@@ -125,7 +125,7 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
           await pool.query(
             `insert into notifications (user_id, type, payload)
              select uid, 'skill.drift',
-                    jsonb_build_object('namespaceSlug',$2::text,'skillSlug',$3::text,'semver',$4::text,'ref',$5::text)
+                    jsonb_build_object('namespaceSlug',$2::text,'skillSlug',$3::text,'semver',$4::text,'ref',$5::text,'contentRisk',$7::boolean)
                from (
                  select sm.user_id as uid from skill_maintainers sm where sm.skill_id = $1
                  union
@@ -135,7 +135,8 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
                   where rm.namespace_id = $6 and rm.role = 'namespace_admin'
                ) recipients
                join users u on u.id = recipients.uid and u.drift_notifications`,
-            [row.skill_id, row.ns_slug, row.skill_slug, row.semver, row.external_ref, row.namespace_id],
+            // §37.5: the drifted upstream content also trips the content check → one more sentence.
+            [row.skill_id, row.ns_slug, row.skill_slug, row.semver, row.external_ref, row.namespace_id, contentRiskTripsGate(findings)],
           );
         }
       }

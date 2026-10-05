@@ -31,6 +31,7 @@ import {
   normalizeSubdir,
   parseSemver,
   runScanners,
+  countContentRiskFindings,
   validateBundle,
   validateGitRef,
   validatePointerUrl,
@@ -674,6 +675,7 @@ async function ingestHostedBundle(
   if (!validation.ok) return fail(`invalid bundle: ${validation.errors.join("; ")}`);
 
   const findings = await runScanners(files, PURE_SCANNERS);
+  countContentRiskFindings(M.contentRiskFindings, findings); // §37.13
   const severity = maxSeverity(findings) ?? "info";
   const contentSha256 = contentDigest(files);
   const { createHash } = await import("node:crypto");

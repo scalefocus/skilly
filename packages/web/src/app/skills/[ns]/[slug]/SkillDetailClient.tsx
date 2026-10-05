@@ -15,6 +15,9 @@ import { resolvePredecessor } from "@skilly/shared/semver";
 import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
+import { ContentRiskCard } from "./ContentRiskCard";
+import { ContentRiskChip } from "../../../../components/ContentRisk";
+import type { ContentRiskStatus } from "@skilly/shared/content-risk-status";
 import { FollowButton } from "../../../../components/FollowButton";
 import { reportFeatureUse } from "../../../../lib/surveyClient";
 
@@ -156,6 +159,10 @@ interface Detail {
   featured: boolean; canFeature: boolean;
   canManage: boolean; canDelete: boolean; canPromote: boolean; isGlobal: boolean; canRetryMirror: boolean;
   discussionCount: number;
+  /** §37.7: the displayed version's content-check status (no findings), or null with no version. */
+  contentRisk: { semver: string; status: ContentRiskStatus; ruleset: number } | null;
+  /** §37.8: maintainers / namespace admins / platform admins also get the full Content risk card. */
+  canSeeContentRisk: boolean;
   /** Optional skill icon (§33) — image and/or emoji, or null. */
   icon: { url: string | null; emoji: string | null } | null;
 }
@@ -321,6 +328,7 @@ export default function SkillDetail() {
         {data.latest && <span className="chip chip-accent">v{data.latest}</span>}
         {data.visibility === "namespace" ? <Pill tone="warn">restricted</Pill> : <Pill tone="ok">org-wide</Pill>}
         {data.archived && <Pill tone="danger">archived</Pill>}
+        {data.contentRisk && <ContentRiskChip status={data.contentRisk.status} />}
         <span className="grow" style={{ flex: 1 }} />
         {data.watchers > 0 && (
           <span className="muted mono" style={{ fontSize: 12 }} title={`${data.watchers} ${data.watchers === 1 ? "person is" : "people are"} watching this skill`}>
@@ -643,6 +651,10 @@ export default function SkillDetail() {
       <RatingPanel rating={data.rating} busy={busy} onRate={rate} readOnly={data.archived} />
 
       <MaintainersPanel ns={ns} slug={slug} />
+
+      {data.canSeeContentRisk && data.contentRisk && (
+        <ContentRiskCard ns={ns} slug={slug} initialStatus={data.contentRisk.status} onChanged={reload} />
+      )}
 
       <SkillDiscussion ns={ns} slug={slug} versions={data.versions} latest={data.latest} initialCount={data.discussionCount} />
 

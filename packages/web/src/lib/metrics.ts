@@ -15,4 +15,6 @@ export const M = {
   searchZeroResults: metrics.counter("skilly_search_zero_results_total", "Registry searches with a query that returned nothing, by surface"),
   rateLimited: metrics.counter("skilly_rate_limited_total", "Requests rejected by the rate limiter"),
   cspReports: metrics.counter("skilly_csp_reports_total", "CSP violation reports received (§22)"),
+  // §37.13 content risk — findings recorded at hosted upload.
+  contentRiskFindings: metrics.counter("skilly_content_risk_findings_total", "Content-risk findings recorded at scan time, by rule and severity"),
 };

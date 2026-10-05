@@ -15,7 +15,7 @@
 // (in-app/webhook), never queuing up to burst-send later.
 import type { Pool } from "pg";
 import { GraphSendError } from "@skilly/shared/email";
-import { followNotificationContent, isFollowNotificationType, notificationTitle } from "@skilly/shared";
+import { followNotificationContent, isFollowNotificationType, notificationTitle, contentRiskRuleLabel } from "@skilly/shared";
 
 const MAX_ATTEMPTS = Number(process.env.NOTIFY_MAX_ATTEMPTS ?? 5);
 const BATCH = Number(process.env.NOTIFY_BATCH ?? 50);
@@ -152,6 +152,8 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
       label = "View the skill";
     } else if (n.type === "skill.drift") {
       sentence = `${slug} has drifted from its pinned upstream ref (${p.ref ?? ""}).`;
+      // §37.5: one extra sentence when the changed upstream content also trips the content check.
+      if (p.contentRisk === true) sentence += " The upstream change also trips the content check.";
       label = "Review it";
     } else {
       sentence = `${slug} was marked official.`;
@@ -162,6 +164,20 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
       subject: s,
       text: `${sentence} ${cta(label, path)}`,
       webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, ref: p.ref ?? null, url: abs(path) },
+    };
+  }
+
+  // §37.9: the re-scan sweep flagged a published version. Links to the owner Content risk card.
+  if (n.type === "skill.content_risk" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#content-risk`;
+    const rules = Array.isArray(p.rules) ? (p.rules as unknown[]).filter((r): r is string => typeof r === "string") : [];
+    const labels = rules.map(contentRiskRuleLabel).join(", ");
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `The content check flagged ${slug} v${p.semver ?? ""}${labels ? `: ${labels}` : ""}. ${cta("Review the findings", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, rules, url: abs(path) },
     };
   }
 
