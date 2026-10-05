@@ -19,7 +19,7 @@ interface Entry {
   skillsRequested: number;
   /** Active followers (§35.7) — 0 while the person has paused follows. */
   followers: number;
-  /** Collections holding at least 3 eligible skills (§37.8). */
+  /** Collections holding at least 3 eligible skills (§38.8). */
   collections: number;
   followable: boolean;
 }
@@ -28,7 +28,7 @@ function Leaderboard() {
   // §36.3 opening the leaderboard is the `leaderboard` feature's first use.
   useEffect(() => { reportFeatureUse("leaderboard"); }, []);
   const [window, setWindow] = useState<"all" | "30d">("all");
-  // Ranking metric (§26/§35.7/§37.8): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested / followers / collections.
+  // Ranking metric (§26/§35.7/§38.8): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested / followers / collections.
   const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested" | "followed" | "curated">("installs");
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
   // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills and "Requests" to Mine).
@@ -92,7 +92,7 @@ function Leaderboard() {
             // Your own row → the requests page's "Mine" toggle; anyone else → the requested-by view
             // (banner shows their name). Requests have no namespace, so nothing to visibility-filter (§21/§26).
             const requestsHref = isSelf ? "/requests?mine=1" : `/requests?requester=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
-            // §37.8 every skill across that person's non-empty collections, own row included.
+            // §38.8 every skill across that person's non-empty collections, own row included.
             const collectionsHref = `/catalog?collectionsBy=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
             return (
             <div className="row lb-row" key={e.userId} style={{ alignItems: "center", gap: 12 }}>

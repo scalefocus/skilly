@@ -1,4 +1,4 @@
-// The 25 curated MCP tools (§29; `get_collections` joined in §37.9). Definitions (JSON Schema, for
+// The 25 curated MCP tools (§29; `get_collections` joined in §38.9). Definitions (JSON Schema, for
 // the client) + dispatch.
 //
 // THE CEILING IS 25. A 26th tool is a spec change, not an implementation detail — the first
@@ -603,7 +603,7 @@ export async function callTool(
     }
 
     case "get_collections": {
-      // §37.9 — read-only. An id wins over a query; neither lists the caller's own.
+      // §38.9 — read-only. An id wins over a query; neither lists the caller's own.
       const id = s(args, "id");
       if (id) {
         const detail = await getCollectionDetail(pool, caller.access, id);

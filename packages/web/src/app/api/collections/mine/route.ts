@@ -1,5 +1,5 @@
-// The caller's own collections (SKILLY_SPEC.md §37.7 / §37.11), newest first, with eligible member
-// counts. `?skillId=` adds `contains` + `itemCount` per row for the Add-to-collection popup (§37.3).
+// The caller's own collections (SKILLY_SPEC.md §38.7 / §38.11), newest first, with eligible member
+// counts. `?skillId=` adds `contains` + `itemCount` per row for the Add-to-collection popup (§38.3).
 import { listMyCollections } from "../../../../lib/collections";
 import { collectionCaller } from "../../../../lib/collectionsApi";
 

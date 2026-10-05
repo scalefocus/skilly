@@ -12,7 +12,7 @@ import { agentLabel } from "@skilly/shared/agents";
 import { collectionPath } from "@skilly/shared/collections";
 import { UserBubble } from "../../components/UserBubble";
 
-/** §37.5 the collection banner's data (GET /api/collections/:id). */
+/** §38.5 the collection banner's data (GET /api/collections/:id). */
 interface CollectionInfo {
   collection: { id: string; name: string; description: string | null; skillCount: number; owner: { id: string; name: string; avatar: string | null } };
   isOwner: boolean;
@@ -50,7 +50,7 @@ function Catalog() {
   // display name for the banner (no extra lookup).
   const nsView = params.get("ns");
   const nsViewName = params.get("nsName") ?? "";
-  // Collection views (§37.5): `?collection=<id>` — one collection, the shareable link — or
+  // Collection views (§38.5): `?collection=<id>` — one collection, the shareable link — or
   // `?collectionsBy=<userId>&by=<name>` — every skill across one person's non-empty collections (the
   // leaderboard's Collections action). Like the namespace view, arrival ignores the viewer's saved
   // filters but the facets stay usable and compose with it; picks inside the view aren't persisted.
@@ -151,7 +151,7 @@ function Catalog() {
     qs.set("maintainer", maintainer);
   } else {
     if (nsView) qs.set("ns", nsView); // namespace view (§10) — combines with the facets below
-    // §37.5 collection views — only once the collection is known to exist (a missing one leaves the
+    // §38.5 collection views — only once the collection is known to exist (a missing one leaves the
     // catalog unfiltered under its "no longer exists" banner).
     if (activeCollection) qs.set("collection", activeCollection.collection.id);
     else if (collectionsBy) qs.set("collectionsBy", collectionsBy);
@@ -169,7 +169,7 @@ function Catalog() {
   // Hold the grid while a `?collection=` banner is still resolving, so it never flashes the full catalog.
   const skillsUrl = collection === "loading" ? null : `/api/skills${qs.toString() ? `?${qs}` : ""}`;
   const { data, loading, error, reload } = useApi<{ skills: CatalogEntry[]; matchMode?: "all" | "any" | null; collections?: { id: string; name: string; skillCount: number }[] }>(skillsUrl);
-  // The owner's "Remove from collection" (§37.5): the same request as the popup's untick.
+  // The owner's "Remove from collection" (§38.5): the same request as the popup's untick.
   const [removing, setRemoving] = useState<string | null>(null);
   const removeFromCollection = async (s: CatalogEntry) => {
     if (!activeCollection || !s.skillId) return;
@@ -240,7 +240,7 @@ function Catalog() {
         </div>
       )}
 
-      {/* Collection banners (§37.5): one collection (the shareable link), or one person's collections. */}
+      {/* Collection banners (§38.5): one collection (the shareable link), or one person's collections. */}
       {!maintainer && collectionParam && collection === "missing" && (
         <div className="reveal collection-banner" data-testid="collection-banner" role="status">
           <div className="collection-banner-head">
@@ -442,7 +442,7 @@ function Catalog() {
   );
 }
 
-/** §37.5 the collection owner's per-skill remove control (outside the card, so nothing is covered). */
+/** §38.5 the collection owner's per-skill remove control (outside the card, so nothing is covered). */
 function RemoveFromCollection({ s, busy, onRemove }: { s: CatalogEntry; busy: boolean; onRemove: (s: CatalogEntry) => void }) {
   return (
     <button

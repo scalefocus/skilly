@@ -1,4 +1,4 @@
-// Collection membership (SKILLY_SPEC.md §37.3 / §37.11). Owner only, both idempotent.
+// Collection membership (SKILLY_SPEC.md §38.3 / §38.11). Owner only, both idempotent.
 //   PUT    add — 422 for an ineligible skill (not org-visible, archived, or nothing installable),
 //          409 collection_full at 50 skills.
 //   DELETE remove — the popup's untick and the catalog card's ✕.

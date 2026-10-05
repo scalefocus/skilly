@@ -14,7 +14,7 @@ export const BADGE_META: Record<LeaderMetric, { icon: string; color: string; lab
   // §35.7 — the one metric whose two windows carry distinct names and glyphs (see badgeIcon /
   // badgeLabel); these are the all-time values.
   followed: { icon: "📣", color: "var(--badge-follow)", label: "Influencer-in-Chief" },
-  // §37.8 — Curator, in a teal none of the other six use.
+  // §38.8 — Curator, in a teal none of the other six use.
   curated: { icon: "🗂", color: "var(--badge-curate)", label: "Curator" },
 };
 

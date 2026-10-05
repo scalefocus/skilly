@@ -1,4 +1,4 @@
-// Create a skill collection with its first member (SKILLY_SPEC.md §37.3 / §37.11).
+// Create a skill collection with its first member (SKILLY_SPEC.md §38.3 / §38.11).
 // POST { name, skillId } → 201 { collection }; 409 collection_limit / name_taken; 422 invalid name or
 // an ineligible skill. Any signed-in user.
 import { createCollection } from "../../../lib/collections";

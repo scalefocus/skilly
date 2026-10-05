@@ -30,7 +30,7 @@ export interface CatalogEntry {
   isNew?: boolean;
   /** Platform-admin "Official" endorsement (§7) — drives the Official badge. */
   official?: boolean;
-  /** The skill id (catalog listings) — the collection owner's remove control uses it (§37.5). */
+  /** The skill id (catalog listings) — the collection owner's remove control uses it (§38.5). */
   skillId?: string;
 }
 

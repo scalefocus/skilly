@@ -1,30 +1,30 @@
-// Skill collections (SKILLY_SPEC.md §37). The rules both tiers must agree on:
+// Skill collections (SKILLY_SPEC.md §38). The rules both tiers must agree on:
 //
-//   - the limits and the name/description validation (§37.1);
+//   - the limits and the name/description validation (§38.1);
 //   - the ELIGIBILITY predicate — a member must be org-visible, active and installable — and the
-//     ONE eviction statement every lifecycle path runs when a skill stops qualifying (§37.4);
+//     ONE eviction statement every lifecycle path runs when a skill stops qualifying (§38.4);
 //   - the eligible-member count, which every read uses so a missed eviction can never surface;
 //   - the collection matcher behind the header dropdown and the MCP `get_collections` query
-//     (§37.6) — a substring ILIKE over name, description and owner name, NOT the §34 engine.
+//     (§38.6) — a substring ILIKE over name, description and owner name, NOT the §34 engine.
 //
 // Client-safe (no node deps); exported via the barrel and the `@skilly/shared/collections` subpath.
 
-/** Collections one person may own (§37.1). */
+/** Collections one person may own (§38.1). */
 export const MAX_COLLECTIONS_PER_OWNER = 50;
-/** Skills one collection may hold (§37.1). */
+/** Skills one collection may hold (§38.1). */
 export const MAX_SKILLS_PER_COLLECTION = 50;
-/** Name length bounds, in characters, after trimming (§37.1). */
+/** Name length bounds, in characters, after trimming (§38.1). */
 export const COLLECTION_NAME_MIN = 1;
 export const COLLECTION_NAME_MAX = 60;
-/** Description bound, in characters (§37.1). */
+/** Description bound, in characters (§38.1). */
 export const COLLECTION_DESCRIPTION_MAX = 500;
-/** A collection counts toward the leaderboard stat only with at least this many eligible skills (§37.8). */
+/** A collection counts toward the leaderboard stat only with at least this many eligible skills (§38.8). */
 export const COLLECTION_LEADERBOARD_MIN_SKILLS = 3;
-/** The header dropdown's Collections group size (§37.6). */
+/** The header dropdown's Collections group size (§38.6). */
 export const COLLECTION_SUGGEST_LIMIT = 3;
-/** The MCP `get_collections` query result size (§37.9). */
+/** The MCP `get_collections` query result size (§38.9). */
 export const COLLECTION_MCP_QUERY_LIMIT = 10;
-/** The query floor shared with the skill dropdown (§37.6). */
+/** The query floor shared with the skill dropdown (§38.6). */
 export const COLLECTION_QUERY_MIN_CHARS = 2;
 /** Per-user write budget for the collection endpoints (the watch/follow budget). */
 export const COLLECTION_WRITE_RATE_LIMIT_PER_MIN = 120;
@@ -36,7 +36,7 @@ function charLength(s: string): number {
 
 export type Validated<T> = { ok: true; value: T } | { ok: false; error: string };
 
-/** Trim and bound a collection name (§37.1). */
+/** Trim and bound a collection name (§38.1). */
 export function validateCollectionName(raw: unknown): Validated<string> {
   if (typeof raw !== "string") return { ok: false, error: "a collection name is required" };
   const name = raw.trim();
@@ -46,7 +46,7 @@ export function validateCollectionName(raw: unknown): Validated<string> {
   return { ok: true, value: name };
 }
 
-/** Trim and bound a description; blank becomes null (§37.1). Plain text, stored as typed. */
+/** Trim and bound a description; blank becomes null (§38.1). Plain text, stored as typed. */
 export function validateCollectionDescription(raw: unknown): Validated<string | null> {
   if (raw === null || raw === undefined) return { ok: true, value: null };
   if (typeof raw !== "string") return { ok: false, error: "the description must be text" };
@@ -58,12 +58,12 @@ export function validateCollectionDescription(raw: unknown): Validated<string | 
   return { ok: true, value: d };
 }
 
-/** Case-insensitive name equality, the rule behind the per-owner unique index (§37.1). */
+/** Case-insensitive name equality, the rule behind the per-owner unique index (§38.1). */
 export function sameCollectionName(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
-// ── Eligibility & eviction (§37.1 / §37.4) ────────────────────────────────────────────────────
+// ── Eligibility & eviction (§38.1 / §38.4) ────────────────────────────────────────────────────
 
 /**
  * The eligibility predicate for a `skills` alias: org-visible, not archived, and at least one
@@ -80,7 +80,7 @@ export function isCollectionEligible(s: { visibility: string; archived: boolean;
 }
 
 /**
- * The ONE eviction statement (§37.4): remove skill `$1` from every collection unless it is still
+ * The ONE eviction statement (§38.4): remove skill `$1` from every collection unless it is still
  * eligible. Safe to run after any lifecycle change; a no-op for a still-eligible skill. Every path
  * that archives a skill, yanks its last installable version or narrows its visibility runs this.
  */
@@ -98,13 +98,13 @@ export async function evictFromCollections(db: CollectionQueryable, skillId: str
   await db.query(COLLECTION_EVICT_SQL, [skillId]);
 }
 
-/** The eligible-member count for a `skill_collections` alias — every read uses it (§37.4). */
+/** The eligible-member count for a `skill_collections` alias — every read uses it (§38.4). */
 export function collectionMemberCountSql(alias = "c"): string {
   return `(select count(*) from skill_collection_items ci join skills s on s.id = ci.skill_id` +
     ` where ci.collection_id = ${alias}.id and ${collectionEligibleSql("s")})::int`;
 }
 
-// ── The matcher (§37.6) ──────────────────────────────────────────────────────────────────────
+// ── The matcher (§38.6) ──────────────────────────────────────────────────────────────────────
 
 /** Escape `%`, `_` and `\` for an ILIKE pattern with `escape '\'`. */
 export function likePattern(q: string): string {
@@ -138,12 +138,12 @@ export function collectionMatchSql(q: string, limit: number): { text: string; va
   return { text, values };
 }
 
-/** A UUID check for path and query parameters (ids are random UUIDs, §37.1). */
+/** A UUID check for path and query parameters (ids are random UUIDs, §38.1). */
 export function isCollectionId(v: unknown): v is string {
   return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 }
 
-/** The shareable link for a collection — the catalog filtered to it (§37.5). */
+/** The shareable link for a collection — the catalog filtered to it (§38.5). */
 export function collectionPath(id: string): string {
   return `/catalog?collection=${encodeURIComponent(id)}`;
 }

@@ -1,4 +1,4 @@
-// Skill collections (SKILLY_SPEC.md §37) — the web tier's reads and writes. The limits, the
+// Skill collections (SKILLY_SPEC.md §38) — the web tier's reads and writes. The limits, the
 // validation, the eligibility predicate, the eviction statement and the matcher live in
 // @skilly/shared/collections so the worker's MCP `get_collections` runs the same rules.
 //
@@ -48,7 +48,7 @@ export interface CollectionView extends CollectionSummary {
 
 const OWNER_NAME = nameSql("u.display_name", "u.email");
 
-/** Postgres unique-violation on the per-owner name index (§37.1). */
+/** Postgres unique-violation on the per-owner name index (§38.1). */
 function isNameTaken(e: unknown): boolean {
   return (e as { code?: string; constraint?: string })?.code === "23505";
 }
@@ -62,8 +62,8 @@ async function isEligibleSkill(db: PoolClient | typeof pool, skillId: string): P
 // ── Reads ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The caller's own collections, newest first (the profile card, §37.7). With `skillId`, each row
- * also says whether that skill is a member and how many items it holds (the popup, §37.3).
+ * The caller's own collections, newest first (the profile card, §38.7). With `skillId`, each row
+ * also says whether that skill is a member and how many items it holds (the popup, §38.3).
  */
 export async function listMyCollections(ownerId: string, skillId?: string | null): Promise<CollectionSummary[]> {
   const withSkill = skillId && isCollectionId(skillId) ? skillId : null;
@@ -90,7 +90,7 @@ export async function listMyCollections(ownerId: string, skillId?: string | null
   }));
 }
 
-/** One collection, any owner (the catalog banner, §37.5). Null for an unknown id. */
+/** One collection, any owner (the catalog banner, §38.5). Null for an unknown id. */
 export async function getCollection(id: string): Promise<CollectionView | null> {
   if (!isCollectionId(id)) return null;
   const { rows } = await pool.query<{
@@ -117,7 +117,7 @@ export async function getCollection(id: string): Promise<CollectionView | null> 
   };
 }
 
-/** A person's NON-EMPTY collections, for the `?collectionsBy=` banner chips (§37.5), newest first. */
+/** A person's NON-EMPTY collections, for the `?collectionsBy=` banner chips (§38.5), newest first. */
 export async function listNonEmptyCollectionsOf(ownerId: string): Promise<{ id: string; name: string; skillCount: number }[]> {
   if (!isCollectionId(ownerId)) return [];
   const { rows } = await pool.query<{ id: string; name: string; skill_count: number }>(
@@ -137,7 +137,7 @@ export interface CollectionSuggestion {
   owner: { id: string; name: string; avatar: string | null };
 }
 
-/** The header dropdown's Collections group (§37.6): the shared matcher, top 3. */
+/** The header dropdown's Collections group (§38.6): the shared matcher, top 3. */
 export async function suggestCollections(q: string, limit = COLLECTION_SUGGEST_LIMIT): Promise<CollectionSuggestion[]> {
   if (q.trim().length < COLLECTION_QUERY_MIN_CHARS) return [];
   const { text, values } = collectionMatchSql(q, limit);
@@ -148,9 +148,9 @@ export async function suggestCollections(q: string, limit = COLLECTION_SUGGEST_L
 // ── Writes ────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Create a collection with its first member (§37.3). 422 for an invalid name or an ineligible
+ * Create a collection with its first member (§38.3). 422 for an invalid name or an ineligible
  * skill, 409 `collection_limit` at 50, 409 `name_taken` for a duplicate (ignoring case). In the same
- * transaction the owner's followers hear about it (§37.8, no visibility gate: every member is
+ * transaction the owner's followers hear about it (§38.8, no visibility gate: every member is
  * org-visible); after commit the creator earns Mixtape (best-effort, a Habits event).
  */
 export async function createCollection(ownerId: string, rawName: unknown, skillId: unknown): Promise<CollectionResult<CollectionSummary>> {
@@ -196,7 +196,7 @@ export async function createCollection(ownerId: string, rawName: unknown, skillI
   } finally {
     client.release();
   }
-  await tryAward(pool, ownerId, "first_collection"); // §37.8 Mixtape
+  await tryAward(pool, ownerId, "first_collection"); // §38.8 Mixtape
   return { ok: true, value: created };
 }
 
@@ -205,12 +205,12 @@ async function ownedCollection(actorId: string, id: string): Promise<CollectionR
   const { rows } = await pool.query<{ owner_id: string }>(`select owner_id from skill_collections where id = $1`, [id]);
   const r = rows[0];
   if (!r) return fail(404, "not found");
-  // Collections are not secret (every member is org-visible), so a 403 here is no oracle (§37.11).
+  // Collections are not secret (every member is org-visible), so a 403 here is no oracle (§38.11).
   if (r.owner_id !== actorId) return fail(403, "only the owner can change this collection");
   return { ok: true, value: { id, ownerId: r.owner_id } };
 }
 
-/** Owner-only rename / description edit (§37.7). */
+/** Owner-only rename / description edit (§38.7). */
 export async function updateCollection(
   actorId: string,
   id: string,
@@ -245,8 +245,8 @@ export async function updateCollection(
 }
 
 /**
- * Hard-delete a collection and its items (§37.7). The owner, or any platform admin (moderation);
- * an admin deleting SOMEONE ELSE's collection is audited as `collection.deleted` (§37.10).
+ * Hard-delete a collection and its items (§38.7). The owner, or any platform admin (moderation);
+ * an admin deleting SOMEONE ELSE's collection is audited as `collection.deleted` (§38.10).
  */
 export async function deleteCollection(access: EffectiveAccess, actorId: string, id: string): Promise<CollectionResult<null>> {
   if (!isCollectionId(id)) return fail(404, "not found");
@@ -277,7 +277,7 @@ export async function deleteCollection(access: EffectiveAccess, actorId: string,
   return { ok: true, value: null };
 }
 
-/** Owner-only add (§37.3). Idempotent; 422 for an ineligible skill, 409 `collection_full` at 50. */
+/** Owner-only add (§38.3). Idempotent; 422 for an ineligible skill, 409 `collection_full` at 50. */
 export async function addSkillToCollection(actorId: string, id: string, skillId: string): Promise<CollectionResult<null>> {
   const owned = await ownedCollection(actorId, id);
   if (!owned.ok) return owned;
@@ -310,7 +310,7 @@ export async function addSkillToCollection(actorId: string, id: string, skillId:
   return { ok: true, value: null };
 }
 
-/** Owner-only remove (§37.3 untick / §37.5 card ✕). Idempotent. */
+/** Owner-only remove (§38.3 untick / §38.5 card ✕). Idempotent. */
 export async function removeSkillFromCollection(actorId: string, id: string, skillId: string): Promise<CollectionResult<null>> {
   const owned = await ownedCollection(actorId, id);
   if (!owned.ok) return owned;

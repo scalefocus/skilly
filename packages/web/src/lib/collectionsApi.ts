@@ -1,4 +1,4 @@
-// Shared plumbing for the /api/collections routes (SKILLY_SPEC.md §37.11): the signed-in caller,
+// Shared plumbing for the /api/collections routes (SKILLY_SPEC.md §38.11): the signed-in caller,
 // the per-user write budget, and the result → Response mapping.
 import { getServerSession } from "next-auth";
 import type { EffectiveAccess } from "@skilly/shared";

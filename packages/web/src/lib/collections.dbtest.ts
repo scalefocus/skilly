@@ -1,8 +1,8 @@
-// Live-DB integration test for skill collections (SKILLY_SPEC.md §37). Gated behind SKILLY_DB_E2E=1.
+// Live-DB integration test for skill collections (SKILLY_SPEC.md §38). Gated behind SKILLY_DB_E2E=1.
 //
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… pnpm --filter @skilly/web test:db
 //
-// Covers (§37.13): create with a first skill, the 50-collection and 50-skill limits, name_taken
+// Covers (§38.13): create with a first skill, the 50-collection and 50-skill limits, name_taken
 // ignoring case, ineligible skills 422, owner-only edits (403), admin delete audited and owner delete
 // not; eviction on archive / last-version yank / visibility narrowing / hard delete, and no re-add on
 // restore; a collection read never returns a restricted skill even with an item row forced past
@@ -182,7 +182,7 @@ test("collections: delete — owner unaudited, platform admin audited, others 40
   assert.equal(err(await deleteCollection(platform, admin, theirs.id)), "404 not found");
 });
 
-test("collections: eviction on archive, last-version yank, narrowing and hard delete — never re-added (§37.4)", { skip: !enabled }, async () => {
+test("collections: eviction on archive, last-version yank, narrowing and hard delete — never re-added (§38.4)", { skip: !enabled }, async () => {
   const owner = await mkUser("evict");
   const arch = await mkSkill("ev-arch");
   const yank = await mkSkill("ev-yank");
@@ -226,7 +226,7 @@ test("collections: eviction on archive, last-version yank, narrowing and hard de
   await pool.query(`update skills set visibility = 'org' where id = $1`, [narrow]);
 });
 
-test("collections: a forced restricted item never surfaces; catalog views and chips (§37.4 / §37.5)", { skip: !enabled }, async () => {
+test("collections: a forced restricted item never surfaces; catalog views and chips (§38.4 / §38.5)", { skip: !enabled }, async () => {
   const owner = await mkUser("view");
   const a = await mkSkill("view-a");
   const b = await mkSkill("view-b");
@@ -249,7 +249,7 @@ test("collections: a forced restricted item never surfaces; catalog views and ch
   assert.ok(chips.find((c) => c.id === c2.id));
 });
 
-test("collections: suggest — floor, ranking, top 3, empty and inactive owners excluded (§37.6)", { skip: !enabled }, async () => {
+test("collections: suggest — floor, ranking, top 3, empty and inactive owners excluded (§38.6)", { skip: !enabled }, async () => {
   const ada = await mkUser("sug-ada");
   const leaver = await mkUser("sug-leaver");
   await pool.query(`update users set display_name = 'Zebracurator Ada' where id = $1`, [ada]);
@@ -278,7 +278,7 @@ test("collections: suggest — floor, ranking, top 3, empty and inactive owners 
   await pool.query(`update users set status = 'active' where id = $1`, [leaver]);
 });
 
-test("collections: follower fan-out, Mixtape, leaderboard threshold, erasure (§37.8 / §37.10)", { skip: !enabled }, async () => {
+test("collections: follower fan-out, Mixtape, leaderboard threshold, erasure (§38.8 / §38.10)", { skip: !enabled }, async () => {
   const curator = await mkUser("lb-curator");
   const fan = await mkUser("lb-fan");
   const admin = await mkUser("lb-admin");

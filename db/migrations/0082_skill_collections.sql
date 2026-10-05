@@ -1,11 +1,11 @@
--- Skill collections (SKILLY_SPEC.md §37).
+-- Skill collections (SKILLY_SPEC.md §38).
 --
 --   skill_collections       a user-owned, named list of skills (an onboarding pack). Any signed-in
 --                           user owns up to 50; names are unique per owner ignoring case. Owning one
---                           grants no authority (invariant #1). Deleted on GDPR erasure (§37.10).
+--                           grants no authority (invariant #1). Deleted on GDPR erasure (§38.10).
 --   skill_collection_items  one row per (collection, skill). Members are org-visible, active,
 --                           installable skills only; a skill that stops qualifying is evicted by the
---                           shared statement in @skilly/shared/collections (§37.4). A permanently
+--                           shared statement in @skilly/shared/collections (§38.4). A permanently
 --                           deleted skill cascades its items away.
 --
 -- No backfill: both tables start empty. Grants come from the 0002 default privileges (SELECT,
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS skill_collections (
   CONSTRAINT skill_collections_description_len CHECK (description IS NULL OR char_length(description) <= 500)
 );
 
--- Unique per owner, ignoring case (§37.1). Also serves the owner's own list.
+-- Unique per owner, ignoring case (§38.1). Also serves the owner's own list.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_skill_collections_owner_name ON skill_collections (owner_id, lower(name));
 
 CREATE TABLE IF NOT EXISTS skill_collection_items (

@@ -1,5 +1,5 @@
 // Leader badges: a small "you're #1" marker shown under a user's avatar bubble everywhere one
-// appears (SKILLY_SPEC.md §21 extension). Seven metrics (followers joined in §35.7, collections in §37.8) — the same ones the leaderboard already
+// appears (SKILLY_SPEC.md §21 extension). Seven metrics (followers joined in §35.7, collections in §38.8) — the same ones the leaderboard already
 // ranks by (installs / skills adopted / requests fulfilled / skills watched / skills requested) —
 // each in two windows (all-time / last-30-days), so up to 14 badges per user. A user is a "leader" for a
 // metric+window when they're tied for the TOP value of that metric in that window (ties all get
@@ -27,7 +27,7 @@ const METRICS: { metric: LeaderMetric; sort: LeaderboardSort; value: (e: Leaderb
   { metric: "requested", sort: "requested", value: (e) => e.skillsRequested },
   // §35.7 — Influencer-in-Chief (all time) / Trendsetter (last 30 days). Paused users read 0.
   { metric: "followed", sort: "followed", value: (e) => e.followers },
-  // §37.8 — Curator: collections holding at least 3 eligible skills.
+  // §38.8 — Curator: collections holding at least 3 eligible skills.
   { metric: "curated", sort: "curated", value: (e) => e.collections },
 ];
 const WINDOWS: LeaderboardWindow[] = ["all", "30d"];

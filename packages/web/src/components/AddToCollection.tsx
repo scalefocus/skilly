@@ -1,5 +1,5 @@
 "use client";
-// "Add to collection" (SKILLY_SPEC.md §37.3): the detail page's button + popup. The popup lists the
+// "Add to collection" (SKILLY_SPEC.md §38.3): the detail page's button + popup. The popup lists the
 // caller's own collections as checkboxes (ticked where this skill is already a member), filtered by
 // the name box; a "Create "‹name›"" row appears when the typed name matches none of them. Ticking
 // adds and unticking removes immediately — one request per change, a short toast, no Save button.
@@ -58,7 +58,7 @@ export function AddToCollection({ skillId }: { skillId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Outside click / Escape dismiss (§37.3, the §23 split-button behavior).
+  // Outside click / Escape dismiss (§38.3, the §23 split-button behavior).
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {

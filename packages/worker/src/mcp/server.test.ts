@@ -91,7 +91,7 @@ test("tools/list exposes exactly the 25 curated tools, with read-only hints", as
   assert.equal(search.annotations.readOnlyHint, true);
   const install = tools.find((t) => t.name === "install_skill")!;
   assert.equal(install.annotations.readOnlyHint, false);
-  // §37.9 agents read collections; people curate them.
+  // §38.9 agents read collections; people curate them.
   const collections = tools.find((t) => t.name === "get_collections")!;
   assert.equal(collections.annotations.readOnlyHint, true);
 });
@@ -184,7 +184,7 @@ const COLLECTION = "33333333-3333-4333-8333-333333333333";
 const callCollections = (fp: FakePool, args: Record<string, unknown>) =>
   rpc(fp, { jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "get_collections", arguments: args } });
 
-test("get_collections with an id: members run the eligibility AND the caller's visibility predicate (§37.9 / invariant #3)", async () => {
+test("get_collections with an id: members run the eligibility AND the caller's visibility predicate (§38.9 / invariant #3)", async () => {
   const fp = signedIn();
   fp.on("from skill_collections c join users u", [
     { id: COLLECTION, name: "Onboarding pack", description: null, skill_count: 1, created_at: new Date("2026-10-01T00:00:00Z"), owner_name: "Ada" },

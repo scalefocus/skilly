@@ -32,7 +32,7 @@ export async function setVersionYanked(
     namespaceId: skill.namespaceId,
     after: { semver: input.semver, status },
   });
-  // §37.4: a yank that leaves nothing installable evicts the skill from every collection (the shared
+  // §38.4: a yank that leaves nothing installable evicts the skill from every collection (the shared
   // statement is a no-op while the skill still qualifies). Restoring never re-adds it.
   if (input.yanked) await evictFromCollections(pool, skill.id);
 
@@ -71,7 +71,7 @@ export async function setSkillArchived(
   // section (§7): clear featured_at/featured_by in the same write. Restoring never re-features.
   if (input.archived) {
     await pool.query(`update skills set status = 'archived', featured_at = null, featured_by = null where id = $1`, [skill.id]);
-    // §37.4: an archived skill leaves every collection. Unarchiving never re-adds it.
+    // §38.4: an archived skill leaves every collection. Unarchiving never re-adds it.
     await evictFromCollections(pool, skill.id);
   } else {
     await pool.query(`update skills set status = 'active' where id = $1`, [skill.id]);

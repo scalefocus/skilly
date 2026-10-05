@@ -122,7 +122,7 @@ export interface CatalogEntry {
   /** Optional skill icon (§33) — image and/or emoji, or null. Present-or-absent on every
    *  catalog/list/suggest surface; the default lockup renders only on single-skill surfaces. */
   icon: SkillIconView | null;
-  /** The skill id — set on catalog listings; the collection owner's remove control needs it (§37.5). */
+  /** The skill id — set on catalog listings; the collection owner's remove control needs it (§38.5). */
   skillId?: string;
 }
 
@@ -157,9 +157,9 @@ export interface CatalogSearchOpts {
   q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest"; limit?: number;
   archivedOnly?: boolean; officialOnly?: boolean; featuredOnly?: boolean; ownerUserId?: string | null;
   maintainerUserId?: string | null; namespaceSlug?: string | null; catalogSeenAt?: string | null;
-  /** §37.5 one collection's members (`?collection=`). */
+  /** §38.5 one collection's members (`?collection=`). */
   collectionId?: string | null;
-  /** §37.5 the union of one person's collections (`?collectionsBy=`). */
+  /** §38.5 the union of one person's collections (`?collectionsBy=`). */
   collectionsByUserId?: string | null;
 }
 
@@ -251,9 +251,9 @@ export async function searchCatalog(
     params.push(opts.namespaceSlug);
     where.push(`n.slug = $${params.length}`);
   }
-  // Collection views (§37.5): one collection's members, or the union of one person's collections.
+  // Collection views (§38.5): one collection's members, or the union of one person's collections.
   // The eligibility predicate is re-applied on top of the visibility predicate above, so a missed
-  // eviction can never show a restricted, archived or uninstallable skill (§37.4 belt and braces).
+  // eviction can never show a restricted, archived or uninstallable skill (§38.4 belt and braces).
   if (opts.collectionId) {
     params.push(opts.collectionId);
     where.push(`exists (select 1 from skill_collection_items ci where ci.skill_id = s.id and ci.collection_id = $${params.length}::uuid)`);

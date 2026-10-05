@@ -124,7 +124,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
   // Header search autocomplete: suggestions appear once 2+ chars are typed (debounced).
   const [suggestions, setSuggestions] = useState<{ namespaceSlug: string; skillSlug: string; title: string; official?: boolean; icon?: { url: string | null; emoji: string | null } | null }[]>([]);
-  // §37.6 the dropdown's Collections group (up to 3), below the skill hits and above the footer.
+  // §38.6 the dropdown's Collections group (up to 3), below the skill hits and above the footer.
   const [collectionHits, setCollectionHits] = useState<{ id: string; name: string; skillCount: number; owner: { id: string; name: string; avatar: string | null } }[]>([]);
   const [acOpen, setAcOpen] = useState(false);
   const [acHi, setAcHi] = useState(-1);
@@ -179,7 +179,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         ? `/api/users/suggest?q=${encodeURIComponent(term)}&limit=5`
         : `/api/skills/suggest?q=${encodeURIComponent(term)}`;
       const getJson = (u: string) => fetch(u).then((r) => (r.ok ? r.json() : null));
-      // §37.6 skills and collections are fetched together; the dropdown opens once both are back.
+      // §38.6 skills and collections are fetched together; the dropdown opens once both are back.
       Promise.all([getJson(url), peopleMode ? Promise.resolve(null) : getJson(`/api/collections/suggest?q=${encodeURIComponent(term)}`).catch(() => null)])
         .then(([j, cj]) => {
           if (!live) return;
@@ -890,7 +890,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   go(`/skills/${s.namespaceSlug}/${s.skillSlug}`);
                   return;
                 }
-                // §37.6 collection hits follow the skill hits; the footer comes after both.
+                // §38.6 collection hits follow the skill hits; the footer comes after both.
                 const ci = acHi - suggestions.length;
                 if (acOpen && ci >= 0 && ci < collectionHits.length && collectionHits[ci]) {
                   const c = collectionHits[ci];
@@ -991,7 +991,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       </button>
                     </li>
                   ))}
-                  {/* §37.6 Collections group: up to 3 non-empty collections; a hit opens the catalog filtered to it. */}
+                  {/* §38.6 Collections group: up to 3 non-empty collections; a hit opens the catalog filtered to it. */}
                   {collectionHits.length > 0 && (
                     <li role="presentation" className="search-ac-group" data-testid="search-collections-group">Collections</li>
                   )}

@@ -1,4 +1,4 @@
-// One skill collection (SKILLY_SPEC.md §37.11).
+// One skill collection (SKILLY_SPEC.md §38.11).
 //   GET    any signed-in user — name, description, owner, created date, eligible member count; 404 unknown.
 //   PATCH  owner only — { name?, description? }; 409 name_taken, 422 invalid, 403 non-owner.
 //   DELETE the owner or a platform admin — hard delete; audited when the actor is not the owner.

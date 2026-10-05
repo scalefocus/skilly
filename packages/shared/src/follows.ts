@@ -16,7 +16,7 @@ export const FOLLOW_NOTIFICATION_TYPES = [
   "follow.achievement",
   "follow.request_created",
   "follow.request_fulfilled",
-  // §37.8 — a followee created a skill collection.
+  // §38.8 — a followee created a skill collection.
   "follow.collection_created",
 ] as const;
 
@@ -175,7 +175,7 @@ export function followNotificationContent(type: string, payload: Record<string, 
       return { sentence: `${actor} fulfilled the request "${title}" with ${skillRef}.`, ctaLabel: "View the skill", path: skillPath };
     }
     case "follow.collection_created": {
-      // §37.8 — the link opens the catalog filtered to the collection; a since-deleted one shows
+      // §38.8 — the link opens the catalog filtered to the collection; a since-deleted one shows
       // the "no longer exists" banner there, so the row never needs retracting.
       const name = str(p.collectionName) ?? "a new collection";
       const collectionId = str(p.collectionId);

@@ -82,7 +82,7 @@ test("followers (§35.7): the most-followed person leads 'followed' per window �
   assert.deepEqual(map["newcomer"], [{ metric: "followed", window: "30d" }]);
 });
 
-test("curated (§37.8): the person with the most qualifying collections is Curator, per window", async () => {
+test("curated (§38.8): the person with the most qualifying collections is Curator, per window", async () => {
   const map = await computeLeaderBadges(reader(
     [entry("curator", { collections: 4 }), entry("fresh", { collections: 2 })],
     [entry("curator", { collections: 0 }), entry("fresh", { collections: 2 })],
@@ -91,7 +91,7 @@ test("curated (§37.8): the person with the most qualifying collections is Curat
   assert.deepEqual(map["fresh"], [{ metric: "curated", window: "30d" }]);
 });
 
-test("leaderboardOrderBy: the existing chains append followers then collections; Followed and Curated lead with their own metric (§35.7 / §37.8)", () => {
+test("leaderboardOrderBy: the existing chains append followers then collections; Followed and Curated lead with their own metric (§35.7 / §38.8)", () => {
   assert.equal(leaderboardOrderBy("installs"), "installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, followers desc, collections desc, display_name asc");
   assert.equal(leaderboardOrderBy("requested"), "skills_requested desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, followers desc, collections desc, display_name asc");
   assert.equal(leaderboardOrderBy("watched"), "skills_watched desc, installs desc, skill_count desc, requests_fulfilled desc, skills_requested desc, followers desc, collections desc, display_name asc");

@@ -30,7 +30,7 @@
 // (allow_follows = false) reads 0 — not shown, not ranked, no follow leader badge. Aggregate only:
 // the board never says WHO follows anyone.
 //
-// collections (§37.8) counts the user's skill collections that currently hold at least
+// collections (§38.8) counts the user's skill collections that currently hold at least
 // COLLECTION_LEADERBOARD_MIN_SKILLS eligible skills (the threshold stops one-click collections from
 // manufacturing standing). All-time = the current count; 30d = such collections created in the
 // trailing 30 days. A count only — the board never names a collection or a skill.
@@ -64,7 +64,7 @@ export interface LeaderboardEntry {
   skillsRequested: number;
   /** Active followers (§35.7) — 0 while the user has paused follows. */
   followers: number;
-  /** Skill collections holding at least 3 eligible skills (§37.8). */
+  /** Skill collections holding at least 3 eligible skills (§38.8). */
   collections: number;
   /** §35.4 — viewer-independent, so the per-(window,sort) cache stays shared. */
   followable: boolean;
@@ -199,7 +199,7 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
 }
 
 /**
- * The ORDER BY for a sort (§26 / §35.7 / §37.8): the chosen metric first, then the other metrics in
+ * The ORDER BY for a sort (§26 / §35.7 / §38.8): the chosen metric first, then the other metrics in
  * the fixed order installs, skills adopted, requests fulfilled, skills watched, skills requested,
  * followers, collections, then name. NOTE: these bare names bind to the SELECT output aliases (Postgres resolves
  * ORDER BY names against output columns first), so every metric column must stay numeric — a

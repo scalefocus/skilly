@@ -1,7 +1,7 @@
-// `get_collections` (SKILLY_SPEC.md §37.9) — the read-only MCP view of skill collections. Agents
+// `get_collections` (SKILLY_SPEC.md §38.9) — the read-only MCP view of skill collections. Agents
 // read collections; people curate them, so there is no write here at all. The matcher, the
 // eligibility predicate and the member count come from @skilly/shared/collections, and member lists
-// additionally run the caller's visibility predicate (invariant #3, belt and braces — §37.4).
+// additionally run the caller's visibility predicate (invariant #3, belt and braces — §38.4).
 import type { Pool } from "pg";
 import {
   COLLECTION_MCP_QUERY_LIMIT,
@@ -41,7 +41,7 @@ export async function listOwnCollections(pool: Pool, userId: string): Promise<Co
   return rows.map((r) => ({ id: r.id, name: r.name, description: r.description, skillCount: r.skill_count, createdAt: iso(r.created_at), link: link(r.id) }));
 }
 
-/** `query`: up to 10 non-empty collections by the shared matcher (§37.6). */
+/** `query`: up to 10 non-empty collections by the shared matcher (§38.6). */
 export async function matchCollections(pool: Pool, q: string): Promise<CollectionOut[] | { error: string }> {
   if (q.trim().length < COLLECTION_QUERY_MIN_CHARS) return { error: `query must be at least ${COLLECTION_QUERY_MIN_CHARS} characters` };
   const { text, values } = collectionMatchSql(q.slice(0, 64), COLLECTION_MCP_QUERY_LIMIT);

@@ -596,7 +596,7 @@ function ProfileInner() {
       <EmailNotificationsPref />
       <MaintainerNotificationsPref />
       <FollowingPref />
-      {/* §37.7 after the Following section. */}
+      {/* §38.7 after the Following section. */}
       <CollectionsCard />
       <SurveysPref />
     </div>

@@ -1,5 +1,5 @@
 // Contributor leaderboard — any signed-in user. ?window=all (default) | 30d;
-// ?sort=installs (default) | skills | requests | watched | requested | followed | curated (§21/§26/§35.7/§37.8).
+// ?sort=installs (default) | skills | requests | watched | requested | followed | curated (§21/§26/§35.7/§38.8).
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { getLeaderboard, type LeaderboardSort } from "../../../lib/leaderboard";

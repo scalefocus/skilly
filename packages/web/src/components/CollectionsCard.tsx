@@ -1,5 +1,5 @@
 "use client";
-// The profile's "Skill collections (N)" card (SKILLY_SPEC.md §37.7): the owner's own collections,
+// The profile's "Skill collections (N)" card (SKILLY_SPEC.md §38.7): the owner's own collections,
 // newest first, each with an inline-editable name and description, its eligible skill count and
 // created date, and View skills / Copy link / Delete. Collapsed by default, remembered per browser,
 // like "People I follow". N counts every collection, empty ones included.

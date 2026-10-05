@@ -40,7 +40,7 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const archivedOnly = url.searchParams.get("archived") === "1";
-  // Collection views (§37.5). Both are viewer-visibility-scoped AND eligibility-filtered in searchCatalog.
+  // Collection views (§38.5). Both are viewer-visibility-scoped AND eligibility-filtered in searchCatalog.
   const collectionId = uuidParam(url, "collection");
   const collectionsByUserId = collectionId ? undefined : uuidParam(url, "collectionsBy");
   // Per-row "new to you" flag: skills created after the caller last opened the catalog (matches
@@ -77,7 +77,7 @@ export async function GET(req: Request) {
   M.searchRequests.inc({ surface: "catalog", mode: matchMode ?? "none" });
   if (matchMode && skills.length === 0) M.searchZeroResults.inc({ surface: "catalog" });
   // matchMode ("all" | "any", null without a query) drives the catalog's partial-matches notice (§34.12).
-  // `?collectionsBy=` also carries the banner's per-collection chips (§37.5): that person's non-empty
+  // `?collectionsBy=` also carries the banner's per-collection chips (§38.5): that person's non-empty
   // collections. Every member is org-visible, so the chips are the same for every viewer.
   if (collectionsByUserId) {
     return Response.json({ skills, matchMode, collections: await listNonEmptyCollectionsOf(collectionsByUserId) });

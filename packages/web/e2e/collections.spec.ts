@@ -1,4 +1,4 @@
-// Skill collections (SKILLY_SPEC.md §37): Add to collection on an org-visible skill (create → toast →
+// Skill collections (SKILLY_SPEC.md §38): Add to collection on an org-visible skill (create → toast →
 // ticked on reopen; absent on a restricted skill), the profile's "Skill collections" card (inline
 // rename, View skills → the catalog's collection banner), the header dropdown's Collections group,
 // Mixtape, and delete → the old link's "no longer exists" banner.
