@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.17.0",
+    date: "2026-10-05",
+    summary:
+      "Installed skills now show which version each install is actually running against the latest (\"installed v1.2.0 \u00b7 latest v1.4.0\"), with Behind and Withdrawn badges and a \"Behind latest\" filter \u2014 also on the admin System installs view. Agents get the same over MCP: list_installed_skills reports freshness and how to refresh. Installs made before this update read \"unknown\" until their next clone.",
+  },
+  {
     version: "2.16.1",
     date: "2026-10-05",
     summary:

@@ -192,7 +192,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id`, `actor_user_id`, `skill_version_id`, `skill_id` (nullable FK, `ON DELETE SET NULL` — links a fetch to its skill even when the exact version isn't resolved; powers install analytics, §21), `source`, `created_at`, `is_system` (BOOLEAN default false — the clone presented a **system installation** token, §23; distinguishes system clones from legacy anonymous/tokenless rows, both of which have `actor_user_id = NULL`).
 
 ### `tokens`
-- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), `created_at`.
+- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), **`last_served_semver`** (TEXT, nullable — the semver the gateway last served this install, migration **0083**, §23 *Installed-version freshness*; a plain string, deliberately **not** an FK to `skill_versions` so a later version delete leaves the row readable), **`last_cloned_at`** (TIMESTAMPTZ, nullable — when that serving happened; both NULL on `marketplace` tokens), `created_at`.
 - **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23. **The §29 MCP/OAuth credentials are a separate regime in separate tables** (`oauth_*` below) — header-borne, short-lived and rotating; they never share a row or an enum with `tokens`.
 - **`marketplace` tokens** (§30.4) are the same handle for a **plugin marketplace** rather than a skill: `skill_id` is NULL and the scope is carried by **`marketplace_scope`** (`public` | `namespace`) + **`namespace_id`** (FK → `namespaces`, `ON DELETE CASCADE`; set **iff** scope = `namespace`). `skill_id` is therefore **nullable**, and a CHECK enforces the discriminant: `install` ⇒ `skill_id` NOT NULL ∧ `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL ∧ `marketplace_scope` NOT NULL ∧ (`namespace_id` NOT NULL ⇔ scope = `namespace`). **`last_served_commit`** (TEXT, nullable) is the per-token attribution cursor of §30.7. Same TTL, reuse, reactivate and hard-delete-on-remove semantics as `install`; **`is_system` is never set** — system marketplaces are deferred (§30.4).
 
@@ -2166,7 +2166,8 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   `client_ip` (the originating client IP captured on first clone; `null` if unknown/unresolved),
   `is_system` (**system installation** flag — see below; `user_id` is NULL iff set, enforced by a
   CHECK), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — provenance: the
-  platform admin who minted a system install; NULL on personal installs).
+  platform admin who minted a system install; NULL on personal installs), **`last_served_semver`** /
+  **`last_cloned_at`** (the freshness stamp — *Installed-version freshness* below; migration 0083).
 - **Reusable**, skill-scoped, owner-revocable. **Every** clone (org *and* namespace) must
   present a valid install token — anonymous org clones are removed. Namespace skills
   additionally require the token's user to have namespace access at clone time
@@ -2213,8 +2214,10 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   originating client IP** (`client_ip`), and — in the same transaction — **deletes the user's
   other *unused* install tokens for that same skill** (per-skill purge; used ones always survive;
   for a **system** token the purge deletes the other unused **system** tokens for that skill,
-  same boundary rule as Generate). Subsequent clones don't re-stamp/re-purge, so the IP reflects
-  **where the install was first made from**, not the latest fetch.
+  same boundary rule as Generate). Subsequent clones don't re-stamp `used_at`/UA/IP and never
+  re-purge, so the IP reflects **where the install was first made from**, not the latest fetch.
+  The **one thing every clone re-stamps** is the freshness pair `last_served_semver` /
+  `last_cloned_at` (*Installed-version freshness* below).
 - **Expiry → inactive:** install tokens are **exempt from the expiry sweep**; the gateway
   simply refuses an expired token (`expires_at > now()`), so it's listed-but-refused.
 - **Reactivate** (inactive only): set a new `expires_at` (date or Never) on the **same** token
@@ -2252,11 +2255,67 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   is normalized to the bare IPv4. The IP is **never** logged with the request and only the
   resolved address is persisted on the token (never credentials/query strings — invariant #6).
 
+### Installed-version freshness (migration 0083)
+The registry **does not learn what a clone fetched from the git protocol** — `access_log.skill_version_id`
+is always NULL (migration 0030) and `pinned_semver` is a client-side `#ref` fragment the gateway
+**does not enforce** (the repo serves every tag; a holder of a pinned URL who edits the fragment gets
+whatever tag they name). Freshness is therefore **derived from what the gateway *resolved to serve***,
+not parsed out of `git-upload-pack` `want` lines — the same approximation as the marketplace cursor
+(`last_served_commit`, §30.7), accepted for the same reasons (one stamp per clone, no body parsing,
+works for both protocol versions).
+
+- **Stamp.** On **every** valid `/info/refs` advertisement for an `install` token (not just the
+  first), the gateway sets, in the same statement as the existing per-clone bookkeeping:
+  - `last_served_semver` = the token's `pinned_semver` when pinned; otherwise the semver `main`
+    points at right now (`latest` = highest **stable** among active versions, invariant #2);
+    NULL if the repo has no serveable version (an advertised-but-empty clone).
+  - `last_cloned_at` = `now()`.
+  The stamp rides the `/info/refs` call, which fires once per clone **whether or not the
+  subsequent `git-upload-pack` succeeds** — an aborted clone can register as served. Accepted
+  (identical to the marketplace cursor). HEAD requests never stamp.
+- **Pinned stays advisory.** The gateway keeps serving every tag to a pinned token; `pinned_semver`
+  is the install's declared intent and what freshness reports for it. Enforcing it would break any
+  consumer that edits fragments today and is deliberately **not** part of this feature.
+- **Backfill (0083):** tokens used before the migration get `last_served_semver = pinned_semver`
+  when pinned (that is what their URL names) and **NULL** when tracking latest (we cannot know
+  what `main` was at their last clone); `last_cloned_at` stays NULL for both until the next clone.
+- **Derived freshness (never stored)** — computed per row against the skill's current `latest`
+  (highest stable active version; **betas never count** — a pinned beta newer than latest stable
+  is not "behind", and a newer beta never makes a latest-tracking install "behind"):
+  - **`current`** — `last_served_semver` = `latest`.
+  - **`behind`** — `last_served_semver` < `latest`. Shown with the install mode: a pinned install
+    reads *"pinned v1.2.0 · latest v1.4.0"*, a latest-tracking one *"cloned v1.2.0 on ‹date› ·
+    latest v1.4.0"* (the date is `last_cloned_at`, viewer-timezone per the DateFormat rule). A
+    pinned install is behind **by choice** and is still listed as behind — the filter answers
+    "what is running old bytes", not "who forgot to update".
+  - **`withdrawn`** — the served version is **yanked** (or is no longer an active version at
+    all). Strictly stronger than `behind` and shown with its own badge; this is the governance
+    case. A withdrawn install is also `behind` for filtering purposes.
+  - **`unknown`** — `last_served_semver` IS NULL (a pre-0083 latest-tracking install that has not
+    re-cloned, or an empty-repo serving). Rendered *"installed version unknown — re-run the
+    install command to record it"*; never counted as behind.
+  - A skill with **no active stable version** has no `latest`; its installs are `unknown` too.
+- **Inactive (expired) installs are included** in every freshness state and in the filter — the
+  remedy is *Activate* + re-clone, and hiding them would hide exactly the stale credentials an
+  admin should see.
+- **No proactive signal in v1.** Being behind writes no notification, no `system_event`, no audit
+  row, and nothing on the skill's detail page; the per-skill owner drill-down (§21) does **not**
+  show "N installations behind" (that would expose token counts to maintainers). On-demand only:
+  the Installed page and the MCP `list_installed_skills` tool (§29).
+- **How a consumer refreshes.** A **latest-tracking** install refreshes by re-running the **same**
+  `npx skills add` command (or `npx skills update`, which re-clones the locked source) — `main`
+  moved, the token did not. A **pinned** install needs a **new** install command for the new tag
+  (a fresh mint; the old pinned token is a separate installation until uninstalled). The UI and
+  the MCP response say which of the two applies to each behind row.
+
 ### Installed Skills page (`/installed`)
 - Reached from the bottom-left account menu, **above Profile**; **owner-scoped** (personal view;
   platform admins additionally get the **System installs** view below).
 - Lists the user's **used** installs (one row each — a user may have several for one skill):
-  skill (`@ns/slug` + title), `latest`/pinned version, installed-at (`used_at`), expiry (date
+  skill (`@ns/slug` + title), **the version column** — *"latest"* or *"pinned v‹x›"* plus the
+  freshness line beneath it (*"installed v1.2.0 · latest v1.4.0"* with a **Behind** / **Withdrawn**
+  badge, *"installed v1.4.0 · up to date"*, or the *unknown* hint — *Installed-version freshness*
+  above), installed-at (`used_at`), expiry (date
   or "Never"), client label (from `User-Agent`), **the client IP the install was made from**
   (`client_ip`, shown when known), and active/inactive. The IP is **owner-scoped** (visible only
   on the user's own Installed page), not surfaced to admins — **except on system-install rows**
@@ -2274,7 +2333,23 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   the **client IP** (a deliberate exception to the owner-only-IP rule: it is the only forensic
   handle a system install has, and every viewer here is a platform admin). Uninstall / Activate
   edge actions work identically for any platform admin. Served by `GET /api/installs?scope=system`
-  (403 for non-admins).
+  (403 for non-admins). The version column, badges and the **Behind latest** filter below apply
+  identically here — this *is* the admin view of outdated system installations; there is no
+  separate Administration surface for it.
+- **"Behind latest" filter:** a toggle chip at the top of the page (next to the Mine/System
+  toggle for admins; alone for everyone else), **default off**. On, the list shows only rows whose
+  freshness is `behind` or `withdrawn` (`unknown` and `current` are hidden). Mirrored to
+  **`?filter=behind`** via `router.replace` (kept out of history, seeded from the URL on arrival,
+  exactly like `?q=`), **persists across the Mine/System toggle**, and **composes with the header
+  live-filter** (`?q=` narrows within the behind set). The filter is applied **client-side** over the
+  already-loaded rows — `GET /api/installs` returns every row with its freshness fields and takes
+  no new query param. Alphabetical-by-title ordering is preserved. **No-match state:** filter on and
+  nothing behind → *"Everything is up to date."* (and, when `?q=` is also set, the existing
+  *"No installed skills match …"* state wins, with a hint naming both the search and the filter).
+- **`GET /api/installs` row shape gains** `lastServedSemver` (string | null), `lastClonedAt` (ISO |
+  null), `latestSemver` (string | null — the skill's current latest stable), and `freshness`
+  (`current` | `behind` | `withdrawn` | `unknown`). Latest-per-skill is computed in the query (one
+  lateral join on `skill_versions`), no new counter or cache. Additive — nothing removed.
 - **Header search — live filter of the installed list (`/installed` only):** the app-shell
   top-bar search box takes a **third mode** here (alongside the registry typeahead and the catalog
   live-filter, §10). On `/installed` its placeholder reads **"Search installed skills…"** (not
@@ -3743,7 +3818,7 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 | Tool | Behavior |
 |---|---|
 | `install_skill` | Mints a **personal** §23 install token (`semver?`, `expiresAt?` honoring `install_max_ttl_months`) and returns the `npx skills add …` command. **`system: true` is refused** — system installations are platform-admin-only and administration is out of surface. **409** for a not-yet-`git_published` version, exactly as `POST /api/skills/:ns/:slug/install`. |
-| `list_installed_skills` | The caller's own installations with their derived state (§23). `?scope=system` has no MCP equivalent. |
+| `list_installed_skills` | The caller's own installations with their derived state (§23) **and their freshness** (§23 *Installed-version freshness*): each row carries `installedVersion` (= `lastServedSemver`), `latestVersion`, `freshness` (`current` \| `behind` \| `withdrawn` \| `unknown`), `pinned` (bool), and for a behind/withdrawn row a `refresh` hint — `{ action: "rerun" }` (latest-tracking: re-run the **same** `npx skills add` command the caller already holds, or `npx skills update`; no re-mint — tokens are **hashed at rest**, so the registry cannot rebuild the command and never hands a credential back) or `{ action: "reinstall", semver }` (pinned: call `install_skill` with the new `semver`; the old pinned installation stays until `uninstall_skill`). Optional input `onlyBehind: true` returns just the behind/withdrawn rows. **This is the "check for updates" tool** — folded in rather than added, so the §29 tool ceiling holds (no new tool). Personal installs only (`?scope=system` has no MCP equivalent); a check is a read — no audit row, no `access_log`, no stamp. |
 | `uninstall_skill` | Hard-deletes one of the caller's own install tokens. *(This is not "irreversible destruction" in the §29 exclusion sense — it destroys a credential the caller owns, not catalog content or history; install counts are preserved per §23.)* |
 | `reactivate_install` | Sets a new `expires_at` on the caller's inactive install (§23). |
 
@@ -7865,3 +7940,41 @@ All endpoints require a signed-in user and are rate-limited like the other socia
    possible, and the threshold only raises the cost.
 5. **Silent eviction.** An owner may find a skill gone from a collection without being told.
 6. **Not a survey feature.** Collections do not join the §36 first-use catalog in v1.
+
+
+## 39. Installed-version freshness
+
+Every install token is reusable (§23), so an *installation* outlives the clone that created it and
+can silently fall behind the catalog. This section records the decisions; the behavior lives in §23
+(*Installed-version freshness*, the Installed page) and §29 (`list_installed_skills`).
+
+### 39.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | The served version is **stamped by the gateway at `/info/refs`** (`tokens.last_served_semver` / `last_cloned_at`, migration 0083), not parsed from `git-upload-pack`. | The protocol gives no cheap per-clone signal; the marketplace cursor (§30.7) already accepts this approximation. |
+| 2 | `pinned_semver` **stays advisory** — the gateway still serves every tag. | Enforcing it would break consumers who edit fragments today; the feature reports intent, it does not police bytes. |
+| 3 | Pre-0083 installs are **backfilled** from `pinned_semver`; latest-tracking ones read `unknown` until their next clone. | We cannot know what `main` was at an unrecorded clone; a guess would be a lie in a governance view. |
+| 4 | **Latest = highest stable active version**; betas never make anything behind. | Invariant #2. |
+| 5 | `withdrawn` (served version yanked / no longer active) is a **distinct, stronger state** than `behind`. | It is the case governance actually cares about. |
+| 6 | Pinned-and-behind **is** behind; inactive installs **are** included. | The filter answers "what runs old bytes", and expired credentials are exactly what an admin should see. |
+| 7 | The admin view of outdated system installs is the **existing System installs scope plus the same filter** — no new Administration surface, no proactive notification, no `system_event`, no owner drill-down count. | On-demand only in v1; counts to maintainers would be new exposure. |
+| 8 | **No new MCP tool.** Freshness and the refresh hint are folded into `list_installed_skills` (`onlyBehind`). | §29: the first response to pressure for surface is to fold, not add. |
+| 9 | A behind **latest-tracking** install refreshes by re-running the **same** command; a **pinned** one needs a **new mint** for the new tag. | The token is skill-scoped; `main` moved, the token did not. |
+
+### 39.2 Out of scope (deferred)
+- Enforcing `pinned_semver` at the gateway.
+- Any push signal (notification / email / banner / `system_event`) when an install falls behind.
+- Showing freshness counts to skill maintainers or on the skill detail page.
+- Freshness for `marketplace` tokens (§30) — they have their own commit cursor and a different
+  update model.
+
+### 39.3 Tests
+- **Unit** (§2 shared): the freshness derivation (`current` / `behind` / `withdrawn` / `unknown`),
+  including beta-never-behind, yanked → withdrawn, missing latest → unknown, and the refresh-hint
+  builder (same-token rerun vs reinstall).
+- **Integration** (worker git server): a second clone re-stamps `last_served_semver`/`last_cloned_at`
+  without touching `used_at`/UA/IP; a pinned clone stamps `pinned_semver`; a HEAD request never
+  stamps; migration 0083 backfill. `GET /api/installs` (both scopes) returns the four new fields.
+  MCP `list_installed_skills` with and without `onlyBehind`, the tool-count test still asserts 24.
+- **e2e**: install latest → publish a newer stable → the Installed row shows *behind* → the
+  **Behind latest** filter shows only it → re-clone → row shows *up to date*.

@@ -103,7 +103,7 @@ INSERT INTO skill_versions (skill_id, semver, is_prerelease, status, artifact_ob
          (SELECT id FROM users WHERE entra_object_id='dev-admin-oid')
     FROM skills s JOIN namespaces n ON n.id=s.namespace_id
     JOIN (VALUES ('pdf-tools','1.0.0',false),('pdf-tools','1.1.0',false),('pdf-tools','1.2.0-beta.1',true),
-                 ('lint-fixer','2.3.0',false),('secret-helper','0.9.0',false)) AS v(slug,semver,pre)
+                 ('lint-fixer','2.2.0',false),('lint-fixer','2.3.0',false),('secret-helper','0.9.0',false)) AS v(slug,semver,pre)
       ON v.slug = s.slug
    WHERE s.type='hosted'
 ON CONFLICT (skill_id, semver) DO NOTHING;
@@ -156,5 +156,18 @@ INSERT INTO tokens (user_id, type, hashed_token, skill_id, pinned_semver, scope,
        SELECT 1 FROM tokens t
         WHERE t.user_id = u.id AND t.skill_id = s.id AND t.type = 'install'
      );
+
+-- Freshness stamps for the seeded installs (SKILLY_SPEC.md §23 "Installed-version freshness"), so
+-- the Installed page shows every state: pdf-tools pinned 1.1.0 = latest stable → CURRENT (the
+-- 1.2.0-beta.1 never makes it behind); lint-fixer tracks latest but was last served 2.2.0 while
+-- 2.3.0 is latest → BEHIND (the e2e's filter target); secret-helper pinned 0.9.0 → current but
+-- inactive. Applied as a separate idempotent UPDATE so an already-seeded local DB picks it up too.
+UPDATE tokens t
+   SET last_served_semver = v.served, last_cloned_at = now() - (v.age_days || ' days')::interval
+  FROM skills s JOIN namespaces n ON n.id = s.namespace_id
+  JOIN (VALUES ('pdf-tools', '1.1.0', 3), ('lint-fixer', '2.2.0', 10), ('secret-helper', '0.9.0', 20)) AS v(slug, served, age_days)
+    ON v.slug = s.slug
+ WHERE t.skill_id = s.id AND t.hashed_token = 'devhash-'||n.slug||'-'||s.slug
+   AND t.last_served_semver IS DISTINCT FROM v.served;
 
 COMMIT;

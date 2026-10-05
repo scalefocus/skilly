@@ -12,6 +12,11 @@ import {
   generateToken,
   hashToken,
   installExpiryCeiling,
+  deriveFreshness,
+  isBehindLatest,
+  refreshHint,
+  type Freshness,
+  type RefreshHint,
 } from "@skilly/shared";
 import { publicBaseUrl } from "./url.js";
 import { getInstallMaxTtlMonths } from "./settings.js";
@@ -95,14 +100,33 @@ export interface InstallView {
   skillSlug: string;
   title: string;
   pinnedSemver: string | null;
+  /** Convenience for agents: `pinnedSemver !== null`. */
+  pinned: boolean;
   installedAt: string;
   expiresAt: string | null;
   inactive: boolean;
   skillArchived: boolean;
+  /**
+   * Freshness (§23 "Installed-version freshness" / §29): `installedVersion` is what the gateway
+   * last served this install (null = not recorded yet); `latestVersion` the skill's current latest
+   * stable; `freshness` the derived state; `refresh` what to do about a behind/withdrawn row —
+   * `rerun` (latest-tracking: re-run the install command you already hold, or `npx skills
+   * update`) or `reinstall` (pinned: call install_skill with the given semver). Null when nothing
+   * needs doing. This IS the "check for updates" — no separate tool (the §29 tool ceiling holds).
+   */
+  installedVersion: string | null;
+  lastClonedAt: string | null;
+  latestVersion: string | null;
+  freshness: Freshness;
+  refresh: RefreshHint | null;
 }
 
-/** The caller's own USED installs (§23). System installs have no MCP equivalent. */
-export async function listInstalls(pool: Pool, userId: string): Promise<InstallView[]> {
+/**
+ * The caller's own USED installs (§23), each with its freshness. System installs have no MCP
+ * equivalent. `onlyBehind` keeps just the behind/withdrawn rows (§29 `list_installed_skills`).
+ * A listing is a read: no audit row, no access_log, no stamp.
+ */
+export async function listInstalls(pool: Pool, userId: string, onlyBehind = false): Promise<InstallView[]> {
   const { rows } = await pool.query<{
     id: string;
     pinned_semver: string | null;
@@ -113,28 +137,47 @@ export async function listInstalls(pool: Pool, userId: string): Promise<InstallV
     title: string;
     inactive: boolean;
     skill_status: "active" | "archived";
+    last_served_semver: string | null;
+    last_cloned_at: string | null;
+    active_semvers: string[];
   }>(
     `select t.id, t.pinned_semver, t.used_at, t.expires_at,
             n.slug as ns_slug, s.slug as skill_slug, s.title, s.status as skill_status,
-            (t.expires_at is not null and t.expires_at <= now()) as inactive
+            (t.expires_at is not null and t.expires_at <= now()) as inactive,
+            t.last_served_semver, t.last_cloned_at, v.active_semvers
        from tokens t
        join skills s on s.id = t.skill_id
        join namespaces n on n.id = s.namespace_id
+       left join lateral (
+         select coalesce(array_agg(sv.semver), '{}') as active_semvers
+           from skill_versions sv where sv.skill_id = s.id and sv.status = 'active'
+       ) v on true
       where t.user_id = $1 and t.type = 'install' and t.used_at is not null
       order by lower(s.title) asc, t.used_at desc`,
     [userId],
   );
-  return rows.map((r) => ({
-    id: r.id,
-    namespaceSlug: r.ns_slug,
-    skillSlug: r.skill_slug,
-    title: r.title,
-    pinnedSemver: r.pinned_semver,
-    installedAt: r.used_at,
-    expiresAt: r.expires_at,
-    inactive: r.inactive,
-    skillArchived: r.skill_status === "archived",
-  }));
+  const views = rows.map((r): InstallView => {
+    const { freshness, latestSemver } = deriveFreshness({ lastServedSemver: r.last_served_semver, activeSemvers: r.active_semvers });
+    const pinned = r.pinned_semver !== null;
+    return {
+      id: r.id,
+      namespaceSlug: r.ns_slug,
+      skillSlug: r.skill_slug,
+      title: r.title,
+      pinnedSemver: r.pinned_semver,
+      pinned,
+      installedAt: r.used_at,
+      expiresAt: r.expires_at,
+      inactive: r.inactive,
+      skillArchived: r.skill_status === "archived",
+      installedVersion: r.last_served_semver,
+      lastClonedAt: r.last_cloned_at,
+      latestVersion: latestSemver,
+      freshness,
+      refresh: refreshHint(freshness, pinned, latestSemver),
+    };
+  });
+  return onlyBehind ? views.filter((v) => isBehindLatest(v.freshness)) : views;
 }
 
 /** Uninstall = hard-delete the token. Owner-scoped, so a system install can never be hit. */

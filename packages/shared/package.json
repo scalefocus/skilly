@@ -94,6 +94,10 @@
     "./collections": {
       "types": "./dist/collections.d.ts",
       "default": "./dist/collections.js"
+    },
+    "./freshness": {
+      "types": "./dist/freshness.d.ts",
+      "default": "./dist/freshness.js"
     }
   },
   "scripts": {

@@ -4,6 +4,8 @@
 // over each row's title, namespace slug, and skill slug, and nothing else (not version, client
 // label, IP, or dates). Extracted here as a pure function so the predicate is unit-testable.
 
+import { isBehindLatest, type Freshness } from "@skilly/shared/freshness";
+
 /** The subset of an installed row the header search matches against (§23). */
 export interface InstallSearchFields {
   title: string;
@@ -33,4 +35,15 @@ export function filterInstalls<T extends InstallSearchFields>(installs: T[], que
   const needle = query.trim().toLowerCase();
   if (!needle) return installs;
   return installs.filter((i) => installMatches(i, needle));
+}
+
+/**
+ * The "Behind latest" chip (§23 "Installed-version freshness"): keeps rows whose freshness is
+ * `behind` or `withdrawn` — `current` and `unknown` are hidden. Off (`false`) returns the list
+ * unchanged (same reference). Composes with filterInstalls (apply either first; order is
+ * preserved either way, so the alphabetical-by-title ordering survives).
+ */
+export function filterBehind<T extends { freshness: Freshness }>(installs: T[], on: boolean): T[] {
+  if (!on) return installs;
+  return installs.filter((i) => isBehindLatest(i.freshness));
 }

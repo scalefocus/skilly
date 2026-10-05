@@ -49,6 +49,13 @@ export interface GitServerDeps extends GitAuthDeps {
    * the first use.
    */
   markInstallUsed(tokenId: string, userAgent: string | null, clientIp: string | null): Promise<boolean>;
+  /**
+   * Stamp what this clone was resolved to serve — `tokens.last_served_semver` (the token's
+   * pinned_semver when pinned, else the skill's current latest stable) + `last_cloned_at = now()`.
+   * Unlike markInstallUsed this runs on EVERY clone, so the Installed page can tell "installed
+   * v1.2.0, latest v1.4.0". SKILLY_SPEC.md §23 "Installed-version freshness".
+   */
+  stampInstallServed(tokenId: string, skillId: string): Promise<void>;
   /** The marketplace analogue of markInstallUsed (§30.4/§30.6): same first-use stamp and purge. */
   markMarketplaceUsed(tokenId: string, userAgent: string | null, clientIp: string | null): Promise<boolean>;
   /**
@@ -159,6 +166,9 @@ export function gitServer(deps: GitServerDeps): Router {
         const firstUse = principal
           ? await deps.markInstallUsed(principal.tokenId, req.header("user-agent") ?? null, clientIp(req))
           : false;
+        // Freshness stamp (§23): every clone, not just the first — this is what tells the owner
+        // (and the MCP tool) which version the installation is actually running.
+        if (principal) await deps.stampInstallServed(principal.tokenId, decision.skill.id);
         const isSystem = principal?.isSystem ?? false;
         await deps.logAccess(decision.skill.id, principal?.userId ?? null, isSystem, isSystem && firstUse);
         return;

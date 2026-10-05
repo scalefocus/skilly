@@ -203,10 +203,16 @@ export function toolDefinitions(): ToolDefinition[] {
     },
     {
       name: "list_installed_skills",
-      title: "List your installed skills",
+      title: "List your installed skills (and check for updates)",
       readOnly: true,
-      description: "The skills you have installed through this registry, with what version each tracks and when its install URL expires.",
-      inputSchema: { type: "object", properties: {} },
+      description:
+        "The skills you have installed through this registry, with what version each tracks, when its install URL expires, and whether it is up to date: each row carries installedVersion (what was last served), latestVersion, freshness (current | behind | withdrawn | unknown) and, for a behind or withdrawn row, a refresh hint — { action: 'rerun' } means re-run the install command you already hold (or `npx skills update`); { action: 'reinstall', semver } means call install_skill with that semver (the install is pinned; uninstall the old one when done). This is the check-for-updates tool. Pass onlyBehind: true to list just the rows that need attention.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          onlyBehind: { type: "boolean", description: "Return only installs whose freshness is behind or withdrawn (default false)." },
+        },
+      },
     },
     {
       name: "uninstall_skill",
@@ -644,8 +650,15 @@ export async function callTool(
       });
     }
 
-    case "list_installed_skills":
-      return toolJson({ installs: await listInstalls(pool, caller.userId) });
+    case "list_installed_skills": {
+      const onlyBehind = args.onlyBehind === true;
+      const installs = await listInstalls(pool, caller.userId, onlyBehind);
+      return toolJson({
+        installs,
+        behindCount: installs.filter((i) => i.refresh !== null).length,
+        ...(onlyBehind ? { filter: "onlyBehind" } : {}),
+      });
+    }
 
     case "uninstall_skill": {
       const id = s(args, "installId");
