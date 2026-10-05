@@ -15,10 +15,28 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.17.0",
+    date: "2026-10-05",
+    summary:
+      "Installed skills now show which version each install is actually running against the latest (\"installed v1.2.0 \u00b7 latest v1.4.0\"), with Behind and Withdrawn badges and a \"Behind latest\" filter \u2014 also on the admin System installs view. Agents get the same over MCP: list_installed_skills reports freshness and how to refresh. Installs made before this update read \"unknown\" until their next clone.",
+  },
+  {
+    version: "2.16.1",
+    date: "2026-10-05",
+    summary:
+      "A new Have your say link sits at the foot of the sidebar, next to powered by the community. It opens the anonymous feedback survey, or reopens one you've already started. Like Give feedback, it's hidden during the weekly cooldown.",
+  },
+  {
+    version: "2.16.0",
+    date: "2026-10-05",
+    summary:
+      "Skill collections: use Add to collection on any org-wide skill to group skills into a named list, like an onboarding pack, and share its link. Manage your collections from your profile, find others' through the header search, and earn the Mixtape badge for your first one.",
+  },
+  {
     version: "2.15.0",
     date: "2026-10-05",
     summary:
-      "Installed skills now show which version each install is actually running against the latest (\"installed v1.2.0 · latest v1.4.0\"), with Behind and Withdrawn badges and a \"Behind latest\" filter — also on the admin System installs view. Agents get the same over MCP: list_installed_skills reports freshness and how to refresh. Installs made before this update read \"unknown\" until their next clone.",
+      "A new content check reads each skill's text the way an agent will: as instructions. It flags hidden characters, look-alike letters, instructions to ignore previous instructions or to hide things from the user, and steps that read credentials and send them out. Reviewers see the findings in a new Content risk section, high findings need the override, and a flagged direct publish now goes to review. Skill pages show the result, and existing skills are checked in the background.",
   },
   {
     version: "2.14.1",

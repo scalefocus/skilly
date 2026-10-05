@@ -137,7 +137,8 @@ export default function NotificationsPage() {
             const skSlug = n.skillSlug ?? (typeof n.payload.skillSlug === "string" ? n.payload.skillSlug : null);
             // skill.discussion — and a skill-context mention — deep-link straight to the
             // (auto-expanding) Discussion card. §24.
-            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : ""}` : null;
+            // skill.content_risk opens the owner Content risk card (§37.9).
+            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : ""}` : null;
             // A DIRECT-chat mention has no page of its own: deep-link to the topbar Messages
             // panel via ?conversation=<id> (§24 Mentions), like the email CTA.
             const conversationHref =

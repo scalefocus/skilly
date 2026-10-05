@@ -1,13 +1,13 @@
-// Live-DB integration test for installed-version freshness (SKILLY_SPEC.md §23, §37.3). Gated
+// Live-DB integration test for installed-version freshness (SKILLY_SPEC.md §23, §39.3). Gated
 // behind SKILLY_DB_E2E=1.
 //
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… pnpm --filter @skilly/web test:db
 //
-// Covers: migration 0081's columns + the gateway stamp SQL (as pgGitDeps.stampInstallServed
+// Covers: migration 0083's columns + the gateway stamp SQL (as pgGitDeps.stampInstallServed
 // writes it — pinned → pinned_semver, latest → latest stable, never touching used_at/UA/IP);
 // listInstalls / listSystemInstalls returning the four freshness fields in every state (current,
 // behind, withdrawn after a yank, unknown with no stamp, unknown when only betas are active);
-// and the backfill rule (a pre-0081 pinned install reads its pin, a latest-tracking one unknown).
+// and the backfill rule (a pre-0083 pinned install reads its pin, a latest-tracking one unknown).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { resolveLatest } from "@skilly/shared";
@@ -116,7 +116,7 @@ test("installs: freshness fields across current / behind / withdrawn / unknown, 
   assert.equal(sys.latestSemver, "1.2.0");
   assert.equal(sys.mintedBy, "Fresh Admin");
 
-  // Backfill rule (0081), replayed: a pre-0081 pinned install reads its pin, a latest one stays unknown.
+  // Backfill rule (0083), replayed: a pre-0083 pinned install reads its pin, a latest one stays unknown.
   const tLegacyPinned = await mkToken(skillA, "1.0.0");
   const tLegacyLatest = await mkToken(skillA, null);
   await pool.query(

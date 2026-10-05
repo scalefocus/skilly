@@ -16,6 +16,8 @@ export const FOLLOW_NOTIFICATION_TYPES = [
   "follow.achievement",
   "follow.request_created",
   "follow.request_fulfilled",
+  // §38.8 — a followee created a skill collection.
+  "follow.collection_created",
 ] as const;
 
 export type FollowNotificationType = (typeof FOLLOW_NOTIFICATION_TYPES)[number];
@@ -171,6 +173,17 @@ export function followNotificationContent(type: string, payload: Record<string, 
     case "follow.request_fulfilled": {
       const title = str(p.requestTitle) ?? "a skill request";
       return { sentence: `${actor} fulfilled the request "${title}" with ${skillRef}.`, ctaLabel: "View the skill", path: skillPath };
+    }
+    case "follow.collection_created": {
+      // §38.8 — the link opens the catalog filtered to the collection; a since-deleted one shows
+      // the "no longer exists" banner there, so the row never needs retracting.
+      const name = str(p.collectionName) ?? "a new collection";
+      const collectionId = str(p.collectionId);
+      return {
+        sentence: `${actor} created the collection "${name}".`,
+        ctaLabel: "View the collection",
+        path: collectionId ? `/catalog?collection=${encodeURIComponent(collectionId)}` : "/catalog",
+      };
     }
     default:
       return null;

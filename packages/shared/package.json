@@ -43,6 +43,10 @@
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"
     },
+    "./content-risk-status": {
+      "types": "./dist/content-risk-status.d.ts",
+      "default": "./dist/content-risk-status.js"
+    },
     "./email": {
       "types": "./dist/email.d.ts",
       "default": "./dist/email.js"
@@ -87,6 +91,10 @@
       "types": "./dist/survey.d.ts",
       "default": "./dist/survey.js"
     },
+    "./collections": {
+      "types": "./dist/collections.d.ts",
+      "default": "./dist/collections.js"
+    },
     "./freshness": {
       "types": "./dist/freshness.d.ts",
       "default": "./dist/freshness.js"
@@ -99,7 +107,7 @@
     "lint": "echo \"(configure eslint)\""
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "typescript": "^6.0.3"
   }
 }

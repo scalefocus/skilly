@@ -9,6 +9,15 @@ import { SkillCard, SkillListRow, type CatalogEntry } from "../../components/Ski
 import { CollapsibleFacetRow, FacetRow } from "../../components/CollapsibleFacetRow";
 import { initialFacetRowOpen, storedFacetRowOpen } from "../../lib/facetRow";
 import { agentLabel } from "@skilly/shared/agents";
+import { collectionPath } from "@skilly/shared/collections";
+import { UserBubble } from "../../components/UserBubble";
+
+/** §38.5 the collection banner's data (GET /api/collections/:id). */
+interface CollectionInfo {
+  collection: { id: string; name: string; description: string | null; skillCount: number; owner: { id: string; name: string; avatar: string | null } };
+  isOwner: boolean;
+  canDelete: boolean;
+}
 
 interface Facets {
   categories: { name: string; count: number }[];
@@ -41,6 +50,29 @@ function Catalog() {
   // display name for the banner (no extra lookup).
   const nsView = params.get("ns");
   const nsViewName = params.get("nsName") ?? "";
+  // Collection views (§38.5): `?collection=<id>` — one collection, the shareable link — or
+  // `?collectionsBy=<userId>&by=<name>` — every skill across one person's non-empty collections (the
+  // leaderboard's Collections action). Like the namespace view, arrival ignores the viewer's saved
+  // filters but the facets stay usable and compose with it; picks inside the view aren't persisted.
+  const collectionParam = params.get("collection");
+  const collectionsBy = collectionParam ? null : params.get("collectionsBy");
+  const collectionsByName = params.get("by") ?? "";
+  // "loading" until the banner data arrives; "missing" for an unknown/deleted id, which shows the
+  // "no longer exists" banner over the normal, unfiltered catalog.
+  const [collection, setCollection] = useState<CollectionInfo | "loading" | "missing" | null>(null);
+  const [collectionTick, setCollectionTick] = useState(0);
+  useEffect(() => {
+    if (!collectionParam) { setCollection(null); return; }
+    let live = true;
+    setCollection("loading");
+    fetch(`/api/collections/${encodeURIComponent(collectionParam)}`)
+      .then(async (r) => (r.ok ? ((await r.json()) as CollectionInfo) : "missing" as const))
+      .then((c) => { if (live) setCollection(c); })
+      .catch(() => { if (live) setCollection("missing"); });
+    return () => { live = false; };
+  }, [collectionParam, collectionTick]);
+  const collectionView = !!collectionParam || !!collectionsBy;
+  const activeCollection = collection && typeof collection === "object" ? collection : null;
   const [category, setCategory] = useState<string | null>(null);
   const [tool, setTool] = useState<string | null>(null);
   const [type, setType] = useState<"hosted" | "pointer" | null>(null);
@@ -91,9 +123,9 @@ function Catalog() {
   // Namespace view arrival: start from an unfiltered view of that namespace (declared after the
   // prefs restore so it wins on mount). Filters picked inside the view are not persisted (below).
   useEffect(() => {
-    if (!nsView) return;
+    if (!nsView && !collectionParam && !collectionsBy) return;
     setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setShowArchived(false);
-  }, [nsView]);
+  }, [nsView, collectionParam, collectionsBy]);
   // `?category=<name>` arrival (§10): select that chip exactly as a click would — it overrides the
   // remembered category for this visit and composes with `?ns=`. Marketplace plugin homepages
   // (§30.3) land here. Declared after the prefs restore and the namespace reset so it wins on mount.
@@ -104,11 +136,11 @@ function Catalog() {
     setCategoryOpen(true);
   }, [arrivalCategory]);
   useEffect(() => {
-    if (!prefsLoaded || nsView) return;
+    if (!prefsLoaded || nsView || collectionView) return;
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, showArchived, mine, official, view, categoryOpen: categoryOpenPref }));
     } catch { /* private mode etc. */ }
-  }, [prefsLoaded, nsView, category, tool, type, sort, showArchived, mine, official, view, categoryOpenPref]);
+  }, [prefsLoaded, nsView, collectionView, category, tool, type, sort, showArchived, mine, official, view, categoryOpenPref]);
   // Managers (platform/namespace admins or maintainers) may surface archived skills to restore them.
   const { data: me } = useApi<{ isPlatformAdmin: boolean; namespaceRoles: { role: string }[]; maintainsSkills: boolean }>("/api/me");
   const canManage = !!me && (me.isPlatformAdmin || (me.namespaceRoles ?? []).some((r) => r.role === "namespace_admin") || me.maintainsSkills);
@@ -119,6 +151,10 @@ function Catalog() {
     qs.set("maintainer", maintainer);
   } else {
     if (nsView) qs.set("ns", nsView); // namespace view (§10) — combines with the facets below
+    // §38.5 collection views — only once the collection is known to exist (a missing one leaves the
+    // catalog unfiltered under its "no longer exists" banner).
+    if (activeCollection) qs.set("collection", activeCollection.collection.id);
+    else if (collectionsBy) qs.set("collectionsBy", collectionsBy);
     if (submitted) qs.set("q", submitted);
     if (category) qs.set("category", category);
     if (tool) qs.set("tool", tool);
@@ -130,7 +166,43 @@ function Catalog() {
   if (sort === "top_rated") qs.set("sort", "top_rated");
   else if (sort === "latest") qs.set("sort", "latest");
 
-  const { data, loading, error } = useApi<{ skills: CatalogEntry[]; matchMode?: "all" | "any" | null }>(`/api/skills${qs.toString() ? `?${qs}` : ""}`);
+  // Hold the grid while a `?collection=` banner is still resolving, so it never flashes the full catalog.
+  const skillsUrl = collection === "loading" ? null : `/api/skills${qs.toString() ? `?${qs}` : ""}`;
+  const { data, loading, error, reload } = useApi<{ skills: CatalogEntry[]; matchMode?: "all" | "any" | null; collections?: { id: string; name: string; skillCount: number }[] }>(skillsUrl);
+  // The owner's "Remove from collection" (§38.5): the same request as the popup's untick.
+  const [removing, setRemoving] = useState<string | null>(null);
+  const removeFromCollection = async (s: CatalogEntry) => {
+    if (!activeCollection || !s.skillId) return;
+    setRemoving(s.skillId);
+    try {
+      const r = await fetch(`/api/collections/${activeCollection.collection.id}/skills/${s.skillId}`, { method: "DELETE" });
+      if (r.ok) { reload(); setCollectionTick((t) => t + 1); }
+    } finally {
+      setRemoving(null);
+    }
+  };
+  const [linkCopied, setLinkCopied] = useState(false);
+  useEffect(() => {
+    if (!linkCopied) return;
+    const t = setTimeout(() => setLinkCopied(false), 1800);
+    return () => clearTimeout(t);
+  }, [linkCopied]);
+  const copyCollectionLink = async () => {
+    if (!activeCollection) return;
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${collectionPath(activeCollection.collection.id)}`);
+      setLinkCopied(true);
+    } catch { /* clipboard blocked */ }
+  };
+  const deleteActiveCollection = async () => {
+    if (!activeCollection) return;
+    const c = activeCollection.collection;
+    const whose = activeCollection.isOwner ? "" : ` by ${c.owner.name}`;
+    if (!window.confirm(`Delete the collection “${c.name}”${whose}? This can’t be undone.`)) return;
+    const r = await fetch(`/api/collections/${c.id}`, { method: "DELETE" });
+    if (r.ok) setCollectionTick((t) => t + 1); // re-reads as missing → the "no longer exists" banner
+  };
+  const isCollectionOwner = !!activeCollection?.isOwner;
   const { data: facets } = useApi<Facets>("/api/skills/facets");
   const skills = data?.skills ?? [];
   // §34.5: no skill matched every word, so the grid shows skills matching some of them.
@@ -168,9 +240,56 @@ function Catalog() {
         </div>
       )}
 
+      {/* Collection banners (§38.5): one collection (the shareable link), or one person's collections. */}
+      {!maintainer && collectionParam && collection === "missing" && (
+        <div className="reveal collection-banner" data-testid="collection-banner" role="status">
+          <div className="collection-banner-head">
+            <span>This collection no longer exists.</span>
+            <span style={{ flex: 1 }} />
+            <Link href="/catalog" className="btn-ghost mono" style={{ fontSize: 12 }}>✕ clear</Link>
+          </div>
+        </div>
+      )}
+      {!maintainer && activeCollection && (
+        <div className="reveal collection-banner" data-testid="collection-banner">
+          <div className="collection-banner-head">
+            <UserBubble name={activeCollection.collection.owner.name} avatar={activeCollection.collection.owner.avatar} userId={activeCollection.collection.owner.id} size={26} />
+            <span>
+              Collection: <strong>{activeCollection.collection.name}</strong> by {activeCollection.collection.owner.name}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button type="button" className="btn btn-sm" onClick={() => void copyCollectionLink()} title="Copy a link anyone signed in can open">Copy link</button>
+            {activeCollection.canDelete && (
+              <button type="button" className="btn btn-sm btn-danger" onClick={() => void deleteActiveCollection()} data-testid="collection-banner-delete">Delete collection</button>
+            )}
+            <Link href="/catalog" className="btn-ghost mono" style={{ fontSize: 12 }}>✕ clear</Link>
+          </div>
+          {activeCollection.collection.description && <p className="collection-banner-desc">{activeCollection.collection.description}</p>}
+        </div>
+      )}
+      {!maintainer && collectionsBy && (
+        <div className="reveal collection-banner" data-testid="collections-by-banner">
+          <div className="collection-banner-head">
+            <span>Skills in collections by <strong>{collectionsByName || "this person"}</strong></span>
+            <span style={{ flex: 1 }} />
+            <Link href="/catalog" className="btn-ghost mono" style={{ fontSize: 12 }}>✕ clear</Link>
+          </div>
+          {(data?.collections?.length ?? 0) > 0 && (
+            <div className="collection-chips">
+              {data!.collections!.map((c) => (
+                <Link key={c.id} href={collectionPath(c.id)} className="facet">
+                  {c.name} <span className="facet-n">{formatCount(c.skillCount)}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {linkCopied && <div className="toast" role="status">✓ Link copied</div>}
+
       {/* Namespace-view banner (from the Marketplaces page's Skills action, §30.6): names the
           namespace and offers a one-click return to the full catalog. Facets stay available. */}
-      {!maintainer && nsView && (
+      {!maintainer && !collectionView && nsView && (
         <div className="reveal ns-view-banner" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 20, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
           <span>Skills in <strong>{nsViewName || nsView}</strong> — that you can see.</span>
           <span style={{ flex: 1 }} />
@@ -274,6 +393,10 @@ function Catalog() {
           {skills.length === 0 ? (
             maintainer ? (
               <EmptyState title="No skills to show" hint={`${maintainerName || "This person"} maintains no skills you have access to.`} />
+            ) : activeCollection && !(submitted || category || tool || type || mine || official) ? (
+              <EmptyState title="No skills to show" hint="This collection has no skills yet." />
+            ) : collectionsBy && !(submitted || category || tool || type || mine || official) ? (
+              <EmptyState title="No skills to show" hint={`${collectionsByName || "This person"} has no collections with skills yet.`} />
             ) : nsView && !(submitted || category || tool || type || mine || official) ? (
               <EmptyState title="No skills to show" hint={`${nsViewName || nsView} has no skills you have access to yet.`} />
             ) : (
@@ -288,20 +411,50 @@ function Catalog() {
             )
           ) : view === "cards" ? (
             <div className="card-grid">
-              {skills.map((s, i) => (
-                <SkillCard key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} index={i} />
-              ))}
+              {skills.map((s, i) =>
+                isCollectionOwner ? (
+                  <div className="collection-item" key={`${s.namespaceSlug}/${s.skillSlug}`}>
+                    <SkillCard s={s} index={i} />
+                    <RemoveFromCollection s={s} busy={removing === s.skillId} onRemove={removeFromCollection} />
+                  </div>
+                ) : (
+                  <SkillCard key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} index={i} />
+                ),
+              )}
             </div>
           ) : (
             <div className="rows reveal">
-              {skills.map((s) => (
-                <SkillListRow key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} />
-              ))}
+              {skills.map((s) =>
+                isCollectionOwner ? (
+                  <div className="collection-item is-row" key={`${s.namespaceSlug}/${s.skillSlug}`}>
+                    <SkillListRow s={s} />
+                    <RemoveFromCollection s={s} busy={removing === s.skillId} onRemove={removeFromCollection} />
+                  </div>
+                ) : (
+                  <SkillListRow key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} />
+                ),
+              )}
             </div>
           )}
         </>
       )}
     </div>
+  );
+}
+
+/** §38.5 the collection owner's per-skill remove control (outside the card, so nothing is covered). */
+function RemoveFromCollection({ s, busy, onRemove }: { s: CatalogEntry; busy: boolean; onRemove: (s: CatalogEntry) => void }) {
+  return (
+    <button
+      type="button"
+      className="collection-remove"
+      disabled={busy}
+      onClick={() => onRemove(s)}
+      aria-label={`Remove ${s.title} from this collection`}
+      data-testid="collection-remove"
+    >
+      {busy ? "…" : "✕ Remove from collection"}
+    </button>
   );
 }
 

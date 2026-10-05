@@ -173,6 +173,22 @@ export function selfSurveyGate(
   return nextAt ? { ok: false, error: "cooldown", nextAt } : { ok: true };
 }
 
+/**
+ * §36.16 the sidebar colophon's "Have your say" link: what a click does, or `null` to hide it.
+ * Signed out, not yet onboarded, or with the platform switch off (`selfSurvey` null) → hidden. An
+ * open offer (random or on-demand) is reopened; otherwise a new on-demand survey starts, unless the
+ * cooldown is running.
+ */
+export function colophonFeedbackAction(
+  s: { signedIn: boolean; onboarded: boolean; selfSurvey: { nextAt: string | null } | null; offerOpen: boolean },
+  now: Date,
+): "start" | "reopen" | null {
+  if (!s.signedIn || !s.onboarded || !s.selfSurvey) return null;
+  if (s.offerOpen) return "reopen";
+  const { nextAt } = s.selfSurvey;
+  return nextAt === null || Date.parse(nextAt) <= now.getTime() ? "start" : null;
+}
+
 /** One 1-in-3 roll. `rng` returns [0, 1) like Math.random (injectable for tests). */
 export function surveyRollWins(rng: () => number = Math.random): boolean {
   return rng() * SURVEY_ROLL_ODDS < 1;

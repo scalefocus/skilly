@@ -45,6 +45,13 @@ test("content: the per-type sentences and links (§35.6)", () => {
   });
   assert.equal(followNotificationContent("follow.achievement", { actorName: "Ada", actorId: "u1", badgeKey: "first_watch", badgeName: "X" })!.path, "/achievements/u1?badge=first_watch");
   assert.equal(followNotificationContent("follow.request_created", { actorName: "Ada", requestId: "r9", requestTitle: "PDF tools" })!.sentence, 'Ada requested a skill: "PDF tools".');
+  // §38.8 — a new collection links to the catalog filtered to it.
+  assert.deepEqual(followNotificationContent("follow.collection_created", { actorName: "Ada", collectionId: "c-1", collectionName: "Onboarding pack" }), {
+    sentence: 'Ada created the collection "Onboarding pack".',
+    ctaLabel: "View the collection",
+    path: "/catalog?collection=c-1",
+  });
+  assert.equal(followNotificationContent("follow.collection_created", {})!.path, "/catalog");
   // Odd payloads never throw and never leak JSON.
   const c = followNotificationContent("follow.new_skill", null)!;
   assert.equal(c.sentence, "Someone you follow published a new skill, a skill.");

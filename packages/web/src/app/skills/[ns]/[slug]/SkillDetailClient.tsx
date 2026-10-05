@@ -4,6 +4,7 @@ import nextDynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useApi, Pill, CopyCommand, EmptyState, ScrollToTop, formatCount, ShareButton } from "../../../../components/ui";
+import { AddToCollection } from "../../../../components/AddToCollection";
 import { ExpiryPicker } from "../../../../components/ExpiryPicker";
 import { useDateFmt } from "../../../../components/DateFormat";
 import { Markdown } from "../../../../components/Markdown";
@@ -15,6 +16,9 @@ import { resolvePredecessor } from "@skilly/shared/semver";
 import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
+import { ContentRiskCard } from "./ContentRiskCard";
+import { ContentRiskChip } from "../../../../components/ContentRisk";
+import type { ContentRiskStatus } from "@skilly/shared/content-risk-status";
 import { FollowButton } from "../../../../components/FollowButton";
 import { reportFeatureUse } from "../../../../lib/surveyClient";
 
@@ -145,6 +149,8 @@ function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canMana
 }
 
 interface Detail {
+  /** §38.3 the skill id and whether it may join a collection (org-visible, active, installable). */
+  skillId: string; collectible: boolean;
   namespaceSlug: string; skillSlug: string; visibility: "org" | "namespace";
   versions: VersionView[]; latest: string | null; latestInstallable: string | null; publishing: boolean; watching: boolean; watchers: number; rating: RatingView;
   usageExamples: string | null; archived: boolean;
@@ -156,6 +162,10 @@ interface Detail {
   featured: boolean; canFeature: boolean;
   canManage: boolean; canDelete: boolean; canPromote: boolean; isGlobal: boolean; canRetryMirror: boolean;
   discussionCount: number;
+  /** §37.7: the displayed version's content-check status (no findings), or null with no version. */
+  contentRisk: { semver: string; status: ContentRiskStatus; ruleset: number } | null;
+  /** §37.8: maintainers / namespace admins / platform admins also get the full Content risk card. */
+  canSeeContentRisk: boolean;
   /** Optional skill icon (§33) — image and/or emoji, or null. */
   icon: { url: string | null; emoji: string | null } | null;
 }
@@ -321,6 +331,7 @@ export default function SkillDetail() {
         {data.latest && <span className="chip chip-accent">v{data.latest}</span>}
         {data.visibility === "namespace" ? <Pill tone="warn">restricted</Pill> : <Pill tone="ok">org-wide</Pill>}
         {data.archived && <Pill tone="danger">archived</Pill>}
+        {data.contentRisk && <ContentRiskChip status={data.contentRisk.status} />}
         <span className="grow" style={{ flex: 1 }} />
         {data.watchers > 0 && (
           <span className="muted mono" style={{ fontSize: 12 }} title={`${data.watchers} ${data.watchers === 1 ? "person is" : "people are"} watching this skill`}>
@@ -341,6 +352,8 @@ export default function SkillDetail() {
             return j.url ?? null;
           }}
         />
+        {/* §38.3 beside Share, only on an org-visible, active, installable skill. */}
+        {data.collectible && <AddToCollection skillId={data.skillId} />}
         {!data.archived && (
           <button
             className={`btn btn-sm${data.watching ? " btn-primary" : ""}`}
@@ -643,6 +656,10 @@ export default function SkillDetail() {
       <RatingPanel rating={data.rating} busy={busy} onRate={rate} readOnly={data.archived} />
 
       <MaintainersPanel ns={ns} slug={slug} />
+
+      {data.canSeeContentRisk && data.contentRisk && (
+        <ContentRiskCard ns={ns} slug={slug} initialStatus={data.contentRisk.status} onChanged={reload} />
+      )}
 
       <SkillDiscussion ns={ns} slug={slug} versions={data.versions} latest={data.latest} initialCount={data.discussionCount} />
 

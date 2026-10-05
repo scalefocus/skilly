@@ -1,4 +1,4 @@
-// Installed-version freshness (SKILLY_SPEC.md §23 "Installed-version freshness", §37).
+// Installed-version freshness (SKILLY_SPEC.md §23 "Installed-version freshness", §39).
 //
 // An install token is reusable, so an *installation* outlives the clone that created it and can
 // silently fall behind the catalog. The gateway stamps `tokens.last_served_semver` on every
@@ -15,7 +15,7 @@ import { compareSemver, isValidSemver, resolveLatest } from "./semver.js";
  *                 the filter answers "what runs old bytes", not "who forgot to update").
  * - `withdrawn` — the served version is yanked / no longer an active version at all. Strictly
  *                 stronger than `behind`; the governance case. Counts as behind for filtering.
- * - `unknown`   — no stamp yet (a pre-0081 latest-tracking install that has not re-cloned, or an
+ * - `unknown`   — no stamp yet (a pre-0083 latest-tracking install that has not re-cloned, or an
  *                 empty-repo serving), or the skill has no latest stable at all. Never "behind".
  */
 export type Freshness = "current" | "behind" | "withdrawn" | "unknown";

@@ -75,7 +75,7 @@ export interface InstallView {
   icon: { url: string | null; emoji: string | null } | null;
   /** Freshness (§23 "Installed-version freshness"): what the gateway last served this install. */
   lastServedSemver: string | null;
-  /** When it was last served (ISO), null until the first post-0081 clone. */
+  /** When it was last served (ISO), null until the first post-0083 clone. */
   lastClonedAt: string | null;
   /** The skill's current latest stable, null when it has none. */
   latestSemver: string | null;

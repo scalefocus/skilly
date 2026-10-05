@@ -19,6 +19,8 @@ interface Entry {
   skillsRequested: number;
   /** Active followers (§35.7) — 0 while the person has paused follows. */
   followers: number;
+  /** Collections holding at least 3 eligible skills (§38.8). */
+  collections: number;
   followable: boolean;
 }
 
@@ -26,8 +28,8 @@ function Leaderboard() {
   // §36.3 opening the leaderboard is the `leaderboard` feature's first use.
   useEffect(() => { reportFeatureUse("leaderboard"); }, []);
   const [window, setWindow] = useState<"all" | "30d">("all");
-  // Ranking metric (§26/§35.7): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested / followers.
-  const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested" | "followed">("installs");
+  // Ranking metric (§26/§35.7/§38.8): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested / followers / collections.
+  const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested" | "followed" | "curated">("installs");
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
   // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills and "Requests" to Mine).
   const { data: me } = useApi<{ userId: string | null }>("/api/me");
@@ -66,6 +68,7 @@ function Leaderboard() {
           <button type="button" className={`sort-opt${sort === "watched" ? " sort-on" : ""}`} onClick={() => setSort("watched")}>Watched</button>
           <button type="button" className={`sort-opt${sort === "requested" ? " sort-on" : ""}`} onClick={() => setSort("requested")}>Requested</button>
           <button type="button" className={`sort-opt${sort === "followed" ? " sort-on" : ""}`} onClick={() => setSort("followed")}>Followed</button>
+          <button type="button" className={`sort-opt${sort === "curated" ? " sort-on" : ""}`} onClick={() => setSort("curated")}>Curated</button>
         </div>
         <div className="sort-toggle" role="group" aria-label="Leaderboard window">
           <button type="button" className={`sort-opt${window === "all" ? " sort-on" : ""}`} onClick={() => setWindow("all")}>All time</button>
@@ -89,6 +92,8 @@ function Leaderboard() {
             // Your own row → the requests page's "Mine" toggle; anyone else → the requested-by view
             // (banner shows their name). Requests have no namespace, so nothing to visibility-filter (§21/§26).
             const requestsHref = isSelf ? "/requests?mine=1" : `/requests?requester=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
+            // §38.8 every skill across that person's non-empty collections, own row included.
+            const collectionsHref = `/catalog?collectionsBy=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
             return (
             <div className="row lb-row" key={e.userId} style={{ alignItems: "center", gap: 12 }}>
               <span className="mono" style={{ fontSize: 14, fontWeight: 600, color: i < 3 ? "var(--accent-2)" : "var(--faint)", minWidth: 28, textAlign: "right" }}>
@@ -103,19 +108,21 @@ function Leaderboard() {
                   {e.skillsWatched > 0 && <> · {e.skillsWatched} skill{e.skillsWatched === 1 ? "" : "s"} watched</>}
                   {e.skillsRequested > 0 && <> · {e.skillsRequested} skill{e.skillsRequested === 1 ? "" : "s"} requested</>}
                   {e.followers > 0 && <> · {e.followers} follower{e.followers === 1 ? "" : "s"}</>}
+                  {e.collections > 0 && <> · {e.collections} collection{e.collections === 1 ? "" : "s"}</>}
                 </div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 600 }}>
-                  {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : sort === "requested" ? e.skillsRequested : sort === "followed" ? e.followers : e.installs)}
+                  {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : sort === "requested" ? e.skillsRequested : sort === "followed" ? e.followers : sort === "curated" ? e.collections : e.installs)}
                 </div>
                 <div className="muted mono" style={{ fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : sort === "requested" ? "requested" : sort === "followed" ? "followers" : "installs"}
+                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : sort === "requested" ? "requested" : sort === "followed" ? "followers" : sort === "curated" ? "collections" : "installs"}
                 </div>
               </div>
               <div className="lb-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                 <Link href={skillsHref} className="btn btn-sm" title={isSelf ? "Your maintained skills" : `Skills maintained by ${e.displayName}`}>Skills</Link>
                 <Link href={requestsHref} className="btn btn-sm" title={isSelf ? "Your skill requests" : `Skills requested by ${e.displayName}`}>Requests</Link>
+                <Link href={collectionsHref} className="btn btn-sm" title={isSelf ? "Skills in your collections" : `Skills in collections by ${e.displayName}`}>Collections</Link>
                 {!isSelf && (
                   <button type="button" className="btn btn-sm" disabled={reaching === e.userId} onClick={() => reachOut(e.userId)} title={`Message ${e.displayName}`}>
                     {reaching === e.userId ? "…" : "Reach out"}

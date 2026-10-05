@@ -1,4 +1,4 @@
--- Installed-version freshness (SKILLY_SPEC.md §23 "Installed-version freshness", §37).
+-- Installed-version freshness (SKILLY_SPEC.md §23 "Installed-version freshness", §39).
 --
 --   tokens.last_served_semver   the semver the gateway RESOLVED TO SERVE this install token on its
 --                               most recent /info/refs advertisement: the token's pinned_semver when
@@ -12,7 +12,7 @@
 --
 -- Backfill: installs used before this migration get last_served_semver = pinned_semver when pinned
 -- (that is what their URL names). Latest-tracking ones stay NULL — we cannot know what `main` was at
--- their last clone, so they read "unknown" until their next clone (§37.1 #3). last_cloned_at stays
+-- their last clone, so they read "unknown" until their next clone (§39.1 #3). last_cloned_at stays
 -- NULL for both.
 --
 -- No grant changes: the app role already owns UPDATE on tokens (0029).

@@ -78,7 +78,7 @@ test("initialize advertises tools + resources and names the server", async () =>
   assert.match(res.body.result.instructions, /search_skills/);
 });
 
-test("tools/list exposes exactly the 24 curated tools, with read-only hints", async () => {
+test("tools/list exposes exactly the 25 curated tools, with read-only hints", async () => {
   const fp = signedIn();
   const res = await rpc(fp, { jsonrpc: "2.0", id: 2, method: "tools/list" });
   const tools = res.body.result.tools as Array<{ name: string; annotations: { readOnlyHint: boolean } }>;
@@ -91,6 +91,9 @@ test("tools/list exposes exactly the 24 curated tools, with read-only hints", as
   assert.equal(search.annotations.readOnlyHint, true);
   const install = tools.find((t) => t.name === "install_skill")!;
   assert.equal(install.annotations.readOnlyHint, false);
+  // §38.9 agents read collections; people curate them.
+  const collections = tools.find((t) => t.name === "get_collections")!;
+  assert.equal(collections.annotations.readOnlyHint, true);
 });
 
 test("no tool exists for the excluded surface (review decisions, admin, destruction)", async () => {
@@ -175,6 +178,63 @@ test("search_skills binds the caller's namespaces into the visibility predicate"
     q!.params.some((p) => Array.isArray(p) && p.length === 1 && p[0] === NS_MINE),
     `expected the caller's namespace ids to be bound; got ${JSON.stringify(q!.params)}`,
   );
+});
+
+const COLLECTION = "33333333-3333-4333-8333-333333333333";
+const callCollections = (fp: FakePool, args: Record<string, unknown>) =>
+  rpc(fp, { jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "get_collections", arguments: args } });
+
+test("get_collections with an id: members run the eligibility AND the caller's visibility predicate (§38.9 / invariant #3)", async () => {
+  const fp = signedIn();
+  fp.on("from skill_collections c join users u", [
+    { id: COLLECTION, name: "Onboarding pack", description: null, skill_count: 1, created_at: new Date("2026-10-01T00:00:00Z"), owner_name: "Ada" },
+  ]);
+  fp.on("from skill_collection_items ci\n       join skills s", [{ namespace_slug: "team", slug: "pdf", title: "PDF", versions: ["1.0.0", "1.1.0"] }]);
+  const res = await callCollections(fp, { id: COLLECTION });
+  assert.equal(res.body.result.isError, undefined);
+  const body = JSON.parse(res.body.result.content[0].text);
+  assert.equal(body.name, "Onboarding pack");
+  assert.equal(body.owner, "Ada");
+  assert.match(body.link, /\/catalog\?collection=33333333-/);
+  assert.deepEqual(body.skills, [{ namespace: "team", slug: "pdf", title: "PDF", latestInstallable: "1.1.0" }]);
+
+  const q = fp.matching("from skill_collection_items ci").find((c) => c.sql.includes("join namespaces n"));
+  assert.ok(q, "the member query must run");
+  assert.match(q!.sql, /s\.visibility = 'org' and s\.status = 'active'/, "eligibility predicate");
+  assert.match(q!.sql, /s\.visibility = 'org' or s\.namespace_id = any/, "the shared visibility predicate");
+  assert.ok(q!.params.some((p) => Array.isArray(p) && p.length === 1 && p[0] === NS_MINE), "bound to the caller's namespaces");
+});
+
+test("get_collections: unknown id and a too-short query are tool errors; no arguments lists your own", async () => {
+  const fp = signedIn();
+  const missing = await callCollections(fp, { id: COLLECTION });
+  assert.equal(missing.body.result.isError, true);
+  assert.match(missing.body.result.content[0].text, /no collection with that id/);
+
+  const short = await callCollections(fp, { query: "a" });
+  assert.equal(short.body.result.isError, true);
+
+  fp.on("from skill_collections c where c.owner_id = $1", [
+    { id: COLLECTION, name: "Mine", description: "d", skill_count: 0, created_at: new Date("2026-10-01T00:00:00Z") },
+  ]);
+  const own = await callCollections(fp, {});
+  const body = JSON.parse(own.body.result.content[0].text);
+  assert.equal(body.collections.length, 1);
+  assert.equal(body.collections[0].skillCount, 0);
+  const q = fp.matching("from skill_collections c where c.owner_id = $1")[0];
+  assert.equal(q!.params[0], USER, "scoped to the caller");
+});
+
+test("get_collections with a query runs the shared matcher (name, description, owner; active owners; non-empty)", async () => {
+  const fp = signedIn();
+  fp.on("as name_hit", [{ id: COLLECTION, name: "Onboarding pack", description: null, skill_count: 3, created_at: new Date("2026-10-01T00:00:00Z"), owner_name: "Ada" }]);
+  const res = await callCollections(fp, { query: "onboard" });
+  const body = JSON.parse(res.body.result.content[0].text);
+  assert.equal(body.collections[0].owner, "Ada");
+  const q = fp.matching("as name_hit")[0]!;
+  assert.equal(q.params[0], "%onboard%");
+  assert.equal(q.params[1], 10);
+  assert.match(q.sql, /m\.skill_count > 0/);
 });
 
 test("get_skill on a skill the caller can't see is indistinguishable from a missing one", async () => {

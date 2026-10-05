@@ -25,7 +25,9 @@ Every decision below was explicitly confirmed.
 | Search | **PostgreSQL full-text search only** (§34): stemmed and weighted (title/slug › description › categories › usage + `SKILL.md` body), admin-curated synonyms, typo + substring fallback tiers, `"phrase"` / `-exclude` / `OR` syntax, admin-selectable language. **No vector store, no new extension.** One engine for the catalog, the header search and MCP |
 | Skill icons | **Optional, skill-level** image or emoji (§33): resolved from the bundle (`icon:` frontmatter → root `icon.png`) before the proposer's upload/emoji; re-encoded to 256×256 PNG; default = the skilly wordmark. Shown on every skill surface and on the **signed share link's** Open Graph card — the only per-skill unfurl, gated by a 7-day token minted by a signed-in viewer |
 | Feedback survey | **Anonymous in-app survey** (§36): general satisfaction + two questions on a feature the user just used for the first time, 1–5 stars + optional free text. A 1-in-3 random roll on an eligible first use, **at most once per 30 days**, 14-day grace for new users, never alongside What's new. Profile opt-out + platform switch; users can also **give feedback on demand** (profile / account menu, once per 7 days, feature of their choice, §36.16); results for platform admins on Monitoring, with any figure over fewer than 5 responses withheld |
+| Skill collections | **User-owned, shareable lists of org-visible skills** (§38): any user adds a skill from its detail page; a collection opens as the catalog filtered to it (`/catalog?collection=<id>`), is found through the header dropdown, and mints nothing (no bulk install). Restricted skills can never be members; a skill that narrows, archives or loses its last version is evicted |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
+| Content risk | **Rule-based content-risk scanner** (§37): flags hidden Unicode, look-alike letters, override phrasing and credential theft in a skill's text; advisory with the audited override, and a flagged **direct publish goes to review** |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
 | Deployment | **docker compose** (6 core services + git-perms init + dev proxy); **Helm/K8s now shipped** (§16 #19) |
@@ -179,7 +181,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Captures proposer resubmissions and reviewer edits (with diff for audit).
 
 ### `scan_reports`
-- `id`, `subject_type` (`skill_version` | `pointer_ref`), `subject_id`, `scanner`, `findings` (json), `severity`, `status`, `cached_for_ref` (for pointer caching), `created_at`.
+- `id`, `subject_type` (`skill_version` | `pointer_ref`), `subject_id`, `scanner`, `findings` (json), `severity`, `status`, `cached_for_ref` (for pointer caching), `created_at`. The ingest pipeline writes `subject_type = 'artifact'` (keyed by artifact object key), the subject the accept gate and the review page read. Findings may carry optional `line`, `excerpt` and `ruleset` fields (§37.3).
 
 ### `audit_log` (append-only)
 - `id`, `actor_user_id` (nullable — null for SCIM/system actions, §5), `action`, `target_type`, `target_id`, `namespace_id`, `before` (json), `after` (json), `source` (`web` | `api` | `scim` | `worker`), `request_id`, `created_at`.
@@ -190,7 +192,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id`, `actor_user_id`, `skill_version_id`, `skill_id` (nullable FK, `ON DELETE SET NULL` — links a fetch to its skill even when the exact version isn't resolved; powers install analytics, §21), `source`, `created_at`, `is_system` (BOOLEAN default false — the clone presented a **system installation** token, §23; distinguishes system clones from legacy anonymous/tokenless rows, both of which have `actor_user_id = NULL`).
 
 ### `tokens`
-- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), **`last_served_semver`** (TEXT, nullable — the semver the gateway last served this install, migration **0081**, §23 *Installed-version freshness*; a plain string, deliberately **not** an FK to `skill_versions` so a later version delete leaves the row readable), **`last_cloned_at`** (TIMESTAMPTZ, nullable — when that serving happened; both NULL on `marketplace` tokens), `created_at`.
+- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), **`last_served_semver`** (TEXT, nullable — the semver the gateway last served this install, migration **0083**, §23 *Installed-version freshness*; a plain string, deliberately **not** an FK to `skill_versions` so a later version delete leaves the row readable), **`last_cloned_at`** (TIMESTAMPTZ, nullable — when that serving happened; both NULL on `marketplace` tokens), `created_at`.
 - **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23. **The §29 MCP/OAuth credentials are a separate regime in separate tables** (`oauth_*` below) — header-borne, short-lived and rotating; they never share a row or an enum with `tokens`.
 - **`marketplace` tokens** (§30.4) are the same handle for a **plugin marketplace** rather than a skill: `skill_id` is NULL and the scope is carried by **`marketplace_scope`** (`public` | `namespace`) + **`namespace_id`** (FK → `namespaces`, `ON DELETE CASCADE`; set **iff** scope = `namespace`). `skill_id` is therefore **nullable**, and a CHECK enforces the discriminant: `install` ⇒ `skill_id` NOT NULL ∧ `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL ∧ `marketplace_scope` NOT NULL ∧ (`namespace_id` NOT NULL ⇔ scope = `namespace`). **`last_served_commit`** (TEXT, nullable) is the per-token attribution cursor of §30.7. Same TTL, reuse, reactivate and hard-delete-on-remove semantics as `install`; **`is_system` is never set** — system marketplaces are deferred (§30.4).
 
@@ -296,6 +298,13 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`survey_answers`** — `response_id` (FK, CASCADE), `question_key`, `stars` (1–5); PK `(response_id, question_key)`; one row per *answered* question.
 - **`survey_daily`** — `day` (PK), `shown`, `closed`, `submitted`, `submitted_from_menu`, plus `shown_self` / `submitted_self` for on-demand surveys (migration 0080, §36.16): aggregate funnel counters with no user or feature dimension.
 
+### `content_risk_acknowledgements` (migration 0081, detailed in §37)
+- `id`, `skill_id` (FK → `skills`, CASCADE), `semver` — keyed to the **version**, `scan_report_id` (FK → `scan_reports`, SET NULL; provenance only), `pairs` (JSONB, the acknowledged `(rule, path)` pairs), `acknowledged_by` (FK → `users`, SET NULL), `acknowledged_at`, `note` (≤ 500 chars), `source` (`override` | `manual`). Append-only for the app role. The same migration adds `proposals.routed_reason` (`content_risk`, nullable) and `users.content_risk_notifications` (default true).
+
+### `skill_collections` / `skill_collection_items` (migration 0082, detailed in §38)
+- **`skill_collections`** — `id` (uuid), `owner_id` (FK → `users`, CASCADE), `name` (1–60, unique per owner on `lower(name)`), `description` (≤ 500, nullable), `created_at`, `updated_at`. A user-owned list; owning one grants no authority (invariant #1). Deleted on GDPR erasure (§4).
+- **`skill_collection_items`** — `collection_id` (FK, CASCADE), `skill_id` (FK → `skills`, CASCADE), `added_at`; PK `(collection_id, skill_id)`. Members are **org-visible, active, installable** skills only; a skill that stops qualifying is evicted in the same transaction (§38.4).
+
 ---
 
 ## 4. RBAC model & permission matrix
@@ -325,11 +334,14 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Approve promotion to global | ✅ | ❌ | ❌ | ❌ |
 | Yank version / archive skill | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Override security finding on publish | ✅ | ✅ (own ns) | ❌ | ❌ |
+| Acknowledge a flagged content-risk finding (§37.6) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | View audit log | ✅ (all) | ✅ (own ns) | own proposals | own proposals |
 | Consume (search/install visible) | ✅ | ✅ | ✅ | ✅ |
 | Mint / manage **system installs** (§23) | ✅ | ❌ | ❌ | ❌ |
 | Rate a visible skill (§18) | ✅ | ✅ | ✅ | ✅ |
 | Manage skill maintainers (§19) | ✅ (any) | ✅ (own ns) | maintainers of that skill | maintainers of that skill |
+| Create / edit / delete **own** skill collections (§38) | ✅ | ✅ | ✅ | ✅ |
+| Delete **anyone's** skill collection (§38, audited) | ✅ | ❌ | ❌ | ❌ |
 
 > **Maintainers (§19)** are an ownership + notification concept and grant **no authority** (invariant #1 — all power stays in SCIM groups + `role_mappings`). The *single* exception is the row above: a skill's own maintainers may curate its co-maintainer list, bounded by the visibility eligibility gate (they can never add anyone who couldn't already see the skill).
 
@@ -385,7 +397,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Delete user info (GDPR erasure)
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), after **Maintenance** and directly before **Namespaces** (Currently online, which used to follow it, now lives on the Monitoring page — §4 *Currently online*). Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
-- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
+- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), **`skill_collections`** with their items (§38.10 — never transferred), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
@@ -728,7 +740,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   log.
 
 ### Security scanning — pluggable pipeline
-- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns).
+- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns). Plus **(d) content risk** (§37): hidden Unicode, look-alike letters, override phrasing and credential theft, read as instructions to an agent.
 - **Pre-accept, for both types** (so reviewers never approve blind): **Hosted** is scanned at upload (artifact-keyed report); **Pointer** is scanned by a worker loop that clones the proposal's pinned ref while it sits in review (proposal-keyed report, deduped per ref). Until that loop runs a pointer proposal reads as **`scan pending`** (not "not scanned"); a ref that can't be fetched reads **`source unreachable`**. Pointer versions are scanned again at mirror time on accept (artifact-keyed) and periodically refreshed.
 - Report attached to proposal, surfaced in review dashboard.
 - **Validation blocks; security findings are advisory** — a reviewer may publish over a finding, **explicitly and audit-logged**.
@@ -855,6 +867,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Applies identically to the **direct-publish** path (`require_review = false` namespace members): same reuse semantics, same snapshot, same no-op guard.
 - **Duplicate detection → redirect to a new version.** A NEW-skill submission that duplicates a skill the submitter can already see is steered to **propose a new version** of the existing one instead of creating a second copy. Two identities, both **active-only** and **visibility-scoped** (invariant #3 — a duplicate the submitter can't see never blocks them, but is surfaced to the reviewer who can): **pointer** = same slug + same **normalized origin URL** (`normalizeOriginUrl`) + same subdir, cross-namespace (a *different* slug for the same repo is allowed — a deliberate fork/rename); **hosted** = a byte-identical **content set** — `content_sha256`, a packaging-independent digest (`contentDigest`: sha256 over the sorted per-file sha256 of raw bytes, filenames/layout/junk disregarded), so a re-exported bundle still matches even though its whole-archive `artifact_sha256` differs. `content_sha256` is computed at upload (hosted) and mirror (pointer), stored on `skill_versions`, and **backfilled** from object storage by a leader-only worker sweep. The same-namespace+same-slug case is handled earlier by the slug-uniqueness 409; this catches the cross-namespace and identical-content cases it misses. New-**version** proposals are exempt (they intentionally target an existing skill). **Enforcement** is a platform setting `duplicate_proposal_enforcement` (Administration → Duplicate proposals), default **`block`**: the propose form disables submit and `POST /api/proposals`/`/api/publish` return **409** with the match; **`warn`** lets it through with an advisory notice. The slug-uniqueness 409 is always hard regardless. The redirect **carries over** the source the submitter already provided — the staged bundle / pointer fields transition in place into the (slug-locked) new-version flow as an **explicitly supplied source** (so *Keep current files* is off), no re-upload. Reviewers are alerted on the review page (with a link to the existing skill) in both modes, evaluated at the reviewer's own visibility.
 - **Pointer proposals are verified at submit time.** Before a pointer (external-git) proposal or direct publish is accepted by the API, skilly confirms the source actually resolves to a `SKILL.md` at the pinned ref + folder — the same resolution the mirror uses (the literal `<subdir>/SKILL.md`, else a folder named after the skill containing one). If it doesn't (wrong URL/ref/folder, or a repo with no `SKILL.md`), the submission is **rejected with 422** and a clear message *before* the proposal is created — rather than dead-lettering at mirror time (the worker's `cloneAndPack` only throws "no SKILL.md found …" on accept). The check is a lightweight, SSRF-hardened partial clone (`--depth 1 --no-checkout --filter=blob:none` + `ls-tree`, identical transport/DNS-rebind guards to the §6 mirror and the ref pre-check) in the web tier; skills-hub registry URLs (fetched via the registry API, not git) skip it. Deeper validation (frontmatter, `name == slug`, scan) still runs at mirror/accept.
+- **A flagged direct publish goes to review (§37.4).** When a direct publish's content-risk findings trip the override gate, a submitter without override authority is routed into an ordinary proposal (`routed_reason = 'content_risk'`, **202**), and a submitter with it must confirm an audited override (**409** first). A direct pointer publish fetches the pinned folder's contents for this check; a failed fetch routes to review.
 - **Pinned-ref default is source-aware.** For a **git** origin the pinned ref defaults to the **`main` branch** — the conventional default branch, and the common case for a repo that publishes no version tags — rather than the proposed version. For a **skills-hub origin** the `main` default never applies (the registry has no branches — §6): the form pins the registry's **latest version** as soon as the pre-check resolves it, and the field's label/placeholder switch to version language. The live ref pre-check (`GET /api/pointer/refs`) validates either way: for git it lists the repo's real branches/tags, for skills-hub the registry's **published versions**; if the typed ref doesn't exist upstream the form warns (`<ref> isn't a branch or tag in this repo — mirroring will fail. Pick one that exists` / the version-flavored equivalent) and offers quick-picks. A ref the proposer typed **deliberately** is never overridden; clearing the field restores the source's default. Server-side, a skills-hub pointer whose ref is not a version is rejected with **422** (§6 `validateSkillsHubRef`).
 - **Separate `proposals` and `skills`/`skill_versions` tables.** On accept, skilly **materializes** a new `skill_version` (and a `skill` if new) from the proposal's final revision. Proposal persists in terminal state, linked to the materialized version.
 - **Maintainer auto-add on acceptance (§19).** Accepting a version — new-skill or new-version, via review or direct publish — auto-adds the submitter as an explicit maintainer of the skill, eligibility-gated; full rule in §19.
@@ -965,7 +978,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Free-text search is PostgreSQL full-text search with forgiving layers — the §34 engine** (superseding the substring-`ILIKE` decision recorded here through v2.10.0, whose revisit condition §34.1 explains). **One engine** serves the **header dropdown, the catalog grid and the MCP `search_skills` tool** identically, so they match and rank the same: stemmed, any-word-order matching over **title + slug (A), description (B), category names (C)** and the **indexed version's usage examples + `SKILL.md` body (D)** (§34.3); platform-admin-curated **synonym groups** (§34.8); a **last-word prefix** so partial words still work as you type; a **typo tier** on titles; and today's **substring predicate kept as the lowest tier**, so nothing a plain query matched before stops matching (§34.5). Queries accept `"phrases"`, `-exclusions` and capital `OR` (§34.4); a multi-word query that matches nothing falls back to any-word matches, flagged `matchMode: "any"`. **No vector store, no new extension** — lexical, not embedding-semantic (§34.1). Maintainer names remain **not** matched (low value).
 - **Search surfaces (one box, five behaviors + a people mode):** the single top-bar box adapts to the page it's on. Its placeholder reads **"Search the registry…"** everywhere except the installed-skills page (**"Search installed skills…"**), the usage dashboard (**"Search usage…"**), and the Requested skills page (**"Search requests…"**).
   - **People mode (`@`) — overrides all five behaviors.** A query whose **first character is `@`** switches the box to a **people typeahead**: the dropdown shows up to **5** matching users — `UserBubble` avatar + display name + email — matched by **substring over display name and email** (2+ chars after the `@`), **excluding erased tombstones and non-`active` users**. Picking one navigates to that person's **maintained-by catalog view** (`/catalog?maintainer=<id>&by=<name>`, §10 above). Backed by the new `GET /api/users/suggest?q=` (§15 — any signed-in user, rate-limited, same posture as `/api/skills/suggest`; people have no per-user visibility model, §28 precedent). People mode is available on **every** page, including the four live-filter pages — a leading `@` re-enables the dropdown there and **suspends the live filter** (nothing is written to `?q=` while in people mode; clearing or deleting the `@` restores the page's normal behavior). Keyboard/clear/Escape semantics are unchanged from the skill dropdown.
-  - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches — the first 5 of the **unfiltered** catalog *Relevance* order for the same query (§34.6) — opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
+  - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches — the first 5 of the **unfiltered** catalog *Relevance* order for the same query (§34.6) — opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered. A **Collections** group (up to 3 hits) sits below the skill hits and opens `/catalog?collection=<id>` (§38.6); the catalog's `?collection=` and `?collectionsBy=` views are §38.5.
   - **Catalog page:** the dropdown is **suppressed**; the same top-bar box becomes a **live filter of the card/row grid** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (merged with the other filters, kept out of history) and the grid re-queries + re-ranks on each keystroke, exactly like choosing a category or tool. The box is **seeded from `?q=`** on arrival, and **clearing it restores the full catalog**. When the §34 engine falls back to any-word matching (`matchMode: "any"`), a one-line **partial-matches notice** plus the query-syntax tip sits above the grid, and a zero-result search shows the tip in the empty state (§34.12).
   - **Installed-skills page (`/installed`, §23):** the dropdown is **suppressed** and the box becomes a **client-side live filter of the caller's own installed list** (no refetch, no query param) — a case-insensitive substring match over each row's title, namespace slug, and skill slug, engaging from the **1st character** (the list is small and already loaded). The typed query is still mirrored to **`?q=`** (`router.replace`, seeded on arrival; clearing restores the full list). This is a **non-registry** mode: different data, matcher, and matched fields — see §23 (*Installed Skills page → Header search*).
   - **Usage dashboard (`/usage`, §21):** the dropdown is **suppressed** the same way and the box becomes a **live filter of the usage list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history); the box is **seeded from `?q=`** on arrival and **clearing it restores the full list**. This box drives the **usage dashboard's own** entitlement-scoped query (`GET /api/usage?q=`), **not** the catalog matcher above — see §21 for its match fields and scope. The usage page therefore carries **no separate in-page search box**.
@@ -1078,6 +1091,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
   - Catalog mutations (publish, new version, yank, archive, **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive or last-version yank, §7), visibility change, namespace reassignment).
   - **Scan overrides** (`proposal.scan_override`).
+  - **Content risk (§37.12):** `proposal.routed_to_review`, `skill.publish_scan_override`, `skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
@@ -1133,6 +1147,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) in their namespace queue.
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
+  - To **effective maintainers**: `skill.content_risk` when the re-scan sweep first flags a published version (§37.5, **once per onset**), gated by `content_risk_notifications` (§37.9).
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
@@ -1190,11 +1205,11 @@ current or future type can ever leak JSON to a user.
   | `proposal.accept` | Proposal accepted | Your skill proposal was accepted. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `proposal.reject` | Proposal rejected | Your skill proposal was rejected. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `system.error` † | System log events | There are {count} new system log events. | View the system log → `/system-log` |
-  | `follow.*` † (5 types) | *see §35.6* | *see §35.6* | *see §35.6* |
+  | `follow.*` † (6 types) | *see §35.6 / §38.8* | *see §35.6 / §38.8* | *see §35.6 / §38.8* |
   | *fallback (any other type)* | Notification | You have a new notification in skilly. | Open skilly → base URL *(CTA omitted when no base URL)* |
 
-  † `system.error` stays **in-app only** (never emailed, §25), and so do the five `follow.*`
-  types (§35.6). Their rows exist so the renderer is **total** and no path can emit JSON even if
+  † `system.error` stays **in-app only** (never emailed, §25), and so do the six `follow.*`
+  types (§35.6, §38.8). Their rows exist so the renderer is **total** and no path can emit JSON even if
   delivery rules later change.
 
 - **No schema change.** Every field above already lives in the notification `payload` (§3
@@ -1203,7 +1218,7 @@ current or future type can ever leak JSON to a user.
 
 ### Maintainer notification preferences (per-type opt-outs)
 
-- **Three per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
+- **Four per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
   `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
@@ -1213,6 +1228,9 @@ current or future type can ever leak JSON to a user.
   "Discussion comments on skills I maintain or watch" when mentions shipped — same column, no
   migration). `GET /api/me` returns them; `PATCH /api/me { driftNotifications,
   newVersionNotifications, discussionNotifications }` updates them.
+  The fourth is **"Content check flags on skills I maintain"** (`users.content_risk_notifications`,
+  `BOOLEAN NOT NULL DEFAULT true`, migration 0081, §37.9); `PATCH /api/me` also accepts
+  `contentRiskNotifications`.
   Toggling is **silent** (not audited), matching the other profile prefs.
 - **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
   filtered out of the recipient set **at insert time** in the worker (the publish sweep's
@@ -1234,6 +1252,8 @@ current or future type can ever leak JSON to a user.
     at insert time (§24 *Skill discussion*). The **same toggle also gates `message.mention`** in
     all four messaging contexts (§24 *Mentions*) — a deliberate single switch, no separate
     mention toggle: opting out of discussion chatter opts out of being pinged by name too.
+  - `content_risk_notifications` gates `skill.content_risk` entirely, like the drift toggle: it
+    only ever targets effective maintainers (§37.9).
 - **No safety floor — deliberately.** Namespace admins can opt out like anyone, so a skill whose
   effective maintainers have all opted out drifts with **no one pinged**. Accepted: the toggle
   silences the *ping*, never the *record* — the `pointer.drift_detected` audit row, the
@@ -1558,7 +1578,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/installs` (+ `?scope=system` — all system installations, **platform-admin only**), `DELETE /api/installs/:id` (uninstall), `PATCH /api/installs/:id {expiresAt}` (reactivate) — owner-checked for personal rows; on **system** rows the DELETE/PATCH check is **platform admin** instead (any admin). *(Replaces the old `POST /api/tokens` PAT path.)*
 
 **MCP server & OAuth (§29)**
-- **On the worker:** `POST /mcp` (Streamable HTTP — the MCP endpoint; 24 curated tools + resource templates), `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server` (RFC 8414), `GET /.well-known/oauth-protected-resource` (RFC 9728).
+- **On the worker:** `POST /mcp` (Streamable HTTP — the MCP endpoint; 25 curated tools + resource templates), `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server` (RFC 8414), `GET /.well-known/oauth-protected-resource` (RFC 9728).
 - **On web:** `GET /oauth/authorize` + the consent screen (session-authenticated — the only leg needing Entra sign-in), `POST /oauth/register` (open Dynamic Client Registration, RFC 7591).
 - **Management:** `GET /api/mcp/connections` (the caller's own live grants — the `/mcp` page's Connections list), `DELETE /api/mcp/connections/:grantId` (revoke; audited `mcp.grant_revoked`). Admin: `GET /api/admin/mcp` (enabled flag, live-grant count, registered clients), `POST /api/admin/mcp/clients/:id/block` + `.../unblock` (platform-admin, audited). The on/off toggle itself is `PATCH /api/admin/settings { mcp_enabled }`.
 - **No REST twin for the tools.** They are implemented directly on the worker against Postgres — there is deliberately **no** generic `/api` proxy, no "act as user" service credential, and no escape-hatch tool.
@@ -1595,6 +1615,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
+- **Skill collections (§38.11):** `GET /api/collections/mine?skillId=` · `POST /api/collections` · `GET|PATCH|DELETE /api/collections/:id` · `PUT|DELETE /api/collections/:id/skills/:skillId` · `GET /api/collections/suggest?q=`. `GET /api/skills` gains **`?collection=<id>`** and **`?collectionsBy=<userId>`** (viewer-visibility-scoped).
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
 ---
@@ -1676,6 +1697,36 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Lifecycle:** erasure deletes follows both ways; deprovision keeps them dormant.
 
     *(Spec'd 2026-09-24; not yet built.)*
+
+**Phase 11 — Content risk**
+30. **Content-risk scanner (§37):**
+    - **Scanner:** a pure `content-risk` scanner in `PURE_SCANNERS` (hidden Unicode, hidden
+      markup, look-alike letters, credential access and exfiltration, override and concealment
+      phrasing), versioned as `CONTENT_RULESET_VERSION`, with `line` / `excerpt` / `ruleset` on
+      findings.
+    - **Gate:** a flagged direct publish is routed to review for members and needs an audited
+      override for admins; direct pointer publishes fetch contents for the check.
+    - **Sweep:** a leader-only re-scan that backfills the catalog and re-runs on ruleset bumps,
+      writing superseding reports and notifying maintainers once per onset.
+    - **Surfaces:** the review page's Content risk section, a skill-page status chip for
+      everyone, an owner card with Acknowledge, and an Administration card.
+    - **Data:** migration 0081 (`content_risk_acknowledgements`, `proposals.routed_reason`,
+      `users.content_risk_notifications`).
+
+    **DONE.**
+
+**Phase 12 — Skill collections**
+31. **Skill collections (§38):**
+    - **Data:** `skill_collections` + `skill_collection_items` (migration 0082), org-visible members
+      only, evicted when a skill narrows, archives or loses its last installable version.
+    - **Surfaces:** an *Add to collection* popup on the detail page, a *Skill collections* card on
+      the profile, the catalog's `?collection=` / `?collectionsBy=` views with a banner, and a
+      Collections group in the header dropdown. No bulk install.
+    - **Extensions:** `follow.collection_created`, the *Mixtape* badge, a *collections* leaderboard
+      stat + *Curated* sort + 🗂 *Curator* leader badge + a Collections row action, and the MCP
+      `get_collections` tool (25 tools).
+
+    *(Spec'd 2026-10-05; not yet built.)*
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -1816,7 +1867,7 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 - **Erasure removes credit — unless transferred.** GDPR erasure (§4, both the admin and SCIM paths) **deletes the erased user's `install_credits`** — credits-only: the shared `access_log` row, `skills.install_count`, and co-maintainers' credit are untouched (the install still happened and still counts for everyone else). **Exception:** the admin erasure path with a "Replace maintainer to" target **reassigns** the credits to that target instead of deleting them (§4 — would-be self-credits and duplicates excepted; those are deleted as usual), so the standing survives on the board under the successor. Either way, a deleted user holds zero credits and never appears. A reversible **deprovision** (leaver → `status='inactive'`) does **not** delete credits — the board's `status='active'` filter hides them, and re-enabling restores their standing.
 - **Privacy (invariant #3).** The board exposes only per-person aggregates (display name, avatar, total installs, skill count) — **never skill identities, slugs, or namespaces** — so it cannot enumerate or identify restricted skills, and is identical for every viewer. Users may opt out via `leaderboard_hidden` (§13).
 - **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other four metrics descending, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
-- **Row actions.** Each row offers four actions, on every row and under every sort: **Skills**, **Requests**, **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow).
+- **Row actions.** Each row offers five actions, on every row and under every sort: **Skills**, **Requests**, **Collections** (§38.8: the catalog's `?collectionsBy=` view), **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow).
   - **Skills** links to the catalog scoped to the skills that person **maintains** — `/catalog?maintainer=<userId>&by=<name>` for another person (the catalog shows a dismissible "Skills maintained by &lt;name&gt;" banner), or `/catalog?mine=1` for **your own** row (reuses the "My Skills" filter). This does **not** break invariant #3: the catalog independently visibility-filters to what the *viewer* may see (`searchSkills`), so it only ever lists skills the viewer could already browse — the leaderboard itself still reveals no skill identities. On arrival the maintainer view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) and shows everything by that maintainer the viewer can see.
   - **Requests** links to the Requested-skills page scoped to the requests that person **posted** — `/requests?requester=<userId>&by=<name>` for another person (the page shows a dismissible "Requested by &lt;name&gt;" banner, §26), or `/requests?mine=1` for **your own** row (reuses the "Mine" toggle). Requests have no namespace and are org-visible, so there is no visibility concern; the link is shown even when the person's requested count is 0 (consistent with **Skills**, which shows at 0 adopted).
   - **Reach out** opens a 1:1 direct chat (`POST /api/messages/direct` → `skilly:open-conversation`), the same mechanism as the skill-detail maintainer list and the admin online-users list. It is **hidden on the viewer's own row** (you can't message yourself).
@@ -1826,11 +1877,11 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 A small marker under a user's avatar bubble — **everywhere one appears** — showing they currently
 top a leaderboard metric. Purely derived from the leaderboard's own data; no new user action.
 
-- **Six metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
+- **Seven metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
   leader (skills adopted), Fulfillment leader (requests fulfilled), Watch leader (skills watched),
   Request leader (skills requested, §26), and the follow leader (followers, §35.7), which has
   window-specific names: 📣 **Influencer-in-Chief** (all time) and 📈 **Trendsetter** (last 30
-  days). Each metric is in **two windows**, all-time and last-30-days, for up to 12 badges per user.
+  days), and 🗂 **Curator** (collections, §38.8). Each metric is in **two windows**, all-time and last-30-days, for up to 14 badges per user.
 - **Who's a leader:** whoever is **tied for the single highest value** of a metric in a window. A
   tie is a tie — everyone at the top value gets the badge, not just one canonical winner. A metric
   with nobody above zero in that window has **no leader** (nobody gets it). Computed in
@@ -1870,7 +1921,7 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   request); omitting `userId` renders the bubble with no badges and no extra request, unchanged
   from before this feature. The map itself is cached for ~30s server-side, layered on top of the
   leaderboard's own 60s per-(window,sort) cache. `metric` is one of `installs` | `skills` |
-  `requests` | `watched` | `requested` | `followed` (§35.7).
+  `requests` | `watched` | `requested` | `followed` (§35.7) | `curated` (§38.8).
 
 ---
 
@@ -2116,7 +2167,7 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   `is_system` (**system installation** flag — see below; `user_id` is NULL iff set, enforced by a
   CHECK), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — provenance: the
   platform admin who minted a system install; NULL on personal installs), **`last_served_semver`** /
-  **`last_cloned_at`** (the freshness stamp — *Installed-version freshness* below; migration 0081).
+  **`last_cloned_at`** (the freshness stamp — *Installed-version freshness* below; migration 0083).
 - **Reusable**, skill-scoped, owner-revocable. **Every** clone (org *and* namespace) must
   present a valid install token — anonymous org clones are removed. Namespace skills
   additionally require the token's user to have namespace access at clone time
@@ -2204,7 +2255,7 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   is normalized to the bare IPv4. The IP is **never** logged with the request and only the
   resolved address is persisted on the token (never credentials/query strings — invariant #6).
 
-### Installed-version freshness (migration 0081)
+### Installed-version freshness (migration 0083)
 The registry **does not learn what a clone fetched from the git protocol** — `access_log.skill_version_id`
 is always NULL (migration 0030) and `pinned_semver` is a client-side `#ref` fragment the gateway
 **does not enforce** (the repo serves every tag; a holder of a pinned URL who edits the fragment gets
@@ -2225,7 +2276,7 @@ works for both protocol versions).
 - **Pinned stays advisory.** The gateway keeps serving every tag to a pinned token; `pinned_semver`
   is the install's declared intent and what freshness reports for it. Enforcing it would break any
   consumer that edits fragments today and is deliberately **not** part of this feature.
-- **Backfill (0081):** tokens used before the migration get `last_served_semver = pinned_semver`
+- **Backfill (0083):** tokens used before the migration get `last_served_semver = pinned_semver`
   when pinned (that is what their URL names) and **NULL** when tracking latest (we cannot know
   what `main` was at their last clone); `last_cloned_at` stays NULL for both until the next clone.
 - **Derived freshness (never stored)** — computed per row against the skill's current `latest`
@@ -2240,7 +2291,7 @@ works for both protocol versions).
   - **`withdrawn`** — the served version is **yanked** (or is no longer an active version at
     all). Strictly stronger than `behind` and shown with its own badge; this is the governance
     case. A withdrawn install is also `behind` for filtering purposes.
-  - **`unknown`** — `last_served_semver` IS NULL (a pre-0081 latest-tracking install that has not
+  - **`unknown`** — `last_served_semver` IS NULL (a pre-0083 latest-tracking install that has not
     re-cloned, or an empty-repo serving). Rendered *"installed version unknown — re-run the
     install command to record it"*; never counted as behind.
   - A skill with **no active stable version** has no `latest`; its installs are `unknown` too.
@@ -3746,13 +3797,13 @@ both processes — they are the ones where a divergence is a security incident, 
 Everything else (shaping, sorting, facets, pagination) may be written twice. **Accepted trade-off:**
 result *shapes* may drift between `/api` and the MCP tools; the *access decisions* cannot.
 
-### Tool surface — 24 curated tools, no escape hatch
+### Tool surface — 25 curated tools, no escape hatch
 
 Every tool: authenticated via the bearer token, **RBAC re-resolved**, **visibility-filtered**,
 rate-limited, and — for writes — audited with the MCP marker (§29 *Attribution*). Tools are named
 `skilly_*` on the wire; the short names below are the spec's shorthand.
 
-**Core read (6)**
+**Core read (7)**
 | Tool | Behavior |
 |---|---|
 | `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`), same sorts, same visibility filter. Paginated. Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
@@ -3761,12 +3812,13 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 | `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
 | `get_skill_file` | One file from a version's bundle. Text inline; binary as a base64 blob; over `mcp_max_resource_bytes` → a clear error naming the `download` route. |
 | `get_registry_metadata` | Categories (**name + slug**, the slug being the marketplace plugin name — §30.3), tool/harness enum, the namespaces the caller can see, and the platform limits an agent needs before proposing (max bundle bytes, inline upload cap, `require_review` per namespace). |
+| `get_collections` | Skill collections (§38.9), read-only: no argument → the caller's own; `id` → one collection with its eligible, visibility-filtered members; `query` → up to 10 matches (the §38.6 matcher). Members are installed one at a time with `install_skill`. |
 
 **Install (4)**
 | Tool | Behavior |
 |---|---|
 | `install_skill` | Mints a **personal** §23 install token (`semver?`, `expiresAt?` honoring `install_max_ttl_months`) and returns the `npx skills add …` command. **`system: true` is refused** — system installations are platform-admin-only and administration is out of surface. **409** for a not-yet-`git_published` version, exactly as `POST /api/skills/:ns/:slug/install`. |
-| `list_installed_skills` | The caller's own installations with their derived state (§23) **and their freshness** (§23 *Installed-version freshness*): each row carries `installedVersion` (= `lastServedSemver`), `latestVersion`, `freshness` (`current` \| `behind` \| `withdrawn` \| `unknown`), `pinned` (bool), and for a behind/withdrawn row a `refresh` hint — `{ action: "rerun" }` (latest-tracking: re-run the **same** `npx skills add` command the caller already holds, or `npx skills update`; no re-mint — tokens are **hashed at rest**, so the registry cannot rebuild the command and never hands a credential back) or `{ action: "reinstall", semver }` (pinned: call `install_skill` with the new `semver`; the old pinned installation stays until `uninstall_skill`). Optional input `onlyBehind: true` returns just the behind/withdrawn rows. **This is the "check for updates" tool** — folded in rather than added, so the 24-tool ceiling holds. Personal installs only (`?scope=system` has no MCP equivalent); a check is a read — no audit row, no `access_log`, no stamp. |
+| `list_installed_skills` | The caller's own installations with their derived state (§23) **and their freshness** (§23 *Installed-version freshness*): each row carries `installedVersion` (= `lastServedSemver`), `latestVersion`, `freshness` (`current` \| `behind` \| `withdrawn` \| `unknown`), `pinned` (bool), and for a behind/withdrawn row a `refresh` hint — `{ action: "rerun" }` (latest-tracking: re-run the **same** `npx skills add` command the caller already holds, or `npx skills update`; no re-mint — tokens are **hashed at rest**, so the registry cannot rebuild the command and never hands a credential back) or `{ action: "reinstall", semver }` (pinned: call `install_skill` with the new `semver`; the old pinned installation stays until `uninstall_skill`). Optional input `onlyBehind: true` returns just the behind/withdrawn rows. **This is the "check for updates" tool** — folded in rather than added, so the §29 tool ceiling holds (no new tool). Personal installs only (`?scope=system` has no MCP equivalent); a check is a read — no audit row, no `access_log`, no stamp. |
 | `uninstall_skill` | Hard-deletes one of the caller's own install tokens. *(This is not "irreversible destruction" in the §29 exclusion sense — it destroys a credential the caller owns, not catalog content or history; install counts are preserved per §23.)* |
 | `reactivate_install` | Sets a new `expires_at` on the caller's inactive install (§23). |
 
@@ -3806,10 +3858,11 @@ authors; a human decides. The tool descriptions say so, so the boundary isn't a 
 - **Catalog governance** — yank, archive, promote, feature/un-feature, mark-Official.
 - **Audit and system-log reads** (§11/§25), and **direct person-to-person messaging** (§24 chats).
 - **The `system` install flag** (§23).
+- **Collection writes** — create, rename, delete, add or remove members (§38.9). Agents read collections; people curate them.
 
-**Accepted trade-off — tool count.** 24 tool definitions is more than the ~10–15 a client comfortably
+**Accepted trade-off — tool count.** 25 tool definitions is more than the ~10–15 a client comfortably
 carries alongside its other servers, and tool-selection accuracy degrades with surface size. This is
-the price of the four capability groups; **24 is the ceiling** — a 25th tool requires a spec change,
+the price of the four capability groups; **25 is the ceiling** (raised from 24 by §38.9) — a 26th tool requires a spec change,
 and the first response to pressure for more surface is to fold, not add.
 
 ### Resources — templates only, never an enumeration
@@ -4019,7 +4072,7 @@ since consumption is universal.
 3. **Catalog read queries exist twice** (web and worker). Bounded by extracting the visibility
    predicate and role resolution into `@skilly/shared` — and, since §34, the search parser, matching
    and ranking too (§34.13); result shapes may still drift.
-4. **24 tools** is above the comfortable client budget, and is a hard ceiling.
+4. **25 tools** is above the comfortable client budget, and is a hard ceiling.
 5. **Agent ratings enter §18's Bayesian aggregate** — marked "via MCP", not excluded or weighted.
 6. **Agent-paced writes meet human-paced review** (§8) and human-read threads (§24); web-equal rate
    limits and visible attribution are the only mitigations.
@@ -4851,6 +4904,7 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | `first_follow` | **Right Behind You** | Followed a first person (`user_follows`, §35.8). | Explore |
 | `followers_10` | **Cult Following** | Reached 10 active followers (§35.8). The one count-tier badge. | Talk |
 | `first_rating` | **Critic** | Rated a first skill (`skill_ratings`, §18). | Explore |
+| `first_collection` | **Mixtape** | Created a first skill collection (§38.8). Deleting it never revokes the badge. | Contribute |
 | `onboarded` | **Read the Manual** | Completed Quick start (`users.onboarded_at`, §23). | Explore |
 | `night_shift` | **Night Shift** | Any achievement event (below) at **00:00–04:59 in the user's own timezone** (§31.3). | Habits |
 | `weekend_warrior` | **Weekend Warrior** | Any achievement event on a **Saturday or Sunday in the user's own timezone** (§31.3). | Habits |
@@ -5051,7 +5105,7 @@ around the bubble itself (§31.10) — one number, never which badges earned it.
 ### 31.10 Level (the badge count, worn on the bubble)
 
 A **level** is nothing more than *how many of the catalog's badges a user has earned* — one number
-from 0 to the catalog size (22 today, after §35.8 added two). It introduces no new event, no new award rule and no new
+from 0 to the catalog size (23 today, after §35.8 added two and §38.8 one). It introduces no new event, no new award rule and no new
 disclosure: everything it shows, the §31.5 achievements count already showed. What it adds is
 **reach** — the number travels with the avatar, so progress is legible at a glance instead of only
 on a page someone has to go and open.
@@ -6407,7 +6461,7 @@ reaches them (invariant #3).
 - **Scope:** the pane lists **only whom *you* follow**. There is no "followers" pane (§35.1).
 
 ### 35.6 Notifications to followers
-Five new notification types, **in-app only**: the bell and the inbox, never email or webhook,
+Five new notification types (a sixth, `follow.collection_created`, is §38.8), **in-app only**: the bell and the inbox, never email or webhook,
 regardless of `email_notifications`, exactly like `achievement.earned` (§31.4). None is
 coalesced; each is one row per event per follower.
 
@@ -6491,7 +6545,7 @@ content*).
     from the existing five.
   - The hover card spells them out as *"Influencer-in-Chief — most followed, all time"* and
     *"Trendsetter — most new followers, last 30 days"*. `aria-label`s follow the same text.
-  - `GET /api/leaders` gains `followed` in its `metric` union. Up to **12** badges per user.
+  - `GET /api/leaders` gains `followed` in its `metric` union. Up to **12** badges per user (**14** after §38.8).
 - **Row actions** gain **Follow** as the fourth action, right of Reach out (§35.4).
 
 ### 35.8 Achievements (§31 extension)
@@ -6837,6 +6891,8 @@ release.
 - The Profile page's survey section (§36.7) shows the same **Take the survey** button while an offer
   is open (in place of *Give feedback now*, §36.16).
 - An open **on-demand** offer (§36.16) gets the same two entries.
+- The sidebar colophon's **Have your say** link (§36.16) also reopens an open offer, random or
+  on-demand, the same way.
 - Both disappear once the offer ends (§36.1 expiry). `GET /api/me` carries the open offer as
   `openSurvey` (resolved questions included, or `null`), so the menu needs no extra request.
 
@@ -7089,7 +7145,7 @@ There is **no MCP tool** for surveys: they are a web-UI affordance.
 
 ### 36.16 On-demand feedback ("Give feedback now", migration 0080)
 Besides the random prompt, a user can **ask for the survey themselves** at any time from the
-profile or the account menu. The on-demand survey uses the same card, questions and anonymous
+profile, the account menu or the sidebar colophon. The on-demand survey uses the same card, questions and anonymous
 storage as the random one. It differs in the points below.
 
 - **Gates.** An on-demand survey **bypasses** the 1-in-3 roll, the 30-day floor, the 14-day grace
@@ -7154,6 +7210,23 @@ storage as the random one. It differs in the points below.
   survey the same way as the profile button. It is **hidden** during the cooldown (a disabled menu
   item explains nothing), while any offer is open (*Take the survey* is already the first item,
   §36.5), and while the platform switch is off.
+- **The sidebar colophon** (the small print at the foot of the sidebar: version, *Created by
+  Scalefocus*, *powered by the community*) gains a **Have your say** link at the end of its last
+  line: *"powered by the community · Have your say"*. Only *Have your say* is the link, styled like
+  the colophon's existing *Scalefocus* link. It is a `<button type="button">` styled as that link,
+  with `data-testid="colophon-have-your-say"`.
+  - **Signed in only.** Signed out, or while the session is still loading, the line stays plain
+    *"powered by the community"*, with no separator and no link.
+  - **Hidden** (the line goes back to plain) while the platform switch is off (`selfSurvey` is
+    `null`), during the on-demand cooldown (the same rule as the menu's *Give feedback*), and while
+    the user is not yet onboarded (`onboardedAt` is `null`: the Quick start gate owns that state).
+  - **No offer open:** the click starts an on-demand survey exactly like *Give feedback*: `POST
+    /api/me/survey/start`, the card opens with `via = 'popup'`, and the cooldown is stamped.
+  - **An offer is open** (random or on-demand): the link **stays visible** and the click **reopens
+    that offer** exactly like *Take the survey* (§36.5): the same questions, starting blank,
+    `via = 'menu'`, no stamp, nothing counted.
+  - On mobile, the click also closes the nav drawer so the card isn't hidden behind it.
+  - No new endpoint, counter, `via` value or audit row. The colophon is just another way in.
 - **The random opt-out doesn't end an on-demand offer.** `PATCH /api/me { surveysEnabled: false }`
   (and *Don't ask me again*) clears the open offer **only when it is a random one**. An open
   on-demand offer, and its *Take the survey* entries, survive.
@@ -7222,40 +7295,686 @@ storage as the random one. It differs in the points below.
     2. Closing an on-demand card shows *Take the survey* in the menu, and reopening starts with
        *skilly in general*.
     3. An admin sees the **Self-initiated** funnel line and the **Source** filter on Monitoring.
+    4. The colophon's **Have your say** is absent when signed out. Signed in, it opens the on-demand
+       card. After closing, it is still shown and reopens the same offer. After a submit (the
+       cooldown running), the line reads plain *"powered by the community"*.
 
-## 37. Installed-version freshness
+---
+
+## 37. Content-risk scanner
+
+The §6 pipeline treats a bundle as files: it looks for secrets, malware and dangerous shell. A
+skill is also **a set of instructions an LLM agent will follow**, and the riskiest content in it can
+be plain prose: hidden characters the reviewer can't see, look-alike letters that disguise a
+command, phrasing that tells the agent to drop its other instructions, and steps that read
+credentials and send them somewhere. The **content-risk scanner** inspects the bundle for exactly
+that. It uses the **same advisory severity model and the same audited override** as the other
+scanners, and its findings get their **own "Content risk" panel** on the review page and the skill
+page. It adds one gate the pipeline lacked: a direct publish that trips it goes to review (§37.4).
+
+### 37.1 Semantics
+- **Rule-based and pure.** The scanner is regex and Unicode-table matching with **no I/O, no
+  network and no model**, so the §17 air-gap posture holds. It lives in `@skilly/shared` beside the
+  secret and heuristic scanners, is named **`content-risk`**, and joins **`PURE_SCANNERS`**. It
+  therefore runs on **every path that already runs them**, with no path-specific wiring: hosted
+  upload (web), MCP hosted proposals, and the worker pipeline (pointer proposal pre-scan,
+  mirror-at-accept, pointer refresh). A model-backed judge is **deferred**; the `Scanner`
+  interface already allows one to be added later.
+- **Advisory, like the others.** Findings never block an upload or the creation of a proposal.
+  Blocking validation stays the only hard stop. What findings do is defined by the existing
+  override gate (§37.4).
+- **Which files.** Every **text** file in the bundle (binary files are skipped by the existing
+  NUL-byte rule), because an agent reads `references/` and scripts as readily as `SKILL.md`. Rules
+  marked **markdown-only** in §37.2 run on `.md`, `.markdown` and `.mdx` files only, because a
+  shell script or config file legitimately says "override" or "ignore".
+- **Normalization before phrase matching.** Phrase rules match a normalized copy of the text:
+  zero-width, bidi-control and tag characters removed, Unicode **NFKC**, whitespace collapsed,
+  lower-cased. So `ign<U+200B>ore previous instructions` still matches. Hidden-character rules run
+  on the **raw** text, so the same line produces both findings.
+- **Bounded cost.** Each file is scanned up to its first **2 MB** of decoded text. A longer file
+  gets one `info` finding, `cr-truncated`. Every pattern is **linear-time** (no nested
+  quantifiers, no back-references), in line with the §22 ReDoS rule.
+
+### 37.2 Rule catalog (ruleset 1)
+
+| Rule | Class | Files | Severity | Matches |
+|---|---|---|---|---|
+| `cr-hidden-unicode` | Hidden text | all text | **high** | Zero-width characters (U+200B, U+200C, U+200D, U+2060, and U+FEFF anywhere but the first character), bidi controls (U+202A–U+202E, U+2066–U+2069), and Unicode tag characters (U+E0000–U+E007F). **Exempt:** U+200D between two emoji, and the U+FE0E/U+FE0F variation selectors, so ordinary emoji sequences are clean. |
+| `cr-hidden-markup` | Hidden text | markdown | **high** | An HTML comment `<!-- … -->` whose content matches any `cr-instruction-override`, `cr-concealment`, `cr-credential-access` or `cr-credential-exfil` pattern. The comment is invisible on the rendered page but read by the agent. A plain comment on its own is not a finding. |
+| `cr-homoglyph` | Look-alike letters | all text | **high** in code, **medium** in prose | One word that mixes Latin letters with Cyrillic, Greek or Armenian look-alikes, such as a Cyrillic `с` inside `curl`. "Code" means fenced blocks and inline code in markdown, and the whole of any non-markdown file. A word written entirely in one script never matches, so Bulgarian or Greek prose is clean. |
+| `cr-credential-exfil` | Credentials | all text | **high** | A credential-store reference (next row) **and** an outbound transmission in the same file: `curl`/`wget` with an upload or data flag, `nc`/`ncat`, `scp`, `Invoke-WebRequest`/`Invoke-RestMethod` with a body, or prose like "send / upload / post … to http(s)://". |
+| `cr-credential-access` | Credentials | all text | medium | References to credential stores or environment dumps: `~/.ssh`, `id_rsa`/`id_ed25519`, `.aws/credentials`, `.azure/`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.npmrc`, `.pypirc`, `.docker/config.json`, `.kube/config`, keychain reads (`security find-generic-password`), `printenv` or `env` piped or redirected, PowerShell `$env:` enumeration. Not reported for a file that already has `cr-credential-exfil`. |
+| `cr-instruction-override` | Override phrasing | markdown | medium | "ignore / disregard / forget (all) (the) previous / prior / above / earlier instructions / rules / prompts", "disregard your system prompt", "you are no longer", "new instructions:", "override your safety / guidelines". |
+| `cr-concealment` | Override phrasing | markdown | medium | Instructions to hide actions from the user: "do not tell / inform / show the user", "without telling / informing / asking the user", "the user must not know", "hide this from the user", "silently send / upload / run / delete / install". Plain "fail silently" does not match. |
+| `cr-prompt-reference` | Override phrasing | markdown | low | Mentions of "system prompt", "developer message", "jailbreak", "DAN mode". |
+| `cr-scanned` | Transparency | — | info | Emitted **exactly once per scan**, carrying the ruleset number. Never raises severity, like `av-clean` (§6). It is how a clean scan proves which ruleset it ran. |
+| `cr-truncated` | Transparency | — | info | The file was longer than the 2 MB scan cap. |
+
+- **No critical rules in ruleset 1.** The gate is unchanged: `requiresOverride` trips on **high or
+  critical** (§6), so `cr-hidden-unicode`, `cr-hidden-markup`, `cr-homoglyph` in code and
+  `cr-credential-exfil` trip it, and the rest are advisory notes.
+- **Occurrence cap.** At most **5** findings per rule per file. The fifth says how many more
+  matches were left out.
+- **No author suppression.** There is **no** frontmatter or in-file way to silence a rule, because
+  the author is the party under review. A skill that legitimately trips rules (for example one that
+  teaches prompt-injection defense) goes through the existing audited override.
+- **Versioned ruleset.** `CONTENT_RULESET_VERSION` (an integer, starting at **1**) lives in
+  `@skilly/shared`. Any change to a pattern, exemption or severity bumps it. A unit test pins a hash
+  of the catalog, so changing a rule without bumping the number fails the build. A bump triggers
+  the re-scan sweep (§37.5).
+- **English phrasing only.** Phrase rules match English. Hidden-text and look-alike rules are
+  language-independent.
+
+### 37.3 Finding shape
+- `ScanFinding` gains three **optional** fields; the existing scanners are untouched:
+  - `line` — 1-based line of the match within the file;
+  - `excerpt` — at most **200 characters** of the matched line, trimmed around the match, with every
+    hidden, bidi and tag character rewritten as a visible marker such as `⟨U+200B⟩`, so the excerpt
+    itself carries no invisible payload;
+  - `ruleset` — set on content-risk findings only.
+- `cr-homoglyph` messages name the scripts and code points involved, for example
+  "`curl` mixes Latin and Cyrillic (U+0441)".
+- **Excerpts are rendered as escaped plain text everywhere** — never as Markdown or HTML.
+- **Excerpts are skill content.** They are stored in `scan_reports.findings` and served only
+  through surfaces already gated by the proposal's or the skill's visibility (§37.8). Nothing new is
+  exposed to someone who could not already open the files.
+
+### 37.4 The gate
+- **Proposals: the existing override, now for pointer proposals too.** The accept gate reads the
+  latest revision's scan report: the artifact-keyed report for a hosted (or Keep-current-files)
+  proposal, and — **new** — the worker's proposal-keyed pre-scan report for a pointer proposal.
+  Before this change the gate ignored the pointer pre-scan, so a pointer proposal's high findings
+  never required a server-enforced, audited override; they do now. A pending or unreachable
+  pre-scan still has nothing to gate on. Content-risk findings are in these reports, so a high one
+  requires the existing explicit, audited override (`proposal.scan_override`, whose `after` already
+  carries the findings). On an accept over gate-tripping content findings, skilly also writes a
+  `content_risk_acknowledgements` row for the version being created (`source = 'override'`, §37.6)
+  — keyed by skill and semver, so it exists even before the worker mirrors a pointer version.
+- **Direct publish (`POST /api/publish`) gains the gate.** Before this change a direct publish ran
+  no override gate at all. Now, when the submission's content-risk findings trip the gate:
+  - **A submitter without override authority** for the target namespace (a Namespace Member in a
+    `require_review = false` namespace) is **routed to review**. skilly creates an ordinary
+    proposal from the same payload and artifact (state `proposed`, revision 1), sets
+    `proposals.routed_reason = 'content_risk'`, and answers **202 `{ routed: "review",
+    proposalId }`**. The form opens the proposal page, which carries a banner: "This was submitted
+    as a direct publish. The content check flagged it, so it needs a reviewer." Reviewers get the
+    normal new-proposal notification. A linked skill request (§26) carries over as the proposal's
+    fulfilment link and fulfils on accept, instead of fulfilling immediately. Audited as
+    `proposal.routed_to_review`.
+  - **A submitter with override authority** (a Namespace Admin of that namespace, or a Platform
+    Admin) is not routed into their own queue. The publish answers **409 `{ requiresOverride: true,
+    findings }`**, and the form shows the same confirm-with-reason dialog reviewers use. Repeating
+    the call with `override: true` and a reason publishes, writes the `source = 'override'`
+    acknowledgement, and is audited as `skill.publish_scan_override`.
+  - **Only content-risk findings route.** High secret or heuristic findings on a direct publish
+    keep today's behavior: recorded, not gated. Widening the gate to every scanner is a separate
+    decision (§37.15).
+- **Where the direct-publish findings come from.**
+  - **Hosted:** the upload's artifact-keyed report, which exists before the publish call.
+  - **Keep current files:** the reused artifact's latest report.
+  - **Pointer:** today's submit-time check fetches no file contents (`--filter=blob:none`). For a
+    **direct pointer publish only**, the web tier also fetches the pinned folder's contents with the
+    same SSRF-hardened transport (depth 1, limited to the folder, bounded by the smaller of
+    `max_bundle_bytes` and the web tier's 25 MB review-fetch limit, and by a **30 s** timeout) and
+    runs `PURE_SCANNERS` on them; registry-sourced pointers fetch through
+    the registry API as the mirror does. The result decides routing only and is not stored. If the
+    submission is routed, the proposal pre-scan loop writes the official report as for any pointer
+    proposal. **If the fetch fails or times out, the submission is routed to review**, never
+    rejected. Pointer *proposals* are unchanged.
+- **The `global` namespace** always requires review, so the routing never applies there.
+- **MCP.** The MCP surface has **no direct publish**: every agent submission already lands in
+  `proposed` (§29). Agent submissions are therefore always reviewed by a human, and their content
+  findings trip the accept gate like any other. `get_proposal` returns the findings in the extended
+  shape (§37.3), so an agent can revise its own proposal.
+
+### 37.5 Re-scan sweep (backfill and ruleset bumps)
+- **What it does.** A **leader-only** worker sweep, `contentRiskSweep`, runs at boot and then every
+  **10 minutes**. Each pass takes up to **50 active versions** (not yanked, skill not archived)
+  whose artifact's latest scan report has **no `cr-scanned` finding at the current ruleset**. For
+  each, it reads the artifact from the object store and runs **only the content-risk scanner**.
+  Several versions sharing one artifact (Keep current files) are covered by one re-scan. An artifact
+  that can't be read or extracted is logged and skipped for the rest of that worker process's life,
+  so a broken object can't starve the batch; the next worker start retries it.
+- **Superseding report, never a mutation.** It writes a **new** `scan_reports` row for the artifact
+  that carries forward every non-content finding from the prior latest report **verbatim**,
+  replaces the content-risk findings, recomputes `severity`, and keeps the prior `status`. Readers
+  that take the latest row (the accept gate, the review page) keep seeing the complete picture.
+- **This release's backfill is simply the first run.** Every version published before this change
+  has no `cr-scanned` finding, so the sweep works through the whole catalog. A later ruleset bump
+  re-runs it automatically. A restored version or un-archived skill is picked up on the next pass.
+- **Onset.** When the sweep's new report has gate-tripping content findings and the version's
+  previous report had none, that is an **onset**:
+  - audit `skill.content_risk_detected` (system actor; skill, version, rules);
+  - a `skill.content_risk` notification to the skill's maintainers (§37.9), **once per onset**;
+  - the version's status becomes **flagged** (§37.7) until someone acknowledges it.
+
+  The same onset check runs when the worker **mirrors a pointer version** (its first artifact
+  report). It fires only if nothing covers the findings — for example a pointer proposal accepted
+  while its pre-scan was still pending.
+- **No automatic state change.** A scanner never yanks, archives, hides or blocks a published
+  version. Flagged versions stay installable; deciding what to do is a human call.
+- **Pointer refresh.** The refresh job already runs the full pipeline against the upstream ref, so
+  its `pointer_ref` reports include content findings with no extra work. The bytes skilly serves
+  are the immutable mirrored artifact, so a pointer's **status** always comes from the
+  artifact-keyed report, like a hosted skill's. Upstream content findings matter when upstream has
+  changed, which is drift: the existing `skill.drift` notification gains a sentence when the
+  drifted upstream content also trips the content check. There is no second notification.
+
+### 37.6 Acknowledgement
+- **What it is.** A record that a person with authority has looked at a version's gate-tripping
+  content findings and accepted them. It moves a version from **flagged** to **noted** (§37.7). It
+  changes nothing else.
+- **Who.** Exactly the holders of **"Override security finding on publish"** (§4): Platform Admins
+  for any skill, Namespace Admins for their own namespace. Maintainers who are not namespace admins
+  can see the findings but cannot acknowledge them.
+- **How.** An **Acknowledge** button with an optional note (at most 500 characters) on the skill
+  page's Content risk card and in the Administration card (§37.8). An accept or direct publish over
+  an override acknowledges automatically (§37.4).
+- **Keyed to the version, recording pairs.** An acknowledgement belongs to one version (skill and
+  semver) and records the gate-tripping `(rule, path)` pairs it covered, plus the report it was made
+  against for provenance. Keying it to the version, not the report, lets an accept-time override
+  acknowledge a pointer version before the worker has mirrored it.
+- **Carry-forward.** A gate-tripping finding counts as acknowledged when its `(rule, path)` pair is
+  in any acknowledgement for that version. So a later report (for example after a ruleset bump)
+  that only repeats acknowledged pairs stays acknowledged, and anything new needs a new
+  acknowledgement.
+- **Audit.** `skill.content_risk_acknowledged` (actor; skill, version, report id, rules, note).
+  Automatic acknowledgements are covered by the override's own audit row.
+- **Append-only.** Acknowledgements are never edited or withdrawn. A mistaken acknowledgement is
+  answered by yanking the version or publishing a fix.
+
+### 37.7 Status (derived, never stored)
+For a version, from its artifact's latest scan report:
+
+| Status | When | Label shown to consumers |
+|---|---|---|
+| `pending` | No `cr-scanned` finding at the current ruleset yet | Content check pending |
+| `passed` | No content-risk finding at medium or above | Content check passed |
+| `noted` | Medium findings only, or every gate-tripping finding is acknowledged (directly or by carry-forward) | Content check: findings noted |
+| `flagged` | At least one gate-tripping finding is not acknowledged | Content check: flagged, awaiting review |
+
+- Low findings never change the status. Owners still see them in the full panel.
+- `flagged` is only reachable **after** publish (the sweep, or a pointer mirror, §37.5): every
+  pre-publish path either passes the gate or acknowledges through the override.
+
+### 37.8 Surfaces
+- **Review page (proposal).** A new **"Content risk"** section sits directly below **"Security
+  scan"**. The Security scan section stops listing content-risk findings, so each finding appears
+  once. The Content risk section shows:
+  - a status line;
+  - findings grouped by file and then by rule, each with a severity pill, the line number, the
+    excerpt (monospace, escaped, visible code-point markers) and the rule's one-sentence
+    explanation from the catalog;
+  - "No content risks found (ruleset N)" when clean, and the same "scan pending" and "source
+    unreachable" states the Security scan section uses.
+
+  The existing override dialog lists content findings alongside the others; its mechanics are
+  unchanged. A routed direct publish shows the routing banner (§37.4).
+- **Skill page, for everyone who can see the skill.** A **one-line status chip** in the header
+  metadata for the latest stable version (the highest active version if none is stable), using the
+  §37.7 labels, with a one-sentence explanation on hover or tap. Consumers never see findings,
+  excerpts or rule names.
+- **Skill page, for owners.** Effective maintainers, Namespace Admins of the skill's namespace and
+  Platform Admins also get a collapsible **"Content risk"** card (styled like the Maintainers and
+  Discussion cards) with:
+  - the full panel for that version;
+  - the acknowledgement, if any: who, when and the note, or "acknowledged at accept by …";
+  - an **Acknowledge** button when the version is flagged and the viewer has the authority;
+  - "Other active versions flagged:" with links to those versions.
+- **Administration → "Content risk" card (Platform Admins).** A list of active versions that are
+  **flagged** (the default filter) or **noted**, filterable by namespace slug and rule, with skill,
+  version, rules, detected-at, a link to the skill page's Content risk card and, on a flagged row, an
+  Acknowledge action (confirmed first, same audited endpoint). The **Maintenance** card gains a line:
+  "Content check: N of M active versions checked at ruleset R".
+- **Not in this change.** No catalog-card badge, no catalog filter, no search ranking signal, and
+  no content-risk field in MCP `get_skill` or `search_skills`. The status is page-level only.
+
+### 37.9 Notifications
+- **`skill.content_risk`** goes to the skill's effective maintainers (explicit maintainers and
+  namespace admins), minus users who opted out, visibility-filtered at insert, **once per onset**
+  (§37.5). Delivered in-app, by email and by webhook like `skill.drift`. Subject: "Skilly - Content
+  check flagged a skill". Body: "The content check flagged ‹skill› v‹x›: ‹rule labels›. [Review the
+  findings](‹skill page›#content-risk)."
+- **New Profile toggle**, in the *Skills I maintain* group: **"Content check flags on skills I
+  maintain"** (`users.content_risk_notifications`, `BOOLEAN NOT NULL DEFAULT true`). It has the
+  same row-level, forward-only, no-safety-floor semantics as the drift toggle (§12): opting out
+  silences the ping, never the record.
+- **Drift** notifications gain one sentence when the drifted upstream content also trips the
+  content check (§37.5).
+- **A routed direct publish** sends no special notification. The submitter sees the result inline,
+  and reviewers get the ordinary new-proposal notification.
+
+### 37.10 Data model (migration 0081)
+- **`content_risk_acknowledgements`** — `id` (UUID PK), `skill_id` (FK → `skills`,
+  `ON DELETE CASCADE`), `semver` (TEXT), `scan_report_id` (FK → `scan_reports`,
+  `ON DELETE SET NULL`), `pairs` (JSONB, the acknowledged `(rule, path)` pairs),
+  `acknowledged_by` (FK → `users`, `ON DELETE SET NULL`), `acknowledged_at` (`timestamptz`, default
+  `now()`), `note` (TEXT NULL, at most 500 characters), `source` (`'override'` | `'manual'`), indexed
+  on `(skill_id, semver)`. The app role gets SELECT and INSERT only.
+- **`proposals.routed_reason`** — TEXT NULL, CHECK `IN ('content_risk')`.
+- **`users.content_risk_notifications`** — `BOOLEAN NOT NULL DEFAULT true`; existing users default
+  on. Scrubbed with the row on erasure (§4).
+- **`scan_reports` has no schema change.** `findings` is JSONB, and the new finding fields are
+  optional. The sweep's "latest report per artifact" lookup uses the existing
+  `idx_scan_reports_subject` index.
+
+### 37.11 API surface
+- `GET /api/skills/:ns/:slug` gains `contentRisk: { semver, status, ruleset }` for the displayed
+  version, for every caller who can see the skill — no findings — plus `canSeeContentRisk`, true for
+  owners (§37.8), which tells the page to render the owner card.
+- `GET /api/skills/:ns/:slug/content-risk?semver=` — the owner panel: findings, acknowledgement and
+  other flagged versions. Owners only (§37.8); **403** for others who can see the skill, **404** if
+  the skill is not visible.
+- `POST /api/skills/:ns/:slug/content-risk/acknowledge { semver, note? }` — override authority only.
+  **409** if the version is not flagged. Audited.
+- `GET /api/admin/content-risk?status=&ns=&rule=` — Platform Admins.
+- `POST /api/publish` — new outcomes: **202** `{ routed: "review", proposalId }`; **409**
+  `{ requiresOverride: true, findings }`; with `override: true` and `overrideReason`, publishes
+  (§37.4).
+- `GET /api/proposals/:id` — the existing `scanReport` carries content findings in the extended
+  shape, plus `routedReason`.
+- `GET /api/me` and `PATCH /api/me` gain `contentRiskNotifications`.
+
+### 37.12 Audit
+New actions: `proposal.routed_to_review`, `skill.publish_scan_override`,
+`skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
+`proposal.scan_override` is unchanged. The Profile toggle is not audited, like the other
+notification preferences.
+
+### 37.13 Metrics
+- `skilly_content_risk_findings_total{rule,severity}` — a counter incremented per finding at scan
+  time.
+- `skilly_content_risk_sweep_pending` — a gauge of active versions not yet checked at the current
+  ruleset.
+
+### 37.14 Tests (ship with the change, §16 discipline)
+- **Unit (`@skilly/shared`):**
+  - a positive and a negative case for every rule;
+  - a known-benign corpus: Bulgarian and Greek prose, emoji ZWJ sequences, a leading BOM, "ignore
+    the default formatting", "fail silently", and a skill that teaches prompt-injection defense
+    (which must trip rules, proving there is no hidden allowance);
+  - normalization: a phrase split by zero-width characters, and full-width letters;
+  - excerpt escaping, the 200-character cap and the occurrence cap;
+  - the ruleset hash pin;
+  - a time bound for every rule on a 2 MB adversarial input;
+  - the §37.7 status table and the §37.6 carry-forward subset rule.
+- **Integration:**
+  - direct publish, hosted and flagged: a member is routed (proposal created, `routed_reason` set,
+    audit row, request link carried over); an admin gets 409, then publishes with an override,
+    with the acknowledgement and the audit row;
+  - direct publish, pointer: a flagged folder is routed; a fetch failure or timeout is routed;
+  - Keep current files over a flagged artifact is routed;
+  - the sweep: the superseding report carries non-content findings forward; reruns are no-ops;
+    yanked versions and archived skills are skipped; an onset notifies once and respects the
+    opt-out;
+  - acknowledgement authority: a maintainer who is not an admin gets 403, a namespace admin of the
+    skill's namespace succeeds, an admin of another namespace gets 403, and an invisible skill
+    gives 404;
+  - the consumer `GET /api/skills/:ns/:slug` never returns findings;
+  - an MCP hosted proposal's report contains content findings.
+- **E2e:** a hosted proposal whose `SKILL.md` hides a zero-width character in an instruction. The
+  review page's Content risk section shows the excerpt with its visible marker; accepting requires
+  the override; afterwards a consumer sees "Content check: findings noted" on the skill page and a
+  maintainer sees the full card.
+- **False-positive budget (one-off, not a CI gate).** A read-only worker script,
+  `pnpm --filter @skilly/worker content-risk:report`, scans every active version of a real catalog
+  and prints per-rule counts with sample excerpts. It writes nothing. It is run before release, and
+  its summary goes into the pull request.
+
+### 37.15 Accepted trade-offs
+- **A floor, not a guarantee.** Regex rules are evaded by paraphrase, other languages, images or
+  instructions split across files. Human review stays the control; the scanner makes sure the
+  reviewer sees what is hidden.
+- **English-only phrasing rules** (i18n is deferred, §16).
+- **More review load.** Flagged direct publishes by members now wait for a reviewer.
+- **The direct-publish gate covers content-risk findings only.** High secret and heuristic findings
+  keep today's ungated direct-publish behavior. Extending the gate to them is a separate spec
+  change.
+- **The web tier now fetches pointer contents** for direct pointer publishes. It uses the same
+  SSRF guards and is bounded by size and time.
+- **Excerpts store up to 200 characters of skill content** in scan reports, behind the same
+  visibility gates as the files themselves.
+- **Flagged versions stay installable.** The scanner informs; yanking stays a human decision.
+
+---
+
+## 38. Skill collections
+
+A **skill collection** is a named list of skills that **any signed-in user** assembles, such as an
+onboarding pack. The owner shares it as a link, and anyone signed in can open it as a filtered
+catalog view. It is a **social, discovery-only** feature:
+
+- **It mints nothing.** There is no "Install all". A viewer installs each skill from its own detail
+  page, which mints its own §23 `install` token. Invariants #4 and #6 are untouched.
+- **It holds only org-visible skills** (any namespace). Every member is visible to every signed-in
+  user, so one link resolves to the same list for every viewer and a collection can never carry a
+  restricted skill (invariant #3, §38.4).
+- **It changes no gate.** Review, scanning, visibility, install and RBAC never read it. Owning a
+  collection grants no authority (invariant #1).
+
+### 38.1 Semantics
+- **Owner.** Each collection has exactly one owner, the user who created it. Only the owner edits it.
+  A **platform admin** may delete any collection (moderation, for example an offensive name), and
+  that deletion is audited (§38.10). No other role has any power over a collection.
+- **Members always resolve to latest.** A collection stores skills, never versions. There is no
+  per-item pin.
+- **Eligible skill** = `visibility = 'org'`, not archived, and at least one installable
+  (published, git-served) version. This is the Featured predicate (§7) plus the org requirement.
+  Only eligible skills can be added, and a skill that stops being eligible is removed (§38.4).
+- **Order.** The catalog's normal sort applies to a collection view. There is no manual reordering.
+- **Limits** (fixed constants in `@skilly/shared/collections`, not platform settings):
+
+  | Limit | Value | Over the limit |
+  |---|---|---|
+  | Collections per owner | 50 | **409** `collection_limit` |
+  | Skills per collection | 50 | **409** `collection_full` |
+  | Name length (trimmed) | 1–60 characters | **422** |
+  | Description length | 0–500 characters, plain text | **422** |
+
+- **Names are unique per owner, ignoring case** (`lower(name)`). Two owners may use the same name.
+  A duplicate name for the same owner is **409** `name_taken`.
+- **Empty collections stay.** A collection whose last skill was unticked or evicted is kept, and the
+  profile card shows **"0 skills"** until the owner deletes it. An empty collection is excluded from
+  discovery (§38.6, §38.8).
+- **Ids are random UUIDs.** Enumeration would reveal nothing restricted, but random ids keep links
+  unguessable for free.
+
+### 38.2 Data model (migration 0082)
+- **`skill_collections`**: `id` (uuid PK, `gen_random_uuid()`), `owner_id` (FK → `users`,
+  `ON DELETE CASCADE`), `name` (text NOT NULL), `description` (text NULL), `created_at`,
+  `updated_at` (timestamptz). **Unique index `(owner_id, lower(name))`**. CHECKs on the name and
+  description lengths.
+- **`skill_collection_items`**: `collection_id` (FK → `skill_collections`, CASCADE), `skill_id`
+  (FK → `skills`, CASCADE), `added_at` (timestamptz). **PK `(collection_id, skill_id)`**, plus an
+  index on `skill_id` for eviction.
+- **Shared builders** in `@skilly/shared` (`collections.ts`): the eligibility predicate, the
+  eviction statement, the member-count expression (eligible members only) and the collection
+  matcher (§38.6). Both web and worker use them, as for `skillVisibilityWhere`.
+- **Grants:** the app role gets SELECT, INSERT, UPDATE and DELETE on both tables. These are
+  ordinary mutable user data, not audit rows.
+
+### 38.3 Adding a skill — the detail page popup
+- **Button.** The detail page's action-button row gains **"Add to collection"**, beside Share. It
+  renders **only on an eligible skill** (§38.1), for every signed-in user. It is hidden on
+  namespace-restricted, archived or not-yet-installable skills.
+- **Popup.** Clicking the button opens a popup anchored to it:
+  - **A name box** at the top, focused on open, with the placeholder *"Collection name"*.
+  - **The owner's collections as checkboxes**, ticked where this skill is already a member, sorted by
+    name. Typing in the box filters the list by case-insensitive substring.
+  - **A "Create "‹name›"" row** appears when the trimmed text matches none of the owner's names,
+    ignoring case. Choosing it (click or Enter) creates the collection **with this skill as its first
+    member** and shows it ticked. When the text exactly matches an existing name, Enter ticks that
+    collection instead of creating a duplicate.
+  - **Ticking adds and unticking removes, immediately.** Each change is its own request, followed by
+    a short toast such as *"Added to Onboarding pack"*. There is no Save button.
+  - **Limits surface inline:** at 50 collections the Create row is disabled with *"You have 50
+    collections, the maximum. Delete one to create another."* A full collection shows its checkbox
+    disabled with *"Full (50 skills)"*.
+  - **Dismissal** matches the app's other menus: an outside click, Escape, or the button again.
+- **The same component** serves every surface that adds to a collection. No other surface adds
+  skills in v1, and MCP is read-only (§38.9).
+
+### 38.4 Eviction (invariant #3)
+A skill that stops being eligible is **removed from every collection** in the same transaction as
+the change that made it ineligible. Eviction is silent: no notification and no audit row.
+
+| Trigger | Effect |
+|---|---|
+| Visibility narrows `org` → `namespace` | Evicted. |
+| Skill archived | Evicted. Unarchiving **never** re-adds it. |
+| Its last installable version is yanked | Evicted. Restoring a version **never** re-adds it. |
+| Skill permanently deleted | The FK cascade removes the items. |
+
+- **Every path** that performs these transitions calls the one shared eviction statement, so the web
+  manage routes and any worker path behave the same.
+- **Belt and braces.** Every collection read also applies the viewer's normal visibility filter
+  (`searchSkills`) and the eligibility predicate. A missed eviction can therefore never show a
+  restricted skill. Its only symptom would be a member count higher than the visible list.
+- **Promotion to `global`** keeps the skill's id, so an org-visible skill stays in its collections.
+
+### 38.5 Viewing a collection — the catalog
+There is no collection page. A collection is the **catalog filtered to it**.
+
+- **`/catalog?collection=<id>`** is the shareable link. It still requires sign-in (§2): the link
+  carries no credential and changes nothing about who may read the catalog.
+  - **A banner** above the grid reads *"Collection: ‹name› by ‹owner›"*, with the owner's
+    `UserBubble`, the description under it when present, and a **Copy link** button. It mirrors the
+    maintainer view's banner (§10).
+  - **On arrival the view ignores the viewer's saved filters** (category, tool, type, My skills),
+    like the maintainer view. Sorting, the header live filter (`?q=`) and any filter the viewer picks
+    afterwards compose with it (AND).
+  - **Dismissing the banner** (✕) drops `?collection=` and restores the normal catalog.
+  - **The owner** additionally gets a **"✕ Remove from collection"** control for each skill, which
+    unticks that membership (the same request as the popup). It sits **outside** the card, under it
+    in the grid and beside the row in the list (under the row at phone widths), so it never covers
+    the card's "new" badge, its install count or the row's edge tab, and the fixed card height (§14)
+    is untouched. Catalog listings carry each skill's id for this.
+  - **The owner and platform admins** get **Delete collection** in the banner, behind a confirm.
+  - **Unknown or deleted id:** the banner reads *"This collection no longer exists"*, and the grid is
+    the normal, unfiltered catalog.
+  - **No eligible members:** the banner shows as usual, and the grid's empty state reads *"This
+    collection has no skills yet."*
+- **`/catalog?collectionsBy=<userId>&by=<name>`** shows the **union** of every skill in that
+  person's non-empty collections (the leaderboard row action, §38.8).
+  - **The banner** reads *"Skills in collections by ‹name›"* and carries **one chip per non-empty
+    collection** (name and count). Clicking a chip navigates to `?collection=<id>`.
+  - Arrival, sorting, dismissal and the empty state work as for `?collection=`.
+- **`GET /api/skills`** gains `?collection=<id>` and `?collectionsBy=<userId>`, viewer-visibility-
+  scoped like `?maintainer=`. With `?collectionsBy=` the response also carries `collections` (that
+  person's non-empty collections as `{ id, name, skillCount }`), which feeds the banner's chips.
+
+### 38.6 Search — the header dropdown
+- **A "Collections" group** joins the header dropdown (§10), **below the 5 skill hits** and above
+  the *"See all results in catalog →"* footer.
+  - **Up to 3** non-empty collections, each showing its name, its member count and the owner's
+    `UserBubble`. Clicking one, or Enter on a highlighted one, opens `/catalog?collection=<id>`.
+  - **Matching** is a case-insensitive substring (`ILIKE`) over **name, description and the owner's
+    display name**. It deliberately does **not** use the §34 engine: different table, different
+    matcher, the §26 precedent. Member skill titles are not matched.
+  - **Ranking:** a name match beats a description or owner match, then member count descending,
+    then newest first.
+  - **The same rules as the skill dropdown:** 2-character floor, rate-limited, and **shown only
+    where the dropdown is**. It does not appear on the four live-filter pages (catalog,
+    `/installed`, `/usage`, `/requests`) or in people mode (`@`).
+  - **Excluded:** empty collections, and collections whose owner is not `status = 'active'`. Such a
+    collection still opens from a link.
+  - **Collections alone can open the dropdown.** A query with no skill hit but at least one
+    collection hit opens the dropdown with just the Collections group and the footer, instead of
+    the *"Nothing found"* bubble. The bubble shows only when both groups are empty.
+  - **Keyboard navigation** runs through the skill hits, then the collection hits, then the footer.
+- **Endpoint:** `GET /api/collections/suggest?q=` (any signed-in user, top 3).
+
+### 38.7 The profile card — "Skill collections"
+- **Where:** a collapsible **"Skill collections (N)"** card on `/profile`, after the **Following**
+  section. It is collapsed by default, like *People I follow*. `N` counts all the user's
+  collections, empty ones included.
+- **Each row** shows:
+  - the **name**, editable inline (owner-only; the §38.1 rules apply, so a duplicate shows the
+    `name_taken` error inline);
+  - the **description**, editable inline, with the placeholder *"Add a description"*;
+  - the **skill count** (*"N skills"*, *"0 skills"* for an empty one) and the created date
+    (`useDateFmt()`, viewer's timezone);
+  - a **View skills** button → `/catalog?collection=<id>`;
+  - a **Copy link** button, copying the absolute `/catalog?collection=<id>` URL with the copy-toast;
+  - a **Delete** button, behind a confirm naming the collection. Deletion is a hard delete of the
+    collection and its items. Notifications already sent are not retracted (§38.8).
+- **Order:** newest first.
+- **Empty state:** *"No collections yet. Use **Add to collection** on any skill page."*
+- **Owner-only.** The profile page is the user's own. Other people reach someone's collections
+  through links, the header dropdown and the leaderboard row action (§38.8).
+
+### 38.8 Extensions to other features
+- **Notification `follow.collection_created` (§35.6).** The sixth `follow.*` type, with the same
+  rules: in-app only (never email or webhook), one row per follower, built by the shared recipient
+  builder, not coalesced, evaluated at insert time.
+  - **Fires** once, inside the transaction that creates the collection. Creation always carries a
+    first skill, so a collection is never empty when the notification lands. Adding skills,
+    renaming and editing the description notify nobody.
+  - **Visibility gate:** none (*—*), since every member is org-visible.
+  - **Dedup:** none needed. No other notification describes this event.
+  - **Payload:** `actorId`, `actorName`, `collectionId`, `collectionName`.
+
+  | Type | Label | Body sentence | CTA → link |
+  |---|---|---|---|
+  | `follow.collection_created` | New collection from someone you follow | {actorName} created the collection "{collectionName}". | View the collection → `/catalog?collection={collectionId}` |
+
+  A later delete or rename leaves the row as written. Its link then shows the *"This collection no
+  longer exists"* banner, or the current name.
+- **Achievement `first_collection` — "Mixtape" (§31).** Group **Contribute**. Earned when the user
+  **creates** their first collection. Deleting it never revokes the badge (§31: badges are never
+  lost).
+  - Awarded by a best-effort `tryAward` right after the create, which counts as a **Habits event**
+    for the creator (§31.3).
+  - The catalog grows from 22 to **23**. Existing Heroes stay Heroes (`hero_at` is permanent,
+    §31.10), and their bars read 22/23 until they earn it.
+  - Earning it fires `achievement.earned` and therefore `follow.achievement` to the earner's
+    followers, as for every badge.
+  - **No backfill:** the tables start empty.
+- **Leaderboard (§21).**
+  - **A seventh stat, "collections":** the number of the user's collections that currently hold
+    **at least 3 eligible skills**. The threshold stops one-click collections from manufacturing
+    standing. **All-time** = the current count. **30d** = such collections created in the last
+    30 days. Rendered as `N collection(s)` after "followers", only when greater than 0.
+  - **A seventh sort, *Curated*,** appended to the toggle. Its tie-break chain: collections desc,
+    then the other six metrics desc in their existing order, then name asc. The six existing sorts
+    append **collections desc** as their last numeric tie-breaker, before name.
+  - **Leader badge metric `curated`:** 🗂 **Curator** in both windows. The all-time variant carries
+    the standard crown. It uses a new hue token `--badge-curate`, defined for light and dark themes
+    and distinct from the existing six. The hover card spells them out as *"Curator — most
+    collections, all time"* and *"Curator — most new collections, last 30 days"*. `GET /api/leaders`
+    gains `curated`. Up to **14** badges per user.
+  - **A fifth row action, Collections,** placed after Requests: `/catalog?collectionsBy=<userId>&by=<name>`
+    (§38.5), on every row including your own, shown even at 0.
+  - The board still exposes **no skill identity**: the stat is a count, and the row action lands on
+    the visibility-filtered catalog.
+
+### 38.9 MCP — `get_collections` (§29)
+One new **core read** tool, read-only, so the surface grows from 24 to **25** and the ceiling moves
+with it.
+
+| Argument | Result |
+|---|---|
+| none | The caller's own collections: id, name, description, member count, created date, link. |
+| `id` | That collection (any owner): name, description, owner name, link, and its **eligible, visibility-filtered** members as `{ ns, slug, title, latestInstallable }`. Unknown id → a clear not-found error. |
+| `query` | Up to 10 non-empty collections matched exactly as §38.6, same fields as the no-argument form plus the owner name. |
+
+- An agent installs members one at a time with the existing `install_skill`. There is no bulk
+  install, here or in the browser.
+- **Excluded:** creating, renaming, deleting a collection, and adding or removing members. Agents
+  read collections; people curate them.
+
+### 38.10 Lifecycle, governance & audit
+- **Not audited:** creating, renaming, editing, adding, removing, the owner's own delete, and
+  eviction. These are social actions, like ratings and watches.
+- **Audited:** a platform admin deleting **someone else's** collection writes
+  **`collection.deleted`** (actor, `before` = owner id, name, member count). An admin deleting their
+  own collection is not audited.
+- **GDPR erasure (§4):** the user's collections are **deleted** with their items. They are never
+  transferred, not even with *"Replace maintainer to"*. Their leaderboard collections stat goes with
+  them.
+- **Deprovision (`status = 'inactive'`):** collections are kept and their links still open. They
+  drop out of the header dropdown and MCP `query` results, and the leaderboard hides the owner as
+  it does for every stat. Re-enabling restores everything.
+- **Skill lifecycle:** see eviction (§38.4).
+
+### 38.11 API surface
+All endpoints require a signed-in user and are rate-limited like the other social writes.
+
+| Endpoint | Who | Behavior |
+|---|---|---|
+| `GET /api/collections/mine?skillId=` | any | The caller's collections with counts. With `skillId`, each row carries `contains` (the popup's ticks). |
+| `POST /api/collections` `{ name, skillId }` | any | Creates a collection with its first member. **201**; 409 `collection_limit` / `name_taken`; 422 invalid name or ineligible skill. Fires §38.8's notification and badge. |
+| `GET /api/collections/:id` | any | Name, description, owner `{ id, name }`, created date, eligible member count, plus the caller's `isOwner` and `canDelete` (owner or platform admin) for the banner. **404** unknown. |
+| `PATCH /api/collections/:id` `{ name?, description? }` | owner | 409 `name_taken`; 422 invalid. **403** non-owner. |
+| `DELETE /api/collections/:id` | owner, platform admin | Hard delete. Audited when the actor is not the owner. |
+| `PUT /api/collections/:id/skills/:skillId` | owner | Adds a member; idempotent. 409 `collection_full`; 422 ineligible skill. |
+| `DELETE /api/collections/:id/skills/:skillId` | owner | Removes a member; idempotent. |
+| `GET /api/collections/suggest?q=` | any | The header dropdown group (§38.6). |
+| `GET /api/skills?collection=` / `?collectionsBy=` | any | The catalog views (§38.5). |
+
+- **404 vs 403:** a non-owner who edits an existing collection gets **403**. Collections are not
+  secret, so this is no oracle.
+
+### 38.12 Migration 0082
+- Creates `skill_collections` and `skill_collection_items` with their indexes, CHECKs and grants
+  (§38.2).
+- No backfill. No change to `notifications` (the payload is JSONB).
+
+### 38.13 Tests (ship with the change, §16 discipline)
+- **Unit:**
+  - name validation: trimming, the 1–60 bounds, case-insensitive uniqueness, description bound;
+  - the eligibility predicate: org vs namespace, archived, no installable version;
+  - the collection matcher and its ranking (name beats description beats owner);
+  - the leaderboard count with the 3-skill threshold, both windows, and the *Curated* tie-break chain;
+  - the `follow.collection_created` renderer row and `first_collection` catalog entry.
+- **Integration:**
+  - create with a first skill, the 50-collection and 50-skill limits, `name_taken`, ineligible skill
+    422, owner-only edits (403), admin delete audited and owner delete not;
+  - eviction on each trigger (visibility narrowing, archive, last-version yank, hard delete), and no
+    re-add on unarchive or restore;
+  - a collection read never returns a namespace-restricted skill, even with an item row forced past
+    eviction;
+  - `?collection=` and `?collectionsBy=` catalog results, unknown id;
+  - suggest: 2-char floor, empty and inactive-owner exclusion, top 3;
+  - the follower fan-out (active followers only, paused followee sends nothing) and the badge award;
+  - erasure deletes the user's collections; deprovision keeps them;
+  - MCP `get_collections` in its three forms, visibility-filtered members;
+  - the migration.
+- **E2e:**
+  1. On an org-visible skill, **Add to collection** → type a new name → Create. The toast shows, and
+     reopening the popup shows it ticked. On a namespace-restricted skill the button is absent.
+  2. The profile's **Skill collections** card lists it. Rename it inline, then **View skills** lands
+     on the catalog with the banner and only that skill.
+  3. A second user opens the copied link and sees the same list. The header dropdown finds the
+     collection by name and opens it.
+  4. The follower sees `follow.collection_created` in the bell, and the creator holds *Mixtape*.
+  5. Delete the collection from the card. The old link shows *"This collection no longer exists"*.
+
+### 38.14 Accepted trade-offs
+1. **No bulk install.** A ten-skill onboarding pack is ten clicks. Dropped by decision: one install
+   per detail page keeps every install a deliberate, per-skill act.
+2. **Org-visible only.** A team cannot curate its own restricted skills. Allowing it would need
+   per-viewer filtering or a collection-level visibility, both rejected for v1.
+3. **A substring matcher, not the §34 engine.** No stemming or typo tolerance on collection names.
+4. **The leaderboard stat is gameable within bounds.** Fifty collections of three skills each is
+   possible, and the threshold only raises the cost.
+5. **Silent eviction.** An owner may find a skill gone from a collection without being told.
+6. **Not a survey feature.** Collections do not join the §36 first-use catalog in v1.
+
+
+## 39. Installed-version freshness
 
 Every install token is reusable (§23), so an *installation* outlives the clone that created it and
 can silently fall behind the catalog. This section records the decisions; the behavior lives in §23
 (*Installed-version freshness*, the Installed page) and §29 (`list_installed_skills`).
 
-### 37.1 Decisions
+### 39.1 Decisions
 | # | Decision | Why |
 |---|---|---|
-| 1 | The served version is **stamped by the gateway at `/info/refs`** (`tokens.last_served_semver` / `last_cloned_at`, migration 0081), not parsed from `git-upload-pack`. | The protocol gives no cheap per-clone signal; the marketplace cursor (§30.7) already accepts this approximation. |
+| 1 | The served version is **stamped by the gateway at `/info/refs`** (`tokens.last_served_semver` / `last_cloned_at`, migration 0083), not parsed from `git-upload-pack`. | The protocol gives no cheap per-clone signal; the marketplace cursor (§30.7) already accepts this approximation. |
 | 2 | `pinned_semver` **stays advisory** — the gateway still serves every tag. | Enforcing it would break consumers who edit fragments today; the feature reports intent, it does not police bytes. |
-| 3 | Pre-0081 installs are **backfilled** from `pinned_semver`; latest-tracking ones read `unknown` until their next clone. | We cannot know what `main` was at an unrecorded clone; a guess would be a lie in a governance view. |
+| 3 | Pre-0083 installs are **backfilled** from `pinned_semver`; latest-tracking ones read `unknown` until their next clone. | We cannot know what `main` was at an unrecorded clone; a guess would be a lie in a governance view. |
 | 4 | **Latest = highest stable active version**; betas never make anything behind. | Invariant #2. |
 | 5 | `withdrawn` (served version yanked / no longer active) is a **distinct, stronger state** than `behind`. | It is the case governance actually cares about. |
 | 6 | Pinned-and-behind **is** behind; inactive installs **are** included. | The filter answers "what runs old bytes", and expired credentials are exactly what an admin should see. |
 | 7 | The admin view of outdated system installs is the **existing System installs scope plus the same filter** — no new Administration surface, no proactive notification, no `system_event`, no owner drill-down count. | On-demand only in v1; counts to maintainers would be new exposure. |
-| 8 | **No 25th MCP tool.** Freshness and the refresh hint are folded into `list_installed_skills` (`onlyBehind`). | §29: the first response to pressure for surface is to fold, not add. |
+| 8 | **No new MCP tool.** Freshness and the refresh hint are folded into `list_installed_skills` (`onlyBehind`). | §29: the first response to pressure for surface is to fold, not add. |
 | 9 | A behind **latest-tracking** install refreshes by re-running the **same** command; a **pinned** one needs a **new mint** for the new tag. | The token is skill-scoped; `main` moved, the token did not. |
 
-### 37.2 Out of scope (deferred)
+### 39.2 Out of scope (deferred)
 - Enforcing `pinned_semver` at the gateway.
 - Any push signal (notification / email / banner / `system_event`) when an install falls behind.
 - Showing freshness counts to skill maintainers or on the skill detail page.
 - Freshness for `marketplace` tokens (§30) — they have their own commit cursor and a different
   update model.
 
-### 37.3 Tests
+### 39.3 Tests
 - **Unit** (§2 shared): the freshness derivation (`current` / `behind` / `withdrawn` / `unknown`),
   including beta-never-behind, yanked → withdrawn, missing latest → unknown, and the refresh-hint
   builder (same-token rerun vs reinstall).
 - **Integration** (worker git server): a second clone re-stamps `last_served_semver`/`last_cloned_at`
   without touching `used_at`/UA/IP; a pinned clone stamps `pinned_semver`; a HEAD request never
-  stamps; migration 0081 backfill. `GET /api/installs` (both scopes) returns the four new fields.
+  stamps; migration 0083 backfill. `GET /api/installs` (both scopes) returns the four new fields.
   MCP `list_installed_skills` with and without `onlyBehind`, the tool-count test still asserts 24.
 - **e2e**: install latest → publish a newer stable → the Installed row shows *behind* → the
   **Behind latest** filter shows only it → re-clone → row shows *up to date*.

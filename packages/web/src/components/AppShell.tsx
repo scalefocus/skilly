@@ -17,7 +17,8 @@ import { RumCollector, markRumNavIntent } from "./RumCollector";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
 import { CHANGELOG } from "../app/whats-new/changelog";
 import { achievementDef } from "@skilly/shared/achievements";
-import type { SurveyOfferView, SurveyVia } from "@skilly/shared/survey";
+import { collectionPath } from "@skilly/shared/collections";
+import { colophonFeedbackAction, type SurveyOfferView, type SurveyVia } from "@skilly/shared/survey";
 import { SurveyCard } from "./SurveyCard";
 import { SURVEY_OFFER_EVENT, SURVEY_PREF_EVENT, SURVEY_REOPEN_EVENT, SURVEY_START_EVENT, SURVEY_STATE_EVENT, setSurveyCanShow, setSurveyReady } from "../lib/surveyClient";
 
@@ -123,6 +124,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
   // Header search autocomplete: suggestions appear once 2+ chars are typed (debounced).
   const [suggestions, setSuggestions] = useState<{ namespaceSlug: string; skillSlug: string; title: string; official?: boolean; icon?: { url: string | null; emoji: string | null } | null }[]>([]);
+  // §38.6 the dropdown's Collections group (up to 3), below the skill hits and above the footer.
+  const [collectionHits, setCollectionHits] = useState<{ id: string; name: string; skillCount: number; owner: { id: string; name: string; avatar: string | null } }[]>([]);
   const [acOpen, setAcOpen] = useState(false);
   const [acHi, setAcHi] = useState(-1);
   // True while a suggest request is in flight — gates the "Nothing found" bubble so it only
@@ -163,6 +166,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     const term = peopleMode ? peopleTerm : q.trim();
     if (status !== "authenticated" || (!peopleMode && liveFilter) || term.length < 2) {
       setSuggestions([]);
+      setCollectionHits([]);
       setPeople([]);
       setAcOpen(false);
       setAcLoading(false);
@@ -174,15 +178,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       const url = peopleMode
         ? `/api/users/suggest?q=${encodeURIComponent(term)}&limit=5`
         : `/api/skills/suggest?q=${encodeURIComponent(term)}`;
-      fetch(url)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => {
+      const getJson = (u: string) => fetch(u).then((r) => (r.ok ? r.json() : null));
+      // §38.6 skills and collections are fetched together; the dropdown opens once both are back.
+      Promise.all([getJson(url), peopleMode ? Promise.resolve(null) : getJson(`/api/collections/suggest?q=${encodeURIComponent(term)}`).catch(() => null)])
+        .then(([j, cj]) => {
           if (!live) return;
           if (peopleMode) {
             setPeople(j?.users ?? []);
             setSuggestions([]);
+            setCollectionHits([]);
           } else {
             setSuggestions(j?.suggestions ?? []);
+            setCollectionHits(cj?.collections ?? []);
             setPeople([]);
           }
           setAcOpen(true); // open even when empty → the "Nothing found" bubble confirms the search ran
@@ -349,6 +356,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
     return () => setSurveyCanShow(() => false);
   }, []);
+  // §36.16 the sidebar colophon's "Have your say": hidden (null), start, or reopen the open offer.
+  const colophonAction = colophonFeedbackAction(
+    { signedIn: status === "authenticated", onboarded: onboarded === true, selfSurvey, offerOpen: openSurvey !== null },
+    new Date(),
+  );
   const openSurveyRef = useRef<SurveyOfferView | null>(null);
   openSurveyRef.current = openSurvey;
   useEffect(() => {
@@ -622,6 +634,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const clearSearch = () => {
     setQ("");
     setSuggestions([]);
+    setCollectionHits([]);
     setAcOpen(false);
     setAcHi(-1);
     if (liveFilter) {
@@ -833,7 +846,26 @@ export function AppShell({ children }: { children: ReactNode }) {
             Created by{" "}
             <a href="https://www.scalefocus.com" target="_blank" rel="noreferrer noopener">Scalefocus</a>
           </span>
-          <span className="colophon-sub">powered by the community</span>
+          <span className="colophon-sub">
+            powered by the community
+            {colophonAction && (
+              <>
+                {" · "}
+                {/* §36.16: start an on-demand survey, or reopen the open offer like "Take the survey". */}
+                <button
+                  type="button"
+                  className="colophon-link"
+                  data-testid="colophon-have-your-say"
+                  onClick={() => {
+                    setNavOpen(false);
+                    window.dispatchEvent(new Event(colophonAction === "reopen" ? SURVEY_REOPEN_EVENT : SURVEY_START_EVENT));
+                  }}
+                >
+                  Have your say
+                </button>
+              </>
+            )}
+          </span>
         </div>
 
         {/* Scroll affordance: only while there's more menu below the fold. */}
@@ -882,6 +914,15 @@ export function AppShell({ children }: { children: ReactNode }) {
                   go(`/skills/${s.namespaceSlug}/${s.skillSlug}`);
                   return;
                 }
+                // §38.6 collection hits follow the skill hits; the footer comes after both.
+                const ci = acHi - suggestions.length;
+                if (acOpen && ci >= 0 && ci < collectionHits.length && collectionHits[ci]) {
+                  const c = collectionHits[ci];
+                  setAcOpen(false);
+                  setQ("");
+                  go(collectionPath(c.id));
+                  return;
+                }
                 setAcOpen(false);
                 go(`/catalog?q=${encodeURIComponent(q)}`);
               }}
@@ -901,7 +942,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 ref={searchRef}
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                onFocus={() => { if ((peopleMode || !liveFilter) && (suggestions.length > 0 || people.length > 0 || (q.trim().length >= 2 && !acLoading))) setAcOpen(true); }}
+                onFocus={() => { if ((peopleMode || !liveFilter) && (suggestions.length > 0 || collectionHits.length > 0 || people.length > 0 || (q.trim().length >= 2 && !acLoading))) setAcOpen(true); }}
                 onKeyDown={(e) => {
                   // Escape always clears the box in one press, in every mode — this supersedes its
                   // former job of merely closing the dropdown (clearSearch closes it anyway). No-op
@@ -910,9 +951,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                     if (q.length > 0 || acOpen) { e.preventDefault(); clearSearch(); }
                     return;
                   }
-                  const rows = peopleMode ? people.length : suggestions.length;
+                  const rows = peopleMode ? people.length : suggestions.length + collectionHits.length;
                   if (!acOpen || rows === 0) return;
-                  // Navigable items = the rows plus (skills only) the "see all in catalog" footer.
+                  // Navigable items = the rows (skills, then collections) plus (non-people) the "see all in catalog" footer.
                   const count = peopleMode ? rows : rows + 1;
                   if (e.key === "ArrowDown") { e.preventDefault(); setAcHi((i) => (i + 1) % count); }
                   else if (e.key === "ArrowUp") { e.preventDefault(); setAcHi((i) => (i <= 0 ? count - 1 : i - 1)); }
@@ -955,7 +996,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   ))}
                 </ul>
               )}
-              {acOpen && !peopleMode && suggestions.length > 0 && (
+              {acOpen && !peopleMode && (suggestions.length > 0 || collectionHits.length > 0) && (
                 <ul className="search-ac" role="listbox">
                   {suggestions.map((s, i) => (
                     <li key={`${s.namespaceSlug}/${s.skillSlug}`} role="option" aria-selected={i === acHi}>
@@ -974,12 +1015,36 @@ export function AppShell({ children }: { children: ReactNode }) {
                       </button>
                     </li>
                   ))}
+                  {/* §38.6 Collections group: up to 3 non-empty collections; a hit opens the catalog filtered to it. */}
+                  {collectionHits.length > 0 && (
+                    <li role="presentation" className="search-ac-group" data-testid="search-collections-group">Collections</li>
+                  )}
+                  {collectionHits.map((c, j) => {
+                    const i = suggestions.length + j;
+                    return (
+                      <li key={`collection:${c.id}`} role="option" aria-selected={i === acHi}>
+                        <button
+                          type="button"
+                          className={`search-ac-item${i === acHi ? " hi" : ""}`}
+                          onMouseEnter={() => setAcHi(i)}
+                          onClick={() => { setAcOpen(false); setQ(""); go(collectionPath(c.id)); }}
+                          data-testid="search-collection-hit"
+                        >
+                          <span className="search-ac-title" style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                            <UserBubble name={c.owner.name} avatar={c.owner.avatar} size={22} />
+                            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</span>
+                          </span>
+                          <span className="search-ac-sub mono">{c.skillCount} skill{c.skillCount === 1 ? "" : "s"} · {c.owner.name}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
                   {/* Footer: only 5 results show in the dropdown — jump to the full card/row view. */}
-                  <li role="option" aria-selected={acHi === suggestions.length}>
+                  <li role="option" aria-selected={acHi === suggestions.length + collectionHits.length}>
                     <button
                       type="button"
-                      className={`search-ac-item search-ac-all${acHi === suggestions.length ? " hi" : ""}`}
-                      onMouseEnter={() => setAcHi(suggestions.length)}
+                      className={`search-ac-item search-ac-all${acHi === suggestions.length + collectionHits.length ? " hi" : ""}`}
+                      onMouseEnter={() => setAcHi(suggestions.length + collectionHits.length)}
                       onClick={() => { setAcOpen(false); go(`/catalog?q=${encodeURIComponent(q.trim())}`); }}
                     >
                       See all results in catalog →
@@ -989,7 +1054,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               )}
               {/* No matches: a bubble so it's clear the search actually ran (only after the
                   request returns empty — never while typing/loading). */}
-              {acOpen && !acLoading && (peopleMode ? people.length === 0 && peopleTerm.length >= 2 : suggestions.length === 0 && q.trim().length >= 2) && (
+              {acOpen && !acLoading && (peopleMode ? people.length === 0 && peopleTerm.length >= 2 : suggestions.length === 0 && collectionHits.length === 0 && q.trim().length >= 2) && (
                 <div className="search-ac search-ac-empty" role="status">
                   Nothing found for <span className="mono">“{(peopleMode ? peopleTerm : q.trim())}”</span>
                 </div>

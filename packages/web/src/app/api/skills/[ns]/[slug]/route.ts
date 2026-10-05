@@ -9,6 +9,7 @@ import { getEffectiveMaintainers, canManageMaintainers } from "../../../../../li
 import { skillDiscussionCount } from "../../../../../lib/messages";
 import { logView } from "../../../../../lib/usage";
 import { withSystemLog } from "../../../../../lib/apiLog";
+import { skillContentRiskSummary } from "../../../../../lib/contentRisk";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, resolveLatest } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   // Record the view only for live consumption — not an owner inspecting an archived skill. §21.
   if (!archived && access.userId) logView(skill.id, skill.namespaceId, access.userId);
 
-  const [versions, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount] = await Promise.all([
+  const [versions, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner] = await Promise.all([
     listVersions(skill.id),
     latestStableSemver(skill.id),
     access.userId ? isWatching(access.userId, skill.id) : Promise.resolve(false),
@@ -48,6 +49,10 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     skillFormDefaults(skill.id),
     pendingMirrorStatus(skill.id),
     skillDiscussionCount(skill.id),
+    // §37.7: the displayed version's content-check status for every viewer — never findings.
+    skillContentRiskSummary(skill.id),
+    // §37.8: owners (maintainers, namespace admins, platform admins) also get the full card.
+    access.userId ? canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId) : Promise.resolve(false),
   ]);
   const isGlobal = skill.namespaceSlug === "global";
   // INSTALLABLE = latest stable version whose serving git repo is actually synthesized
@@ -60,6 +65,10 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   );
   const publishing = latest != null && latestInstallable == null;
   return Response.json({
+    // §38.3 the Add-to-collection popup addresses the skill by id; `collectible` gates the button
+    // (org-visible, active, installable — the shared eligibility rule).
+    skillId: skill.id,
+    collectible: skill.visibility === "org" && !archived && latestInstallable != null,
     namespaceSlug: skill.namespaceSlug,
     skillSlug: skill.slug,
     visibility: skill.visibility,
@@ -77,6 +86,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     pendingMirror,
     // Live comment count for the collapsed Discussion card header ("Discussion (N)") — §24.
     discussionCount,
+    contentRisk,
+    canSeeContentRisk: isOwner,
     createdAt: skill.createdAt,
     updatedAt: skill.updatedAt,
     archived,

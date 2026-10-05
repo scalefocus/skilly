@@ -1,10 +1,10 @@
-// e2e: installed-version freshness on the Installed Skills page (SKILLY_SPEC.md §23, §37). Runs
+// e2e: installed-version freshness on the Installed Skills page (SKILLY_SPEC.md §23, §39). Runs
 // against the dev stack (SKILLY_DEV_AUTH=1) using db/seed.dev.sql, whose stamps put the three
 // dev-user installs in three states: pdf-tools pinned 1.1.0 = latest stable → current (the
 // 1.2.0-beta.1 never makes it behind); lint-fixer tracks latest, last served 2.2.0 while 2.3.0 is
 // latest → BEHIND; secret-helper pinned 0.9.0 → current, inactive. Read-only: never uninstalls.
 //
-// The "re-clone → row flips to up to date" half of the §37.3 e2e needs a real git clone through
+// The "re-clone → row flips to up to date" half of the §39.3 e2e needs a real git clone through
 // the gateway, which this dev-server suite has no git repos for; the stamp is covered at the HTTP
 // level by packages/worker/src/git/server.test.ts and at the SQL level by installs.dbtest.ts.
 import { test, expect, devSignIn } from "./fixtures";

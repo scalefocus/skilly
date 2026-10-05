@@ -112,7 +112,7 @@ export interface InstallView {
    * stable; `freshness` the derived state; `refresh` what to do about a behind/withdrawn row —
    * `rerun` (latest-tracking: re-run the install command you already hold, or `npx skills
    * update`) or `reinstall` (pinned: call install_skill with the given semver). Null when nothing
-   * needs doing. This IS the "check for updates" — no separate tool (the §29 ceiling of 24 holds).
+   * needs doing. This IS the "check for updates" — no separate tool (the §29 tool ceiling holds).
    */
   installedVersion: string | null;
   lastClonedAt: string | null;
