@@ -65,6 +65,10 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   );
   const publishing = latest != null && latestInstallable == null;
   return Response.json({
+    // §38.3 the Add-to-collection popup addresses the skill by id; `collectible` gates the button
+    // (org-visible, active, installable — the shared eligibility rule).
+    skillId: skill.id,
+    collectible: skill.visibility === "org" && !archived && latestInstallable != null,
     namespaceSlug: skill.namespaceSlug,
     skillSlug: skill.slug,
     visibility: skill.visibility,

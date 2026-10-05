@@ -29,6 +29,7 @@
   --danger-soft: #ffe1e3;
   --violet: #7c3aed;
   --badge-follow: #db2777; /* §35.7 the follow leader badges — a hue none of the other five use */
+  --badge-curate: #0d9488; /* §38.8 the Curator leader badge — a teal none of the other six use */
   --shadow-sm: 0 1px 2px rgba(8, 39, 115, 0.06);
   --shadow: 0 1px 2px rgba(8, 39, 115, 0.05), 0 14px 34px -18px rgba(8, 39, 115, 0.25);
   --shadow-lg: 0 2px 4px rgba(8, 39, 115, 0.06), 0 36px 60px -28px rgba(8, 39, 115, 0.35);
@@ -73,6 +74,7 @@
   --danger-soft: #331518;
   --violet: #a78bfa;
   --badge-follow: #f472b6;
+  --badge-curate: #2dd4bf;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow: 0 2px 6px rgba(0, 0, 0, 0.5), 0 18px 44px -20px rgba(0, 0, 0, 0.8);
   --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.55), 0 44px 80px -30px rgba(0, 0, 0, 0.9);
@@ -391,6 +393,10 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 .search-ac-item.hi, .search-ac-item:hover { background: var(--surface-2); }
 .search-ac-title { font-size: 13.5px; font-weight: 500; }
 .search-ac-sub { font-size: 11px; color: var(--faint); }
+/* §38.6 the "Collections" group label between the skill hits and the footer. A divider above it
+   only when skill hits precede it (the group can also stand alone). */
+.search-ac-group { padding: 8px 11px 4px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid var(--line); padding-top: 10px; }
 /* "See all results in catalog" footer: a divider above, accent label, single-line. */
 .search-ac-all {
   margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line);
@@ -544,6 +550,57 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 /* Install split-button version dropdown options. */
 .ver-opt { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; background: none; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); cursor: pointer; }
 .ver-opt:hover { background: var(--surface-2); }
+
+/* §38.3 the Add-to-collection popup: anchored under its button like the version menu. It stays
+   inside the viewport at phone widths (max-width), and the list scrolls once it grows. */
+.collection-popup {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
+  width: 280px; max-width: calc(100vw - 32px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); padding: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.collection-popup-input { width: 100%; box-sizing: border-box; }
+.collection-popup-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+.collection-opt {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 8px;
+  border: 0; background: none; border-radius: var(--radius-sm); font-size: 13px; color: var(--ink); cursor: pointer;
+}
+.collection-opt:hover { background: var(--surface-2); }
+.collection-opt.is-disabled, .collection-opt:disabled { cursor: default; opacity: 0.6; }
+.collection-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collection-create { font-family: var(--font-body); color: var(--accent); }
+.collection-popup-err { font-size: 12px; color: var(--danger); padding: 0 4px; }
+
+/* §38.5 the catalog's collection banner (shares the maintained-by banner's look). */
+.collection-banner { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--accent-soft); font-size: 13.5px; }
+.collection-banner-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.collection-banner-desc { margin: 0; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.collection-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+/* §38.7 the profile card: click-to-edit name/description and a wrapping action group. */
+.inline-edit { border: 0; background: none; padding: 2px 4px; margin: -2px -4px; text-align: left; color: inherit; font: inherit; cursor: text; border-radius: var(--radius-sm); overflow-wrap: anywhere; white-space: pre-wrap; max-width: 100%; }
+.inline-edit:hover, .inline-edit:focus-visible { background: var(--surface-2); }
+.inline-edit.is-empty { color: var(--faint); font-style: italic; }
+.inline-edit-input { width: 100%; box-sizing: border-box; resize: vertical; }
+.collection-row { align-items: flex-start; }
+.collection-row-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; }
+@media (max-width: 640px) {
+  .collection-row { flex-direction: column; }
+  .collection-row-actions { justify-content: flex-start; }
+}
+/* The owner's "Remove from collection" control in the collection view. It sits OUTSIDE the card
+   (under it in the grid, beside it in the list) so it never covers the card's "new" badge, its
+   install count or the row's edge tab, and the fixed card height (§14) is untouched. */
+.collection-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.collection-item.is-row { flex-direction: row; align-items: center; gap: 0; }
+.collection-item.is-row > .skill-row { flex: 1; min-width: 0; }
+.collection-remove { align-self: flex-end; border: 0; background: none; color: var(--muted); cursor: pointer; font-family: var(--font-mono); font-size: 11.5px; padding: 2px 6px; border-radius: var(--radius-sm); }
+.collection-item.is-row > .collection-remove { align-self: center; margin-right: 10px; flex-shrink: 0; }
+.collection-remove:hover { color: var(--danger); background: var(--danger-soft); }
+/* At phone widths the list row needs its full width — the control drops under it, like on a card. */
+@media (max-width: 640px) {
+  .collection-item.is-row { flex-direction: column; align-items: stretch; }
+  .collection-item.is-row > .collection-remove { align-self: flex-end; margin: 0 10px 8px; }
+}
 
 /* A discussion comment's version pill is a button (clicking jumps to that version's row). The
    button is chromeless — the Pill inside carries all the visuals. §24. */

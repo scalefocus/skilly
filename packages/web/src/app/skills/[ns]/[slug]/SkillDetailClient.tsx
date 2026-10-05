@@ -4,6 +4,7 @@ import nextDynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useApi, Pill, CopyCommand, EmptyState, ScrollToTop, formatCount, ShareButton } from "../../../../components/ui";
+import { AddToCollection } from "../../../../components/AddToCollection";
 import { ExpiryPicker } from "../../../../components/ExpiryPicker";
 import { useDateFmt } from "../../../../components/DateFormat";
 import { Markdown } from "../../../../components/Markdown";
@@ -148,6 +149,8 @@ function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canMana
 }
 
 interface Detail {
+  /** §38.3 the skill id and whether it may join a collection (org-visible, active, installable). */
+  skillId: string; collectible: boolean;
   namespaceSlug: string; skillSlug: string; visibility: "org" | "namespace";
   versions: VersionView[]; latest: string | null; latestInstallable: string | null; publishing: boolean; watching: boolean; watchers: number; rating: RatingView;
   usageExamples: string | null; archived: boolean;
@@ -349,6 +352,8 @@ export default function SkillDetail() {
             return j.url ?? null;
           }}
         />
+        {/* §38.3 beside Share, only on an org-visible, active, installable skill. */}
+        {data.collectible && <AddToCollection skillId={data.skillId} />}
         {!data.archived && (
           <button
             className={`btn btn-sm${data.watching ? " btn-primary" : ""}`}

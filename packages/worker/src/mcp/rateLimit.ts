@@ -59,6 +59,7 @@ const LIMITS: Record<McpToolName, number> = {
   list_skill_files: 120,
   get_skill_file: 240,
   get_registry_metadata: 60,
+  get_collections: 60, // §38.9
   // Install
   install_skill: 30,
   list_installed_skills: 60,

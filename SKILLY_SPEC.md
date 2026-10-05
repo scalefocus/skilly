@@ -25,6 +25,7 @@ Every decision below was explicitly confirmed.
 | Search | **PostgreSQL full-text search only** (§34): stemmed and weighted (title/slug › description › categories › usage + `SKILL.md` body), admin-curated synonyms, typo + substring fallback tiers, `"phrase"` / `-exclude` / `OR` syntax, admin-selectable language. **No vector store, no new extension.** One engine for the catalog, the header search and MCP |
 | Skill icons | **Optional, skill-level** image or emoji (§33): resolved from the bundle (`icon:` frontmatter → root `icon.png`) before the proposer's upload/emoji; re-encoded to 256×256 PNG; default = the skilly wordmark. Shown on every skill surface and on the **signed share link's** Open Graph card — the only per-skill unfurl, gated by a 7-day token minted by a signed-in viewer |
 | Feedback survey | **Anonymous in-app survey** (§36): general satisfaction + two questions on a feature the user just used for the first time, 1–5 stars + optional free text. A 1-in-3 random roll on an eligible first use, **at most once per 30 days**, 14-day grace for new users, never alongside What's new. Profile opt-out + platform switch; users can also **give feedback on demand** (profile / account menu, once per 7 days, feature of their choice, §36.16); results for platform admins on Monitoring, with any figure over fewer than 5 responses withheld |
+| Skill collections | **User-owned, shareable lists of org-visible skills** (§38): any user adds a skill from its detail page; a collection opens as the catalog filtered to it (`/catalog?collection=<id>`), is found through the header dropdown, and mints nothing (no bulk install). Restricted skills can never be members; a skill that narrows, archives or loses its last version is evicted |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
 | Content risk | **Rule-based content-risk scanner** (§37): flags hidden Unicode, look-alike letters, override phrasing and credential theft in a skill's text; advisory with the audited override, and a flagged **direct publish goes to review** |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
@@ -300,6 +301,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `content_risk_acknowledgements` (migration 0081, detailed in §37)
 - `id`, `skill_id` (FK → `skills`, CASCADE), `semver` — keyed to the **version**, `scan_report_id` (FK → `scan_reports`, SET NULL; provenance only), `pairs` (JSONB, the acknowledged `(rule, path)` pairs), `acknowledged_by` (FK → `users`, SET NULL), `acknowledged_at`, `note` (≤ 500 chars), `source` (`override` | `manual`). Append-only for the app role. The same migration adds `proposals.routed_reason` (`content_risk`, nullable) and `users.content_risk_notifications` (default true).
 
+### `skill_collections` / `skill_collection_items` (migration 0082, detailed in §38)
+- **`skill_collections`** — `id` (uuid), `owner_id` (FK → `users`, CASCADE), `name` (1–60, unique per owner on `lower(name)`), `description` (≤ 500, nullable), `created_at`, `updated_at`. A user-owned list; owning one grants no authority (invariant #1). Deleted on GDPR erasure (§4).
+- **`skill_collection_items`** — `collection_id` (FK, CASCADE), `skill_id` (FK → `skills`, CASCADE), `added_at`; PK `(collection_id, skill_id)`. Members are **org-visible, active, installable** skills only; a skill that stops qualifying is evicted in the same transaction (§38.4).
+
 ---
 
 ## 4. RBAC model & permission matrix
@@ -335,6 +340,8 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Mint / manage **system installs** (§23) | ✅ | ❌ | ❌ | ❌ |
 | Rate a visible skill (§18) | ✅ | ✅ | ✅ | ✅ |
 | Manage skill maintainers (§19) | ✅ (any) | ✅ (own ns) | maintainers of that skill | maintainers of that skill |
+| Create / edit / delete **own** skill collections (§38) | ✅ | ✅ | ✅ | ✅ |
+| Delete **anyone's** skill collection (§38, audited) | ✅ | ❌ | ❌ | ❌ |
 
 > **Maintainers (§19)** are an ownership + notification concept and grant **no authority** (invariant #1 — all power stays in SCIM groups + `role_mappings`). The *single* exception is the row above: a skill's own maintainers may curate its co-maintainer list, bounded by the visibility eligibility gate (they can never add anyone who couldn't already see the skill).
 
@@ -390,7 +397,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Delete user info (GDPR erasure)
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), after **Maintenance** and directly before **Namespaces** (Currently online, which used to follow it, now lives on the Monitoring page — §4 *Currently online*). Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
-- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
+- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), **`skill_collections`** with their items (§38.10 — never transferred), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
@@ -971,7 +978,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Free-text search is PostgreSQL full-text search with forgiving layers — the §34 engine** (superseding the substring-`ILIKE` decision recorded here through v2.10.0, whose revisit condition §34.1 explains). **One engine** serves the **header dropdown, the catalog grid and the MCP `search_skills` tool** identically, so they match and rank the same: stemmed, any-word-order matching over **title + slug (A), description (B), category names (C)** and the **indexed version's usage examples + `SKILL.md` body (D)** (§34.3); platform-admin-curated **synonym groups** (§34.8); a **last-word prefix** so partial words still work as you type; a **typo tier** on titles; and today's **substring predicate kept as the lowest tier**, so nothing a plain query matched before stops matching (§34.5). Queries accept `"phrases"`, `-exclusions` and capital `OR` (§34.4); a multi-word query that matches nothing falls back to any-word matches, flagged `matchMode: "any"`. **No vector store, no new extension** — lexical, not embedding-semantic (§34.1). Maintainer names remain **not** matched (low value).
 - **Search surfaces (one box, five behaviors + a people mode):** the single top-bar box adapts to the page it's on. Its placeholder reads **"Search the registry…"** everywhere except the installed-skills page (**"Search installed skills…"**), the usage dashboard (**"Search usage…"**), and the Requested skills page (**"Search requests…"**).
   - **People mode (`@`) — overrides all five behaviors.** A query whose **first character is `@`** switches the box to a **people typeahead**: the dropdown shows up to **5** matching users — `UserBubble` avatar + display name + email — matched by **substring over display name and email** (2+ chars after the `@`), **excluding erased tombstones and non-`active` users**. Picking one navigates to that person's **maintained-by catalog view** (`/catalog?maintainer=<id>&by=<name>`, §10 above). Backed by the new `GET /api/users/suggest?q=` (§15 — any signed-in user, rate-limited, same posture as `/api/skills/suggest`; people have no per-user visibility model, §28 precedent). People mode is available on **every** page, including the four live-filter pages — a leading `@` re-enables the dropdown there and **suspends the live filter** (nothing is written to `?q=` while in people mode; clearing or deleting the `@` restores the page's normal behavior). Keyboard/clear/Escape semantics are unchanged from the skill dropdown.
-  - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches — the first 5 of the **unfiltered** catalog *Relevance* order for the same query (§34.6) — opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered.
+  - **Header dropdown (every page *except* the catalog, the installed-skills page, the usage dashboard, and the Requested skills page):** a typeahead showing the **top 5** matches — the first 5 of the **unfiltered** catalog *Relevance* order for the same query (§34.6) — opening at **2+ characters**; clicking a result opens that skill, and a keyboard-navigable **"See all results in catalog →"** footer jumps to the full results (same as pressing Enter). Cheap/bounded (no joins or aggregates), rate-limited, visibility-filtered. A **Collections** group (up to 3 hits) sits below the skill hits and opens `/catalog?collection=<id>` (§38.6); the catalog's `?collection=` and `?collectionsBy=` views are §38.5.
   - **Catalog page:** the dropdown is **suppressed**; the same top-bar box becomes a **live filter of the card/row grid** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (merged with the other filters, kept out of history) and the grid re-queries + re-ranks on each keystroke, exactly like choosing a category or tool. The box is **seeded from `?q=`** on arrival, and **clearing it restores the full catalog**. When the §34 engine falls back to any-word matching (`matchMode: "any"`), a one-line **partial-matches notice** plus the query-syntax tip sits above the grid, and a zero-result search shows the tip in the empty state (§34.12).
   - **Installed-skills page (`/installed`, §23):** the dropdown is **suppressed** and the box becomes a **client-side live filter of the caller's own installed list** (no refetch, no query param) — a case-insensitive substring match over each row's title, namespace slug, and skill slug, engaging from the **1st character** (the list is small and already loaded). The typed query is still mirrored to **`?q=`** (`router.replace`, seeded on arrival; clearing restores the full list). This is a **non-registry** mode: different data, matcher, and matched fields — see §23 (*Installed Skills page → Header search*).
   - **Usage dashboard (`/usage`, §21):** the dropdown is **suppressed** the same way and the box becomes a **live filter of the usage list** — typing (2+ chars, debounced ~250ms) writes `?q=` via `router.replace` (kept out of history); the box is **seeded from `?q=`** on arrival and **clearing it restores the full list**. This box drives the **usage dashboard's own** entitlement-scoped query (`GET /api/usage?q=`), **not** the catalog matcher above — see §21 for its match fields and scope. The usage page therefore carries **no separate in-page search box**.
@@ -1198,11 +1205,11 @@ current or future type can ever leak JSON to a user.
   | `proposal.accept` | Proposal accepted | Your skill proposal was accepted. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `proposal.reject` | Proposal rejected | Your skill proposal was rejected. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `system.error` † | System log events | There are {count} new system log events. | View the system log → `/system-log` |
-  | `follow.*` † (5 types) | *see §35.6* | *see §35.6* | *see §35.6* |
+  | `follow.*` † (6 types) | *see §35.6 / §38.8* | *see §35.6 / §38.8* | *see §35.6 / §38.8* |
   | *fallback (any other type)* | Notification | You have a new notification in skilly. | Open skilly → base URL *(CTA omitted when no base URL)* |
 
-  † `system.error` stays **in-app only** (never emailed, §25), and so do the five `follow.*`
-  types (§35.6). Their rows exist so the renderer is **total** and no path can emit JSON even if
+  † `system.error` stays **in-app only** (never emailed, §25), and so do the six `follow.*`
+  types (§35.6, §38.8). Their rows exist so the renderer is **total** and no path can emit JSON even if
   delivery rules later change.
 
 - **No schema change.** Every field above already lives in the notification `payload` (§3
@@ -1571,7 +1578,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/installs` (+ `?scope=system` — all system installations, **platform-admin only**), `DELETE /api/installs/:id` (uninstall), `PATCH /api/installs/:id {expiresAt}` (reactivate) — owner-checked for personal rows; on **system** rows the DELETE/PATCH check is **platform admin** instead (any admin). *(Replaces the old `POST /api/tokens` PAT path.)*
 
 **MCP server & OAuth (§29)**
-- **On the worker:** `POST /mcp` (Streamable HTTP — the MCP endpoint; 24 curated tools + resource templates), `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server` (RFC 8414), `GET /.well-known/oauth-protected-resource` (RFC 9728).
+- **On the worker:** `POST /mcp` (Streamable HTTP — the MCP endpoint; 25 curated tools + resource templates), `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server` (RFC 8414), `GET /.well-known/oauth-protected-resource` (RFC 9728).
 - **On web:** `GET /oauth/authorize` + the consent screen (session-authenticated — the only leg needing Entra sign-in), `POST /oauth/register` (open Dynamic Client Registration, RFC 7591).
 - **Management:** `GET /api/mcp/connections` (the caller's own live grants — the `/mcp` page's Connections list), `DELETE /api/mcp/connections/:grantId` (revoke; audited `mcp.grant_revoked`). Admin: `GET /api/admin/mcp` (enabled flag, live-grant count, registered clients), `POST /api/admin/mcp/clients/:id/block` + `.../unblock` (platform-admin, audited). The on/off toggle itself is `PATCH /api/admin/settings { mcp_enabled }`.
 - **No REST twin for the tools.** They are implemented directly on the worker against Postgres — there is deliberately **no** generic `/api` proxy, no "act as user" service credential, and no escape-hatch tool.
@@ -1608,6 +1615,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
+- **Skill collections (§38.11):** `GET /api/collections/mine?skillId=` · `POST /api/collections` · `GET|PATCH|DELETE /api/collections/:id` · `PUT|DELETE /api/collections/:id/skills/:skillId` · `GET /api/collections/suggest?q=`. `GET /api/skills` gains **`?collection=<id>`** and **`?collectionsBy=<userId>`** (viewer-visibility-scoped).
 - `/scim/v2/Users`, `/scim/v2/Groups` (worker).
 
 ---
@@ -1706,6 +1714,19 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
       `users.content_risk_notifications`).
 
     **DONE.**
+
+**Phase 12 — Skill collections**
+31. **Skill collections (§38):**
+    - **Data:** `skill_collections` + `skill_collection_items` (migration 0082), org-visible members
+      only, evicted when a skill narrows, archives or loses its last installable version.
+    - **Surfaces:** an *Add to collection* popup on the detail page, a *Skill collections* card on
+      the profile, the catalog's `?collection=` / `?collectionsBy=` views with a banner, and a
+      Collections group in the header dropdown. No bulk install.
+    - **Extensions:** `follow.collection_created`, the *Mixtape* badge, a *collections* leaderboard
+      stat + *Curated* sort + 🗂 *Curator* leader badge + a Collections row action, and the MCP
+      `get_collections` tool (25 tools).
+
+    *(Spec'd 2026-10-05; not yet built.)*
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -1846,7 +1867,7 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 - **Erasure removes credit — unless transferred.** GDPR erasure (§4, both the admin and SCIM paths) **deletes the erased user's `install_credits`** — credits-only: the shared `access_log` row, `skills.install_count`, and co-maintainers' credit are untouched (the install still happened and still counts for everyone else). **Exception:** the admin erasure path with a "Replace maintainer to" target **reassigns** the credits to that target instead of deleting them (§4 — would-be self-credits and duplicates excepted; those are deleted as usual), so the standing survives on the board under the successor. Either way, a deleted user holds zero credits and never appears. A reversible **deprovision** (leaver → `status='inactive'`) does **not** delete credits — the board's `status='active'` filter hides them, and re-enabling restores their standing.
 - **Privacy (invariant #3).** The board exposes only per-person aggregates (display name, avatar, total installs, skill count) — **never skill identities, slugs, or namespaces** — so it cannot enumerate or identify restricted skills, and is identical for every viewer. Users may opt out via `leaderboard_hidden` (§13).
 - **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other four metrics descending, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
-- **Row actions.** Each row offers four actions, on every row and under every sort: **Skills**, **Requests**, **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow).
+- **Row actions.** Each row offers five actions, on every row and under every sort: **Skills**, **Requests**, **Collections** (§38.8: the catalog's `?collectionsBy=` view), **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow).
   - **Skills** links to the catalog scoped to the skills that person **maintains** — `/catalog?maintainer=<userId>&by=<name>` for another person (the catalog shows a dismissible "Skills maintained by &lt;name&gt;" banner), or `/catalog?mine=1` for **your own** row (reuses the "My Skills" filter). This does **not** break invariant #3: the catalog independently visibility-filters to what the *viewer* may see (`searchSkills`), so it only ever lists skills the viewer could already browse — the leaderboard itself still reveals no skill identities. On arrival the maintainer view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) and shows everything by that maintainer the viewer can see.
   - **Requests** links to the Requested-skills page scoped to the requests that person **posted** — `/requests?requester=<userId>&by=<name>` for another person (the page shows a dismissible "Requested by &lt;name&gt;" banner, §26), or `/requests?mine=1` for **your own** row (reuses the "Mine" toggle). Requests have no namespace and are org-visible, so there is no visibility concern; the link is shown even when the person's requested count is 0 (consistent with **Skills**, which shows at 0 adopted).
   - **Reach out** opens a 1:1 direct chat (`POST /api/messages/direct` → `skilly:open-conversation`), the same mechanism as the skill-detail maintainer list and the admin online-users list. It is **hidden on the viewer's own row** (you can't message yourself).
@@ -1856,11 +1877,11 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 A small marker under a user's avatar bubble — **everywhere one appears** — showing they currently
 top a leaderboard metric. Purely derived from the leaderboard's own data; no new user action.
 
-- **Six metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
+- **Seven metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
   leader (skills adopted), Fulfillment leader (requests fulfilled), Watch leader (skills watched),
   Request leader (skills requested, §26), and the follow leader (followers, §35.7), which has
   window-specific names: 📣 **Influencer-in-Chief** (all time) and 📈 **Trendsetter** (last 30
-  days). Each metric is in **two windows**, all-time and last-30-days, for up to 12 badges per user.
+  days), and 🗂 **Curator** (collections, §38.8). Each metric is in **two windows**, all-time and last-30-days, for up to 14 badges per user.
 - **Who's a leader:** whoever is **tied for the single highest value** of a metric in a window. A
   tie is a tie — everyone at the top value gets the badge, not just one canonical winner. A metric
   with nobody above zero in that window has **no leader** (nobody gets it). Computed in
@@ -1900,7 +1921,7 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   request); omitting `userId` renders the bubble with no badges and no extra request, unchanged
   from before this feature. The map itself is cached for ~30s server-side, layered on top of the
   leaderboard's own 60s per-(window,sort) cache. `metric` is one of `installs` | `skills` |
-  `requests` | `watched` | `requested` | `followed` (§35.7).
+  `requests` | `watched` | `requested` | `followed` (§35.7) | `curated` (§38.8).
 
 ---
 
@@ -3701,13 +3722,13 @@ both processes — they are the ones where a divergence is a security incident, 
 Everything else (shaping, sorting, facets, pagination) may be written twice. **Accepted trade-off:**
 result *shapes* may drift between `/api` and the MCP tools; the *access decisions* cannot.
 
-### Tool surface — 24 curated tools, no escape hatch
+### Tool surface — 25 curated tools, no escape hatch
 
 Every tool: authenticated via the bearer token, **RBAC re-resolved**, **visibility-filtered**,
 rate-limited, and — for writes — audited with the MCP marker (§29 *Attribution*). Tools are named
 `skilly_*` on the wire; the short names below are the spec's shorthand.
 
-**Core read (6)**
+**Core read (7)**
 | Tool | Behavior |
 |---|---|
 | `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`), same sorts, same visibility filter. Paginated. Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
@@ -3716,6 +3737,7 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 | `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
 | `get_skill_file` | One file from a version's bundle. Text inline; binary as a base64 blob; over `mcp_max_resource_bytes` → a clear error naming the `download` route. |
 | `get_registry_metadata` | Categories (**name + slug**, the slug being the marketplace plugin name — §30.3), tool/harness enum, the namespaces the caller can see, and the platform limits an agent needs before proposing (max bundle bytes, inline upload cap, `require_review` per namespace). |
+| `get_collections` | Skill collections (§38.9), read-only: no argument → the caller's own; `id` → one collection with its eligible, visibility-filtered members; `query` → up to 10 matches (the §38.6 matcher). Members are installed one at a time with `install_skill`. |
 
 **Install (4)**
 | Tool | Behavior |
@@ -3761,10 +3783,11 @@ authors; a human decides. The tool descriptions say so, so the boundary isn't a 
 - **Catalog governance** — yank, archive, promote, feature/un-feature, mark-Official.
 - **Audit and system-log reads** (§11/§25), and **direct person-to-person messaging** (§24 chats).
 - **The `system` install flag** (§23).
+- **Collection writes** — create, rename, delete, add or remove members (§38.9). Agents read collections; people curate them.
 
-**Accepted trade-off — tool count.** 24 tool definitions is more than the ~10–15 a client comfortably
+**Accepted trade-off — tool count.** 25 tool definitions is more than the ~10–15 a client comfortably
 carries alongside its other servers, and tool-selection accuracy degrades with surface size. This is
-the price of the four capability groups; **24 is the ceiling** — a 25th tool requires a spec change,
+the price of the four capability groups; **25 is the ceiling** (raised from 24 by §38.9) — a 26th tool requires a spec change,
 and the first response to pressure for more surface is to fold, not add.
 
 ### Resources — templates only, never an enumeration
@@ -3974,7 +3997,7 @@ since consumption is universal.
 3. **Catalog read queries exist twice** (web and worker). Bounded by extracting the visibility
    predicate and role resolution into `@skilly/shared` — and, since §34, the search parser, matching
    and ranking too (§34.13); result shapes may still drift.
-4. **24 tools** is above the comfortable client budget, and is a hard ceiling.
+4. **25 tools** is above the comfortable client budget, and is a hard ceiling.
 5. **Agent ratings enter §18's Bayesian aggregate** — marked "via MCP", not excluded or weighted.
 6. **Agent-paced writes meet human-paced review** (§8) and human-read threads (§24); web-equal rate
    limits and visible attribution are the only mitigations.
@@ -4806,6 +4829,7 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | `first_follow` | **Right Behind You** | Followed a first person (`user_follows`, §35.8). | Explore |
 | `followers_10` | **Cult Following** | Reached 10 active followers (§35.8). The one count-tier badge. | Talk |
 | `first_rating` | **Critic** | Rated a first skill (`skill_ratings`, §18). | Explore |
+| `first_collection` | **Mixtape** | Created a first skill collection (§38.8). Deleting it never revokes the badge. | Contribute |
 | `onboarded` | **Read the Manual** | Completed Quick start (`users.onboarded_at`, §23). | Explore |
 | `night_shift` | **Night Shift** | Any achievement event (below) at **00:00–04:59 in the user's own timezone** (§31.3). | Habits |
 | `weekend_warrior` | **Weekend Warrior** | Any achievement event on a **Saturday or Sunday in the user's own timezone** (§31.3). | Habits |
@@ -5006,7 +5030,7 @@ around the bubble itself (§31.10) — one number, never which badges earned it.
 ### 31.10 Level (the badge count, worn on the bubble)
 
 A **level** is nothing more than *how many of the catalog's badges a user has earned* — one number
-from 0 to the catalog size (22 today, after §35.8 added two). It introduces no new event, no new award rule and no new
+from 0 to the catalog size (23 today, after §35.8 added two and §38.8 one). It introduces no new event, no new award rule and no new
 disclosure: everything it shows, the §31.5 achievements count already showed. What it adds is
 **reach** — the number travels with the avatar, so progress is legible at a glance instead of only
 on a page someone has to go and open.
@@ -6362,7 +6386,7 @@ reaches them (invariant #3).
 - **Scope:** the pane lists **only whom *you* follow**. There is no "followers" pane (§35.1).
 
 ### 35.6 Notifications to followers
-Five new notification types, **in-app only**: the bell and the inbox, never email or webhook,
+Five new notification types (a sixth, `follow.collection_created`, is §38.8), **in-app only**: the bell and the inbox, never email or webhook,
 regardless of `email_notifications`, exactly like `achievement.earned` (§31.4). None is
 coalesced; each is one row per event per follower.
 
@@ -6446,7 +6470,7 @@ content*).
     from the existing five.
   - The hover card spells them out as *"Influencer-in-Chief — most followed, all time"* and
     *"Trendsetter — most new followers, last 30 days"*. `aria-label`s follow the same text.
-  - `GET /api/leaders` gains `followed` in its `metric` union. Up to **12** badges per user.
+  - `GET /api/leaders` gains `followed` in its `metric` union. Up to **12** badges per user (**14** after §38.8).
 - **Row actions** gain **Follow** as the fourth action, right of Reach out (§35.4).
 
 ### 35.8 Achievements (§31 extension)
@@ -7514,3 +7538,308 @@ notification preferences.
 - **Excerpts store up to 200 characters of skill content** in scan reports, behind the same
   visibility gates as the files themselves.
 - **Flagged versions stay installable.** The scanner informs; yanking stays a human decision.
+
+---
+
+## 38. Skill collections
+
+A **skill collection** is a named list of skills that **any signed-in user** assembles, such as an
+onboarding pack. The owner shares it as a link, and anyone signed in can open it as a filtered
+catalog view. It is a **social, discovery-only** feature:
+
+- **It mints nothing.** There is no "Install all". A viewer installs each skill from its own detail
+  page, which mints its own §23 `install` token. Invariants #4 and #6 are untouched.
+- **It holds only org-visible skills** (any namespace). Every member is visible to every signed-in
+  user, so one link resolves to the same list for every viewer and a collection can never carry a
+  restricted skill (invariant #3, §38.4).
+- **It changes no gate.** Review, scanning, visibility, install and RBAC never read it. Owning a
+  collection grants no authority (invariant #1).
+
+### 38.1 Semantics
+- **Owner.** Each collection has exactly one owner, the user who created it. Only the owner edits it.
+  A **platform admin** may delete any collection (moderation, for example an offensive name), and
+  that deletion is audited (§38.10). No other role has any power over a collection.
+- **Members always resolve to latest.** A collection stores skills, never versions. There is no
+  per-item pin.
+- **Eligible skill** = `visibility = 'org'`, not archived, and at least one installable
+  (published, git-served) version. This is the Featured predicate (§7) plus the org requirement.
+  Only eligible skills can be added, and a skill that stops being eligible is removed (§38.4).
+- **Order.** The catalog's normal sort applies to a collection view. There is no manual reordering.
+- **Limits** (fixed constants in `@skilly/shared/collections`, not platform settings):
+
+  | Limit | Value | Over the limit |
+  |---|---|---|
+  | Collections per owner | 50 | **409** `collection_limit` |
+  | Skills per collection | 50 | **409** `collection_full` |
+  | Name length (trimmed) | 1–60 characters | **422** |
+  | Description length | 0–500 characters, plain text | **422** |
+
+- **Names are unique per owner, ignoring case** (`lower(name)`). Two owners may use the same name.
+  A duplicate name for the same owner is **409** `name_taken`.
+- **Empty collections stay.** A collection whose last skill was unticked or evicted is kept, and the
+  profile card shows **"0 skills"** until the owner deletes it. An empty collection is excluded from
+  discovery (§38.6, §38.8).
+- **Ids are random UUIDs.** Enumeration would reveal nothing restricted, but random ids keep links
+  unguessable for free.
+
+### 38.2 Data model (migration 0082)
+- **`skill_collections`**: `id` (uuid PK, `gen_random_uuid()`), `owner_id` (FK → `users`,
+  `ON DELETE CASCADE`), `name` (text NOT NULL), `description` (text NULL), `created_at`,
+  `updated_at` (timestamptz). **Unique index `(owner_id, lower(name))`**. CHECKs on the name and
+  description lengths.
+- **`skill_collection_items`**: `collection_id` (FK → `skill_collections`, CASCADE), `skill_id`
+  (FK → `skills`, CASCADE), `added_at` (timestamptz). **PK `(collection_id, skill_id)`**, plus an
+  index on `skill_id` for eviction.
+- **Shared builders** in `@skilly/shared` (`collections.ts`): the eligibility predicate, the
+  eviction statement, the member-count expression (eligible members only) and the collection
+  matcher (§38.6). Both web and worker use them, as for `skillVisibilityWhere`.
+- **Grants:** the app role gets SELECT, INSERT, UPDATE and DELETE on both tables. These are
+  ordinary mutable user data, not audit rows.
+
+### 38.3 Adding a skill — the detail page popup
+- **Button.** The detail page's action-button row gains **"Add to collection"**, beside Share. It
+  renders **only on an eligible skill** (§38.1), for every signed-in user. It is hidden on
+  namespace-restricted, archived or not-yet-installable skills.
+- **Popup.** Clicking the button opens a popup anchored to it:
+  - **A name box** at the top, focused on open, with the placeholder *"Collection name"*.
+  - **The owner's collections as checkboxes**, ticked where this skill is already a member, sorted by
+    name. Typing in the box filters the list by case-insensitive substring.
+  - **A "Create "‹name›"" row** appears when the trimmed text matches none of the owner's names,
+    ignoring case. Choosing it (click or Enter) creates the collection **with this skill as its first
+    member** and shows it ticked. When the text exactly matches an existing name, Enter ticks that
+    collection instead of creating a duplicate.
+  - **Ticking adds and unticking removes, immediately.** Each change is its own request, followed by
+    a short toast such as *"Added to Onboarding pack"*. There is no Save button.
+  - **Limits surface inline:** at 50 collections the Create row is disabled with *"You have 50
+    collections, the maximum. Delete one to create another."* A full collection shows its checkbox
+    disabled with *"Full (50 skills)"*.
+  - **Dismissal** matches the app's other menus: an outside click, Escape, or the button again.
+- **The same component** serves every surface that adds to a collection. No other surface adds
+  skills in v1, and MCP is read-only (§38.9).
+
+### 38.4 Eviction (invariant #3)
+A skill that stops being eligible is **removed from every collection** in the same transaction as
+the change that made it ineligible. Eviction is silent: no notification and no audit row.
+
+| Trigger | Effect |
+|---|---|
+| Visibility narrows `org` → `namespace` | Evicted. |
+| Skill archived | Evicted. Unarchiving **never** re-adds it. |
+| Its last installable version is yanked | Evicted. Restoring a version **never** re-adds it. |
+| Skill permanently deleted | The FK cascade removes the items. |
+
+- **Every path** that performs these transitions calls the one shared eviction statement, so the web
+  manage routes and any worker path behave the same.
+- **Belt and braces.** Every collection read also applies the viewer's normal visibility filter
+  (`searchSkills`) and the eligibility predicate. A missed eviction can therefore never show a
+  restricted skill. Its only symptom would be a member count higher than the visible list.
+- **Promotion to `global`** keeps the skill's id, so an org-visible skill stays in its collections.
+
+### 38.5 Viewing a collection — the catalog
+There is no collection page. A collection is the **catalog filtered to it**.
+
+- **`/catalog?collection=<id>`** is the shareable link. It still requires sign-in (§2): the link
+  carries no credential and changes nothing about who may read the catalog.
+  - **A banner** above the grid reads *"Collection: ‹name› by ‹owner›"*, with the owner's
+    `UserBubble`, the description under it when present, and a **Copy link** button. It mirrors the
+    maintainer view's banner (§10).
+  - **On arrival the view ignores the viewer's saved filters** (category, tool, type, My skills),
+    like the maintainer view. Sorting, the header live filter (`?q=`) and any filter the viewer picks
+    afterwards compose with it (AND).
+  - **Dismissing the banner** (✕) drops `?collection=` and restores the normal catalog.
+  - **The owner** additionally gets a **"✕ Remove from collection"** control for each skill, which
+    unticks that membership (the same request as the popup). It sits **outside** the card, under it
+    in the grid and beside the row in the list (under the row at phone widths), so it never covers
+    the card's "new" badge, its install count or the row's edge tab, and the fixed card height (§14)
+    is untouched. Catalog listings carry each skill's id for this.
+  - **The owner and platform admins** get **Delete collection** in the banner, behind a confirm.
+  - **Unknown or deleted id:** the banner reads *"This collection no longer exists"*, and the grid is
+    the normal, unfiltered catalog.
+  - **No eligible members:** the banner shows as usual, and the grid's empty state reads *"This
+    collection has no skills yet."*
+- **`/catalog?collectionsBy=<userId>&by=<name>`** shows the **union** of every skill in that
+  person's non-empty collections (the leaderboard row action, §38.8).
+  - **The banner** reads *"Skills in collections by ‹name›"* and carries **one chip per non-empty
+    collection** (name and count). Clicking a chip navigates to `?collection=<id>`.
+  - Arrival, sorting, dismissal and the empty state work as for `?collection=`.
+- **`GET /api/skills`** gains `?collection=<id>` and `?collectionsBy=<userId>`, viewer-visibility-
+  scoped like `?maintainer=`. With `?collectionsBy=` the response also carries `collections` (that
+  person's non-empty collections as `{ id, name, skillCount }`), which feeds the banner's chips.
+
+### 38.6 Search — the header dropdown
+- **A "Collections" group** joins the header dropdown (§10), **below the 5 skill hits** and above
+  the *"See all results in catalog →"* footer.
+  - **Up to 3** non-empty collections, each showing its name, its member count and the owner's
+    `UserBubble`. Clicking one, or Enter on a highlighted one, opens `/catalog?collection=<id>`.
+  - **Matching** is a case-insensitive substring (`ILIKE`) over **name, description and the owner's
+    display name**. It deliberately does **not** use the §34 engine: different table, different
+    matcher, the §26 precedent. Member skill titles are not matched.
+  - **Ranking:** a name match beats a description or owner match, then member count descending,
+    then newest first.
+  - **The same rules as the skill dropdown:** 2-character floor, rate-limited, and **shown only
+    where the dropdown is**. It does not appear on the four live-filter pages (catalog,
+    `/installed`, `/usage`, `/requests`) or in people mode (`@`).
+  - **Excluded:** empty collections, and collections whose owner is not `status = 'active'`. Such a
+    collection still opens from a link.
+  - **Collections alone can open the dropdown.** A query with no skill hit but at least one
+    collection hit opens the dropdown with just the Collections group and the footer, instead of
+    the *"Nothing found"* bubble. The bubble shows only when both groups are empty.
+  - **Keyboard navigation** runs through the skill hits, then the collection hits, then the footer.
+- **Endpoint:** `GET /api/collections/suggest?q=` (any signed-in user, top 3).
+
+### 38.7 The profile card — "Skill collections"
+- **Where:** a collapsible **"Skill collections (N)"** card on `/profile`, after the **Following**
+  section. It is collapsed by default, like *People I follow*. `N` counts all the user's
+  collections, empty ones included.
+- **Each row** shows:
+  - the **name**, editable inline (owner-only; the §38.1 rules apply, so a duplicate shows the
+    `name_taken` error inline);
+  - the **description**, editable inline, with the placeholder *"Add a description"*;
+  - the **skill count** (*"N skills"*, *"0 skills"* for an empty one) and the created date
+    (`useDateFmt()`, viewer's timezone);
+  - a **View skills** button → `/catalog?collection=<id>`;
+  - a **Copy link** button, copying the absolute `/catalog?collection=<id>` URL with the copy-toast;
+  - a **Delete** button, behind a confirm naming the collection. Deletion is a hard delete of the
+    collection and its items. Notifications already sent are not retracted (§38.8).
+- **Order:** newest first.
+- **Empty state:** *"No collections yet. Use **Add to collection** on any skill page."*
+- **Owner-only.** The profile page is the user's own. Other people reach someone's collections
+  through links, the header dropdown and the leaderboard row action (§38.8).
+
+### 38.8 Extensions to other features
+- **Notification `follow.collection_created` (§35.6).** The sixth `follow.*` type, with the same
+  rules: in-app only (never email or webhook), one row per follower, built by the shared recipient
+  builder, not coalesced, evaluated at insert time.
+  - **Fires** once, inside the transaction that creates the collection. Creation always carries a
+    first skill, so a collection is never empty when the notification lands. Adding skills,
+    renaming and editing the description notify nobody.
+  - **Visibility gate:** none (*—*), since every member is org-visible.
+  - **Dedup:** none needed. No other notification describes this event.
+  - **Payload:** `actorId`, `actorName`, `collectionId`, `collectionName`.
+
+  | Type | Label | Body sentence | CTA → link |
+  |---|---|---|---|
+  | `follow.collection_created` | New collection from someone you follow | {actorName} created the collection "{collectionName}". | View the collection → `/catalog?collection={collectionId}` |
+
+  A later delete or rename leaves the row as written. Its link then shows the *"This collection no
+  longer exists"* banner, or the current name.
+- **Achievement `first_collection` — "Mixtape" (§31).** Group **Contribute**. Earned when the user
+  **creates** their first collection. Deleting it never revokes the badge (§31: badges are never
+  lost).
+  - Awarded by a best-effort `tryAward` right after the create, which counts as a **Habits event**
+    for the creator (§31.3).
+  - The catalog grows from 22 to **23**. Existing Heroes stay Heroes (`hero_at` is permanent,
+    §31.10), and their bars read 22/23 until they earn it.
+  - Earning it fires `achievement.earned` and therefore `follow.achievement` to the earner's
+    followers, as for every badge.
+  - **No backfill:** the tables start empty.
+- **Leaderboard (§21).**
+  - **A seventh stat, "collections":** the number of the user's collections that currently hold
+    **at least 3 eligible skills**. The threshold stops one-click collections from manufacturing
+    standing. **All-time** = the current count. **30d** = such collections created in the last
+    30 days. Rendered as `N collection(s)` after "followers", only when greater than 0.
+  - **A seventh sort, *Curated*,** appended to the toggle. Its tie-break chain: collections desc,
+    then the other six metrics desc in their existing order, then name asc. The six existing sorts
+    append **collections desc** as their last numeric tie-breaker, before name.
+  - **Leader badge metric `curated`:** 🗂 **Curator** in both windows. The all-time variant carries
+    the standard crown. It uses a new hue token `--badge-curate`, defined for light and dark themes
+    and distinct from the existing six. The hover card spells them out as *"Curator — most
+    collections, all time"* and *"Curator — most new collections, last 30 days"*. `GET /api/leaders`
+    gains `curated`. Up to **14** badges per user.
+  - **A fifth row action, Collections,** placed after Requests: `/catalog?collectionsBy=<userId>&by=<name>`
+    (§38.5), on every row including your own, shown even at 0.
+  - The board still exposes **no skill identity**: the stat is a count, and the row action lands on
+    the visibility-filtered catalog.
+
+### 38.9 MCP — `get_collections` (§29)
+One new **core read** tool, read-only, so the surface grows from 24 to **25** and the ceiling moves
+with it.
+
+| Argument | Result |
+|---|---|
+| none | The caller's own collections: id, name, description, member count, created date, link. |
+| `id` | That collection (any owner): name, description, owner name, link, and its **eligible, visibility-filtered** members as `{ ns, slug, title, latestInstallable }`. Unknown id → a clear not-found error. |
+| `query` | Up to 10 non-empty collections matched exactly as §38.6, same fields as the no-argument form plus the owner name. |
+
+- An agent installs members one at a time with the existing `install_skill`. There is no bulk
+  install, here or in the browser.
+- **Excluded:** creating, renaming, deleting a collection, and adding or removing members. Agents
+  read collections; people curate them.
+
+### 38.10 Lifecycle, governance & audit
+- **Not audited:** creating, renaming, editing, adding, removing, the owner's own delete, and
+  eviction. These are social actions, like ratings and watches.
+- **Audited:** a platform admin deleting **someone else's** collection writes
+  **`collection.deleted`** (actor, `before` = owner id, name, member count). An admin deleting their
+  own collection is not audited.
+- **GDPR erasure (§4):** the user's collections are **deleted** with their items. They are never
+  transferred, not even with *"Replace maintainer to"*. Their leaderboard collections stat goes with
+  them.
+- **Deprovision (`status = 'inactive'`):** collections are kept and their links still open. They
+  drop out of the header dropdown and MCP `query` results, and the leaderboard hides the owner as
+  it does for every stat. Re-enabling restores everything.
+- **Skill lifecycle:** see eviction (§38.4).
+
+### 38.11 API surface
+All endpoints require a signed-in user and are rate-limited like the other social writes.
+
+| Endpoint | Who | Behavior |
+|---|---|---|
+| `GET /api/collections/mine?skillId=` | any | The caller's collections with counts. With `skillId`, each row carries `contains` (the popup's ticks). |
+| `POST /api/collections` `{ name, skillId }` | any | Creates a collection with its first member. **201**; 409 `collection_limit` / `name_taken`; 422 invalid name or ineligible skill. Fires §38.8's notification and badge. |
+| `GET /api/collections/:id` | any | Name, description, owner `{ id, name }`, created date, eligible member count, plus the caller's `isOwner` and `canDelete` (owner or platform admin) for the banner. **404** unknown. |
+| `PATCH /api/collections/:id` `{ name?, description? }` | owner | 409 `name_taken`; 422 invalid. **403** non-owner. |
+| `DELETE /api/collections/:id` | owner, platform admin | Hard delete. Audited when the actor is not the owner. |
+| `PUT /api/collections/:id/skills/:skillId` | owner | Adds a member; idempotent. 409 `collection_full`; 422 ineligible skill. |
+| `DELETE /api/collections/:id/skills/:skillId` | owner | Removes a member; idempotent. |
+| `GET /api/collections/suggest?q=` | any | The header dropdown group (§38.6). |
+| `GET /api/skills?collection=` / `?collectionsBy=` | any | The catalog views (§38.5). |
+
+- **404 vs 403:** a non-owner who edits an existing collection gets **403**. Collections are not
+  secret, so this is no oracle.
+
+### 38.12 Migration 0082
+- Creates `skill_collections` and `skill_collection_items` with their indexes, CHECKs and grants
+  (§38.2).
+- No backfill. No change to `notifications` (the payload is JSONB).
+
+### 38.13 Tests (ship with the change, §16 discipline)
+- **Unit:**
+  - name validation: trimming, the 1–60 bounds, case-insensitive uniqueness, description bound;
+  - the eligibility predicate: org vs namespace, archived, no installable version;
+  - the collection matcher and its ranking (name beats description beats owner);
+  - the leaderboard count with the 3-skill threshold, both windows, and the *Curated* tie-break chain;
+  - the `follow.collection_created` renderer row and `first_collection` catalog entry.
+- **Integration:**
+  - create with a first skill, the 50-collection and 50-skill limits, `name_taken`, ineligible skill
+    422, owner-only edits (403), admin delete audited and owner delete not;
+  - eviction on each trigger (visibility narrowing, archive, last-version yank, hard delete), and no
+    re-add on unarchive or restore;
+  - a collection read never returns a namespace-restricted skill, even with an item row forced past
+    eviction;
+  - `?collection=` and `?collectionsBy=` catalog results, unknown id;
+  - suggest: 2-char floor, empty and inactive-owner exclusion, top 3;
+  - the follower fan-out (active followers only, paused followee sends nothing) and the badge award;
+  - erasure deletes the user's collections; deprovision keeps them;
+  - MCP `get_collections` in its three forms, visibility-filtered members;
+  - the migration.
+- **E2e:**
+  1. On an org-visible skill, **Add to collection** → type a new name → Create. The toast shows, and
+     reopening the popup shows it ticked. On a namespace-restricted skill the button is absent.
+  2. The profile's **Skill collections** card lists it. Rename it inline, then **View skills** lands
+     on the catalog with the banner and only that skill.
+  3. A second user opens the copied link and sees the same list. The header dropdown finds the
+     collection by name and opens it.
+  4. The follower sees `follow.collection_created` in the bell, and the creator holds *Mixtape*.
+  5. Delete the collection from the card. The old link shows *"This collection no longer exists"*.
+
+### 38.14 Accepted trade-offs
+1. **No bulk install.** A ten-skill onboarding pack is ten clicks. Dropped by decision: one install
+   per detail page keeps every install a deliberate, per-skill act.
+2. **Org-visible only.** A team cannot curate its own restricted skills. Allowing it would need
+   per-viewer filtering or a collection-level visibility, both rejected for v1.
+3. **A substring matcher, not the §34 engine.** No stemming or typo tolerance on collection names.
+4. **The leaderboard stat is gameable within bounds.** Fifty collections of three skills each is
+   possible, and the threshold only raises the cost.
+5. **Silent eviction.** An owner may find a skill gone from a collection without being told.
+6. **Not a survey feature.** Collections do not join the §36 first-use catalog in v1.
