@@ -495,6 +495,11 @@ export async function setUserDirectoryHidden(userId: string, hidden: boolean): P
 
 /** §24 skill-discussion opt-out. Row-level like the two above, but gates EVERY recipient route
  *  (watchers too) — the only way to keep watching a skill for versions while muting its chatter. */
+/** §37.9: the content-check opt-out — row-level like the drift toggle (no row is minted at all). */
+export async function setUserContentRiskNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set content_risk_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
 export async function setUserDiscussionNotifications(userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set discussion_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }

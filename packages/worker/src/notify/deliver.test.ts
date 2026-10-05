@@ -304,3 +304,25 @@ test("sweep: follow.* rows are in-app only — delivered without any email (§35
   assert.deepEqual(delivered.sort(), ["f1", "n2"]);
   assert.equal(email.sent.length, 1); // only the non-follow row emailed
 });
+
+test("renderNotification: skill.content_risk names the skill, version and rules, links to the card (§37.9)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const r = renderNotification({
+    type: "skill.content_risk",
+    payload: { namespaceSlug: "team-a", skillSlug: "pdf", semver: "1.2.0", rules: ["cr-hidden-unicode", "cr-credential-exfil"] },
+  });
+  assert.equal(r.subject, "Skilly - Content check flagged a skill");
+  assert.match(r.text, /The content check flagged team-a\/pdf v1\.2\.0: Hidden characters, Credential exfiltration\./);
+  assert.match(r.text, /\[Review the findings\]\(https:\/\/skilly\.test\/skills\/team-a\/pdf#content-risk\)/);
+  assert.equal(r.webhook.event, "skill.content_risk");
+  assert.deepEqual(r.webhook.rules, ["cr-hidden-unicode", "cr-credential-exfil"]);
+  assert.doesNotMatch(r.text, /[{}]/); // never a JSON dump
+});
+
+test("renderNotification: skill.drift adds a sentence when the upstream change trips the content check (§37.5)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const plain = renderNotification({ type: "skill.drift", payload: { namespaceSlug: "team-a", skillSlug: "pdf", ref: "v1" } });
+  assert.doesNotMatch(plain.text, /content check/);
+  const flagged = renderNotification({ type: "skill.drift", payload: { namespaceSlug: "team-a", skillSlug: "pdf", ref: "v1", contentRisk: true } });
+  assert.match(flagged.text, /has drifted from its pinned upstream ref \(v1\)\. The upstream change also trips the content check\./);
+});

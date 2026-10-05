@@ -1,7 +1,11 @@
 // Security scanning — ADVISORY findings surfaced to reviewers (§6, §9). Pluggable: orgs
-// can add their own Scanner (e.g. ClamAV in the worker, Snyk, internal AV). These two
-// pure scanners (secret + static heuristics) are the bundled defaults and need no I/O.
+// can add their own Scanner (e.g. ClamAV in the worker, Snyk, internal AV). The pure
+// scanners (secret, static heuristics, content risk §37) are the bundled defaults and need no I/O.
 import type { BundleEntry } from "./validate.js";
+import { decodeScanText } from "./scan-text.js";
+import { contentRiskScanner } from "./content-risk.js";
+
+export { decodeScanText };
 
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 
@@ -11,6 +15,12 @@ export interface ScanFinding {
   rule: string;
   message: string;
   path?: string;
+  /** 1-based line of the match (content-risk findings, §37.3). */
+  line?: number;
+  /** At most 200 chars of the matched line, hidden characters shown as ⟨U+XXXX⟩ (§37.3). */
+  excerpt?: string;
+  /** The content-check ruleset that produced this finding (content-risk only, §37.2). */
+  ruleset?: number;
 }
 
 export interface Scanner {
@@ -18,12 +28,6 @@ export interface Scanner {
   scan(files: BundleEntry[]): ScanFinding[] | Promise<ScanFinding[]>;
 }
 
-// Skip files that look binary (lots of NUL bytes) — scanners are text-oriented.
-function asText(bytes: Uint8Array): string | null {
-  const sample = bytes.subarray(0, 8000);
-  for (const b of sample) if (b === 0) return null;
-  return new TextDecoder().decode(bytes);
-}
 
 interface Pattern {
   rule: string;
@@ -51,7 +55,7 @@ const HEURISTIC_PATTERNS: Pattern[] = [
 function scanWith(name: string, patterns: Pattern[], files: BundleEntry[]): ScanFinding[] {
   const findings: ScanFinding[] = [];
   for (const f of files) {
-    const text = asText(f.bytes);
+    const text = decodeScanText(f.bytes);
     if (text == null) continue;
     for (const p of patterns) {
       if (p.re.test(text)) {
@@ -72,7 +76,7 @@ export const heuristicScanner: Scanner = {
   scan: (files) => scanWith("static-heuristics", HEURISTIC_PATTERNS, files),
 };
 
-export const PURE_SCANNERS: Scanner[] = [secretScanner, heuristicScanner];
+export const PURE_SCANNERS: Scanner[] = [secretScanner, heuristicScanner, contentRiskScanner];
 
 export async function runScanners(files: BundleEntry[], scanners: Scanner[]): Promise<ScanFinding[]> {
   const results = await Promise.all(scanners.map((s) => s.scan(files)));

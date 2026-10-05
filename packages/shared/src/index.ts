@@ -12,6 +12,8 @@ export * from "./validate.js";
 export * from "./linediff.js";
 export * from "./content-digest.js";
 export * from "./scan.js";
+export * from "./content-risk.js";
+export * from "./content-risk-status.js";
 export * from "./archive.js";
 export * from "./download.js";
 export * from "./metrics.js";

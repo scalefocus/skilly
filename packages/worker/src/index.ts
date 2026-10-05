@@ -29,6 +29,7 @@ import { recomputeRelatedSkills } from "./related.js";
 import { recordDailyActiveUsers } from "./dau.js";
 import { rollupRum, pruneRum } from "./rum.js";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
+import { sweepContentRisk } from "./scan/contentRisk.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
 import { sweepSearchIndex, reindexSearchLanguage } from "./searchIndex.js";
 import { mcpRouter } from "./mcp/server.js";
@@ -298,6 +299,25 @@ async function leaderLoops(): Promise<void> {
   };
   await backfill();
   setInterval(backfill, Number(process.env.CONTENT_BACKFILL_INTERVAL_MS ?? 3_600_000)); // 1h
+
+  // Content-risk re-scan (§37.5): check every published version at the current ruleset — the
+  // backfill after this ships, and again after any ruleset bump. Batched; never overlaps itself;
+  // started without awaiting so a long first pass can't hold up the loops below.
+  let contentSweepRunning = false;
+  const contentSweep = async () => {
+    if (!isLeader || contentSweepRunning) return;
+    contentSweepRunning = true;
+    try {
+      const n = await sweepContentRisk(pool, store);
+      if (n > 0) console.log(JSON.stringify({ level: "info", msg: "content-risk sweep re-scanned artifacts", count: n }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "content-risk sweep failed", err: String(err) }));
+    } finally {
+      contentSweepRunning = false;
+    }
+  };
+  void contentSweep();
+  setInterval(contentSweep, Number(process.env.CONTENT_RISK_SWEEP_INTERVAL_MS ?? 600_000)); // 10 min
 
   // Search index (§34.9/§34.10): first rebuild any vectors built with another search language (a
   // language switch), then extract SKILL.md text for pending versions — the post-migration backfill,
