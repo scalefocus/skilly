@@ -10,6 +10,7 @@ import {
   SURVEY_ROTATING_QUESTIONS,
   SURVEY_FREE_TEXT_MAX,
   SURVEY_SELF_COOLDOWN_DAYS,
+  colophonFeedbackAction,
   composeSurveyOffer,
   isSurveyEligible,
   isSurveyFallbackDue,
@@ -167,6 +168,23 @@ test("on-demand gate: platform switch, status and the 7-day cooldown; nothing el
   // The gate has no opt-out / grace / 30-day-floor inputs at all: those are bypassed by design.
   assert.equal(selfSurveyNextAt(null, NOW), null);
   assert.equal(selfSurveyNextAt(ago(8), NOW), null);
+});
+
+test("colophon 'Have your say': signed in + onboarded only; reopen an open offer, else start unless cooling down (§36.16)", () => {
+  const s = (over: Partial<Parameters<typeof colophonFeedbackAction>[0]> = {}) =>
+    ({ signedIn: true, onboarded: true, selfSurvey: { nextAt: null }, offerOpen: false, ...over });
+  assert.equal(colophonFeedbackAction(s(), NOW), "start");
+  assert.equal(colophonFeedbackAction(s({ signedIn: false }), NOW), null);
+  assert.equal(colophonFeedbackAction(s({ onboarded: false }), NOW), null);
+  assert.equal(colophonFeedbackAction(s({ selfSurvey: null }), NOW), null); // platform switch off
+  assert.equal(colophonFeedbackAction(s({ selfSurvey: null, offerOpen: true }), NOW), null);
+  const later = new Date(NOW.getTime() + DAY).toISOString();
+  assert.equal(colophonFeedbackAction(s({ selfSurvey: { nextAt: later } }), NOW), null); // cooldown
+  assert.equal(colophonFeedbackAction(s({ selfSurvey: { nextAt: ago(1).toISOString() } }), NOW), "start"); // cooldown over
+  // An open offer stays reachable, even while the cooldown runs.
+  assert.equal(colophonFeedbackAction(s({ offerOpen: true }), NOW), "reopen");
+  assert.equal(colophonFeedbackAction(s({ offerOpen: true, selfSurvey: { nextAt: later } }), NOW), "reopen");
+  assert.equal(colophonFeedbackAction(s({ offerOpen: true, signedIn: false }), NOW), null);
 });
 
 test("on-demand offers: no feature, general questions only, 7-day expiry (§36.16)", () => {

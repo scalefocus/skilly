@@ -18,7 +18,7 @@ import { resolveStaticPageLabel } from "../lib/pageLabel";
 import { CHANGELOG } from "../app/whats-new/changelog";
 import { achievementDef } from "@skilly/shared/achievements";
 import { collectionPath } from "@skilly/shared/collections";
-import type { SurveyOfferView, SurveyVia } from "@skilly/shared/survey";
+import { colophonFeedbackAction, type SurveyOfferView, type SurveyVia } from "@skilly/shared/survey";
 import { SurveyCard } from "./SurveyCard";
 import { SURVEY_OFFER_EVENT, SURVEY_PREF_EVENT, SURVEY_REOPEN_EVENT, SURVEY_START_EVENT, SURVEY_STATE_EVENT, setSurveyCanShow, setSurveyReady } from "../lib/surveyClient";
 
@@ -356,6 +356,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
     return () => setSurveyCanShow(() => false);
   }, []);
+  // §36.16 the sidebar colophon's "Have your say": hidden (null), start, or reopen the open offer.
+  const colophonAction = colophonFeedbackAction(
+    { signedIn: status === "authenticated", onboarded: onboarded === true, selfSurvey, offerOpen: openSurvey !== null },
+    new Date(),
+  );
   const openSurveyRef = useRef<SurveyOfferView | null>(null);
   openSurveyRef.current = openSurvey;
   useEffect(() => {
@@ -841,7 +846,26 @@ export function AppShell({ children }: { children: ReactNode }) {
             Created by{" "}
             <a href="https://www.scalefocus.com" target="_blank" rel="noreferrer noopener">Scalefocus</a>
           </span>
-          <span className="colophon-sub">powered by the community</span>
+          <span className="colophon-sub">
+            powered by the community
+            {colophonAction && (
+              <>
+                {" · "}
+                {/* §36.16: start an on-demand survey, or reopen the open offer like "Take the survey". */}
+                <button
+                  type="button"
+                  className="colophon-link"
+                  data-testid="colophon-have-your-say"
+                  onClick={() => {
+                    setNavOpen(false);
+                    window.dispatchEvent(new Event(colophonAction === "reopen" ? SURVEY_REOPEN_EVENT : SURVEY_START_EVENT));
+                  }}
+                >
+                  Have your say
+                </button>
+              </>
+            )}
+          </span>
         </div>
 
         {/* Scroll affordance: only while there's more menu below the fold. */}

@@ -6816,6 +6816,8 @@ release.
 - The Profile page's survey section (§36.7) shows the same **Take the survey** button while an offer
   is open (in place of *Give feedback now*, §36.16).
 - An open **on-demand** offer (§36.16) gets the same two entries.
+- The sidebar colophon's **Have your say** link (§36.16) also reopens an open offer, random or
+  on-demand, the same way.
 - Both disappear once the offer ends (§36.1 expiry). `GET /api/me` carries the open offer as
   `openSurvey` (resolved questions included, or `null`), so the menu needs no extra request.
 
@@ -7068,7 +7070,7 @@ There is **no MCP tool** for surveys: they are a web-UI affordance.
 
 ### 36.16 On-demand feedback ("Give feedback now", migration 0080)
 Besides the random prompt, a user can **ask for the survey themselves** at any time from the
-profile or the account menu. The on-demand survey uses the same card, questions and anonymous
+profile, the account menu or the sidebar colophon. The on-demand survey uses the same card, questions and anonymous
 storage as the random one. It differs in the points below.
 
 - **Gates.** An on-demand survey **bypasses** the 1-in-3 roll, the 30-day floor, the 14-day grace
@@ -7133,6 +7135,23 @@ storage as the random one. It differs in the points below.
   survey the same way as the profile button. It is **hidden** during the cooldown (a disabled menu
   item explains nothing), while any offer is open (*Take the survey* is already the first item,
   §36.5), and while the platform switch is off.
+- **The sidebar colophon** (the small print at the foot of the sidebar: version, *Created by
+  Scalefocus*, *powered by the community*) gains a **Have your say** link at the end of its last
+  line: *"powered by the community · Have your say"*. Only *Have your say* is the link, styled like
+  the colophon's existing *Scalefocus* link. It is a `<button type="button">` styled as that link,
+  with `data-testid="colophon-have-your-say"`.
+  - **Signed in only.** Signed out, or while the session is still loading, the line stays plain
+    *"powered by the community"*, with no separator and no link.
+  - **Hidden** (the line goes back to plain) while the platform switch is off (`selfSurvey` is
+    `null`), during the on-demand cooldown (the same rule as the menu's *Give feedback*), and while
+    the user is not yet onboarded (`onboardedAt` is `null`: the Quick start gate owns that state).
+  - **No offer open:** the click starts an on-demand survey exactly like *Give feedback*: `POST
+    /api/me/survey/start`, the card opens with `via = 'popup'`, and the cooldown is stamped.
+  - **An offer is open** (random or on-demand): the link **stays visible** and the click **reopens
+    that offer** exactly like *Take the survey* (§36.5): the same questions, starting blank,
+    `via = 'menu'`, no stamp, nothing counted.
+  - On mobile, the click also closes the nav drawer so the card isn't hidden behind it.
+  - No new endpoint, counter, `via` value or audit row. The colophon is just another way in.
 - **The random opt-out doesn't end an on-demand offer.** `PATCH /api/me { surveysEnabled: false }`
   (and *Don't ask me again*) clears the open offer **only when it is a random one**. An open
   on-demand offer, and its *Take the survey* entries, survive.
@@ -7201,6 +7220,9 @@ storage as the random one. It differs in the points below.
     2. Closing an on-demand card shows *Take the survey* in the menu, and reopening starts with
        *skilly in general*.
     3. An admin sees the **Self-initiated** funnel line and the **Source** filter on Monitoring.
+    4. The colophon's **Have your say** is absent when signed out. Signed in, it opens the on-demand
+       card. After closing, it is still shown and reopens the same offer. After a submit (the
+       cooldown running), the line reads plain *"powered by the community"*.
 
 ---
 
