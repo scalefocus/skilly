@@ -783,6 +783,8 @@ export async function createMcpProposal(
     // §31 Homegrown / Finger Pointer — same artifact-shape rule as the web tier and migration 0071.
     const proposedPointer = !!payload.pointer; // MCP proposals never carry a Keep-current-files reuse
     await awardAchievement(client, userId, proposedPointer ? "first_pointer_proposal" : "first_hosted_proposal");
+    // §31.11 Encore — a new version of an existing skill (MCP never proposes a global promotion).
+    if (target.targetSkillId) await awardAchievement(client, userId, "first_version_proposal", { noHabits: true });
     await client.query("commit");
     M.mcpWrites.inc({ kind: "proposal" });
     return {

@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.19.0",
+    date: "2026-10-06",
+    summary:
+      "A new achievement, Encore 🎤, is earned the first time you propose a new version of an existing skill — from the skill's page, over MCP, or by publishing one directly. It counts on submission, so it's yours even if the version isn't accepted. If you've done this before, it's already in your hall.",
+  },
+  {
     version: "2.18.0",
     date: "2026-10-06",
     summary:

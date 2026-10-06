@@ -113,7 +113,7 @@ test("achievements: hall read model — self / other / hidden / inactive / unkno
   assert.ok(asViewer);
   assert.equal(asViewer.hidden, false);
   assert.deepEqual(asViewer.earned.map((e) => e.key).sort(), ["first_message", "first_request"]);
-  assert.equal(asViewer.total, 23);
+  assert.equal(asViewer.total, 24);
   assert.equal(await achievementCountForCard(owner), 2);
 
   // Opt-out: others get the private shape; the owner still sees everything.
@@ -265,7 +265,7 @@ test("levels: the notification carries the level the badge moved you to", { skip
   )).rows.map((r) => r.payload);
   assert.deepEqual(payloads.map((p) => p.level), [1, 2]);
   assert.deepEqual(payloads.map((p) => p.hero), [false, false]);
-  assert.equal(payloads[0]!.total, 23);
+  assert.equal(payloads[0]!.total, 24);
 });
 
 test("levels: the hall payload carries heroAt, and withholds it from a non-self viewer", { skip: !enabled }, async () => {

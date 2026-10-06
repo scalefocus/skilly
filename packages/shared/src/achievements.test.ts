@@ -18,8 +18,8 @@ import {
   habitKeysFor,
 } from "./achievements.js";
 
-test("catalog: 23 badges, unique keys, every field populated, known groups", () => {
-  assert.equal(ACHIEVEMENTS.length, 23);
+test("catalog: 24 badges, unique keys, every field populated, known groups", () => {
+  assert.equal(ACHIEVEMENTS.length, 24);
   assert.equal(new Set(ACHIEVEMENT_KEYS).size, ACHIEVEMENTS.length);
   for (const a of ACHIEVEMENTS) {
     assert.match(a.key, /^[a-z][a-z0-9_]*$/, a.key); // `…_10` count-tier keys allowed (§31.1, §35.8)
@@ -34,6 +34,13 @@ test("catalog: lookup helpers", () => {
   assert.equal(isAchievementKey("night_shift"), true);
   assert.equal(isAchievementKey("installs_10"), false);
   assert.equal(isAchievementKey(42), false);
+});
+
+test("catalog: Encore sits in Contribute directly after Sequel (§31.11)", () => {
+  const def = achievementDef("first_version_proposal");
+  assert.equal(def?.name, "Encore");
+  assert.equal(def?.group, "Contribute");
+  assert.equal(ACHIEVEMENT_KEYS.indexOf("first_version_proposal"), ACHIEVEMENT_KEYS.indexOf("first_new_version") + 1);
 });
 
 test("triple_threat: due only when all three channel badges are held", () => {
@@ -107,15 +114,15 @@ test("habitKeysFor: both, one, or none", () => {
 
 test("ACHIEVEMENT_TOTAL is the catalog size — the level's denominator", () => {
   assert.equal(ACHIEVEMENT_TOTAL, ACHIEVEMENTS.length);
-  assert.equal(ACHIEVEMENT_TOTAL, 23);
+  assert.equal(ACHIEVEMENT_TOTAL, 24);
 });
 
 test("levelLabel / levelAriaLabel: the level is the count, Hero is the stamp", () => {
-  assert.equal(levelLabel(0, false), "Level 0 — 0 of 23");
-  assert.equal(levelLabel(7, false), "Level 7 — 7 of 23");
-  assert.equal(levelLabel(23, true), "Hero — 23 of 23");
-  assert.equal(levelAriaLabel(7, false), "Level 7 of 23");
-  assert.equal(levelAriaLabel(23, true), "Hero — 23 of 23");
+  assert.equal(levelLabel(0, false), "Level 0 — 0 of 24");
+  assert.equal(levelLabel(7, false), "Level 7 — 7 of 24");
+  assert.equal(levelLabel(24, true), "Hero — 24 of 24");
+  assert.equal(levelAriaLabel(7, false), "Level 7 of 24");
+  assert.equal(levelAriaLabel(24, true), "Hero — 24 of 24");
 });
 
 test("a grown catalog never demotes a Hero (§31.10 'never demote')", () => {
