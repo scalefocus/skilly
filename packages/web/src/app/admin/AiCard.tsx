@@ -453,9 +453,9 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
           {data.features.length === 0 ? (
             <p style={{ fontSize: 13, color: "var(--muted)", margin: 0 }} data-testid="ai-no-features">No skilly features use the AI integration yet.</p>
           ) : (
-            <ul style={{ fontSize: 13, margin: 0, paddingLeft: 18 }}>
+            <ul style={{ fontSize: 13, margin: 0, paddingLeft: 18 }} data-testid="ai-features">
               {data.features.map((f) => (
-                <li key={f.key}>
+                <li key={f.key} data-testid="ai-feature" data-feature={f.key}>
                   <strong>{f.label}</strong> — {f.egress} <span className="muted">({f.spec})</span>
                 </li>
               ))}

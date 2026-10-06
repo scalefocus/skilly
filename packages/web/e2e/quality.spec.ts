@@ -77,6 +77,10 @@ async function publish(page: Parameters<typeof devSignIn>[0], slug: string, md: 
 test.describe.serial("skill quality rating (§41)", () => {
   test("upload lint → review section → published card, detail card, re-assess, catalog sort and facet", async ({ page }) => {
     await devSignIn(page);
+    // Rules-only by construction: a configured AI integration (e.g. left by another spec) would queue
+    // an AI assessment and change the mode line. Best-effort: 204 removed, 404 nothing configured,
+    // 409 no AI_TOKEN_ENC_KEY on this server (so AI can't be enabled anyway).
+    await page.request.delete("/api/admin/ai");
     const stamp = Date.now().toString(36);
     const badSlug = `e2e-quality-bad-${stamp}`;
     const goodSlug = `e2e-quality-good-${stamp}`;

@@ -67,6 +67,12 @@ async function openCard(page: Page): Promise<boolean> {
   return true;
 }
 
+// Never leave a configured (stub) integration behind, even when an assertion fails mid-test: later
+// specs (e.g. quality, §41) behave differently while AI is enabled.
+test.afterEach(async ({ page }) => {
+  await page.request.delete("/api/admin/ai").catch(() => {});
+});
+
 test("configure Open WebUI: models, test, rejected save, save, enable, remove", async ({ page }) => {
   test.skip(!(await openCard(page)), "AI_TOKEN_ENC_KEY is not set on the dev server");
   const c = card(page);
@@ -107,7 +113,9 @@ test("configure Open WebUI: models, test, rejected save, save, enable, remove", 
   await clickAndAwait(page, () => sw.click(), "/api/admin/ai", { method: "PATCH" });
   await expect(header(page)).toContainText("Operational");
   await expect(c.getByTestId("ai-usage")).toContainText("Test");
-  await expect(c.getByTestId("ai-no-features")).toBeVisible();
+  // The egress notice lists every registered AI task (§40.4) — the first is the quality assessment (§41.5).
+  await expect(c.locator('[data-testid="ai-feature"][data-feature="skill_quality"]')).toContainText("Skill quality assessment");
+  await expect(c.getByTestId("ai-no-features")).toHaveCount(0);
 
   // Remove → Not configured.
   const dialog = acceptNextDialog(page);
