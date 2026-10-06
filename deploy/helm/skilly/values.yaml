@@ -59,6 +59,9 @@ secrets:
   # §12 Graph email service account: encrypts the stored OAuth tokens (32 bytes base64,
   # `openssl rand -base64 32`). Empty = the admin "Set email service account" flow is disabled.
   emailTokenEncKey: ""
+  # §40 AI integration: encrypts the AI provider token (32 bytes base64, `openssl rand -base64 32`).
+  # Empty = the Administration "AI integration" card is disabled.
+  aiTokenEncKey: ""
   s3SecretKey: "change-me-minio"
 
 # ── Non-secret config ────────────────────────────────────────────────────────

@@ -98,6 +98,10 @@
     "./freshness": {
       "types": "./dist/freshness.d.ts",
       "default": "./dist/freshness.js"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.ts",
+      "default": "./dist/ai.js"
     }
   },
   "scripts": {

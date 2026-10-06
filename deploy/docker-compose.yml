@@ -120,6 +120,8 @@ services:
       EMAIL_TOKEN_ENC_KEY: ${EMAIL_TOKEN_ENC_KEY:-}
       ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
+      # §40 AI integration: encrypts/decrypts the stored provider token (web + worker).
+      AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
       SMTP_HOST: ${SMTP_HOST:-}
     restart: unless-stopped
     expose:
@@ -168,6 +170,8 @@ services:
       EMAIL_TOKEN_ENC_KEY: ${EMAIL_TOKEN_ENC_KEY:-}
       ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
+      # §40 AI integration: encrypts/decrypts the stored provider token (web + worker).
+      AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       POINTER_REFRESH_INTERVAL_MS: ${POINTER_REFRESH_INTERVAL_MS:-86400000}
       # Entra Graph credentials for group membership reconciliation (§4b).

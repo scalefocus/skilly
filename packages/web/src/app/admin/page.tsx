@@ -10,6 +10,7 @@ import { afterToggle } from "../../lib/lastWatched";
 import { EmailCard } from "./EmailCard";
 import { SystemBannerCard } from "./SystemBannerCard";
 import { McpCard } from "./McpCard";
+import { AiCard } from "./AiCard";
 import { SearchCard } from "./SearchCard";
 import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
@@ -38,7 +39,7 @@ const NS_PAGE = 100;
 // persists it per-card (localStorage), and drives Expand all / Collapse all. Cards start collapsed.
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
-  "systembanner", "mcp", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
+  "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
   "achievements", "search", "contentrisk",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
@@ -695,6 +696,9 @@ export default function AdminPage() {
 
       {/* Email notifications (§12) — collapsible like every card */}
       <McpCard open={cards.open.mcp} onToggle={() => cards.toggle("mcp")} />
+
+      {/* AI integration (§40) — the one external LLM provider connection */}
+      <AiCard open={cards.open.ai} onToggle={() => cards.toggle("ai")} />
 
       {/* Search (§34) — the search language and the synonym groups */}
       <SearchCard open={cards.open.search} onToggle={() => cards.toggle("search")} />
