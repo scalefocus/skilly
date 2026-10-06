@@ -12,7 +12,7 @@
 // The SAME-namespace+same-slug case is handled earlier by the slug-uniqueness 409; this catches
 // the cross-namespace and identical-content cases that slug-uniqueness misses.
 import type { Pool } from "pg";
-import { normalizeOriginUrl, normalizeSubdir, type EffectiveAccess } from "@skilly/shared";
+import { normalizeOriginUrl, normalizeSubdir, skillVisibilityWhere, type EffectiveAccess } from "@skilly/shared";
 import { pool } from "./db";
 
 export interface DuplicateMatch {
@@ -33,11 +33,9 @@ export interface DuplicateQuery {
   excludeSkillId?: string | null;
 }
 
-/** Visibility predicate mirroring searchSkills (#3): admins see all; others see org + own ns. */
+/** Invariant #3 via the ONE shared predicate (org ∪ own namespaces ∪ §42 grants); admins see all. */
 function visibilityClause(access: EffectiveAccess, params: unknown[]): string {
-  if (access.isPlatformAdmin) return "true";
-  params.push([...access.namespaceRoles.keys()]);
-  return `(s.visibility = 'org' or s.namespace_id = any($${params.length}::uuid[]))`;
+  return skillVisibilityWhere(access, params, "s") ?? "true";
 }
 
 /**

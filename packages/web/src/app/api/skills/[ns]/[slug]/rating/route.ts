@@ -20,7 +20,7 @@ async function authorize(ns: string, slug: string) {
   const skill = await findSkill(ns, slug);
   // Archived skills are out of the catalog; restricted skills must not leak (#3) — same 404.
   if (!skill || skill.status === "archived") return { error: Response.json({ error: "not found" }, { status: 404 }) };
-  if (!isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  if (!isSkillVisible(access, skill)) {
     return { error: Response.json({ error: "not found" }, { status: 404 }) };
   }
   return { userId: access.userId, skill };

@@ -21,7 +21,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
   const skill = await findSkill((await ctx.params).ns, (await ctx.params).slug);
   if (!skill || skill.status === "archived") return Response.json({ error: "not found" }, { status: 404 });
   // Don't reveal a restricted skill's existence to a non-member (#3); then require ownership.
-  if (!isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  if (!isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
   if (!(await canManageMaintainers(access, skill, access.userId))) {

@@ -34,7 +34,7 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/install", async funct
   }
 
   const access = await resolveUserAccess(oid);
-  if (!isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  if (!isSkillVisible(access, skill)) {
     // Do not reveal existence of restricted skills to outsiders.
     return Response.json({ error: "not found" }, { status: 404 });
   }

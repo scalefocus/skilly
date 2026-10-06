@@ -24,6 +24,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ ns: string; s
   const skill: SkillDiscussionSkill = {
     id: found.id, namespaceId: found.namespaceId, namespaceSlug: found.namespaceSlug,
     skillSlug: found.slug, visibility: found.visibility, archived: found.status === "archived",
+    sharedNamespaceIds: found.sharedNamespaceIds,
   };
   const isOwner = skill.archived
     ? await canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId)

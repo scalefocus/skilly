@@ -47,12 +47,13 @@ export async function GET(req: Request) {
     const skill: SkillDiscussionSkill = {
       id: found.id, namespaceId: found.namespaceId, namespaceSlug: found.namespaceSlug,
       skillSlug: found.slug, visibility: found.visibility, archived: found.status === "archived",
+      sharedNamespaceIds: found.sharedNamespaceIds,
     };
     const isOwner = skill.archived
       ? await canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId)
       : false;
     if (!canReadSkill(access, skill, isOwner)) return Response.json({ error: "not found" }, { status: 404 }); // no leak
-    audience = { kind: "skill", namespaceId: skill.namespaceId, visibility: skill.visibility };
+    audience = { kind: "skill", skillId: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility };
   }
 
   const limit = Math.min(6, Math.max(1, Number(url.searchParams.get("limit") ?? 6) || 6));

@@ -9,7 +9,7 @@
 // The proposer half is naturally self-scoped (submitted_by = the caller).
 import type { Pool } from "pg";
 import { pool } from "./db";
-import type { EffectiveAccess } from "@skilly/shared";
+import { skillVisibilityWhere, type EffectiveAccess } from "@skilly/shared";
 import { getNavSeen } from "./settings";
 
 export interface NavBadges {
@@ -31,9 +31,9 @@ export async function getNavBadges(access: EffectiveAccess & { userId: string | 
   // of an existing skill creates no new skill row, so it isn't counted — only genuinely new skills.
   const catParams: unknown[] = [seen.catalogSeenAt];
   let catVis = "";
-  if (!access.isPlatformAdmin) {
-    catParams.push([...access.namespaceRoles.keys()]);
-    catVis = ` and (s.visibility = 'org' or s.namespace_id = any($${catParams.length}::uuid[]))`;
+  {
+    const vis = skillVisibilityWhere(access, catParams, "s"); // org ∪ own namespaces ∪ §42 grants
+    if (vis) catVis = ` and ${vis}`;
   }
   const catalog = Number(
     (

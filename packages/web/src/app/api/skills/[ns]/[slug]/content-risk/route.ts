@@ -17,7 +17,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
   const skill = await findSkill(ns, slug);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
   const owner = await canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId);
-  const visible = skill.status === "archived" ? owner : isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility });
+  const visible = skill.status === "archived" ? owner : isSkillVisible(access, skill);
   if (!visible) return Response.json({ error: "not found" }, { status: 404 });
   if (!owner) return Response.json({ error: "only this skill's maintainers and admins can see its content-risk findings" }, { status: 403 });
   const semver = new URL(req.url).searchParams.get("semver");

@@ -7,7 +7,7 @@
 // mint rule (`canUseNamespaceMarketplace`, §30.4). A restricted namespace's existence, count and
 // contact are therefore never revealed to an outsider. Disabled marketplaces are omitted — there is
 // no repo, no URL, and a mint would 404, so a row would have no working action.
-import { PUBLIC_SCOPE, marketplaceName, type EffectiveAccess } from "@skilly/shared";
+import { PUBLIC_SCOPE, marketplaceName, namespaceMarketplaceSkillSql, type EffectiveAccess } from "@skilly/shared";
 import { pool } from "./db";
 import { marketplacePluginCount, marketplaceSkillCount } from "./marketplaces";
 import { addedState, resolveContact, type AddedState, type DirectoryContact } from "./marketplaceDirectoryFilter";
@@ -78,15 +78,17 @@ export async function listMarketplaceDirectory(
 
   const ids = nsRows.map((r) => r.id);
   // Payload counts in one grouped query — the same qualifying rule as marketplaceSkillCount and
-  // the worker (active skill, ≥1 active git-published version, namespace visibility).
+  // the worker (active skill, ≥1 active git-published version, the namespace's own restricted
+  // skills ∪ those shared with it — §42).
   const counts = new Map<string, number>();
   if (ids.length > 0) {
     const { rows } = await pool.query<{ namespace_id: string; n: string }>(
-      `select s.namespace_id, count(distinct s.id) as n
-         from skills s
+      `select m.ns_id as namespace_id, count(distinct s.id) as n
+         from unnest($1::uuid[]) as m(ns_id)
+         join skills s on ${namespaceMarketplaceSkillSql("m.ns_id", "s")}
          join skill_versions sv on sv.skill_id = s.id and sv.status = 'active' and sv.git_published
-        where s.status = 'active' and s.visibility = 'namespace' and s.namespace_id = any($1::uuid[])
-        group by s.namespace_id`,
+        where s.status = 'active'
+        group by m.ns_id`,
       [ids],
     );
     for (const r of rows) counts.set(r.namespace_id, Number(r.n));

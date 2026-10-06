@@ -81,7 +81,7 @@ test("mentions: validate/persist/notify/resolve across contexts (§24)", { skip:
     const doomedId = await mkSkill(nsId, `${K}-doomed`, "org");
     await pool.query(`insert into skill_watches (user_id, skill_id) values ($1,$2),($3,$2) on conflict do nothing`, [watcher, orgSkillId, pinged]);
 
-    const orgSkill: SkillDiscussionSkill = { id: orgSkillId, namespaceId: nsId, namespaceSlug: `${K}-ns`, skillSlug: `${K}-org-skill`, visibility: "org", archived: false };
+    const orgSkill: SkillDiscussionSkill = { id: orgSkillId, namespaceId: nsId, namespaceSlug: `${K}-ns`, skillSlug: `${K}-org-skill`, visibility: "org", archived: false, sharedNamespaceIds: [] };
     const authorAccess = access(author, { roles: [[nsId, "namespace_member"]] });
 
     // ── Validation ────────────────────────────────────────────────────────────
@@ -223,7 +223,7 @@ test("mentions: validate/persist/notify/resolve across contexts (§24)", { skip:
     const erasedHit = await mm.suggestUsers("Deleted", null);
     assert.equal(erasedHit.some((u) => u.id === doomedUser), false, "erased users never suggested");
     // Restricted-skill audience: outsiders are not in the candidate pool.
-    const nsAudience = await mm.suggestUsers(K, { kind: "skill", namespaceId: nsId, visibility: "namespace" }, 10);
+    const nsAudience = await mm.suggestUsers(K, { kind: "skill", skillId: restrictedId, namespaceId: nsId, visibility: "namespace" }, 10);
     assert.ok(nsAudience.some((u) => u.id === pinged), "namespace member offered");
     assert.equal(nsAudience.some((u) => u.id === outsider), false, "outsider not offered for a restricted skill");
 

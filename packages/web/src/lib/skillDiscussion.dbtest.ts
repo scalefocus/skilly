@@ -62,7 +62,7 @@ test("skill discussion: post/validate/moderate/notify (§24)", { skip: !enabled 
     await pool.query(`insert into skill_watches (user_id, skill_id) values ($1,$2),($3,$2),($4,$2) on conflict do nothing`, [watcher, skillId, optedOut, maintainer]);
     await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1,$2) on conflict do nothing`, [skillId, maintainer]);
 
-    const skill: SkillDiscussionSkill = { id: skillId, namespaceId: nsId, namespaceSlug: `${K}-ns`, skillSlug: `${K}-pdf`, visibility: "org", archived: false };
+    const skill: SkillDiscussionSkill = { id: skillId, namespaceId: nsId, namespaceSlug: `${K}-ns`, skillSlug: `${K}-pdf`, visibility: "org", archived: false, sharedNamespaceIds: [] };
 
     // ── Validation ──────────────────────────────────────────────────────────
     const empty = await m.postSkillDiscussionMessage(access(author), skill, "   ", "1.0.0");
@@ -182,7 +182,7 @@ test("skill discussion: a watcher who can't see a restricted skill is skipped (i
     // The outsider watches the (now namespace-restricted) skill but holds NO role in the namespace.
     await pool.query(`insert into skill_watches (user_id, skill_id) values ($1,$2) on conflict do nothing`, [outsider, skillId]);
 
-    const skill: SkillDiscussionSkill = { id: skillId, namespaceId: nsId, namespaceSlug: `${K}-ns`, skillSlug: `${K}-sk`, visibility: "namespace", archived: false };
+    const skill: SkillDiscussionSkill = { id: skillId, namespaceId: nsId, namespaceSlug: `${K}-ns`, skillSlug: `${K}-sk`, visibility: "namespace", archived: false, sharedNamespaceIds: [] };
     const posted = await m.postSkillDiscussionMessage(access(author, { roles: [[nsId, "namespace_member"]] }), skill, "hi", "1.0.0");
     assert.ok(posted.ok);
     const cid = (posted as { conversationId: string }).conversationId;

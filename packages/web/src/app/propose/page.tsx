@@ -11,6 +11,7 @@ import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposa
 import { Pill, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
+import { NamespaceMultiPicker, useShareTargets } from "../../components/NamespaceMultiPicker";
 import { InfoTip } from "../../components/ui";
 import { checkCategoryNames } from "@skilly/shared/category";
 import { MarkdownField } from "../../components/MarkdownField";
@@ -159,6 +160,13 @@ function ProposeForm() {
   const categoryError = checkCategoryNames(categories, categoryOptions);
   // Namespaces the user can file into (global + their namespaces) — feeds the namespace combobox.
   const [namespaceOptions, setNamespaceOptions] = useState<{ slug: string; displayName: string }[]>([]);
+  // §42 "Share with namespaces": grantee namespace ids (any namespace in the org but the owner and
+  // global). Pre-filled from the skill's current grants in new-version mode, where it is the one
+  // access-surface field a re-version may change.
+  const shareTargets = useShareTargets();
+  const [sharedNs, setSharedNs] = useState<string[]>([]);
+  // The existing skill's (frozen) visibility in new-version mode — decides whether sharing applies.
+  const [nvVisibility, setNvVisibility] = useState<"org" | "namespace" | null>(null);
   // Pointer (external git) is the first tab and the default for a NEW proposal; new-version mode
   // overrides this from the existing skill's type once it loads.
   const [sourceType, setSourceType] = useState<"hosted" | "pointer">("pointer");
@@ -307,7 +315,7 @@ function ProposeForm() {
   const noteIsDefault = useRef(false);
   // Snapshot of the skill's current metadata at pre-fill, for the client-side §8 no-op guard
   // (with reused files, at least one field must differ; the server re-enforces with a 422).
-  const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; categories: string[]; usageExamples: string } | null>(null);
+  const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; categories: string[]; usageExamples: string; sharedNamespaceIds: string[] } | null>(null);
 
   // The "Updated metadata" default describes a metadata-only re-version, so it lives and dies with
   // Keep-current-files (§8): supplying a real source drops it (a version that ships files is never
@@ -392,6 +400,10 @@ function ProposeForm() {
         setNvLatest(j.latest ?? null);
         setCurrentIcon(j.meta?.icon ?? null);
         setIconMode("keep");
+        // §42: the skill's current grants pre-fill the share picker; its visibility gates it.
+        const currentShared: string[] = Array.isArray(j.sharedNamespaces) ? j.sharedNamespaces.map((n: { namespaceId: string }) => n.namespaceId) : [];
+        setSharedNs(currentShared);
+        setNvVisibility(j.visibility === "org" ? "org" : "namespace");
         // Baseline for the §8 no-op guard (reuse mode: at least one field must differ from this).
         nvBaseline.current = {
           title: j.meta?.title ?? "",
@@ -399,6 +411,7 @@ function ProposeForm() {
           toolHarness: j.meta?.toolHarness ?? "generic",
           categories: j.meta?.categories ?? [],
           usageExamples: j.usageExamples ?? "",
+          sharedNamespaceIds: currentShared,
         };
         // Default to "Keep current files" when there's a stable version to reuse — EXCEPT on a
         // duplicate carry-over (`forcedNV`), where the proposer already provided a fresh source.
@@ -551,6 +564,11 @@ function ProposeForm() {
   // org-wide namespace, so skills there are org-wide; anything in a specific namespace is
   // restricted to it. (The server still re-validates.)
   const visibility: "org" | "namespace" = f.namespaceSlug.trim().toLowerCase() === "global" ? "org" : "namespace";
+  // §42: sharing applies to a restricted skill — in new-version mode the EXISTING skill's frozen
+  // visibility decides (a non-global namespace can hold an org skill), else the derived one.
+  const shareVisibility: "org" | "namespace" = isNewVersion ? (nvVisibility ?? visibility) : visibility;
+  const ownerNamespaceId = shareTargets.find((o) => o.slug === f.namespaceSlug.trim().toLowerCase())?.id ?? null;
+  const effectiveShared = shareVisibility === "namespace" ? sharedNs.filter((id) => id !== ownerNamespaceId) : [];
 
   // Accept a dropped/chosen bundle: soft-validate the extension, then stage it.
   function acceptBundle(picked: File | null) {
@@ -657,6 +675,8 @@ function ProposeForm() {
         // Per-version note (§8): required in new-version mode; omitted for a skill's first version.
         whatChanged: isNewVersion ? f.whatChanged.trim() || null : null,
         visibility,
+        // §42: the grantee namespaces (cleared for an org skill; the server re-validates).
+        sharedNamespaceIds: effectiveShared,
       };
 
       // The "What changed" note is required on a new version (server re-enforces with a 422).
@@ -691,9 +711,10 @@ function ProposeForm() {
           f.description.trim() === b.description.trim() &&
           f.toolHarness.trim() === b.toolHarness.trim() &&
           setEq(categories, b.categories, true) &&
-          f.usageExamples.trim() === b.usageExamples.trim()
+          f.usageExamples.trim() === b.usageExamples.trim() &&
+          setEq(effectiveShared, b.sharedNamespaceIds)
         ) {
-          throw new Error("Nothing changed — edit at least one field (title, description, categories, tool/harness, or usage), or provide a new source.");
+          throw new Error("Nothing changed — edit at least one field (title, description, categories, tool/harness, usage, or shared namespaces), or provide a new source.");
         }
       } else if (sourceType === "hosted") {
         const up = await uploadBundle();
@@ -1153,10 +1174,27 @@ function ProposeForm() {
               {visibility === "org" ? (
                 <><span className="mono">global</span> — org-wide, visible to everyone.</>
               ) : (
-                <>Restricted to <span className="mono">{f.namespaceSlug}</span> — visible only to its members.</>
+                <>Restricted to <span className="mono">{f.namespaceSlug}</span> — visible only to its members{effectiveShared.length > 0 ? " and the namespaces it is shared with" : ""}.</>
               )}
             </p>
           </div>
+          {shareVisibility === "namespace" && (
+            <div data-testid="share-with-namespaces">
+              <label style={label}>
+                Share with namespaces
+                <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · optional{isNewVersion ? " · editable on a new version" : ""}</span>
+              </label>
+              <NamespaceMultiPicker
+                value={effectiveShared}
+                onChange={setSharedNs}
+                options={shareTargets}
+                exclude={ownerNamespaceId ? [ownerNamespaceId] : []}
+              />
+              <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
+                Members of these namespaces can find, install and discuss the skill. Your namespace keeps all review and management rights.
+              </p>
+            </div>
+          )}
           <div><label style={label}>Skill slug{lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · locked</span>}</label><input className="input input-lg" style={{ width: "100%", ...(lock ? lockedStyle : {}) }} value={f.skillSlug} onChange={set("skillSlug")} onBlur={() => { const slug = f.skillSlug.trim(); if (!lock && slug && !f.title.trim()) setF((prev) => ({ ...prev, title: titleize(slug) })); }} placeholder="pdf-tools" disabled={lock} /></div>
         {!lock && existingSkill && existingSkill.ns === f.namespaceSlug.trim() && existingSkill.slug === f.skillSlug.trim() && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>

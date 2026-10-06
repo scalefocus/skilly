@@ -118,7 +118,7 @@ test("follows: the fan-out gate — visibility, dedup, pause, inactive followers
       type: "follow.new_skill",
       actorId: actor,
       payload: { namespaceSlug: `${P}-ns`, skillSlug: "restricted", semver: "1.0.0" },
-      skill: { namespaceId: ns, visibility: "namespace" },
+      skill: { id: "00000000-0000-0000-0000-000000000000", namespaceId: ns, visibility: "namespace" },
       excludeUserIds,
     });
   await publish([watcher]); // the watcher already got skill.new_version for this publish
@@ -131,10 +131,10 @@ test("follows: the fan-out gate — visibility, dedup, pause, inactive followers
   assert.equal(payload.actorName, `${P}-actor`);
 
   // Org-visible reaches every active follower; a paused actor reaches nobody.
-  await fanOutToFollowers(pool, { type: "follow.new_version", actorId: actor, payload: {}, skill: { namespaceId: ns, visibility: "org" } });
+  await fanOutToFollowers(pool, { type: "follow.new_version", actorId: actor, payload: {}, skill: { id: "00000000-0000-0000-0000-000000000000", namespaceId: ns, visibility: "org" } });
   assert.equal((await rowsOf(outsider, "follow.new_version")).length, 1);
   await pool.query(`update users set allow_follows = false where id = $1`, [actor]);
-  await fanOutToFollowers(pool, { type: "follow.new_version", actorId: actor, payload: {}, skill: { namespaceId: ns, visibility: "org" } });
+  await fanOutToFollowers(pool, { type: "follow.new_version", actorId: actor, payload: {}, skill: { id: "00000000-0000-0000-0000-000000000000", namespaceId: ns, visibility: "org" } });
   assert.equal((await rowsOf(outsider, "follow.new_version")).length, 1, "paused: no new rows");
   await pool.query(`update users set allow_follows = true, status = 'active' where id in ($1, $2)`, [actor, sleeper]);
 });

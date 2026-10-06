@@ -28,7 +28,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
     // chart follows: non-owners 404 (no leak), exactly like the detail route.
     const owner = await canManageMaintainers(access, skill, access.userId);
     if (!owner) return Response.json({ error: "not found" }, { status: 404 });
-  } else if (!isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  } else if (!isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 }); // no leak
   }
 

@@ -168,6 +168,26 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
+  // §42: a restricted skill was shared with a namespace the recipient administers, or a skill
+  // shared with it published a new version. Both link to the skill page.
+  if ((n.type === "skill.shared" || n.type === "skill.shared_new_version") && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}`;
+    const owner = typeof p.ownerNamespaceName === "string" ? p.ownerNamespaceName : String(p.namespaceSlug ?? "another namespace");
+    const grantee = typeof p.granteeNamespaceName === "string" ? p.granteeNamespaceName : "your namespace";
+    const who = typeof p.fromName === "string" ? p.fromName : "Someone";
+    const sentence =
+      n.type === "skill.shared"
+        ? `${who} shared ${slug} from ${owner} with ${grantee}. Its members can now find and install it. As an admin of ${grantee} you can remove this access from the skill page.`
+        : `${slug}, shared with ${grantee} by ${owner}, published version ${p.semver ?? ""}.`;
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${sentence} ${cta("View the skill", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, url: abs(path) },
+    };
+  }
+
   // §37.9: the re-scan sweep flagged a published version. Links to the owner Content risk card.
   if (n.type === "skill.content_risk" && typeof p.skillSlug === "string") {
     const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;

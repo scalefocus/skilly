@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useApi, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../../components/ui";
 import { RequireAuth } from "../../../components/RequireAuth";
 import { TagInput } from "../../../components/TagInput";
+import { NamespaceMultiPicker, useShareTargets, type NamespaceOption } from "../../../components/NamespaceMultiPicker";
 import { InfoTip } from "../../../components/ui";
 import { Markdown } from "../../../components/Markdown";
 import { MarkdownField } from "../../../components/MarkdownField";
@@ -42,6 +43,8 @@ interface Meta {
   /** Skill icon (§33) — image and/or emoji, or null/absent for none. */
   iconSha256?: string | null;
   iconEmoji?: string | null;
+  /** §42 grantee namespace ids; absent = not resent (keeps the skill's current grants). */
+  sharedNamespaceIds?: string[];
 }
 interface Revision {
   revisionNo: number;
@@ -64,6 +67,8 @@ interface TargetSkillCurrent {
   title: string; description: string; toolHarness: string; categories: string[];
   usageExamples: string | null; latestStable: string | null;
   iconSha256: string | null; iconEmoji: string | null;
+  /** §42: the skill's frozen visibility + its current grantee namespace ids. */
+  visibility: "org" | "namespace"; sharedNamespaceIds: string[];
 }
 interface Detail {
   id: string; state: string; targetNamespaceSlug: string; targetSkillId: string | null; proposedSemver: string;
@@ -117,6 +122,15 @@ interface EditDraft {
    *  both to null (Remove); only the SUBMITTER sees the upload/emoji replace controls. */
   iconSha256: string | null;
   iconEmoji: string | null;
+  /** §42 "Share with namespaces" — grantee namespace ids (reviewer- and proposer-editable). */
+  sharedNamespaceIds: string[];
+}
+
+/** §42: namespace ids → display-name chips, for the read view and the accept diff. */
+function nsChips(ids: readonly string[], names: Map<string, NamespaceOption>): ReactNode {
+  return ids.length
+    ? ids.map((id) => <span key={id} className="chip" style={{ marginRight: 6 }} title={names.get(id) ? `@${names.get(id)!.slug}` : id}>{names.get(id)?.displayName ?? "Unknown namespace"}</span>)
+    : <span className="muted">none</span>;
 }
 
 /**
@@ -201,7 +215,7 @@ function DiffRow({ label, oldNode, newNode, block = false }: { label: string; ol
  * old → new diff of every changed metadata field, plus the files line ("unchanged — reuses
  * v<x>'s bundle" for a Keep-current-files proposal). SKILLY_SPEC.md §8.
  */
-function ChangesOnAccept({ meta, cur, payload }: { meta: Meta; cur: TargetSkillCurrent; payload: Revision["payload"] }) {
+function ChangesOnAccept({ meta, cur, payload, nsNames }: { meta: Meta; cur: TargetSkillCurrent; payload: Revision["payload"]; nsNames: Map<string, NamespaceOption> }) {
   const chips = (xs: string[]) => (xs.length ? xs.map((x) => <span key={x} className="chip" style={{ marginRight: 6 }}>{x}</span>) : <span className="muted">none</span>);
   const rows: ReactNode[] = [];
   if (meta.title.trim() !== cur.title.trim()) {
@@ -224,6 +238,10 @@ function ChangesOnAccept({ meta, cur, payload }: { meta: Meta; cur: TargetSkillC
       <SkillIcon icon={{ url: sha ? `/skill-icons/${sha}.png` : null, emoji: emoji ?? null }} title="" size={28} fallback="default" />
     );
     rows.push(<DiffRow key="icon" label="Icon" oldNode={iconOf(cur.iconSha256, cur.iconEmoji)} newNode={iconOf(meta.iconSha256, meta.iconEmoji)} />);
+  }
+  // §42: the shared-namespaces list (omitted on the payload ⇒ unchanged on accept).
+  if (cur.visibility === "namespace" && meta.sharedNamespaceIds !== undefined && !diffSameSet(diffNormSet(meta.sharedNamespaceIds), diffNormSet(cur.sharedNamespaceIds))) {
+    rows.push(<DiffRow key="shared" label="Shared with" oldNode={nsChips(diffNormSet(cur.sharedNamespaceIds), nsNames)} newNode={nsChips(diffNormSet(meta.sharedNamespaceIds), nsNames)} />);
   }
   return (
     <div className="card card-pad" style={{ marginTop: 26 }}>
@@ -262,6 +280,10 @@ function ProposalDetailInner() {
   const { id } = useParams<{ id: string }>();
   const { data, loading, error, reload } = useApi<Detail>(id ? `/api/proposals/${id}` : null);
   usePageLabelOverride(data ? `Proposal: ${data.revisions.at(-1)?.payload.metadata.title ?? "Proposal"}` : null);
+  // §42: the namespace directory for the share picker + id → name chips.
+  const shareTargets = useShareTargets();
+  const nsNames = new Map(shareTargets.map((o) => [o.id, o]));
+  const ownerNsId = shareTargets.find((o) => o.slug === data?.targetNamespaceSlug)?.id ?? null;
   const [note, setNote] = useState("");
   const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -360,6 +382,11 @@ function ProposalDetailInner() {
         // Skill icon (§33) — always resent; a reviewer's edit can only have cleared it (Remove).
         iconSha256: edit.iconSha256,
         iconEmoji: edit.iconEmoji,
+        // §42: always resent from the edit form; cleared when the skill is (or becomes) org-wide.
+        sharedNamespaceIds:
+          (data?.targetSkillId ? data.targetSkillCurrent?.visibility ?? "namespace" : edit.visibility) === "namespace"
+            ? edit.sharedNamespaceIds.filter((nsId) => nsId !== ownerNsId)
+            : [],
       },
     };
     // Proposer replaced the hosted bundle: swap in the freshly-uploaded artifact (keeps the same
@@ -603,6 +630,7 @@ function ProposalDetailInner() {
                       reuseFiles: !!latest.payload.reuse,
                       iconSha256: m.iconSha256 ?? null,
                       iconEmoji: m.iconEmoji ?? null,
+                      sharedNamespaceIds: m.sharedNamespaceIds ?? data.targetSkillCurrent?.sharedNamespaceIds ?? [],
                     }); }}
                   >
                     ✎ Edit
@@ -616,7 +644,7 @@ function ProposalDetailInner() {
                 {!isNewSkill && (
                   <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
                     New-version proposal — the slug and visibility are locked to the existing skill; title, description,
-                    categories, tool/harness and usage are editable and sync to the skill on accept (§8).
+                    categories, tool/harness, usage and the shared namespaces are editable and sync to the skill on accept (§8, §42).
                     {isSubmitter ? (reviseMode ? " You can also replace the files below — the version stays locked while in review." : " You can also revise the files and the version below.") : ""}
                   </p>
                 )}
@@ -700,6 +728,17 @@ function ProposalDetailInner() {
                     </select>
                   </div>
                 </div>
+                {(data.targetSkillId ? data.targetSkillCurrent?.visibility === "namespace" : edit.visibility === "namespace") && (
+                  <div data-testid="review-share-with">
+                    <label style={labelStyle}>Shared with <span style={{ textTransform: "none", letterSpacing: 0 }}>· optional</span></label>
+                    <NamespaceMultiPicker
+                      value={edit.sharedNamespaceIds.filter((nsId) => nsId !== ownerNsId)}
+                      onChange={(next) => setEdit({ ...edit, sharedNamespaceIds: next })}
+                      options={shareTargets}
+                      exclude={ownerNsId ? [ownerNsId] : []}
+                    />
+                  </div>
+                )}
                 <div>
                   <label style={labelStyle}>
                     Categories
@@ -852,6 +891,9 @@ function ProposalDetailInner() {
                 </ReadRow>
                 <ReadRow label="Harness"><span className="chip">{m.toolHarness}</span></ReadRow>
                 <ReadRow label="Visibility">{m.visibility === "namespace" ? <Pill tone="warn">restricted</Pill> : <Pill tone="ok">org-wide</Pill>}</ReadRow>
+                {m.visibility === "namespace" && m.sharedNamespaceIds !== undefined && (
+                  <ReadRow label="Shared with">{nsChips(m.sharedNamespaceIds, nsNames)}</ReadRow>
+                )}
                 {m.description && (
                   <ReadRow label="Description" wide><Markdown source={m.description} /></ReadRow>
                 )}
@@ -891,7 +933,7 @@ function ProposalDetailInner() {
       {/* New-version proposals: explicit old → new diff of what accepting changes on the live
           skill, plus the files line ("unchanged — reuses vX" for Keep-current-files). §8. */}
       {data.targetSkillId && data.targetSkillCurrent && latest && !edit && (
-        <ChangesOnAccept meta={latest.payload.metadata} cur={data.targetSkillCurrent} payload={latest.payload} />
+        <ChangesOnAccept meta={latest.payload.metadata} cur={data.targetSkillCurrent} payload={latest.payload} nsNames={nsNames} />
       )}
 
       {/* File-change view (§8): what changed vs the skill's latest stable version — added /

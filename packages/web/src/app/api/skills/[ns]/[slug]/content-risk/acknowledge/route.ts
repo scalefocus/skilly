@@ -16,7 +16,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
   if (limited) return limited;
   const { ns, slug } = await ctx.params;
   const skill = await findSkill(ns, slug);
-  if (!skill || skill.status !== "active" || !isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  if (!skill || skill.status !== "active" || !isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
   const body = (await req.json().catch(() => ({}))) as { semver?: unknown; note?: unknown };

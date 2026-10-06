@@ -20,6 +20,7 @@ import {
   pluginKeywords,
   pluginVersion,
   resolveLatest,
+  namespaceMarketplaceSkillSql,
   validateMarketplacePrefix,
   GENERAL_PLUGIN_SLUG,
   type MarketplaceScope,
@@ -158,9 +159,10 @@ export function diffChange(prev: readonly ServedSkill[] | null, next: readonly S
 }
 
 /**
- * The skills a marketplace publishes (§30.1). The two sets are DISJOINT by construction:
- * the public marketplace takes org-visible skills across all namespaces; a namespace
- * marketplace takes only that namespace's namespace-visibility skills. Only active skills with
+ * The skills a marketplace publishes (§30.1). Public and namespace sets are DISJOINT by
+ * construction: the public marketplace takes org-visible skills across all namespaces; a namespace
+ * marketplace takes that namespace's namespace-visibility skills plus the restricted skills shared
+ * with it (§42) — so two namespace marketplaces may list the same skill. Only active skills with
  * at least one git-published active version qualify, and the listed version is the latest STABLE
  * one — a skill whose only versions are prereleases is not listed at all.
  */
@@ -175,7 +177,7 @@ async function qualifyingSkills(pool: Pool, scope: MarketplaceScope, namespaceId
        join namespaces n on n.id = s.namespace_id
        join skill_versions sv on sv.skill_id = s.id and sv.status = 'active' and sv.git_published
       where s.status = 'active'
-        and ${scope.kind === "public" ? `s.visibility = 'org'` : `s.visibility = 'namespace' and s.namespace_id = $1`}
+        and ${scope.kind === "public" ? `s.visibility = 'org'` : namespaceMarketplaceSkillSql("$1::uuid", "s")}
       group by s.id, n.slug`,
     scope.kind === "public" ? [] : [namespaceId],
   );

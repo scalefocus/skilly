@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { skillVisibilityWhere, accessFromRows, roleMappingsFromRows, userGroupsFromRows } from "./visibility.js";
+import { skillVisibilityWhere, sharedNamespaceIdsSql, userCanSeeSkillSql, accessFromRows, roleMappingsFromRows, userGroupsFromRows } from "./visibility.js";
 import { resolveAccess, isSkillVisible } from "./rbac.js";
 import type { RoleMapping } from "./types.js";
 
@@ -20,7 +20,11 @@ test("a member gets the org-or-my-namespaces predicate with their namespace ids 
     { isPlatformAdmin: false, namespaceRoles: new Map([[NS_A, "namespace_member"]]) },
     params,
   );
-  assert.equal(sql, "(s.visibility = 'org' or s.namespace_id = any($2::uuid[]))");
+  assert.equal(
+    sql,
+    "(s.visibility = 'org' or s.namespace_id = any($2::uuid[])" +
+      " or exists (select 1 from skill_namespace_grants sng where sng.skill_id = s.id and sng.namespace_id = any($2::uuid[])))",
+  );
   assert.deepEqual(params[1], [NS_A]);
 });
 
@@ -34,7 +38,11 @@ test("a user with NO namespaces still gets the predicate — an empty array, not
 test("the alias is honored so the predicate can be used in a joined query", () => {
   const params: unknown[] = [];
   const sql = skillVisibilityWhere({ isPlatformAdmin: false, namespaceRoles: new Map() }, params, "sk");
-  assert.equal(sql, "(sk.visibility = 'org' or sk.namespace_id = any($1::uuid[]))");
+  assert.equal(
+    sql,
+    "(sk.visibility = 'org' or sk.namespace_id = any($1::uuid[])" +
+      " or exists (select 1 from skill_namespace_grants sng where sng.skill_id = sk.id and sng.namespace_id = any($1::uuid[])))",
+  );
 });
 
 test("the SQL predicate agrees with the in-memory isSkillVisible check", () => {
@@ -97,4 +105,38 @@ test("an unknown/inactive user (no rows) resolves to no user and no access", () 
   assert.equal(a.userId, null);
   assert.equal(a.isPlatformAdmin, false);
   assert.equal(a.namespaceRoles.size, 0);
+});
+
+// ── §42 sharing a restricted skill with other namespaces ──
+
+test("§42: the predicate binds the viewer's namespaces ONCE and reuses it for the grant probe", () => {
+  const params: unknown[] = [];
+  const sql = skillVisibilityWhere(
+    { isPlatformAdmin: false, namespaceRoles: new Map([[NS_B, "namespace_member"]]) },
+    params,
+  )!;
+  assert.equal(params.length, 1, "one parameter for both the owner and the grant arm");
+  assert.match(sql, /skill_namespace_grants sng where sng\.skill_id = s\.id and sng\.namespace_id = any\(\$1::uuid\[\]\)/);
+});
+
+test("§42: SQL and in-memory gates agree for a grantee member", () => {
+  const access = resolveAccess(new Set(["g-b"]), [
+    { id: "m1", groupId: "g-b", namespaceId: NS_B, role: "namespace_member" } satisfies RoleMapping,
+  ]);
+  // A restricted skill owned by A, shared with B — visible to a B member…
+  assert.equal(isSkillVisible(access, { namespaceId: NS_A, visibility: "namespace", sharedNamespaceIds: [NS_B] }), true);
+  // …and not once the grant is gone.
+  assert.equal(isSkillVisible(access, { namespaceId: NS_A, visibility: "namespace", sharedNamespaceIds: [] }), false);
+  const params: unknown[] = [];
+  skillVisibilityWhere(access, params);
+  assert.deepEqual(params[0], [NS_B]);
+});
+
+test("§42: helper fragments honour the alias and the parameter placeholder", () => {
+  assert.match(sharedNamespaceIdsSql("sk"), /where sng\.skill_id = sk\.id\), '\{\}'::uuid\[\]\)$/);
+  const frag = userCanSeeSkillSql("$3", "x");
+  assert.match(frag, /^\(x\.visibility = 'org' or exists/);
+  assert.match(frag, /gm\.user_id = \$3/);
+  assert.match(frag, /rm\.namespace_id = x\.namespace_id/);
+  assert.match(frag, /sng\.skill_id = x\.id/);
 });

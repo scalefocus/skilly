@@ -100,7 +100,7 @@ TypeScript monorepo (pnpm workspaces), three processes + two stateful backends +
    - **Legacy `one_time`/`pat` tokens** — the original strict rule: single-use, short-TTL, deleted on use.
    - **`install` tokens** (the consumer install/"installation" handle — §23) — a deliberate carve-out: skill-scoped, **reusable**, user-TTL'd (explicit dates ≤ 1y, or an explicit "Never"), and **not** deleted on use/expiry — they go *inactive* on expiry and are revoked by **uninstall** (owner hard-delete).
    - **System installations** (§23) — relaxed further: platform-owned (no user; minted/managed by platform admins only), **no clone-time visibility re-check**, compensated by mandatory audit of mint/uninstall/reactivate.
-7. **Visibility is per-skill** (`org` | `namespace`). No per-individual private, no per-version visibility.
+7. **Visibility is per-skill** (`org` | `namespace`). `namespace` = the owning namespace **plus any namespaces the skill is explicitly shared with** (`skill_namespace_grants`, §42 — grants confer visibility, never roles). No per-individual private, no per-version visibility. Every visibility check goes through the shared predicate (`@skilly/shared/visibility` + `isSkillVisible`) — never inline it.
 
 ## Roles (§4)
 - **Platform Admin** (platform-level), **Namespace Admin** (per-ns), **Namespace Member** (per-ns).

@@ -13,6 +13,8 @@ import {
   mentionToken,
   type EffectiveAccess,
   type MentionRef,
+  sharedNamespaceIdsSql,
+  userCanSeeSkillSql,
 } from "@skilly/shared";
 
 type Access = EffectiveAccess & { userId: string | null };
@@ -21,7 +23,7 @@ type Access = EffectiveAccess & { userId: string | null };
 export type MentionAudience =
   | { kind: "proposal"; submitterId: string; namespaceId: string; skillId: string | null }
   | { kind: "request" }
-  | { kind: "skill"; namespaceId: string; visibility: "org" | "namespace" }
+  | { kind: "skill"; skillId: string; namespaceId: string; visibility: "org" | "namespace" }
   | { kind: "direct" };
 
 /** A validated mention, ready to persist. `label` is the ns/slug handle (skill mentions only). */
@@ -61,12 +63,9 @@ function audiencePredicate(aud: MentionAudience, params: unknown[]): string {
       or ($${pSkill}::uuid is not null and exists (select 1 from skill_maintainers sm where sm.skill_id = $${pSkill} and sm.user_id = u.id)))`;
   }
   if (aud.kind === "skill" && aud.visibility === "namespace") {
-    params.push(aud.namespaceId);
-    return `exists (
-      select 1 from group_memberships gm
-      join role_mappings rm on rm.group_id = gm.group_id
-      where gm.user_id = u.id and (rm.role = 'platform_admin' or rm.namespace_id = $${params.length})
-    )`;
+    // Owner namespace ∪ §42 grantee namespaces ∪ platform admins — the shared per-user predicate.
+    params.push(aud.skillId);
+    return `exists (select 1 from skills sk where sk.id = $${params.length} and ${userCanSeeSkillSql("u.id", "sk")})`;
   }
   return "true";
 }
@@ -116,8 +115,9 @@ export async function validateMentions(
   }
 
   if (skillIds.length) {
-    const { rows } = await pool.query<{ id: string; status: string; visibility: "org" | "namespace"; namespace_id: string; slug: string; ns_slug: string }>(
-      `select s.id, s.status, s.visibility, s.namespace_id, s.slug, n.slug as ns_slug
+    const { rows } = await pool.query<{ id: string; status: string; visibility: "org" | "namespace"; namespace_id: string; slug: string; ns_slug: string; shared_namespace_ids: string[] }>(
+      `select s.id, s.status, s.visibility, s.namespace_id, s.slug, n.slug as ns_slug,
+              ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
          from skills s join namespaces n on n.id = s.namespace_id
         where s.id = any($1::uuid[])`,
       [skillIds],
@@ -127,7 +127,7 @@ export async function validateMentions(
       const s = byId.get(id);
       // Mentionable = a skill the AUTHOR can currently see in the catalog (active + visible);
       // readers are handled per-reader at render time (redaction), not here.
-      if (!s || s.status !== "active" || !isSkillVisible(access, { namespaceId: s.namespace_id, visibility: s.visibility })) {
+      if (!s || s.status !== "active" || !isSkillVisible(access, { namespaceId: s.namespace_id, visibility: s.visibility, sharedNamespaceIds: s.shared_namespace_ids })) {
         return { ok: false, status: 422, error: "mentioned skill not found" };
       }
       prepared.push({ kind: "skill", id, label: `${s.ns_slug}/${s.slug}` });
@@ -225,13 +225,15 @@ export async function resolveMentions(access: Access, messageIds: string[]): Pro
     s_title: string | null; s_slug: string | null; s_status: string | null;
     s_visibility: "org" | "namespace" | null; s_namespace_id: string | null; ns_slug: string | null;
     s_icon_sha256: string | null; s_icon_emoji: string | null;
+    s_shared_namespace_ids: string[] | null;
   }>(
     `select distinct mm.kind, mm.target_id, mm.label,
             case when mm.kind = 'user' then ${nameSql("u.display_name", "u.email")} end as u_name,
             u.erased_at::text as u_erased,
             s.title as s_title, s.slug as s_slug, s.status as s_status,
             s.visibility as s_visibility, s.namespace_id as s_namespace_id, n.slug as ns_slug,
-            s.icon_sha256 as s_icon_sha256, s.icon_emoji as s_icon_emoji
+            s.icon_sha256 as s_icon_sha256, s.icon_emoji as s_icon_emoji,
+            case when s.id is not null then ${sharedNamespaceIdsSql("s")} end as s_shared_namespace_ids
        from message_mentions mm
        left join users u on mm.kind = 'user' and u.id = mm.target_id
        left join skills s on mm.kind = 'skill' and s.id = mm.target_id
@@ -270,7 +272,7 @@ export async function resolveMentions(access: Access, messageIds: string[]): Pro
         ? access.isPlatformAdmin ||
           access.namespaceRoles.get(r.s_namespace_id) === "namespace_admin" ||
           maintainerOf.has(r.target_id)
-        : isSkillVisible(access, { namespaceId: r.s_namespace_id, visibility: r.s_visibility ?? "namespace" });
+        : isSkillVisible(access, { namespaceId: r.s_namespace_id, visibility: r.s_visibility ?? "namespace", sharedNamespaceIds: r.s_shared_namespace_ids });
     map[token] = visible
       ? {
           kind: "skill", id: r.target_id, state: "ok", title: r.s_title ?? r.s_slug, ns: r.ns_slug, slug: r.s_slug,
