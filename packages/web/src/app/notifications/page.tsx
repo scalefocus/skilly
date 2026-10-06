@@ -206,6 +206,12 @@ export default function NotificationsPage() {
                       view skill →
                     </Link>
                   )}
+                  {/* §43.9: the second CTA of skill.quality_low, when the draft was available at creation. */}
+                  {n.type === "skill.quality_low" && n.payload.aiDraft === true && nsSlug && skSlug && (
+                    <Link href={`/skills/${nsSlug}/${skSlug}?draft=ai#quality`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginLeft: 12 }} data-testid="notification-ai-draft">
+                      draft improvements with {typeof n.payload.aiName === "string" && n.payload.aiName ? n.payload.aiName : "AI"} →
+                    </Link>
+                  )}
                   {conversationHref && (
                     <Link href={conversationHref} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                       view message →

@@ -6,6 +6,7 @@
 // sent to the stored base URL. SKILLY_SPEC.md §40.
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { getPlatformSettings } from "./settings";
 import {
   AI_FEATURES,
   AI_PROVIDER_LABELS,
@@ -85,6 +86,8 @@ export interface AiAdminStatus {
   updatedByName: string | null;
   usage30d: { calls: number; failed: number; inputTokens: number; outputTokens: number; byFeature: AiUsageByFeature[] };
   features: { key: string; label: string; egress: string; spec: string }[];
+  /** §40.14 the end-user AI display name (independent of the provider config). */
+  displayName: string;
 }
 
 function featureLabel(key: string): string {
@@ -144,6 +147,7 @@ export async function getAiAdminStatus(): Promise<AiAdminStatus> {
     updatedByName,
     usage30d: { calls: sum("calls"), failed: sum("failed"), inputTokens: sum("inputTokens"), outputTokens: sum("outputTokens"), byFeature },
     features: AI_FEATURES.map((f) => ({ key: f.key, label: f.label, egress: f.egress, spec: f.spec })),
+    displayName: (await getPlatformSettings(pool)).aiDisplayName,
   };
 }
 

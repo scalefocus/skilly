@@ -676,7 +676,7 @@ export default function SkillDetail() {
       <RatingPanel rating={data.rating} busy={busy} onRate={rate} readOnly={data.archived} />
 
       {/* §41.7: the system-computed quality of the latest stable version — everyone who can see the skill sees it. */}
-      {data.latest && <QualityCard detail={data.qualityDetail} base={base} onChanged={reload} />}
+      {data.latest && <QualityCard detail={data.qualityDetail} base={base} ns={ns} slug={slug} onChanged={reload} />}
 
       <MaintainersPanel ns={ns} slug={slug} />
 

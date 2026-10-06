@@ -28,6 +28,7 @@ import { ContentRiskFindingsList } from "../../../components/ContentRisk";
 import { QualityFindingsList, type QualityFindingItem } from "../../../components/QualityFindingsList";
 import { QualityStars } from "../../../components/QualityBadge";
 import { formatStars } from "@skilly/shared/quality";
+import { useAiName } from "../../../components/AiName";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string; line?: number; excerpt?: string; ruleset?: number }
 interface Meta {
@@ -81,6 +82,8 @@ interface Detail {
   viaMcpClient?: string | null;
   /** §37.4: 'content_risk' when a direct publish was routed here by the content check. */
   routedReason?: string | null;
+  /** §43.8: the model that drafted the submitted files, or null. */
+  aiDraftModel?: string | null;
   submitterCard: SubmitterCard | null;
   conversationId: string | null;
   duplicate: { namespaceSlug: string; skillSlug: string; title: string } | null;
@@ -276,6 +279,7 @@ function ChangesOnAccept({ meta, cur, payload, nsNames }: { meta: Meta; cur: Tar
 
 function ProposalDetailInner() {
   const fmt = useDateFmt();
+  const aiName = useAiName();
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const { data, loading, error, reload } = useApi<Detail>(id ? `/api/proposals/${id}` : null);
@@ -532,6 +536,16 @@ function ProposalDetailInner() {
         <span className="chip">{data.targetSkillId ? "new version" : "new skill"}</span>
         {/* §29 attribution — the reviewer sees, on the proposal itself, that an agent submitted it. */}
         <ViaMcp client={data.viaMcpClient} />
+        {/* §43.8 provenance: the files were drafted by the AI and reviewed by the proposer before submission. */}
+        {data.aiDraftModel && (
+          <span
+            className="chip"
+            data-testid="ai-drafted-badge"
+            title={`The files were drafted by ${aiName} (${data.aiDraftModel}) and reviewed by the proposer before submission.`}
+          >
+            ✦ Drafted with {aiName}
+          </span>
+        )}
       </div>
       <h1 className="page-title" style={{ fontSize: "clamp(28px,4vw,40px)" }}>{latest?.payload.metadata.title ?? "Proposal"}</h1>
 
@@ -1087,7 +1101,7 @@ function ProposalDetailInner() {
         {data.quality ? (
           <>
             <p className="muted" style={{ fontSize: 13, marginTop: 0, marginBottom: 12 }}>
-              The SKILL.md authoring rules. Advisory — nothing here blocks acceptance. The AI assessment runs after publish.
+              The SKILL.md authoring rules. Advisory — nothing here blocks acceptance. The {aiName} assessment runs after publish.
             </p>
             <QualityFindingsList findings={data.quality.findings} compact />
           </>

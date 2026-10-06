@@ -154,6 +154,8 @@ export interface CreateProposalInput {
   routedReason?: "content_risk" | null;
   /** The content-risk rules that caused the routing — audit context only. */
   routedRules?: string[];
+  /** §43.8: the model that drafted the submitted files (from a verified aiDraftToken), else null. */
+  aiDraftModel?: string | null;
 }
 
 /**
@@ -505,9 +507,9 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
     const { rows } = await client.query<{ id: string }>(
       // origin_request_id: set when the proposal was started from a skill request's "Propose a
       // skill" button (§26) — the explicit fulfilment link, advisory until acceptance.
-      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, routed_reason)
-       values ($1,$2,$3,'proposed',$4,$5,$6) returning id`,
-      [input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null, input.routedReason ?? null],
+      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, routed_reason, ai_draft_model)
+       values ($1,$2,$3,'proposed',$4,$5,$6,$7) returning id`,
+      [input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null, input.routedReason ?? null, input.aiDraftModel ?? null],
     );
     const proposalId = rows[0]!.id;
     await client.query(
@@ -521,7 +523,7 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
       targetType: "proposal",
       targetId: proposalId,
       namespaceId: input.targetNamespaceId,
-      after: { state: "proposed", semver: input.proposedSemver },
+      after: { state: "proposed", semver: input.proposedSemver, ...(input.aiDraftModel ? { aiDraftModel: input.aiDraftModel } : {}) },
     });
     if (input.routedReason) {
       // §37.4: a direct publish the content check sent to review instead of publishing.
@@ -1244,6 +1246,8 @@ export async function directPublish(
     /** Override holders confirming an audited publish over gate-tripping content findings. */
     override?: boolean;
     overrideReason?: string | null;
+    /** §43.8: the model that drafted the files (from a verified aiDraftToken), else null. */
+    aiDraftModel?: string | null;
   },
 ): Promise<DirectPublishResult> {
   const ns = (await pool.query<{ id: string; require_review: boolean }>(`select id, require_review from namespaces where slug = $1`, [input.namespaceSlug])).rows[0];
@@ -1275,6 +1279,7 @@ export async function directPublish(
       originRequestId,
       routedReason: "content_risk",
       routedRules,
+      aiDraftModel: input.aiDraftModel ?? null,
     });
     return { ok: true, routed: "review", proposalId: id, findings: content };
   }
@@ -1315,7 +1320,7 @@ export async function directPublish(
       targetType: "skill",
       targetId: result.skillId,
       namespaceId: ns.id,
-      after: { semver: input.semver, slug: input.payload.metadata.skillSlug, pending: result.pendingMirror ?? false },
+      after: { semver: input.semver, slug: input.payload.metadata.skillSlug, pending: result.pendingMirror ?? false, ...(input.aiDraftModel ? { aiDraftModel: input.aiDraftModel } : {}) },
     });
     if (trips) {
       // §37.4: an override holder published over gate-tripping content findings.
@@ -1625,6 +1630,8 @@ export interface ProposalDetail {
   viaMcpClient: string | null;
   /** §37.4: 'content_risk' when this was a direct publish the content check routed to review. */
   routedReason: string | null;
+  /** §43.8: the model that drafted the submitted files, or null. */
+  aiDraftModel: string | null;
   revisions: ProposalRevisionView[];
   scanReport: { severity: string | null; status: string; findings: unknown; createdAt: string } | null;
   /** §41.3: the rules-only quality of the latest revision's report, computed on read; null until the quality scanner ran. */
@@ -1689,10 +1696,11 @@ export async function getProposalDetail(
     updated_at: string;
     via_mcp_client: string | null;
     routed_reason: string | null;
+    ai_draft_model: string | null;
   }>(
     `select p.id, p.state, p.target_namespace_id, n.slug as namespace_slug, p.target_skill_id,
             p.proposed_semver, p.submitted_by, p.decision_reason, p.materialized_version_id,
-            p.created_at, p.updated_at, p.via_mcp_client, p.routed_reason
+            p.created_at, p.updated_at, p.via_mcp_client, p.routed_reason, p.ai_draft_model
        from proposals p join namespaces n on n.id = p.target_namespace_id
       where p.id = $1`,
     [id],
@@ -1827,6 +1835,7 @@ export async function getProposalDetail(
     updatedAt: p.updated_at,
     viaMcpClient: p.via_mcp_client,
     routedReason: p.routed_reason,
+    aiDraftModel: p.ai_draft_model,
     revisions,
     scanReport,
     quality: scanReport && scanReport.status !== "pending" && scanReport.status !== "unreachable" ? proposalQuality(scanReport.findings) : null,

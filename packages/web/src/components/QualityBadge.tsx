@@ -1,11 +1,13 @@
 "use client";
 import { formatStars, type QualityMode } from "@skilly/shared/quality";
+import { useAiName } from "./AiName";
 
 /** The skill-level quality summary a catalog surface carries (§41.11). */
 export interface QualitySummaryView { score: number; stars: number; mode: QualityMode; scoredAt?: string }
 
-export function qualityTooltip(q: QualitySummaryView): string {
-  return `Quality ${formatStars(q.stars)} / 5 (${q.score}) — computed by skilly from the authoring rules${q.mode === "rules+ai" ? " and an AI assessment" : " only"}`;
+/** `aiName` is the §40.14 display name. */
+export function qualityTooltip(q: QualitySummaryView, aiName = "AI"): string {
+  return `Quality ${formatStars(q.stars)} / 5 (${q.score}) — computed by skilly from the authoring rules${q.mode === "rules+ai" ? ` and an assessment by ${aiName}` : " only"}`;
 }
 
 /**
@@ -13,9 +15,10 @@ export function qualityTooltip(q: QualitySummaryView): string {
  * half-star value. Deliberately not the gold ★ of the user rating. Renders nothing while unscored.
  */
 export function QualityBadge({ quality, label = false }: { quality?: QualitySummaryView | null; label?: boolean }) {
+  const aiName = useAiName();
   if (!quality) return null;
   return (
-    <span className="quality-badge" title={qualityTooltip(quality)} data-testid="quality-badge" aria-label={`Quality ${formatStars(quality.stars)} out of 5`}>
+    <span className="quality-badge" title={qualityTooltip(quality, aiName)} data-testid="quality-badge" aria-label={`Quality ${formatStars(quality.stars)} out of 5`}>
       <span className="quality-glyph" aria-hidden>⛨</span>
       {label && <span className="quality-label">Quality</span>}
       {formatStars(quality.stars)}

@@ -4,6 +4,7 @@ import { parseMinQuality } from "@skilly/shared";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { searchCatalog } from "../../../lib/catalog";
+import { canAiDraftFlags } from "../../../lib/qualityDraft";
 import { getNavSeen } from "../../../lib/settings";
 import { listNonEmptyCollectionsOf } from "../../../lib/collections";
 import { enforceRateLimit } from "../../../lib/ratelimit";
@@ -87,6 +88,11 @@ export async function GET(req: Request) {
   // collections. Every member is org-visible, so the chips are the same for every viewer.
   if (collectionsByUserId) {
     return Response.json({ skills, matchMode, collections: await listNonEmptyCollectionsOf(collectionsByUserId) });
+  }
+  // §43.9 My Skills: the "Draft improvements with <AI>" action per item (the detail page re-checks).
+  if (url.searchParams.get("mine") === "1" && !archivedOnly) {
+    const flags = await canAiDraftFlags(skills);
+    return Response.json({ skills: skills.map((s, i) => ({ ...s, canAiDraft: flags[i] })), matchMode });
   }
   return Response.json({ skills, matchMode });
 }

@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.22.0",
+    date: "2026-10-06",
+    summary:
+      "Maintainers and platform admins can now have the AI draft fixes for a hosted skill's quality findings: review each file's change, keep what you want, and continue in the new-version propose form. Reviewers see a \"Drafted with\" badge. Admins can also rename \"AI\" for end users on the AI integration card.",
+  },
+  {
     version: "2.21.2",
     date: "2026-10-06",
     summary:

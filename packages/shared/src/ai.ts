@@ -44,15 +44,34 @@ export interface AiFeature {
   egress: string;
   /** The spec section that defines the task, e.g. "§41". */
   spec: string;
+  /** Raises this feature's output-token ceiling above the default 8192 (max 32,768) — §40.7. */
+  maxTokens?: number;
+  /** This feature's per-attempt timeout (default 60 s, max 360 s) — §40.7. */
+  timeoutMs?: number;
 }
 
-/** The registered AI tasks (§40.7). The first is the skill quality assessment (§41.5). */
+/** The upper bounds a feature may declare (§40.7). */
+export const AI_FEATURE_MAX_TOKENS_CEILING = 32_768;
+export const AI_FEATURE_TIMEOUT_CEILING_MS = 360_000;
+
+/**
+ * The registered AI tasks (§40.7): the skill quality assessment (§41.5) and the AI-drafted
+ * quality improvements (§43.4).
+ */
 export const AI_FEATURES: readonly AiFeature[] = [
   {
     key: "skill_quality",
     label: "Skill quality assessment",
     egress: "The SKILL.md frontmatter and body (first 60,000 characters), the list of bundled file paths (first 200), and the deterministic quality findings, for each published version",
     spec: "§41",
+  },
+  {
+    key: "skill_quality_draft",
+    label: "Draft quality improvements",
+    egress: "On a maintainer's request, for one hosted skill: the full text of SKILL.md and of every text file carrying a quality finding (up to 25 files, 100,000 characters each; files with a flagged secret are never sent), the bundle's file paths (first 200), and that version's quality findings and stored AI assessment",
+    spec: "§43",
+    maxTokens: AI_FEATURE_MAX_TOKENS_CEILING,
+    timeoutMs: AI_FEATURE_TIMEOUT_CEILING_MS,
   },
 ];
 /** The reserved feature key the admin connectivity test records its usage under. */
@@ -66,7 +85,9 @@ export type AiErrorCode =
   | "ai_unknown_feature"
   | "ai_timeout"
   | "ai_provider_error"
-  | "ai_invalid_json";
+  | "ai_invalid_json"
+  /** The caller aborted the call (e.g. the user cancelled a §43 draft run). Never System-logged. */
+  | "ai_cancelled";
 
 export class AiError extends Error {
   readonly code: AiErrorCode;
@@ -323,16 +344,23 @@ async function readCapped(res: Response, max: number): Promise<string> {
  */
 export async function providerFetch(
   spec: AiRequestSpec,
-  opts: { timeoutMs: number; token: string; fetchImpl?: typeof fetch },
+  opts: { timeoutMs: number; token: string; fetchImpl?: typeof fetch; signal?: AbortSignal },
 ): Promise<unknown> {
   const f = opts.fetchImpl ?? fetch;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
+  const cancelled = () => opts.signal?.aborted === true;
+  const onCancel = () => ctrl.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) ctrl.abort();
+    else opts.signal.addEventListener("abort", onCancel, { once: true });
+  }
   try {
     let res: Response;
     try {
       res = await f(spec.url, { ...spec.init, redirect: "manual", signal: ctrl.signal });
     } catch (err) {
+      if (cancelled()) throw new AiError("ai_cancelled", "the call was cancelled");
       if (ctrl.signal.aborted) throw new AiError("ai_timeout", `the provider did not answer within ${Math.round(opts.timeoutMs / 1000)}s`);
       throw new AiError("ai_provider_error", sanitizeAiError(`could not reach the provider: ${(err as Error)?.message ?? err}`, opts.token));
     }
@@ -356,10 +384,12 @@ export async function providerFetch(
     return body;
   } catch (err) {
     if (err instanceof AiError) throw err;
+    if (cancelled()) throw new AiError("ai_cancelled", "the call was cancelled");
     if (ctrl.signal.aborted) throw new AiError("ai_timeout", `the provider did not answer within ${Math.round(opts.timeoutMs / 1000)}s`);
     throw new AiError("ai_provider_error", sanitizeAiError(String((err as Error)?.message ?? err), opts.token));
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener("abort", onCancel);
   }
 }
 
@@ -599,6 +629,8 @@ export interface AiCompleteOptions {
   messages: AiMessage[];
   maxTokens: number;
   json?: boolean;
+  /** Aborts the call (and its retry); the attempt is recorded as `ai_cancelled`. */
+  signal?: AbortSignal;
 }
 
 export interface AiCompleteResult {
@@ -608,6 +640,16 @@ export interface AiCompleteResult {
   inputTokens: number | null;
   outputTokens: number | null;
   latencyMs: number;
+}
+
+/** A feature's output-token ceiling: its declared `maxTokens` (clamped to 32,768), else 8192. */
+export function aiFeatureMaxTokens(f: Pick<AiFeature, "maxTokens">): number {
+  return Number.isInteger(f.maxTokens) && f.maxTokens! > 0 ? Math.min(f.maxTokens!, AI_FEATURE_MAX_TOKENS_CEILING) : AI_MAX_TOKENS_LIMIT;
+}
+
+/** A feature's per-attempt timeout: its declared `timeoutMs` (clamped to 360 s), else 60 s. */
+export function aiFeatureTimeoutMs(f: Pick<AiFeature, "timeoutMs">): number {
+  return Number.isInteger(f.timeoutMs) && f.timeoutMs! > 0 ? Math.min(f.timeoutMs!, AI_FEATURE_TIMEOUT_CEILING_MS) : AI_CALL_TIMEOUT_MS;
 }
 
 /** True when the integration is configured, enabled and its token decrypts — gate AI affordances on it. */
@@ -631,13 +673,16 @@ function bestEffort(p: Promise<unknown>): Promise<void> {
  */
 export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Promise<AiCompleteResult> {
   const features = env.features ?? AI_FEATURES;
-  if (o.feature === AI_TEST_FEATURE || !features.some((f) => f.key === o.feature)) {
+  const feature = o.feature === AI_TEST_FEATURE ? undefined : features.find((f) => f.key === o.feature);
+  if (!feature) {
     throw new AiError("ai_unknown_feature", `"${o.feature}" is not a registered AI feature`);
   }
   if (!Array.isArray(o.messages) || o.messages.length === 0) throw new Error("aiComplete: messages must be a non-empty array");
-  if (!Number.isInteger(o.maxTokens) || o.maxTokens < 1 || o.maxTokens > AI_MAX_TOKENS_LIMIT) {
-    throw new Error(`aiComplete: maxTokens must be an integer 1–${AI_MAX_TOKENS_LIMIT}`);
+  const ceiling = aiFeatureMaxTokens(feature);
+  if (!Number.isInteger(o.maxTokens) || o.maxTokens < 1 || o.maxTokens > ceiling) {
+    throw new Error(`aiComplete: maxTokens must be an integer 1–${ceiling}`);
   }
+  const timeoutMs = env.timeoutMs ?? aiFeatureTimeoutMs(feature);
 
   const row = await loadAiConfig(db);
   if (!row) throw new AiError("ai_not_configured", "the AI integration is not configured");
@@ -663,13 +708,13 @@ export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Pr
   let json: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const body = await providerFetch(spec, { timeoutMs: env.timeoutMs ?? AI_CALL_TIMEOUT_MS, token, fetchImpl: env.fetchImpl });
+      const body = await providerFetch(spec, { timeoutMs, token, fetchImpl: env.fetchImpl, signal: o.signal });
       parsed = parseCompletionResponse(row.provider, body);
       failure = null;
       break;
     } catch (err) {
       failure = err instanceof AiError ? err : new AiError("ai_provider_error", sanitizeAiError(String(err), token));
-      if (attempt === 0 && isRetryable(failure)) {
+      if (attempt === 0 && isRetryable(failure) && !o.signal?.aborted) {
         await sleep(retryDelayMs(failure.retryAfter));
         continue;
       }

@@ -106,6 +106,10 @@
     "./ai": {
       "types": "./dist/ai.d.ts",
       "default": "./dist/ai.js"
+    },
+    "./ai-name": {
+      "types": "./dist/ai-name.d.ts",
+      "default": "./dist/ai-name.js"
     }
   },
   "scripts": {

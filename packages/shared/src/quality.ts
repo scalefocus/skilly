@@ -293,6 +293,11 @@ const basename = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 const ext = (p: string) => (basename(p).includes(".") ? basename(p).split(".").pop()!.toLowerCase() : "");
 const isHidden = (p: string) => p.split("/").some((seg) => seg.startsWith("."));
 
+/** True when a bundle path is OS / tooling junk (the FS-004 junk test) — §43.3 deletes these deterministically. */
+export function isOsJunkPath(p: string): boolean {
+  return p.split("/").some((seg) => OS_JUNK.test(seg));
+}
+
 export function excerptOf(line: string): string {
   const t = line.trim();
   return t.length > QUALITY_EXCERPT_MAX ? t.slice(0, QUALITY_EXCERPT_MAX - 1) + "…" : t;

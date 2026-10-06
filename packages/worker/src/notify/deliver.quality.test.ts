@@ -52,3 +52,26 @@ test("renderNotification: skill.quality_low without AI or findings still reads a
   assert.doesNotMatch(r.text, /AI assessment:/);
   assert.doesNotMatch(r.text, /Recommendations:/);
 });
+
+test("renderNotification: skill.quality_low uses the captured AI name and adds the §43.9 draft CTA", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const r = renderNotification({
+    type: "skill.quality_low",
+    payload: {
+      namespaceSlug: "team-a", skillSlug: "pdf", semver: "1.2.0", score: 32, stars: 2, mode: "rules+ai",
+      findings: [], summary: "Vague.", suggestions: [], aiName: "Aria", aiDraft: true,
+    },
+  });
+  assert.match(r.text, /\(32\/100, rules \+ Aria assessment\)/);
+  assert.match(r.text, /Aria assessment: Vague\./);
+  assert.match(r.text, /\[Draft improvements with Aria\]\(https:\/\/skilly\.test\/skills\/team-a\/pdf\?draft=ai#quality\)/);
+});
+
+test("renderNotification: skill.quality_low has no draft CTA unless the payload says so", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const r = renderNotification({
+    type: "skill.quality_low",
+    payload: { namespaceSlug: "team-a", skillSlug: "pdf", semver: "1.2.0", score: 32, stars: 2, mode: "rules", findings: [], suggestions: [], aiDraft: false },
+  });
+  assert.doesNotMatch(r.text, /Draft improvements/);
+});

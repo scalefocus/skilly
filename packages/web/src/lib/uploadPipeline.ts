@@ -6,7 +6,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { pool } from "./db";
 import { proposalQuality } from "./quality";
-import { s3ArtifactStore } from "./objectStore";
+import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { extractBundle } from "./bundle";
 import { findDuplicateSkill } from "./duplicate";
 import { getDuplicateEnforcement } from "./settings";
@@ -27,6 +27,8 @@ export async function processBundleUpload(
   filename: string | undefined,
   skillSlug: string,
   maxBytes: number,
+  /** Test seam: the object store (production: S3). */
+  deps: { store?: ArtifactStore } = {},
 ): Promise<Response> {
   if (bundleBytes.length > maxBytes) {
     return Response.json({ error: `the bundle is bigger than the allowed size of ${fmtSize(maxBytes)}` }, { status: 413 });
@@ -91,7 +93,7 @@ export async function processBundleUpload(
   // Store the original uploaded bundle (verbatim) at an immutable key; record the scan.
   const artifactObjectKey = `uploads/${access.userId}/${randomUUID()}.bundle`;
   try {
-    await s3ArtifactStore().put(artifactObjectKey, bundleBytes);
+    await (deps.store ?? s3ArtifactStore()).put(artifactObjectKey, bundleBytes);
   } catch (e) {
     // Object storage unreachable/misconfigured (e.g. the S3 endpoint host can't be resolved).
     // Surface a clear, actionable message instead of a generic 500; the raw cause goes to stdout

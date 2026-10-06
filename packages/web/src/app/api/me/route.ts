@@ -148,6 +148,8 @@ export async function GET() {
     // How far ahead (calendar months) an install URL's expiry may be set — bounds the ExpiryPicker
     // (server re-validates authoritatively). §23.
     installMaxTtlMonths: settings.installMaxTtlMonths,
+    // §40.14 the end-user name for the AI ("AI" unless an admin branded it) — every end-user AI label.
+    aiDisplayName: settings.aiDisplayName,
     // Map -> array of { namespaceId, role } for JSON.
     namespaceRoles: [...access.namespaceRoles.entries()].map(([namespaceId, role]) => ({
       namespaceId,

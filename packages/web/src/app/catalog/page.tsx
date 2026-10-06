@@ -11,6 +11,7 @@ import { initialFacetRowOpen, storedFacetRowOpen } from "../../lib/facetRow";
 import { agentLabel } from "@skilly/shared/agents";
 import { collectionPath } from "@skilly/shared/collections";
 import { UserBubble } from "../../components/UserBubble";
+import { useAiName } from "../../components/AiName";
 
 /** §38.5 the collection banner's data (GET /api/collections/:id). */
 interface CollectionInfo {
@@ -33,6 +34,7 @@ const SEARCH_TIP = "Tip: use \"quotes\" for an exact phrase, -word to exclude, a
 
 function Catalog() {
   const params = useSearchParams();
+  const aiName = useAiName();
   // Press Enter to jump to the header search box (the catalog has no page-local input).
   useEnterKey(() => window.dispatchEvent(new Event("skilly:focus-search")));
   // Search comes from the topbar box (it navigates to /catalog?q=…) — no page-local input.
@@ -441,6 +443,11 @@ function Catalog() {
                     <SkillCard s={s} index={i} />
                     <RemoveFromCollection s={s} busy={removing === s.skillId} onRemove={removeFromCollection} />
                   </div>
+                ) : s.canAiDraft ? (
+                  <div className="collection-item" key={`${s.namespaceSlug}/${s.skillSlug}`}>
+                    <SkillCard s={s} index={i} />
+                    <AiDraftAction s={s} aiName={aiName} />
+                  </div>
                 ) : (
                   <SkillCard key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} index={i} />
                 ),
@@ -454,6 +461,11 @@ function Catalog() {
                     <SkillListRow s={s} />
                     <RemoveFromCollection s={s} busy={removing === s.skillId} onRemove={removeFromCollection} />
                   </div>
+                ) : s.canAiDraft ? (
+                  <div className="collection-item is-row" key={`${s.namespaceSlug}/${s.skillSlug}`}>
+                    <SkillListRow s={s} />
+                    <AiDraftAction s={s} aiName={aiName} />
+                  </div>
                 ) : (
                   <SkillListRow key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} />
                 ),
@@ -463,6 +475,15 @@ function Catalog() {
         </>
       )}
     </div>
+  );
+}
+
+/** §43.9 My Skills: "Draft improvements with <AI>" — opens the skill's Quality card with the draft dialog. */
+function AiDraftAction({ s, aiName }: { s: CatalogEntry; aiName: string }) {
+  return (
+    <Link href={`/skills/${s.namespaceSlug}/${s.skillSlug}?draft=ai#quality`} className="collection-remove ai-draft-action" data-testid="ai-draft-action">
+      ✦ Draft improvements with {aiName}
+    </Link>
   );
 }
 

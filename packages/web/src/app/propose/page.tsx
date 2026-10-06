@@ -26,6 +26,29 @@ import { ContentRiskFindingsList, type ContentRiskFinding } from "../../componen
 import { QualityFindingsList, type QualityFindingItem } from "../../components/QualityFindingsList";
 import { QualityStars } from "../../components/QualityBadge";
 import { formatStars } from "@skilly/shared/quality";
+import { useAiName } from "../../components/AiName";
+
+/** §43.7 the AI draft handed over from the skill page's draft dialog (sessionStorage). */
+const AI_DRAFT_HANDOFF_KEY = "skilly.aiDraft";
+interface AiDraftHandoff {
+  ns: string;
+  slug: string;
+  baseSemver: string;
+  aiDraftToken: string;
+  whatChanged: string;
+  model: string | null;
+  upload: {
+    artifactObjectKey: string;
+    artifactSha256: string;
+    contentSha256: string;
+    artifactFilename: string | null;
+    scan?: { severity: string; findings: { severity?: string; scanner?: string }[] } | null;
+    quality?: { rulesScore: number; stars: number; findings: QualityFindingItem[] } | null;
+    bundleIcon?: { sha256?: string; emoji?: string; url?: string; source: "frontmatter" | "bundle" } | null;
+    duplicate?: { namespaceSlug: string; skillSlug: string } | null;
+    duplicateEnforcement?: "block" | "warn";
+  };
+}
 
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
@@ -72,9 +95,18 @@ function titleize(slug: string): string {
     .join(" ");
 }
 
+function clearAiDraftHandoff(): void {
+  try {
+    sessionStorage.removeItem(AI_DRAFT_HANDOFF_KEY);
+  } catch {
+    /* storage blocked — nothing to clear */
+  }
+}
+
 function ProposeForm() {
   const router = useRouter();
   const params = useSearchParams();
+  const aiName = useAiName();
   // New-version mode: pre-fill from an existing skill and LOCK the identity/access surface only —
   // slug, visibility (namespace-derived), and delivery type. Title, description, categories,
   // tool/harness, usage, and the semver are all editable (synced to the skill on accept, §8); the
@@ -313,6 +345,32 @@ function ProposeForm() {
   // Supplying a real source clears it; any keystroke in the field makes the note the proposer's,
   // and it is then never rewritten in either direction.
   const noteIsDefault = useRef(false);
+  // §43.7 AI draft handoff: the staged bundle + token + note from the skill page's draft dialog.
+  // It stands in for an attached file until the proposer attaches a different bundle.
+  const [aiDraft, setAiDraft] = useState<AiDraftHandoff | null>(null);
+  const aiDraftApplied = useRef(false);
+  useEffect(() => {
+    if (params.get("aiDraft") !== "1" || !isNewVersion) return;
+    try {
+      const h = JSON.parse(sessionStorage.getItem(AI_DRAFT_HANDOFF_KEY) ?? "null") as AiDraftHandoff | null;
+      if (h && h.ns === nvNs && h.slug === nvSlug && h.upload?.artifactObjectKey && h.aiDraftToken) setAiDraft(h);
+    } catch {
+      /* no handoff — the form behaves as plain new-version mode */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once on arrival
+  }, []);
+  // Once the new-version pre-fill has run, the draft overrides it: a fresh (hosted) source instead
+  // of Keep current files, the AI's per-file summaries as the note, and the draft's scan/quality.
+  useEffect(() => {
+    if (!aiDraft || !ready || aiDraftApplied.current) return;
+    aiDraftApplied.current = true;
+    setReuseFiles(false);
+    noteIsDefault.current = false;
+    setF((prev) => ({ ...prev, whatChanged: aiDraft.whatChanged || prev.whatChanged }));
+    setScan(aiDraft.upload.scan ?? null);
+    setQuality(aiDraft.upload.quality ?? null);
+    setBundleIcon(aiDraft.upload.bundleIcon ?? null);
+  }, [aiDraft, ready]);
   // Snapshot of the skill's current metadata at pre-fill, for the client-side §8 no-op guard
   // (with reused files, at least one field must differ; the server re-enforces with a 422).
   const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; categories: string[]; usageExamples: string; sharedNamespaceIds: string[] } | null>(null);
@@ -583,6 +641,7 @@ function ProposeForm() {
     }
     setDropErr(null);
     setDup(null); // a new bundle invalidates any prior content-duplicate verdict (re-checked on submit)
+    setAiDraft(null); // §43.7: a different bundle replaces the AI-drafted one (and drops its token)
     setReuseFiles(false); // attaching a bundle = explicitly supplying a source (§8)
     dropDefaultNote();
     setFile(picked);
@@ -685,6 +744,7 @@ function ProposeForm() {
       }
 
       const reusing = isNewVersion && reuseFiles;
+      let usedAiDraft = false;
       let artifact: { artifactObjectKey?: string; artifactSha256?: string; contentSha256?: string; artifactFilename?: string | null } = {};
       let pointer: { url: string; ref: string; subdir?: string | null } | undefined;
       if (reusing) {
@@ -717,7 +777,18 @@ function ProposeForm() {
           throw new Error("Nothing changed — edit at least one field (title, description, categories, tool/harness, usage, or shared namespaces), or provide a new source.");
         }
       } else if (sourceType === "hosted") {
-        const up = await uploadBundle();
+        // §43.7: the AI-drafted bundle is already uploaded, validated and scanned — use it as is.
+        const up = aiDraft && !file
+          ? {
+              artifactObjectKey: aiDraft.upload.artifactObjectKey,
+              artifactSha256: aiDraft.upload.artifactSha256,
+              contentSha256: aiDraft.upload.contentSha256,
+              artifactFilename: aiDraft.upload.artifactFilename,
+              duplicate: aiDraft.upload.duplicate ?? null,
+              enforcement: aiDraft.upload.duplicateEnforcement === "warn" ? ("warn" as const) : ("block" as const),
+            }
+          : await uploadBundle();
+        if (aiDraft && !file) usedAiDraft = true;
         // Hosted duplicate gate (§8): block stops here and offers "propose a new version"; warn
         // surfaces a notice but proceeds. Never gates a new-version proposal (it's intentional).
         if (up.duplicate && !isNewVersion) {
@@ -774,6 +845,8 @@ function ProposeForm() {
         pointer,
         // Keep current files (§8): the server resolves the reuse snapshot itself.
         ...(reusing ? { reuseCurrentFiles: true } : {}),
+        // §43.8: provenance of an AI-drafted bundle (the server ignores a token that doesn't verify).
+        ...(usedAiDraft && aiDraft ? { aiDraftToken: aiDraft.aiDraftToken } : {}),
         // Fulfilment link (§26): accepted proposal → the originating request is fulfilled.
         ...(originRequestId && !isNewVersion ? { originRequestId } : {}),
         // §37.4: the confirmed, audited override of a flagged direct publish.
@@ -794,6 +867,7 @@ function ProposeForm() {
           throw new Error(j.error ?? "Could not create proposal");
         }
         reportFeatureUse("propose"); // §36.3
+        if (usedAiDraft) clearAiDraftHandoff();
         router.push(`/proposals/${j.id}`);
       } else {
         const r = await fetch("/api/publish", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -813,6 +887,7 @@ function ProposeForm() {
           throw new Error(j.error ?? "Could not publish");
         }
         reportFeatureUse("propose"); // §36.3
+        if (usedAiDraft) clearAiDraftHandoff();
         if (r.status === 202 && j.routed === "review" && j.proposalId) {
           // §37.4: the content check sent this direct publish to review instead.
           router.push(`/proposals/${j.proposalId}`);
@@ -1005,6 +1080,11 @@ function ProposeForm() {
         {mode === "have" && !(lock && reuseFiles) && (sourceType === "hosted" ? (
           <div>
             <label style={label}>SKILL.md bundle (.tar.gz, .zip, or .skill)</label>
+            {aiDraft && !file && (
+              <div className="card card-pad" data-testid="ai-draft-notice" style={{ marginBottom: 10, fontSize: 13, lineHeight: 1.5, background: "var(--accent-soft)", borderColor: "color-mix(in oklab, var(--accent) 30%, var(--line))" }}>
+                ✦ Files drafted with {aiName} from <span className="mono">v{aiDraft.baseSemver}</span> — review before submitting. Attaching a different bundle replaces them.
+              </div>
+            )}
             {/* Drops are handled page-wide (see the window listeners above); this box keeps the
                 highlight + the click-to-choose affordance. */}
             <div className={`dropzone${dragOver ? " drag" : ""}`}>
@@ -1015,6 +1095,12 @@ function ProposeForm() {
                 <span className="dropzone-file">
                   <span className="mono">{file.name}</span>
                   <button type="button" className="dropzone-clear" onClick={() => { setFile(null); setDropErr(null); }} title="Remove file">✕ remove</button>
+                </span>
+              ) : aiDraft ? (
+                <span className="dropzone-file" data-testid="ai-draft-attached">
+                  <span className="mono">{aiDraft.upload.artifactFilename ?? "draft.zip"}</span>
+                  <span className="muted" style={{ fontSize: 12 }}>· drafted with {aiName}</span>
+                  <button type="button" className="dropzone-clear" onClick={() => { setAiDraft(null); clearAiDraftHandoff(); setScan(null); setQuality(null); }} title="Discard the drafted files">✕ discard</button>
                 </span>
               ) : (
                 <div className="dropzone-lead">Drag &amp; drop your skill bundle here</div>
@@ -1437,7 +1523,7 @@ function ProposeForm() {
               <span style={{ fontWeight: 600, fontSize: 14 }}>Quality</span>
               <QualityStars stars={quality.stars} size={15} />
               <span className="mono" style={{ fontSize: 13, fontWeight: 600 }} data-testid="propose-quality-stars">{formatStars(quality.stars)}</span>
-              <span className="muted mono" style={{ fontSize: 11 }}>{quality.rulesScore} / 100 · rules only · AI assessment runs after publish</span>
+              <span className="muted mono" style={{ fontSize: 11 }}>{quality.rulesScore} / 100 · rules only · {aiName} assessment runs after publish</span>
               {quality.findings.length > 0 && (
                 <button type="button" className="btn-ghost mono" style={{ fontSize: 11, marginLeft: "auto" }} aria-expanded={qualityOpen} onClick={() => setQualityOpen((o) => !o)}>
                   {qualityOpen ? "▾" : "▸"} {quality.findings.length} finding{quality.findings.length === 1 ? "" : "s"}

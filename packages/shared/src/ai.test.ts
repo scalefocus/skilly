@@ -5,6 +5,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AI_BUDGET_EXHAUSTED_MESSAGE,
+  AI_FEATURES,
+  AI_FEATURE_MAX_TOKENS_CEILING,
+  AI_FEATURE_TIMEOUT_CEILING_MS,
+  aiFeatureMaxTokens,
+  aiFeatureTimeoutMs,
   AI_TEST_MAX_TOKENS,
   AiError,
   aiAvailable,
@@ -496,4 +501,57 @@ test("aiAvailable: configured + enabled + decryptable", async () => {
   assert.equal(await aiAvailable(fakeDb(stateWith({ enabled: false })), { key: KEY }), false);
   assert.equal(await aiAvailable(fakeDb(stateWith()), { key: OTHER_KEY }), false);
   assert.equal(await aiAvailable(fakeDb({ row: null, usage: [], events: [], claimOpen: true }), { key: KEY }), false);
+});
+
+// ── §40.7 per-feature ceilings & cancellation (§43) ─────────────────────────────────────────────
+
+test("aiFeatureMaxTokens / aiFeatureTimeoutMs: defaults, declared values, and the clamps", () => {
+  assert.equal(aiFeatureMaxTokens({}), 8192);
+  assert.equal(aiFeatureMaxTokens({ maxTokens: 20000 }), 20000);
+  assert.equal(aiFeatureMaxTokens({ maxTokens: 99999 }), AI_FEATURE_MAX_TOKENS_CEILING);
+  assert.equal(aiFeatureTimeoutMs({}), 60_000);
+  assert.equal(aiFeatureTimeoutMs({ timeoutMs: 120_000 }), 120_000);
+  assert.equal(aiFeatureTimeoutMs({ timeoutMs: 9_999_999 }), AI_FEATURE_TIMEOUT_CEILING_MS);
+});
+
+test("AI_FEATURES registers skill_quality_draft (§43.4) with the 32,768-token / 360 s ceilings", () => {
+  const f = AI_FEATURES.find((x) => x.key === "skill_quality_draft");
+  assert.ok(f);
+  assert.equal(f!.spec, "§43");
+  assert.equal(f!.maxTokens, 32_768);
+  assert.equal(f!.timeoutMs, 360_000);
+  assert.match(f!.egress, /never sent/);
+  // The quality assessment keeps the default ceiling.
+  assert.equal(AI_FEATURES.find((x) => x.key === "skill_quality")!.maxTokens, undefined);
+});
+
+test("aiComplete: maxTokens above 8192 is allowed only for a feature that declares a higher ceiling", async () => {
+  const big: AiFeature[] = [...FEATURES, { key: "big", label: "Big", egress: "x", spec: "§99", maxTokens: 32_768 }];
+  const st = stateWith();
+  const f = fakeFetch([json({ model: "claude-x", content: [{ type: "text", text: "ok" }] })]);
+  await assert.rejects(aiComplete(fakeDb(st), env(f.impl, { features: big }), { feature: "summarize", messages: MSG, maxTokens: 9000 }), /maxTokens must be an integer 1–8192/);
+  const r = await aiComplete(fakeDb(st), env(f.impl, { features: big }), { feature: "big", messages: MSG, maxTokens: 32_768 });
+  assert.equal(r.text, "ok");
+  assert.equal(JSON.parse(String(f.calls[0]!.init.body)).max_tokens, 32_768);
+  await assert.rejects(aiComplete(fakeDb(st), env(f.impl, { features: big }), { feature: "big", messages: MSG, maxTokens: 32_769 }), /1–32768/);
+});
+
+test("aiComplete: an aborted signal ends the call as ai_cancelled — recorded, never retried, never System-logged", async () => {
+  const st = stateWith();
+  const ctrl = new AbortController();
+  const f = fakeFetch([
+    (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        ctrl.abort();
+      }),
+  ]);
+  await assert.rejects(
+    aiComplete(fakeDb(st), env(f.impl), { feature: "summarize", messages: MSG, maxTokens: 5, signal: ctrl.signal }),
+    (e: unknown) => e instanceof AiError && e.code === "ai_cancelled",
+  );
+  assert.equal(f.calls.length, 1);
+  assert.equal(st.usage.length, 1);
+  assert.equal(st.usage[0]![8], "ai_cancelled");
+  assert.equal(st.events.length, 0);
 });

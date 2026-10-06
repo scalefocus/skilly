@@ -184,7 +184,7 @@ export async function sweepQualityAi(pool: Pool, store: ArtifactStore, limit = Q
     }
     M.qualityAiAttempts.inc({ outcome });
     await refreshSkillQuality(pool, c.skill_id);
-    await settleQualityLow(pool, c.version_id);
+    await settleQualityLow(pool, c.version_id, undefined, { aiOn: true });
   }
   M.qualitySweepRuns.inc({ phase: "ai" });
   return attempted;
