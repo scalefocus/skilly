@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.21.1",
+    date: "2026-10-06",
+    summary:
+      "Fixed: saving an unchanged proposal from its review page no longer creates a new revision. The share list was being sent even when nobody touched it, so the \"nothing changed\" check never fired.",
+  },
+  {
     version: "2.21.0",
     date: "2026-10-06",
     summary:
