@@ -149,11 +149,20 @@ pipeline {
             -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
             -p ${CI_PG_PORT}:5432 "${PG_IMAGE}"
 
-          # Wait for readiness.
-          for i in $(seq 1 30); do
-            if docker exec "${CI_PG_CONTAINER}" pg_isready -U skilly >/dev/null 2>&1; then break; fi
+          # Wait for readiness. Probe over TCP and query the target database: on first boot the
+          # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
+          # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
+          # 'database "skilly" does not exist'). The temp server never listens on TCP.
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "${CI_PG_CONTAINER}" psql -h 127.0.0.1 -U skilly -d skilly -tAc 'select 1' >/dev/null 2>&1; then ready=1; break; fi
             sleep 2
           done
+          if [ "$ready" != 1 ]; then
+            echo "Postgres did not become ready in time" >&2
+            docker logs "${CI_PG_CONTAINER}" >&2 || true
+            exit 1
+          fi
 
           # Create least-privilege app role and apply all migrations.
           docker exec "${CI_PG_CONTAINER}" psql -U skilly -d skilly -c \
@@ -212,11 +221,20 @@ pipeline {
             -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD="${CI_E2E_MINIO_PASSWORD}" \
             -p ${CI_E2E_MINIO_PORT}:9000 "${MINIO_IMAGE}" server /data
 
-          # Wait for Postgres readiness.
-          for i in $(seq 1 30); do
-            if docker exec "${CI_E2E_PG_CONTAINER}" pg_isready -U skilly >/dev/null 2>&1; then break; fi
+          # Wait for Postgres readiness. Probe over TCP and query the target database: on first boot the
+          # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
+          # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
+          # 'database "skilly" does not exist'). The temp server never listens on TCP.
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "${CI_E2E_PG_CONTAINER}" psql -h 127.0.0.1 -U skilly -d skilly -tAc 'select 1' >/dev/null 2>&1; then ready=1; break; fi
             sleep 2
           done
+          if [ "$ready" != 1 ]; then
+            echo "Postgres did not become ready in time" >&2
+            docker logs "${CI_E2E_PG_CONTAINER}" >&2 || true
+            exit 1
+          fi
 
           # Least-privilege app role, all migrations, then the DEV seed (dev-admin user + fixtures).
           docker exec "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -c \
