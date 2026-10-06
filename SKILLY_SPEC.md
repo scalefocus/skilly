@@ -1748,6 +1748,15 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
     *(Spec'd 2026-10-06; not yet built.)*
 
+**Phase 14 — Achievements extension**
+33. **Encore badge (§31.11):** `first_version_proposal`, awarded on the first new-version
+    submission — a web or MCP proposal for an existing skill, or a direct publish of a new version
+    (in `directPublish()`, never on review acceptance). The catalog grows to 24; migration 0085
+    backfills from new-version proposals and non-first versions and stamps `hero_at` for anyone it
+    completes.
+
+    **DONE.**
+
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
 - **SAML** — identity is anchored on Entra **OIDC** (+ SCIM). A second federation protocol is a large auth surface with no current requirement.
@@ -4924,6 +4933,7 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | `first_pointer_proposal` | **Finger Pointer** | Submitted a first proposal whose artifact type is **pointer**. | Contribute |
 | `first_published` | **Shipped It** | A version the user submitted was **published** (review acceptance, or direct publish in a no-review namespace). | Contribute |
 | `first_new_version` | **Sequel** | A version the user submitted was published to a skill that **already had a published version**. | Contribute |
+| `first_version_proposal` | **Encore** | **Put forward** a first new version of an **existing** skill (`target_skill_id` set): a new-version proposal created on the web or over MCP, **or** a direct publish of a new version in a no-review namespace (§8). Awarded on submission, not on acceptance — a later reject or delete never revokes it. Any skill counts, including one the user maintains. See §31.11. | Contribute |
 | `maintainer_added` | **Adopted** | Added as an **explicit maintainer** of a skill whose original proposer — the creator of the skill's **earliest version** — is **not** the user (§19). A brand-new skill's own submitter is never "adopted". | Contribute |
 | `first_message` | **Icebreaker** | Sent a first message in **any** messaging context (direct, proposal review, request discussion, skill discussion — §24). | Talk |
 | `first_reply` | **Conversationalist** | Posted in a conversation whose **first message was authored by someone else**. | Talk |
@@ -4948,7 +4958,8 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
   `key` scheme leaves room for `installs_10`-style keys later without touching existing rows.
 - **MCP-originated actions count** exactly like web ones — a proposal submitted through the MCP
   `propose_*` tools is a proposal (§29 attribution) and earns `first_hosted_proposal` /
-  `first_pointer_proposal`; an install minted and cloned by an agent earns `first_install`.
+  `first_pointer_proposal` (and `first_version_proposal` when it targets an existing skill); an
+  install minted and cloned by an agent earns `first_install`.
 - **System installations (§23) earn nothing** — no user.
 
 ### 31.2 Data & awarding
@@ -4994,7 +5005,11 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
   dispatcher, once per tool call, before dispatch (`first_mcp`); `POST /api/requests`
   (`first_request`); both fulfilment paths — proposal acceptance and "fulfil with existing skill"
   (`request_fulfilled` to the requester, `first_fulfilment` to the fulfiller); proposal creation,
-  web and MCP (`first_hosted_proposal` / `first_pointer_proposal` by artifact type); version
+  web and MCP (`first_hosted_proposal` / `first_pointer_proposal` by artifact type, plus
+  `first_version_proposal` when `target_skill_id` is set); the direct-publish branch of
+  `directPublish()` when it publishes a new version of an existing skill (`first_version_proposal`,
+  in the publish transaction — **not** inside `materializeVersion()`, which review acceptance also
+  calls, §31.11); version
   publish (`first_published`, plus `first_new_version` when the skill already had a published
   version); `skill_maintainers` insert (`maintainer_added`, when the skill's original proposer is
   someone else); message insert (`first_message`; `first_reply` when the conversation's earliest
@@ -5133,7 +5148,7 @@ around the bubble itself (§31.10) — one number, never which badges earned it.
 ### 31.10 Level (the badge count, worn on the bubble)
 
 A **level** is nothing more than *how many of the catalog's badges a user has earned* — one number
-from 0 to the catalog size (23 today, after §35.8 added two and §38.8 one). It introduces no new event, no new award rule and no new
+from 0 to the catalog size (24 today, after §35.8 added two, §38.8 one and §31.11 one). It introduces no new event, no new award rule and no new
 disclosure: everything it shows, the §31.5 achievements count already showed. What it adds is
 **reach** — the number travels with the avatar, so progress is legible at a glance instead of only
 on a page someone has to go and open.
@@ -5246,6 +5261,10 @@ rows; the notification is created only by the runtime helper). Sources:
 The migration is idempotent (`ON CONFLICT DO NOTHING`) and self-contained plain SQL, like
 migration 0041's credit backfill.
 
+**Later catalog additions** carry their own backfill in the migration that ships them, under the
+same rules (non-erased users, original timestamp, no notifications, idempotent):
+`first_version_proposal` → **migration 0085** (§31.11).
+
 ### 31.7 Lifecycle, privacy, governance
 
 - **GDPR erasure (§4, both the admin and SCIM paths):** `user_achievements` rows are **deleted**
@@ -5313,6 +5332,74 @@ including on a backfilled award; migration 0072 backfills `hero_at = max(earned_
 full-house user and leaves everyone else null; `GET /api/levels` omits hidden, inactive and erased
 users, includes the caller's own hidden entry, omits level-0 users, and returns an empty map while
 the toggle is off; the card payload's `achievementHero`; the erasure sweep clears `hero_at`.
+
+### 31.11 Encore — first new-version proposal (`first_version_proposal`)
+
+A badge for **putting forward a new version of an existing skill** for the first time. It sits
+next to *Sequel* (`first_new_version`) but is earlier in the funnel: Sequel needs the version to be
+**published**, Encore only needs it to be **submitted** — achievements reward trying the feature
+(§31), and proposing a new version is the step the propose-from-detail-page flow (§8) exists to
+invite.
+
+- **Catalog entry** (group **Contribute**, placed directly after `first_new_version`):
+  `{ key: "first_version_proposal", name: "Encore", glyph: "🎤", blurb: "The crowd wanted more, so
+  you proposed it.", howToEarn: "Propose a new version from a skill's page." }`.
+- **Qualifying event** — the user submits a version whose target is an **existing skill**
+  (`target_skill_id` is set). Three doors, one fact:
+  1. **Web proposal** — `createProposal()` with `targetSkillId` set. This includes a direct publish
+     the content-risk gate **routed to review** (§37.4), which goes through `createProposal()`.
+  2. **MCP proposal** — the worker's mirror of proposal creation (`mcp/writes.ts`), same rule.
+  3. **Direct publish of a new version** — the publish branch of `directPublish()` in a
+     no-review namespace (no proposal row is created). The award joins that transaction and is
+     made **there, not in `materializeVersion()`**, because review acceptance also calls
+     `materializeVersion()` and the proposer already earned the badge when they submitted.
+- **What counts:** any existing skill, including one the user maintains (§31.1 self-actions
+  rule); prerelease semvers; the *Keep current files* reuse source; and a new-skill submission
+  redirected into the new-version flow by duplicate detection (§8), since it is created as a
+  new-version proposal.
+- **What does not count:** `revise` and resubmit (only **creation** awards, so it is a new
+  proposal, not another revision); promote-to-global (§8) — including a **re-promotion** that
+  targets an existing global copy, which is a copy of a version and proposes no new content
+  (recognised by the payload's `promotedFromSkillVersionId`); a proposal for a brand-new skill.
+- **Never revoked.** A later reject, a reviewer's delete of the proposal, or deletion of the skill leaves the
+  badge in place (§31: badges are never lost).
+- **Stacks with the existing keys, which are unchanged.** The same submission still earns
+  `first_hosted_proposal` / `first_pointer_proposal` by artifact type (proposal paths only — direct
+  publish keeps not awarding those, as today), and its later publish still earns `first_published` /
+  `first_new_version`. In a no-review namespace a first direct-published new version can therefore
+  earn Encore, Shipped It and Sequel together. The Encore award passes `noHabits: true` where
+  another award at the same hook already evaluates the Habits badges, so one event is one Habits
+  evaluation.
+- **Notifications:** `achievement.earned` (§31.4) and therefore `follow.achievement` to the
+  earner's followers (§35.6), as for every badge; none for backfilled awards.
+- **Catalog grows from 23 to 24.** Existing Heroes stay Heroes (`hero_at` is permanent, §31.10);
+  their bars read 23/24 until they earn it. Nobody new is stamped Hero without holding all 24.
+- **Backfill — migration 0085.** For non-erased users, `earned_at` = the **earlier** of:
+  - `min(proposals.created_at)` by `submitted_by` over proposals with `target_skill_id IS NOT NULL`
+    whose initial revision carries no `promotedFromSkillVersionId` (re-promotions excluded);
+  - `min(skill_versions.created_at)` by `created_by` over versions that are **not** the earliest
+    version of their skill **and** that no `accepted` proposal produced (matched on skill + semver,
+    so pointer versions mirrored after acceptance are excluded too) — i.e. historical **direct
+    publishes**, which left no proposal row.
+
+  Idempotent (`ON CONFLICT DO NOTHING`), no notifications. After inserting, the migration stamps
+  `users.hero_at` for any user it leaves holding all 24 keys whose stamp is still null
+  (`hero_at = max(earned_at)`, the migration-0072 rule). Accepted lossiness: proposals a reviewer
+  deleted and versions of deleted skills cannot be proven, so those users earn the badge on their
+  next qualifying submission.
+- **Quick start (§23) is unchanged** — the tour does not teach new-version proposals, so the
+  card's list of named badges does not grow (§23's guard test only checks that named badges exist).
+- **Tests.**
+  - *Unit:* the catalog still has unique keys and complete fields; `first_version_proposal` is in
+    group Contribute.
+  - *Integration:* a web new-version proposal awards it and a new-skill proposal does not; a
+    revise does not award it; a direct publish of a new version awards it and a direct publish of
+    a new skill does not; a content-risk-routed direct publish of a new version awards it through
+    `createProposal()`; accepting a new-version proposal does not award it a second time (one row,
+    one notification); the MCP new-version proposal awards it; migration 0085 seeds it from both
+    sources with the earlier timestamp, skips erased users, writes no notifications, and stamps
+    `hero_at` for a user it completes.
+  - *E2e:* none new — the existing achievements e2e covers the toast/bell/card path for any key.
 
 ---
 

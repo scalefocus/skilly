@@ -35,6 +35,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: "first_pointer_proposal", name: "Finger Pointer", blurb: "You pointed skilly at a skill living elsewhere.", howToEarn: "Propose a pointer skill (an external git source).", glyph: "👉", group: "Contribute" },
   { key: "first_published", name: "Shipped It", blurb: "A version you submitted went live in the catalog.", howToEarn: "Get a proposal accepted and published.", glyph: "🚀", group: "Contribute" },
   { key: "first_new_version", name: "Sequel", blurb: "You published a follow-up version of a skill.", howToEarn: "Publish a new version of a skill that already has one.", glyph: "🎬", group: "Contribute" },
+  { key: "first_version_proposal", name: "Encore", blurb: "The crowd wanted more, so you proposed it.", howToEarn: "Propose a new version from a skill's page.", glyph: "🎤", group: "Contribute" },
   { key: "first_collection", name: "Mixtape", blurb: "You put skills together for someone else to pick up.", howToEarn: "Add a skill to a new collection with Add to collection on its page.", glyph: "📼", group: "Contribute" },
   { key: "maintainer_added", name: "Adopted", blurb: "Someone trusted you with a skill they created.", howToEarn: "Be added as a maintainer of a skill you did not propose.", glyph: "🤝", group: "Contribute" },
   // Talk

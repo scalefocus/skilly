@@ -510,6 +510,11 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
     // migration-0071 backfill uses: a pointer source or a pointer Keep-current-files reuse).
     const proposedPointer = !!input.payload.pointer || !!input.payload.reuse?.external;
     await awardAchievement(client, input.submittedByUserId, proposedPointer ? "first_pointer_proposal" : "first_hosted_proposal");
+    // §31.11 Encore: a new version of an existing skill — but not a global (re-)promotion, which
+    // targets the existing global copy yet proposes no new content.
+    if (input.targetSkillId && !input.payload.promotedFromSkillVersionId) {
+      await awardAchievement(client, input.submittedByUserId, "first_version_proposal", { noHabits: true });
+    }
     await client.query("commit");
     M.proposalsCreated.inc();
     return { id: proposalId };
@@ -1201,6 +1206,12 @@ export async function directPublish(
       submittedBy: input.actorUserId,
       payload: input.payload,
     });
+    // §31.11 Encore: a direct publish of a new version is a submission too. Awarded here, not in
+    // materializeVersion(), which review acceptance also runs. A hosted version already evaluated
+    // the Habits badges there (Shipped It); a pending pointer mirror did not, so evaluate them now.
+    if (existing) {
+      await awardAchievement(client, input.actorUserId, "first_version_proposal", { noHabits: !result.pendingMirror });
+    }
     await appendAudit(client, {
       actorUserId: input.actorUserId,
       action: "skill.published",
