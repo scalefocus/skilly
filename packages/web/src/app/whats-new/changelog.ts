@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.18.0",
+    date: "2026-10-06",
+    summary:
+      "Platform admins can connect skilly to an AI provider \u2014 Open WebUI or the Anthropic API \u2014 from the new AI integration card on the Administration page: pick the provider, paste the token, choose a model and test it. Saving runs the test first, the token is stored encrypted, and the card shows status and 30-day usage. No features use it yet; servers need AI_TOKEN_ENC_KEY set.",
+  },
+  {
     version: "2.17.0",
     date: "2026-10-05",
     summary:

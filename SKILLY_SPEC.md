@@ -305,6 +305,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`skill_collections`** — `id` (uuid), `owner_id` (FK → `users`, CASCADE), `name` (1–60, unique per owner on `lower(name)`), `description` (≤ 500, nullable), `created_at`, `updated_at`. A user-owned list; owning one grants no authority (invariant #1). Deleted on GDPR erasure (§4).
 - **`skill_collection_items`** — `collection_id` (FK, CASCADE), `skill_id` (FK → `skills`, CASCADE), `added_at`; PK `(collection_id, skill_id)`. Members are **org-visible, active, installable** skills only; a skill that stops qualifying is evicted in the same transaction (§38.4).
 
+### `ai_integration` / `ai_usage` (migration 0084, detailed in §40)
+- **`ai_integration`** — **single row** (`id = 1`): the platform's one LLM provider connection — `enabled`, `provider` (`openwebui` | `anthropic`), `base_url`, `model`, `token_enc` (AES-256-GCM under the env `AI_TOKEN_ENC_KEY`, §13 — never logged, never in audit payloads), `token_last4`, the `last_test_*` / `last_call_*` health columns, `last_failure_logged_at` (System-log throttle), `updated_by_user_id`, `updated_at`. *Remove integration* hard-deletes the row.
+- **`ai_usage`** — one row per provider call: `created_at`, `feature`, `user_id` (nullable, SET NULL; nulled on GDPR erasure), `provider`, `model`, `input_tokens`, `output_tokens`, `latency_ms`, `ok`, `error_code`. **Never prompts, responses or the token.** 365-day retention (worker prune).
+
 ---
 
 ## 4. RBAC model & permission matrix
@@ -398,7 +402,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), after **Maintenance** and directly before **Namespaces** (Currently online, which used to follow it, now lives on the Monitoring page — §4 *Currently online*). Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
 - **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), **`skill_collections`** with their items (§38.10 — never transferred), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
-- **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
+- **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. Likewise **`ai_usage.user_id` → NULL** (§40.3), keeping AI usage totals intact. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
@@ -1099,6 +1103,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
+  - **AI integration (§40.11):** `ai.config_updated` (provider / base URL / model before→after plus a `token_rotated` flag — **never the token or any part of it**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests, model-list calls and AI runtime calls are **not audited** (they are telemetry in `ai_usage`).
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
   - **Feedback survey (§36.11):** submissions, closes and first uses are **never audited** (an audit row would tie a person to an anonymous response). Audited: `settings.updated` for `survey_enabled`, and **`survey.response_deleted`** (the admin; `before` = date, feature, segment, catalog version, answer count and text length — **never the text**).
@@ -1310,6 +1315,7 @@ current or future type can ever leak JSON to a user.
 
 ### Configuration (env / mounted config; secrets external, never in images)
 - Postgres URL; object-store endpoint+creds; OIDC (tenant, client id/secret); SCIM bearer token; SMTP; registry base URL; scan config; retention policy; `SKILLY_BOOTSTRAP_ADMIN_GROUP`; **`EMAIL_TOKEN_ENC_KEY`** (32-byte base64 — encrypts the §12 email service-account tokens; shared by web + worker; required only for the Graph email transport). *(The **install-token max TTL** is no longer an env var — it's the global-admin `install_max_ttl_months` platform setting, §23. The legacy `ONE_TIME_TOKEN_TTL_SECONDS` still ships in `.env.example`/compose but is vestigial — install tokens don't use it.)*
+- **`AI_TOKEN_ENC_KEY`** (32-byte base64) — encrypts the §40 AI-integration provider token; shared by **web + worker** (both may call the AI helper); required only to configure or use the AI integration — without it the Administration card is disabled with a config hint. Shipped in `.env.example`, `docker-compose.yml` (web + worker) and the Helm values/secret. The integration itself (provider, URL, token, model, on/off) is **UI-only** — no env override.
 - **Entra app prerequisites for the §12 Graph email transport** (documented deployment step): the existing skilly app registration needs delegated **`Mail.Send`** + **`offline_access`** admin-consented and the extra redirect URI **`/api/admin/email/callback`** registered. Env-SMTP remains the consent-free fallback.
 - **`CSP_MODE`** (`enforce` default | `report-only` | `off`) selects the Content-Security-Policy posture the web middleware emits (§22 *Content-Security-Policy*): ships **enforcing**; `report-only` is a no-block shakedown; `off` reverts to the legacy `unsafe-inline` policy. Production-only — development always uses the lenient dev policy.
 - **§29 MCP server — no new secret.** OAuth codes/access/refresh tokens are **opaque random values stored as sha256 hashes** (like `tokens.hashed_token`), so there is nothing to encrypt and no signing key to manage; the AS/protected-resource metadata is derived from the existing **registry base URL**, and client-IP attribution reuses **`TRUST_PROXY`** (§23). All tuning is platform settings, not env (`mcp_enabled`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`).
@@ -1610,6 +1616,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
+- **AI integration (§40.9, all platform-admin):** `GET|PUT|PATCH|DELETE /api/admin/ai` (status / save-with-test / enable-disable / remove), `POST /api/admin/ai/models` (provider model list), `POST /api/admin/ai/test` (connectivity test of the form values). The token is write-only — no response ever contains it.
 
 **Misc**
 - `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
@@ -1727,6 +1734,19 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
       `get_collections` tool (25 tools).
 
     *(Spec'd 2026-10-05; not yet built.)*
+
+**Phase 13 — AI integration**
+32. **AI integration plumbing (§40):**
+    - **Data:** `ai_integration` (single row, AES-256-GCM token under the new `AI_TOKEN_ENC_KEY`) +
+      `ai_usage` (per-call counts, 365-day retention) — migration 0084.
+    - **Surface:** a collapsed-by-default *AI integration* Administration card — provider (Open WebUI
+      / Anthropic API), base URL, write-only token, fetched model list with free-text fallback, Test,
+      save-runs-test (a failing save is rejected), enable gated on a passing test, Remove, status
+      pill, 30-day usage, data-egress notice.
+    - **Helper:** server-only `@skilly/shared/ai` — `aiComplete` / `aiAvailable`, feature registry
+      (empty in v1), one retry, throttled `system_event` on failures, audit of config changes.
+
+    *(Spec'd 2026-10-06; not yet built.)*
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -1974,6 +1994,12 @@ responsibilities. Hardening that pins or clarifies invariants here:
   logs or audit payloads (invariant #6's "never log credentials" extends to them), and are
   hard-deleted on disconnect. The connect callback is guarded by the initiating platform-admin's
   session (state-bound), and the flow grants no skilly session or role (invariant #1, §5).
+- **AI provider token** (§40): stored only AES-256-GCM-encrypted under the env-provided
+  `AI_TOKEN_ENC_KEY`; write-only in the UI (the browser only ever sees its last 4 characters);
+  never in logs, audit payloads or `system_event`; hard-deleted on *Remove integration*. It is sent
+  **only to the stored base URL** — changing the URL or provider requires re-entering it — and
+  provider redirects are not followed, so the secret cannot be steered to another host. Every AI
+  task must declare its data egress and keep its output within the viewer's visibility (§40.10).
 - **Decompression limits**: archive extraction caps cumulative *actual* (not declared) bytes +
   entry count on both the upload and the publish/mirror paths.
 - **Rate limiting (worker HTTP surfaces)**: every worker HTTP endpoint — the git smart server
@@ -3064,7 +3090,9 @@ has **no** tamper-evident hash chain and **no** append-only trigger (cheap inser
   signal worth surfacing, not polling noise. **§29 extends the same carve-out to the MCP server**
   (also `source='worker'`): `mcp_disabled` (503), `mcp_token_invalid`, `mcp_token_expired`,
   `mcp_refresh_reuse_detected`, `mcp_grant_revoked`, `mcp_client_blocked`, `mcp_rate_limited`,
-  `mcp_owner_inactive` and `mcp_upload_too_large`. As at the git gateway, the **client-facing response
+  `mcp_owner_inactive` and `mcp_upload_too_large`. **§40.8 adds AI-integration failures**
+  (`source` = `web` or `worker`, `method` `AI`, `route` `ai:<feature>`, status 502/504/500,
+  throttled to one event per 15 minutes platform-wide). As at the git gateway, the **client-facing response
   never distinguishes why a credential failed** — the reason exists only in the system log — and
   credentials are never included in the message.
 - **Capture path (primary):** a `withSystemLog(routeTemplate, handler)` wrapper records, **in the
@@ -7978,3 +8006,251 @@ can silently fall behind the catalog. This section records the decisions; the be
   MCP `list_installed_skills` with and without `onlyBehind`, the tool-count test still asserts 24.
 - **e2e**: install latest → publish a newer stable → the Installed row shows *behind* → the
   **Behind latest** filter shows only it → re-clone → row shows *up to date*.
+
+---
+
+## 40. AI integration
+
+A platform-level connection to **one** external LLM provider, configured by platform admins on the
+Administration page, that later skilly features ("AI tasks") call through a single server-side
+helper. **This section ships the plumbing only** — the admin card, the encrypted config, the test,
+the helper and usage recording. **No AI task ships with it**; each future task is its own gated
+spec change that registers a feature key (§40.7) and declares its data egress.
+
+### 40.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Plumbing only**; tasks come later, each with its own spec. | Gets the governance (egress rule, audit, usage) in place before any data leaves skilly. |
+| 2 | **One active config** (a single row): provider, base URL, token, model, enabled. Switching provider requires re-entering the token. | A token belongs to one provider; one secret to rotate and audit. |
+| 3 | Providers: **Open WebUI** (OpenAI-compatible chat completions) and the **Anthropic API** (Messages). | The two services in use. |
+| 4 | The token is **AES-256-GCM-encrypted** under a **new env key `AI_TOKEN_ENC_KEY`** (same `v1:` format and code as §12's email tokens); write-only in the UI. | Key separation from `EMAIL_TOKEN_ENC_KEY`; invariant #6 extended. |
+| 5 | **Save runs a test; a failing save is rejected** and the previous config stays live. | A bad rotation can never take AI down. |
+| 6 | The **enable toggle needs a passing test** of the saved config; disabling keeps the config. | No "enabled but never worked" state. |
+| 7 | The **stored token is only ever sent to the stored base URL**; changing the URL or provider requires re-entering the token. | Stops a hijacked admin session (or a typo) from shipping the secret to another host. |
+| 8 | Every call is **recorded in `ai_usage`** (counts, never content); **no caps** in v1. | Cost/usage visibility from day one. |
+| 9 | **Every AI task declares its egress** in a code registry and in its spec; **AI output respects visibility**. | Data leaving skilly to a third party is a governance decision, made per task. |
+| 10 | **Non-streaming** helper (text or JSON), usable from **web and worker**. | No consumer needs streaming yet. |
+
+### 40.2 Providers & wire calls
+The helper normalizes both providers behind one call; the provider is chosen by config, never by
+the caller.
+
+| | **Open WebUI** (`openwebui`) | **Anthropic API** (`anthropic`) |
+|---|---|---|
+| Base URL | **required** (e.g. `https://openwebui.corp.local`; a path prefix is allowed) | optional; default **`https://api.anthropic.com`** (override for a corporate gateway/proxy) |
+| Auth header | `Authorization: Bearer <token>` | `x-api-key: <token>` + `anthropic-version: 2023-06-01` |
+| Completion | `POST {base}/api/chat/completions` — OpenAI shape `{model, messages, max_tokens, stream:false}`; the system prompt is the first `system` message | `POST {base}/v1/messages` — `{model, system, messages, max_tokens}` |
+| Text | `choices[0].message.content` | concatenation of the `text` content blocks |
+| Usage | `usage.prompt_tokens` / `usage.completion_tokens` (null when absent) | `usage.input_tokens` / `usage.output_tokens` |
+| Model list | `GET {base}/api/models` → `data[].id` | `GET {base}/v1/models?limit=1000` → `data[].id` |
+
+- **Base URL validation:** an absolute `http://` or `https://` URL, ≤ 500 chars, **no userinfo, query
+  or fragment**; a trailing `/` is stripped. `http://` is allowed (internal Open WebUI). No host
+  allow-list — platform admins are trusted to point it where they mean to (§40.10 covers the
+  token-forwarding risk).
+- **Requests:** redirects are **not followed** (a 3xx is an error — a redirect must never carry the
+  token to another host); response bodies are capped at **1 MB**; the token never appears in a URL.
+- **The UI labels the token "API key / bearer token"** — Anthropic's header is `x-api-key`, Open
+  WebUI's is a bearer; the admin pastes the same kind of value either way.
+
+### 40.3 Data model — `ai_integration` / `ai_usage` (migration 0084)
+- **`ai_integration`** — **single row** (`id smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1)`):
+  `enabled` (bool, default false), `provider` (`openwebui` | `anthropic`), `base_url` (text — the
+  normalized URL actually used, i.e. the Anthropic default is stored explicitly), `model` (text,
+  ≤ 200), `token_enc` (text — the `v1:` AES-256-GCM blob), `token_last4` (text — the last 4
+  characters, for the card), `last_test_at`, `last_test_ok`, `last_test_error`,
+  `last_test_latency_ms`, `last_call_at`, `last_call_ok`, `last_call_error`,
+  `last_failure_logged_at` (the §40.8 throttle watermark), `updated_by_user_id` (FK → `users`,
+  `ON DELETE SET NULL`; provenance only), `updated_at`. **No row = not configured.** *Remove
+  integration* hard-deletes the row (token included).
+- **`ai_usage`** — one row per provider call: `id` (bigserial), `created_at`, `feature` (a §40.7
+  registry key, or `test`), `user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the person the
+  call ran for; null for system/background work), `provider`, `model`, `input_tokens` / `output_tokens`
+  (nullable int — absent when the provider doesn't report them), `latency_ms`, `ok` (bool),
+  `error_code` (nullable). **Never the prompt, the response, the base URL or the token.** Index on
+  `(created_at DESC)` and `(feature, created_at DESC)`. **Retention: 365 days** — the leader-only
+  worker housekeeping sweep prunes older rows. Survives *Remove integration*.
+- **GDPR erasure (§4):** the erasure sweep sets `ai_usage.user_id` → **NULL** (anonymised in place,
+  like `rum_samples`), so usage totals stay true.
+
+### 40.4 The Administration card
+A collapsible **"AI integration"** card on the Administration page (platform admins only; card id
+`ai`, **collapsed by default**, open state remembered per browser — the existing admin-card
+pattern), with the **status pill** as its header accessory.
+
+- **Status pill** (§40.8): **Not configured** · **Off** · **Operational** · **Failing — <reason>**,
+  with the time of the failure.
+- **Enable toggle** — disabled (with a tooltip saying why) unless a config is saved **and** its
+  latest test passed **and** the token decrypts.
+- **Form:**
+  - **Provider** — Open WebUI / Anthropic API. Changing it clears the token field and makes it required.
+  - **Base URL** — required for Open WebUI; for Anthropic it shows the default as a placeholder and
+    may be left blank (= default).
+  - **API key / bearer token** — write-only. With a token stored it reads **"Set · ends …abcd"**
+    plus a **Replace** button that opens an empty field; the plaintext is **never returned to the
+    browser**. Required when no token is stored, the provider or base URL changed, or the stored
+    token can't be decrypted.
+  - **Model** — a dropdown filled from the provider's model list (§40.2): loaded automatically when
+    the card opens on a saved config whose stored token applies (§40.1 #7), or with the **Load
+    models** button once a provider, base URL and typed token are entered; **Refresh** reloads it. If the list call fails, the field falls back to **free text** with the provider's
+    error shown beneath it.
+- **Actions:**
+  - **Test** — runs the §40.5 test against the values **currently in the form** (saved or not).
+  - **Save** — runs the same test first; persists only on a pass (§40.6).
+  - **Remove integration** — confirm dialog, then hard-deletes the config row (token included) and
+    turns AI off. Usage history is kept.
+- **Last test:** when, pass/fail, latency, the model that answered, the provider's error text on failure.
+- **Usage (last 30 days):** total calls, failed calls, input/output tokens, broken down per feature
+  (from `ai_usage`; test calls listed as *Test*).
+- **Data egress notice:** "When enabled, the features below send data to **<provider>** at
+  **<host>**." followed by the §40.7 registry — each feature's name, the data it sends and its spec
+  §. With no feature registered (v1) it reads "No skilly features use the AI integration yet."
+- **Key missing:** without a valid `AI_TOKEN_ENC_KEY` the whole form is disabled with a config hint
+  ("Set `AI_TOKEN_ENC_KEY` — a 32-byte base64 key — on web and worker"); the API refuses writes
+  (§40.9).
+
+### 40.5 The test
+- A minimal completion: system *"You are a connectivity check."*, user *"Reply with the single word
+  OK."*, `max_tokens` 16, **20 s timeout, no retry**. **Pass = HTTP 2xx with a parseable response**
+  (any text — the answer's wording is not checked). The result reports pass/fail, latency, the
+  model id the provider echoes back, and on failure the provider's HTTP status and a sanitized
+  one-line error (≤ 300 chars; never the token or request headers).
+- **Inputs:** provider, base URL, model and token **from the form**. A blank token means "use the
+  stored token", which is permitted **only** when provider and normalized base URL equal the saved
+  config (§40.1 #7) — otherwise **422 `ai_token_required`**.
+- **Bookkeeping:** every test writes an `ai_usage` row (`feature='test'`). A test that ran with
+  exactly the saved provider/base URL/model **and** the stored token also updates the row's
+  `last_test_*` columns; a test of unsaved values does not.
+- Tests are **not audited** (like the email test send) and never write `system_event`.
+
+### 40.6 Save, enable, disable, remove
+- **Save** (`PUT /api/admin/ai`): validate → run the test (§40.5) → on **pass**, upsert the row (new
+  token encrypted, `token_last4` updated; a blank token keeps the stored one), set `last_test_*` to
+  this pass, keep `enabled` as it was (so saving while on puts the new config live immediately,
+  saving while off stays off) → audit `ai.config_updated`. On **fail**: **422 `ai_test_failed`** with
+  the test result, **nothing persisted**, the previous config (and its enabled state) untouched.
+  Saving identical values is a no-op (no test, no audit).
+- **Enable** (`PATCH {enabled:true}`): requires a saved row whose **latest test passed** and whose
+  token decrypts — else **409 `ai_test_required`** / **409 `ai_token_undecryptable`**. Audited
+  `ai.enabled`.
+- **Disable** (`PATCH {enabled:false}`): always allowed; the config stays. Every helper call then
+  fails fast with `ai_disabled`. Audited `ai.disabled`.
+- **Remove** (`DELETE`): hard-deletes the row; audited `ai.config_cleared`. Idempotent (404 → no
+  audit when there is nothing to remove).
+- A **manual test of the saved config that fails** while enabled does **not** disable AI — it flips
+  the pill to *Failing* (§40.8); the admin decides.
+
+### 40.7 The helper & feature registry (`@skilly/shared/ai`)
+- A **server-only** subpath export `@skilly/shared/ai` (it uses `node:crypto` and reads the DB;
+  never imported from client components — the subpath rule). Both **web** and **worker** may call it.
+- **API:**
+  `aiComplete({ feature, userId?, system?, messages, maxTokens, json? }) → { text, json?, model, inputTokens, outputTokens, latencyMs }`.
+  - `messages`: `{ role: 'user' | 'assistant', content: string }[]`, non-empty; `maxTokens` 1–8192.
+  - `json: true` appends a "respond with a single JSON value only" instruction, strips a surrounding
+    code fence and parses; a parse failure is error **`ai_invalid_json`** (recorded, not retried).
+  - `aiAvailable(): Promise<boolean>` — true when configured, enabled and the token decrypts; callers
+    use it to hide AI affordances.
+- **Config is read from the DB on every call** (one single-row read) — no cache, so enable/disable,
+  rotation and removal take effect immediately in both processes.
+- **Timeouts & retry:** 60 s per attempt; **one retry** on network error, HTTP 429 or 5xx (honoring
+  `Retry-After` up to 10 s); no retry on other 4xx.
+- **Errors** are thrown as `AiError` with a code: `ai_not_configured`, `ai_disabled`,
+  `ai_key_missing`, `ai_token_undecryptable`, `ai_unknown_feature`, `ai_timeout`,
+  `ai_provider_error` (carries the provider HTTP status), `ai_invalid_json`. The calling feature
+  decides what its user sees; the helper never surfaces provider error text to non-admins.
+- **Feature registry:** `AI_FEATURES` in `@skilly/shared/ai` — each entry `{ key, label, egress, spec }`
+  (e.g. `egress: "Skill name, description and SKILL.md body of org-visible skills"`,
+  `spec: "§41"`). Calling with an **unregistered key throws `ai_unknown_feature`** before any
+  network call. `test` is reserved. **v1 ships the registry empty.**
+- **Recording:** every call that reaches the provider (success or failure) writes **one**
+  `ai_usage` row with its final outcome — a retried call is still one row — and updates `last_call_*`. Calls
+  refused before the network (`ai_not_configured`, `ai_disabled`, `ai_key_missing`,
+  `ai_unknown_feature`) write **nothing**; `ai_token_undecryptable` updates `last_call_*` (it is an
+  integration failure) but writes no usage row.
+
+### 40.8 Health, status & the System log
+- **Status** (computed on read):
+  - **Not configured** — no row.
+  - **Off** — row exists, `enabled = false`.
+  - **Failing** — enabled and either the token can't be decrypted (reason *"can't decrypt token —
+    replace it"*), or the **more recent** of the last saved-config test and the last runtime call
+    failed (reason = its error code + sanitized message, with its time).
+  - **Operational** — enabled and that more recent signal succeeded.
+- **System log (§25):** a runtime failure (`ai_timeout`, `ai_provider_error`, `ai_invalid_json`,
+  `ai_token_undecryptable`) writes a `system_event` **at most once per 15 minutes platform-wide** —
+  claimed by a conditional `UPDATE ai_integration SET last_failure_logged_at = now() WHERE
+  last_failure_logged_at IS NULL OR last_failure_logged_at < now() - interval '15 minutes'` so web
+  and worker never double-log. Shape: `source` = the calling process (`web` | `worker`), `status`
+  **502** (provider error / invalid JSON), **504** (timeout) or **500** (undecryptable), `method`
+  **`AI`**, `route` **`ai:<feature>`**, `path` = the provider endpoint path (e.g. `/v1/messages` —
+  no host, no query), `user_id` = the call's `userId` (null for background work), `error_code`,
+  sanitized one-line `message` (never the token, prompt or response). The existing §25 coalesced
+  `system.error` bell alert covers notifying admins — no new notification type.
+
+### 40.9 API (all platform-admin; 403 otherwise)
+- `GET /api/admin/ai` → `{ keyConfigured, configured, enabled, provider, baseUrl, model, tokenLast4,
+  tokenDecryptable, status, statusReason, statusAt, lastTest: {at, ok, latencyMs, error}, usage30d:
+  {calls, failed, inputTokens, outputTokens, byFeature[]}, features[] }` — never the token.
+- `POST /api/admin/ai/models` `{ provider, baseUrl?, token? }` → `{ models: string[] }` (sorted, ≤ 1000)
+  or **422** with the provider error; stored-token rule as §40.5.
+- `POST /api/admin/ai/test` `{ provider, baseUrl?, model, token? }` → the test result (always 200
+  with `ok:false` on a provider failure; 422 only for invalid input / `ai_token_required`).
+- `PUT /api/admin/ai` `{ provider, baseUrl?, model, token? }` → saved state, or **422
+  `ai_test_failed`** (with the test result) / 422 validation errors.
+- `PATCH /api/admin/ai` `{ enabled }` → **409 `ai_test_required` | `ai_token_undecryptable` |
+  `ai_not_configured`** when enabling isn't allowed.
+- `DELETE /api/admin/ai` → 204.
+- Every write (`models`, `test`, `PUT`, `PATCH`, `DELETE`) returns **409 `ai_key_missing`** without a
+  valid `AI_TOKEN_ENC_KEY`. All routes are wrapped in `withSystemLog` (§25) as usual; bodies
+  carrying a token are never logged.
+
+### 40.10 Security & data governance
+- **Token at rest:** AES-256-GCM under `AI_TOKEN_ENC_KEY` (32 bytes, base64; shared by web + worker;
+  §13). Never logged, never in audit payloads, never in `system_event`, never returned to the
+  browser (only `token_last4`). Lost/changed key ⇒ *Failing — can't decrypt token*; nothing is
+  auto-deleted; the next save requires a new token.
+- **Token forwarding:** the stored token is sent only to the stored base URL (§40.1 #7); redirects
+  are not followed (§40.2).
+- **Egress rule (binding on every future AI task):** a task's spec section must state **exactly
+  which data it sends** to the provider, and the task must register that statement in `AI_FEATURES`
+  (shown on the card). Never sent by any task: credentials of any kind (install/MCP/share tokens,
+  secrets, `.env`-style content the task can recognize), audit rows, or the System log.
+- **Visibility rule (invariant #3 extended):** AI output derived from content a user cannot see
+  must never be shown to that user — anything persisted or displayed from an AI call is subject to
+  the same visibility filter as its inputs. A task that mixes namespace-restricted input into output
+  shown org-wide is a spec violation.
+- **Provider-side retention** is outside skilly's control; the egress notice names the provider and
+  host so admins choose consciously.
+
+### 40.11 Audit (§11)
+`ai.config_updated` (`before`/`after`: provider, base URL, model; `after.token_rotated: bool` —
+**never the token or its last 4**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests,
+model-list calls and runtime calls are **not audited** (telemetry, in `ai_usage`).
+
+### 40.12 Out of scope (deferred)
+- Any AI task (each is its own gated spec).
+- Streaming, tool use, images/files, embeddings.
+- Multiple simultaneous providers, per-feature model choice, fallback providers.
+- Usage caps / budgets, cost estimates in currency, per-user quotas.
+- Env-var configuration of the integration (it is UI-only).
+- Storing prompts or responses for debugging.
+
+### 40.13 Tests
+- **Unit** (`@skilly/shared/ai`): base-URL normalization/validation; request building and response
+  parsing for both providers (text, usage, model list, error bodies); `json` mode incl. fenced JSON
+  and the invalid-JSON error; retry policy (429/5xx/network retried once, other 4xx not, `Retry-After`
+  capped); redirect = error; status derivation (all four states, "more recent signal wins");
+  stored-token rule (blank token + changed URL/provider → `ai_token_required`); unknown feature
+  throws before any fetch; encrypt/decrypt round-trip with the AI key.
+- **Integration** (web API + DB, provider stubbed by a local HTTP server): every route's 403 for
+  non-platform-admins; `ai_key_missing` without the key; save-pass persists + audits
+  (`token_rotated` true/false), save-fail persists nothing and leaves the old config + enabled
+  state; identical save is a no-op; enable gated on last test / decryptability; disable + helper
+  `ai_disabled`; remove hard-deletes + audits and keeps `ai_usage`; `GET` never contains the token;
+  helper writes `ai_usage` (one row per retried call), updates `last_call_*`, and the 15-minute
+  `system_event` throttle holds across two concurrent failures; usage retention prune; GDPR erasure
+  nulls `ai_usage.user_id`; migration 0084 applies.
+- **e2e:** admin opens the AI integration card → picks a provider, enters a URL + token (stub
+  provider) → models load → **Test** passes → **Save** → enable → pill shows *Operational*; a
+  failing token on Save shows the error and the pill stays as before; **Remove integration** returns
+  the card to *Not configured*.

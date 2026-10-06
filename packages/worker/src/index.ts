@@ -28,6 +28,7 @@ import { refreshPointerVersions } from "./git/pointerRefresh.js";
 import { recomputeRelatedSkills } from "./related.js";
 import { recordDailyActiveUsers } from "./dau.js";
 import { rollupRum, pruneRum } from "./rum.js";
+import { pruneAiUsage } from "@skilly/shared/ai";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
 import { sweepContentRisk } from "./scan/contentRisk.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
@@ -432,6 +433,19 @@ async function leaderLoops(): Promise<void> {
   };
   await rumPrune();
   setInterval(rumPrune, Number(process.env.RUM_PRUNE_INTERVAL_MS ?? 21_600_000)); // 6h
+
+  // AI usage housekeeping (§40.3): ai_usage rows older than 365 days.
+  const aiUsagePrune = async () => {
+    if (!isLeader) return;
+    try {
+      const rows = await pruneAiUsage(pool);
+      if (rows > 0) console.log(JSON.stringify({ level: "info", msg: "pruned ai usage", rows }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "ai usage prune failed", err: String(err) }));
+    }
+  };
+  await aiUsagePrune();
+  setInterval(aiUsagePrune, Number(process.env.AI_USAGE_PRUNE_INTERVAL_MS ?? 86_400_000)); // 24h
 }
 
 /**

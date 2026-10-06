@@ -94,6 +94,13 @@ spec:
                   name: {{ include "skilly.secretName" . }}
                   key: EMAIL_TOKEN_ENC_KEY
                   optional: true # pre-0053 operator-managed Secrets lack this key
+            # §40 AI integration: encrypts/decrypts the stored provider token.
+            - name: AI_TOKEN_ENC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: AI_TOKEN_ENC_KEY
+                  optional: true # pre-0084 operator-managed Secrets lack this key
             - name: SMTP_HOST
               value: {{ .Values.config.smtp.host | quote }}
           readinessProbe:

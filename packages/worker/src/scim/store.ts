@@ -295,6 +295,8 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // RUM samples (§32.3): anonymise in place — rows stay for the aggregates, the person goes.
     // The tombstone never deletes the users row, so the FK's ON DELETE SET NULL cannot do this.
     await client.query(`update rum_samples set user_id = null where user_id = $1`, [userId]);
+    // AI usage (§40.3) likewise: the totals stay true, the person goes. Mirrored in web lib/eraseUser.ts.
+    await client.query(`update ai_usage set user_id = null where user_id = $1`, [userId]);
     // Follows (§35.9) are personal data in BOTH directions: whom they followed, and who followed
     // them. Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_follows where follower_id = $1 or followee_id = $1`, [userId]);

@@ -262,6 +262,7 @@ pipeline {
           SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
           DATABASE_URL="${CI_E2E_DATABASE_URL}" \
           NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL=http://localhost:3000 \
+          AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
           SKILLY_REGISTRY_URL=http://localhost:3000 \
           S3_ENDPOINT="http://127.0.0.1:${CI_E2E_MINIO_PORT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
           CI=1 \
