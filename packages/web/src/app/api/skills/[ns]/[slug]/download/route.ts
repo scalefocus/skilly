@@ -32,7 +32,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
     // Archived skills are withdrawn from the catalog: only owners may download (they can restore).
     const owner = await canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId);
     if (!owner) return Response.json({ error: "not found" }, { status: 404 }); // no leak
-  } else if (!isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  } else if (!isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
 

@@ -25,7 +25,48 @@ export function skillVisibilityWhere(
 ): string | null {
   if (access.isPlatformAdmin) return null;
   params.push(visibleNamespaceIds(access as EffectiveAccess));
-  return `(${alias}.visibility = 'org' or ${alias}.namespace_id = any($${params.length}::uuid[]))`;
+  const p = `$${params.length}::uuid[]`;
+  // §42: a restricted skill is visible to its owning namespace ∪ the namespaces it is shared with.
+  return (
+    `(${alias}.visibility = 'org' or ${alias}.namespace_id = any(${p})` +
+    ` or exists (select 1 from skill_namespace_grants sng where sng.skill_id = ${alias}.id and sng.namespace_id = any(${p})))`
+  );
+}
+
+/**
+ * SQL fragment selecting a skill's grantee namespace ids as a uuid[] (never null — `{}` when
+ * there are none). For queries that load a skill row and then call `isSkillVisible` in memory:
+ *   select s.*, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids from skills s …
+ */
+export function sharedNamespaceIdsSql(alias = "s"): string {
+  return `coalesce((select array_agg(sng.namespace_id) from skill_namespace_grants sng where sng.skill_id = ${alias}.id), '{}'::uuid[])`;
+}
+
+/**
+ * SQL boolean: does the skill at `alias` belong in the NAMESPACE plugin marketplace of the namespace
+ * bound at `nsParam`? Its own restricted skills plus the restricted skills shared with it (§30, §42).
+ * The ONE definition for the synthesizer, the install-credit resolver and the web counts.
+ */
+export function namespaceMarketplaceSkillSql(nsParam: string, alias = "s"): string {
+  return `(${alias}.visibility = 'namespace' and (${alias}.namespace_id = ${nsParam}` +
+    ` or exists (select 1 from skill_namespace_grants sng where sng.skill_id = ${alias}.id and sng.namespace_id = ${nsParam})))`;
+}
+
+/**
+ * SQL boolean: can the user bound at parameter `userParam` (a users.id) see the skill at `alias`?
+ * The per-USER twin of {@link skillVisibilityWhere} (which binds a viewer's resolved namespace ids):
+ * used where the subject is a stored user id rather than the session — maintainer eligibility,
+ * notification fan-out. Mirrors isSkillVisible: org, platform admin, any role in the owning
+ * namespace or in a grantee namespace (§42).
+ */
+export function userCanSeeSkillSql(userParam: string, alias = "s"): string {
+  return `(${alias}.visibility = 'org' or exists (
+    select 1 from group_memberships gm
+      join role_mappings rm on rm.group_id = gm.group_id
+     where gm.user_id = ${userParam}
+       and (rm.role = 'platform_admin'
+            or rm.namespace_id = ${alias}.namespace_id
+            or rm.namespace_id in (select sng.namespace_id from skill_namespace_grants sng where sng.skill_id = ${alias}.id))))`;
 }
 
 // ── DB-backed role resolution (invariant #1: SCIM groups × role_mappings, never token claims) ──

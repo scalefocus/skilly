@@ -71,7 +71,7 @@ export interface FollowFanOutInput {
    * (achievements, a new request). Org-visible skills reach every follower; a namespace-scoped
    * one only followers in a group mapped to that namespace, or platform admins (§35.6).
    */
-  skill: { namespaceId: string; visibility: string } | null;
+  skill: { id: string; namespaceId: string; visibility: string } | null;
   /** Users already notified about this same event (the dedup rule, §35.6). */
   excludeUserIds?: readonly string[];
 }
@@ -86,9 +86,11 @@ export function followFanOutSql(input: FollowFanOutInput): { text: string; value
   const values: unknown[] = [input.type, JSON.stringify(input.payload ?? {}), input.actorId, [...(input.excludeUserIds ?? [])]];
   let gate = "";
   if (input.skill) {
-    values.push(input.skill.visibility, input.skill.namespaceId);
-    const vis = `$${values.length - 1}`;
-    const ns = `$${values.length}`;
+    values.push(input.skill.visibility, input.skill.namespaceId, input.skill.id);
+    const vis = `$${values.length - 2}`;
+    const ns = `$${values.length - 1}`;
+    const sid = `$${values.length}`;
+    // Owner namespace ∪ §42 grantee namespaces ∪ platform admins.
     gate = `
        and (
          ${vis}::text = 'org'
@@ -96,7 +98,8 @@ export function followFanOutSql(input: FollowFanOutInput): { text: string; value
            select 1 from group_memberships gm
              join role_mappings rm on rm.group_id = gm.group_id
             where gm.user_id = f.follower_id
-              and (rm.role = 'platform_admin' or rm.namespace_id = ${ns}::uuid)
+              and (rm.role = 'platform_admin' or rm.namespace_id = ${ns}::uuid
+                   or rm.namespace_id in (select sng.namespace_id from skill_namespace_grants sng where sng.skill_id = ${sid}::uuid))
          )
        )`;
   }

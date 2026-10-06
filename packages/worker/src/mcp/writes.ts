@@ -12,7 +12,7 @@
 //      author-and-self-approve hole (§29 Excluded surface) at the code level, not in a doc.
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { categorySlug, checkCategoryNames, fanOutToFollowers, normalizeCategoryNames, type KnownCategory } from "@skilly/shared";
+import { categorySlug, checkCategoryNames, fanOutToFollowers, isSkillVisible, normalizeCategoryNames, sharedNamespaceIdsSql, userCanSeeSkillSql, type KnownCategory } from "@skilly/shared";
 import {
   MAX_MENTIONS_PER_MESSAGE,
   PURE_SCANNERS,
@@ -96,7 +96,9 @@ async function validateMentionsWorker(
   pool: Pool,
   access: EffectiveAccess,
   body: string,
-  audience: { visibleNamespaceId: string | null; orgWide: boolean },
+  /** `skillId` set ⇒ a skill discussion: the audience is whoever can see that skill (owner ∪ §42
+   *  grants). Otherwise `visibleNamespaceId` (a review thread's target namespace). */
+  audience: { visibleNamespaceId: string | null; orgWide: boolean; skillId?: string | null },
   opts: { markdown?: boolean } = {},
 ): Promise<{ ok: true; mentions: PreparedMention[] } | WriteFailure> {
   const refs = extractMentions(body, { markdown: opts.markdown });
@@ -110,14 +112,16 @@ async function validateMentionsWorker(
   if (userIds.length) {
     const { rows } = await pool.query<{ id: string; in_audience: boolean }>(
       `select u.id,
-              ($3::boolean or exists (
+              ($3::boolean
+               or ($4::uuid is not null and exists (select 1 from skills sk where sk.id = $4::uuid and ${userCanSeeSkillSql("u.id", "sk")}))
+               or ($4::uuid is null and exists (
                  select 1 from group_memberships gm
                  join role_mappings rm on rm.group_id = gm.group_id
                 where gm.user_id = u.id and (rm.role = 'platform_admin' or rm.namespace_id = $2)
-              )) as in_audience
+              ))) as in_audience
          from users u
         where u.id = any($1::uuid[]) and u.status = 'active' and u.erased_at is null`,
-      [userIds, audience.visibleNamespaceId, audience.orgWide],
+      [userIds, audience.visibleNamespaceId, audience.orgWide, audience.skillId ?? null],
     );
     const byId = new Map(rows.map((r) => [r.id, r.in_audience]));
     for (const id of userIds) {
@@ -129,8 +133,8 @@ async function validateMentionsWorker(
   }
 
   if (skillIds.length) {
-    const { rows } = await pool.query<{ id: string; visibility: "org" | "namespace"; namespace_id: string; ns_slug: string; slug: string }>(
-      `select s.id, s.visibility, s.namespace_id, n.slug as ns_slug, s.slug
+    const { rows } = await pool.query<{ id: string; visibility: "org" | "namespace"; namespace_id: string; ns_slug: string; slug: string; shared_namespace_ids: string[] }>(
+      `select s.id, s.visibility, s.namespace_id, n.slug as ns_slug, s.slug, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
          from skills s join namespaces n on n.id = s.namespace_id where s.id = any($1::uuid[])`,
       [skillIds],
     );
@@ -138,7 +142,7 @@ async function validateMentionsWorker(
     for (const id of skillIds) {
       const s = byId.get(id);
       if (!s) return fail("mentioned skill not found");
-      const visible = s.visibility === "org" || access.isPlatformAdmin || access.namespaceRoles.has(s.namespace_id);
+      const visible = isSkillVisible(access, { namespaceId: s.namespace_id, visibility: s.visibility, sharedNamespaceIds: s.shared_namespace_ids });
       if (!visible) return fail("mentioned skill isn't visible to you");
       prepared.push({ kind: "skill", id, label: `${s.ns_slug}/${s.slug}` });
     }
@@ -307,7 +311,7 @@ export async function postSkillComment(
     pool,
     access,
     body,
-    { visibleNamespaceId: skill.namespaceId, orgWide: skill.visibility === "org" },
+    { visibleNamespaceId: skill.namespaceId, orgWide: skill.visibility === "org", skillId: skill.id },
     { markdown: true },
   );
   if (!mentions.ok) return mentions;
@@ -353,22 +357,14 @@ export async function postSkillComment(
        ) r
        join users u on u.id = r.uid and u.status = 'active' and u.discussion_notifications
       where r.uid <> $4
-        and r.uid <> all($6::uuid[])
-        and (
-          $5 = 'org'
-          or exists (
-            select 1 from group_memberships gm2
-            join role_mappings rm2 on rm2.group_id = gm2.group_id
-            where gm2.user_id = r.uid and (rm2.role = 'platform_admin' or rm2.namespace_id = $3)
-          )
-        )
+        and r.uid <> all($5::uuid[])
+        and exists (select 1 from skills sk where sk.id = $1 and ${userCanSeeSkillSql("r.uid", "sk")}) -- owner ∪ §42 grants
      on conflict do nothing`,
     [
       skill.id,
       JSON.stringify({ conversationId, namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug, fromName }),
       skill.namespaceId,
       userId,
-      skill.visibility,
       mentioned,
     ],
   );
@@ -606,6 +602,10 @@ function validateMetadata(
   meta.categories = normalizeCategoryNames(meta.categories, 12);
   // Free-form tags were removed (§10): a stale client's `tags` is dropped silently, never rejected.
   delete (meta as unknown as Record<string, unknown>).tags;
+  // §42.3: MCP propose tools do not take the shared-namespaces list. Strip it so an agent can never
+  // smuggle a grant change into a revision (a new version keeps the skill's current grants; a new
+  // skill starts with none). Silently, like `tags`.
+  delete (meta as unknown as Record<string, unknown>).sharedNamespaceIds;
   meta.usageExamples = meta.usageExamples?.trim() || null;
   return null;
 }

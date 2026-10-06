@@ -12,7 +12,8 @@ import { withSystemLog } from "../../../../../lib/apiLog";
 import { skillContentRiskSummary } from "../../../../../lib/contentRisk";
 import { skillQualityDetail, skillVersionQualities } from "../../../../../lib/quality";
 import { qualitySummary } from "../../../../../lib/catalog";
-import { isSkillVisible, canYankOrArchive, canInitiatePromotion, resolveLatest } from "@skilly/shared";
+import { listGrants, isExplicitMaintainer } from "../../../../../lib/grants";
+import { isSkillVisible, canYankOrArchive, canInitiatePromotion, canShareSkill, seesViaGrantOnly, resolveLatest } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -32,14 +33,14 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     // (no leak, same as a non-existent skill). §7, §19.
     const owner = access.userId ? await canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId) : false;
     if (!owner) return Response.json({ error: "not found" }, { status: 404 });
-  } else if (!isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  } else if (!isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 }); // no leak
   }
 
   // Record the view only for live consumption — not an owner inspecting an archived skill. §21.
   if (!archived && access.userId) logView(skill.id, skill.namespaceId, access.userId);
 
-  const [versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality] = await Promise.all([
+  const [versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality, grants, explicitMaintainer] = await Promise.all([
     listVersions(skill.id),
     latestStableSemver(skill.id),
     access.userId ? isWatching(access.userId, skill.id) : Promise.resolve(false),
@@ -57,6 +58,9 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     access.userId ? canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId) : Promise.resolve(false),
     // §41.7: each version's own stars for the Versions list.
     skillVersionQualities(skill.id),
+    // §42: the shared-with list (chips + the propose form's new-version pre-fill).
+    skill.visibility === "namespace" ? listGrants(skill.id) : Promise.resolve([]),
+    isExplicitMaintainer(skill.id, access.userId ?? null),
   ]);
   const versions = versions0.map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
   // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
@@ -105,6 +109,12 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     officialAt: skill.officialAt,
     officialByName: skill.officialByName,
     icon: skill.icon,
+    // §42 sharing: the grantee namespaces, whether THIS viewer sees the skill only through a grant
+    // (drives the "Shared with your namespace by <owner>" marker), and the share right.
+    sharedNamespaces: grants.map((g) => ({ namespaceId: g.namespaceId, slug: g.slug, displayName: g.displayName })),
+    sharedWithViewer: seesViaGrantOnly(access, skill),
+    ownerNamespaceName: skill.namespaceDisplayName,
+    canManageGrants: !archived && skill.visibility === "namespace" && canShareSkill(access, skill.namespaceId, explicitMaintainer),
     canMarkOfficial: access.isPlatformAdmin && !archived,
     // Featured homepage spotlight (§7): current state + whether this caller can toggle it. The
     // Spotlight control is platform-admin only and only on an active, installable skill.

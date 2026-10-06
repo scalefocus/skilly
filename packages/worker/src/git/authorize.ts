@@ -42,6 +42,8 @@ export interface SkillRef {
   namespaceId: string;
   visibility: "org" | "namespace";
   status: "active" | "archived";
+  /** §42 grantee namespaces; a member of any of them clones a restricted skill like an owner member. */
+  sharedNamespaceIds?: string[];
 }
 
 /** A servable marketplace, as resolved from the DB. */
@@ -198,7 +200,7 @@ async function authorizeSkill(
   if (skill.visibility === "namespace" && !principal.isSystem) {
     if (!principal.userId) return { allow: false, status: 403, reason: "not authorized for this namespace" };
     const access = await deps.resolveAccess(principal.userId);
-    if (!isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+    if (!isSkillVisible(access, skill)) {
       return { allow: false, status: 403, reason: "not authorized for this namespace" };
     }
   }

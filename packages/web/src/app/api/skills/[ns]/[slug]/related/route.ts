@@ -17,7 +17,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ ns: string; sl
   const { ns, slug } = await ctx.params;
   const skill = await findSkill(ns, slug);
   // No leak: an invisible (or archived, or missing) skill returns 404 exactly like the detail route.
-  if (!skill || skill.status === "archived" || !isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  if (!skill || skill.status === "archived" || !isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
 

@@ -31,6 +31,9 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "skill.content_risk": { title: "Content check flagged a skill", tone: "danger" },
   "skill.quality_low": { title: "Low quality score", tone: "warn" },
   "skill.discussion": { title: "New discussion comment", tone: "warn" },
+  // §42 — a restricted skill shared with a namespace you administer, and its new versions.
+  "skill.shared": { title: "Skill shared with your namespace", tone: "ok" },
+  "skill.shared_new_version": { title: "New version of a skill shared with your namespace", tone: "ok" },
   "message.new": { title: "New message", tone: "warn" },
   "message.mention": { title: "You were mentioned", tone: "warn" },
   "system.error": { title: "System log events", tone: "danger" },

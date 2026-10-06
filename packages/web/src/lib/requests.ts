@@ -428,7 +428,7 @@ export async function fulfilOriginRequest(
       type: "follow.request_fulfilled",
       actorId: opts.fulfilledByUserId,
       payload: { requestId: opts.originRequestId, requestTitle: r.title, namespaceSlug: gate[0].ns, skillSlug: gate[0].slug },
-      skill: { namespaceId: gate[0].namespace_id, visibility: gate[0].visibility },
+      skill: { id: opts.skillId, namespaceId: gate[0].namespace_id, visibility: gate[0].visibility },
       excludeUserIds: [r.requester_user_id],
     });
   }
@@ -509,7 +509,7 @@ export async function fulfilWithExistingSkill(
       type: "follow.request_fulfilled",
       actorId: actorUserId,
       payload: { requestId, requestTitle: r.title, namespaceSlug, skillSlug },
-      skill: { namespaceId: sk.namespace_id, visibility: sk.visibility },
+      skill: { id: sk.id, namespaceId: sk.namespace_id, visibility: sk.visibility },
       excludeUserIds: [r.requester_user_id],
     });
     if (r.requester_user_id !== actorUserId) {
@@ -559,7 +559,7 @@ export async function findSimilar(title: string, visibleNamespaceIds: string[] |
       `select n.slug as namespace_slug, s.slug as skill_slug, s.title
          from skills s join namespaces n on n.id = s.namespace_id
         where s.status = 'active' and (s.title ilike $1 escape '\\' or $2 ilike '%' || s.title || '%')
-          and ${visibleNamespaceIds === null ? "true" : "(s.visibility = 'org' or s.namespace_id = any($3::uuid[]))"}
+          and ${visibleNamespaceIds === null ? "true" : "(s.visibility = 'org' or s.namespace_id = any($3::uuid[]) or exists (select 1 from skill_namespace_grants sng where sng.skill_id = s.id and sng.namespace_id = any($3::uuid[])))"}
         order by s.install_count desc limit 1`,
       visibleNamespaceIds === null ? [term, t] : [term, t, visibleNamespaceIds],
     ),

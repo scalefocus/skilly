@@ -167,6 +167,32 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
       [row.skill_id, row.ns_slug, row.skill_slug, row.semver],
     );
 
+    // §42/§12: tell the admins of every namespace this restricted skill is SHARED with — they can
+    // see it but don't govern it, so this is awareness, not a review item. Deduped against anyone
+    // the skill.new_version insert above already notified (watch/maintainer wins). Advisory: a
+    // failure never un-publishes the version.
+    try {
+      await pool.query(
+        `insert into notifications (user_id, type, payload)
+         select distinct gm.user_id, 'skill.shared_new_version',
+                jsonb_build_object('namespaceSlug', $2::text, 'skillSlug', $3::text, 'semver', $4::text,
+                                   'ownerNamespaceName', own.display_name, 'granteeNamespaceName', tgt.display_name)
+           from skills s
+           join namespaces own on own.id = s.namespace_id
+           join skill_namespace_grants g on g.skill_id = s.id
+           join namespaces tgt on tgt.id = g.namespace_id
+           join role_mappings rm on rm.namespace_id = g.namespace_id and rm.role = 'namespace_admin'
+           join group_memberships gm on gm.group_id = rm.group_id
+           join users u on u.id = gm.user_id and u.status = 'active'
+          where s.id = $1 and s.visibility = 'namespace'
+            and gm.user_id <> all($5::uuid[])
+            and ($6::uuid is null or gm.user_id <> $6::uuid)`,
+        [row.skill_id, row.ns_slug, row.skill_slug, row.semver, notified.map((r) => r.user_id), row.created_by],
+      );
+    } catch (err) {
+      console.error(JSON.stringify({ level: "warn", msg: "shared new-version notify failed", versionId: row.id, err: String(err) }));
+    }
+
     // §35.6: tell the SUBMITTER's followers — visibility-gated at insert (invariant #3), and
     // deduped against everyone the skill.new_version insert just notified (a watch/maintainer
     // notification for the same event wins). Advisory: a failure never un-publishes the version.
@@ -176,7 +202,7 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
           type: (prior[0]?.n ?? 0) > 0 ? "follow.new_version" : "follow.new_skill",
           actorId: row.created_by,
           payload: { namespaceSlug: row.ns_slug, skillSlug: row.skill_slug, semver: row.semver, skillId: row.skill_id },
-          skill: { namespaceId: row.namespace_id, visibility: row.visibility },
+          skill: { id: row.skill_id, namespaceId: row.namespace_id, visibility: row.visibility },
           excludeUserIds: notified.map((r) => r.user_id),
         });
       } catch (err) {

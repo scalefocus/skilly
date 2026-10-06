@@ -344,6 +344,9 @@ test("groupSkillsIntoPlugins: general is omitted when every skill has a category
 test("groupSkillsIntoPlugins: public marketplace prefixes the namespace; directory collisions keep the first and are reported", () => {
   assert.equal(memberSkillDir(PUBLIC_SCOPE, "team-a", "deploy"), "team-a-deploy");
   assert.equal(memberSkillDir(NS, "team-a", "deploy"), "deploy");
+  // §42: a skill shared INTO the namespace marketplace from another namespace is prefixed, so it
+  // can never shadow one of the namespace's own skills of the same slug.
+  assert.equal(memberSkillDir(NS, "team-b", "deploy"), "team-b-deploy");
   const { plugins, collisions } = groupSkillsIntoPlugins(PUBLIC_SCOPE, [
     sk("team-a", "deploy", ["productivity"]),
     sk("team", "a-deploy", ["productivity"]), // also → team-a-deploy

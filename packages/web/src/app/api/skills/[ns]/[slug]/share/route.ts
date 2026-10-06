@@ -31,7 +31,7 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/share", async functio
   const skill = await findSkill(ns, slug);
   // No leak (§33.6/invariant #3): a restricted skill the caller can't see 404s exactly like an
   // unknown slug.
-  if (!skill || (skill.status === "active" && !isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility }))) {
+  if (!skill || (skill.status === "active" && !isSkillVisible(access, skill))) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
 

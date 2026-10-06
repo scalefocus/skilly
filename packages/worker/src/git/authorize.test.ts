@@ -272,3 +272,23 @@ test("install and marketplace tokens are not interchangeable", async () => {
   );
   assert.deepEqual(mktAtSkill, { allow: false, status: 403, reason: "token is scoped to a different skill" });
 });
+
+// §42: a member of a namespace the restricted skill is SHARED with clones it with their own
+// personal token; once the grant is revoked the same token is refused exactly like an outsider's.
+test("namespace skill shared with another namespace: grantee member allowed, refused after revoke", async () => {
+  const NS_B = "nsid-b";
+  const granteeAccess = async () => resolveAccess(new Set(["g-b"]), [{ id: "m9", groupId: "g-b", namespaceId: NS_B, role: "namespace_member" }]);
+  const req = { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack" as const, isServiceRpc: true };
+
+  const shared = await authorizeGitRequest(req, "good-ns-outsider", deps({
+    async findSkill() { return { ...nsSkill, sharedNamespaceIds: [NS_B] }; },
+    resolveAccess: granteeAccess,
+  }));
+  assert.equal(shared.allow, true, "grantee member clones the shared skill");
+
+  const revoked = await authorizeGitRequest(req, "good-ns-outsider", deps({
+    async findSkill() { return { ...nsSkill, sharedNamespaceIds: [] }; },
+    resolveAccess: granteeAccess,
+  }));
+  assert.deepEqual(revoked, { allow: false, status: 403, reason: "not authorized for this namespace" });
+});

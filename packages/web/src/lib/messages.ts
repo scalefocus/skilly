@@ -24,7 +24,7 @@ import {
   type MentionMap,
   type PreparedMention,
 } from "./mentions";
-import { canReviewNamespace, isSkillVisible, maxRawMentionLength, mentionCollapsedLength, type EffectiveAccess } from "@skilly/shared";
+import { canReviewNamespace, isSkillVisible, userCanSeeSkillSql, maxRawMentionLength, mentionCollapsedLength, type EffectiveAccess } from "@skilly/shared";
 
 export const MAX_MESSAGE_LEN = 4000;
 /** Skill-discussion comments are capped tighter than the general message body (§24). */
@@ -552,6 +552,8 @@ export interface SkillDiscussionSkill {
   skillSlug: string;
   visibility: "org" | "namespace";
   archived: boolean;
+  /** §42 grantee namespaces — part of the skill's audience. */
+  sharedNamespaceIds: string[];
 }
 export interface SkillDiscussionMessage extends MessageView {
   /** The version the comment is about (§24). Null when the skill had no active version at post time. */
@@ -574,7 +576,7 @@ export interface SkillDiscussionThread {
 /** True if the caller may see the skill's discussion — mirrors the detail route's gate exactly. */
 export function canReadSkill(access: Access, skill: SkillDiscussionSkill, isOwner: boolean): boolean {
   if (skill.archived) return isOwner; // archived skills are owner-only (§7)
-  return isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility });
+  return isSkillVisible(access, skill);
 }
 
 /** True if the caller may delete comments: platform admin, the namespace's admin, or an
@@ -680,7 +682,7 @@ export async function postSkillDiscussionMessage(
   if (bodyTooLong(body, MAX_SKILL_DISCUSSION_LEN)) return { ok: false, status: 422, error: `message too long (max ${MAX_SKILL_DISCUSSION_LEN})` };
   // Mentions (§24): the mentionable set follows the skill's visibility; tokens inside markdown
   // code fences/backticks stay literal (this is the one markdown-rendering context).
-  const mentions = await validateMentions(access, body, { kind: "skill", namespaceId: skill.namespaceId, visibility: skill.visibility }, { markdown: true });
+  const mentions = await validateMentions(access, body, { kind: "skill", skillId: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, { markdown: true });
   if (!mentions.ok) return mentions;
 
   // Resolve the version pill. A non-null semver must be an active (non-yanked) version of this
@@ -762,18 +764,11 @@ async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscuss
        ) r
        join users u on u.id = r.uid and u.status = 'active' and u.discussion_notifications
       where r.uid <> $4
-        and r.uid <> all($6::uuid[]) -- mentioned users get the un-coalesced mention ping instead (§12)
-        and (
-          $5 = 'org'
-          or exists (
-            select 1 from group_memberships gm2
-            join role_mappings rm2 on rm2.group_id = gm2.group_id
-            where gm2.user_id = r.uid and (rm2.role = 'platform_admin' or rm2.namespace_id = $3)
-          )
-        )
+        and r.uid <> all($5::uuid[]) -- mentioned users get the un-coalesced mention ping instead (§12)
+        and exists (select 1 from skills sk where sk.id = $1 and ${userCanSeeSkillSql("r.uid", "sk")}) -- owner ∪ §42 grants
      on conflict (user_id, (payload->>'conversationId')) where type = 'skill.discussion' and read_at is null
      do update set payload = excluded.payload, created_at = now()`,
-    [skill.id, payload, skill.namespaceId, authorId, skill.visibility, mentionedUserIds],
+    [skill.id, payload, skill.namespaceId, authorId, mentionedUserIds],
   );
 }
 

@@ -16,7 +16,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ ns: string; s
   if (limited) return limited;
   const { ns, slug, semver } = await ctx.params;
   const skill = await findSkill(ns, slug);
-  if (!skill || skill.status !== "active" || !isSkillVisible(access, { namespaceId: skill.namespaceId, visibility: skill.visibility })) {
+  if (!skill || skill.status !== "active" || !isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });
   }
   const r = await reassessQuality(access, access.userId, { id: skill.id, namespaceId: skill.namespaceId, slug: skill.slug }, semver);

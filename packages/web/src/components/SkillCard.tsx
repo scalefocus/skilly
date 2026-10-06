@@ -35,6 +35,9 @@ export interface CatalogEntry {
   skillId?: string;
   /** §41.11 the system quality summary, or null/absent while unscored (no badge). */
   quality?: QualitySummaryView | null;
+  /** §42: the owning namespace's display name when this viewer sees the skill only through a
+   *  namespace grant ⇒ the "Shared with your namespace by …" marker. */
+  sharedFrom?: string | null;
 }
 
 /** The "Official" badge marks platform-endorsed (first-party / sanctioned) skills (§7). It is an
@@ -100,7 +103,9 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
         <OfficialBadge official={s.official} />
         {s.latest && <span className="chip chip-accent">v{s.latest}</span>}
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
-        {s.visibility === "namespace" && <Pill tone="warn">restricted</Pill>}
+        {s.visibility === "namespace" && (s.sharedFrom
+          ? <span title={`Shared with your namespace by ${s.sharedFrom}`} aria-label={`Shared with your namespace by ${s.sharedFrom}`}><Pill tone="warn">shared</Pill></span>
+          : <Pill tone="warn">restricted</Pill>)}
         {s.status === "archived" && <Pill tone="danger">archived</Pill>}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -140,6 +145,7 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</div>
           <div className="ns mono" style={{ fontSize: 11.5 }}>@{s.namespaceSlug}/{s.skillSlug}</div>
+          {s.sharedFrom && <div className="muted" style={{ fontSize: 11.5 }}>Shared with your namespace by {s.sharedFrom}</div>}
         </div>
       </div>
       <p className="desc muted skill-row-desc">{plainText(s.description)}</p>
@@ -147,7 +153,7 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
         <OfficialBadge official={s.official} />
         {s.latest && <span className="chip chip-accent">v{s.latest}</span>}
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
-        {s.visibility === "namespace" && <Pill tone="warn">restricted</Pill>}
+        {s.visibility === "namespace" && <Pill tone="warn">{s.sharedFrom ? "shared" : "restricted"}</Pill>}
         {s.status === "archived" && <Pill tone="danger">archived</Pill>}
         <span className="chip">{agentLabel(s.toolHarness)}</span>
         {/* Grouped so on mobile (when the row wraps) rating + installs drop to their own bottom row. */}

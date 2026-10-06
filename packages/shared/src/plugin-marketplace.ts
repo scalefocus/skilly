@@ -267,11 +267,14 @@ export function compareMembers(a: MarketplaceMemberSkill, b: MarketplaceMemberSk
 
 /**
  * The directory a member skill lives under inside a plugin — and therefore the consumer-visible
- * skill name (`/<plugin>:<skillDir>`). Namespace marketplaces use the bare slug (unique within the
- * namespace); the public marketplace spans namespaces, so it prefixes the namespace slug.
+ * skill name (`/<plugin>:<skillDir>`). Namespace marketplaces use the bare slug for the namespace's
+ * OWN skills (unique within the namespace); the public marketplace spans namespaces, so it prefixes
+ * the namespace slug — and so does a namespace marketplace for a skill SHARED into it from another
+ * namespace (§42), so a shared skill can never shadow one of the namespace's own.
  */
 export function memberSkillDir(scope: MarketplaceScope, namespaceSlug: string, skillSlug: string): string {
-  return scope.kind === "public" ? `${namespaceSlug}-${skillSlug}` : skillSlug;
+  if (scope.kind === "namespace" && scope.namespaceSlug === namespaceSlug) return skillSlug;
+  return `${namespaceSlug}-${skillSlug}`;
 }
 
 /**
