@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AI_BUDGET_EXHAUSTED_MESSAGE,
+  AI_FEATURES,
   AI_TEST_MAX_TOKENS,
   AiError,
   aiAvailable,
@@ -427,6 +428,26 @@ test("aiComplete: 503 then success = one retry, ONE usage row (ok)", async () =>
   assert.equal(f.calls.length, 2);
   assert.equal(st.usage.length, 1);
   assert.equal(st.usage[0]![7], true);
+});
+
+test("aiComplete: retry:false makes exactly one attempt on a 503 (§43.9)", async () => {
+  const st = stateWith();
+  const f = fakeFetch([json({ error: { message: "overloaded" } }, 503), json({ content: [{ type: "text", text: "ok" }] })]);
+  await assert.rejects(
+    aiComplete(fakeDb(st), env(f.impl), { feature: "summarize", messages: MSG, maxTokens: 5, retry: false }),
+    (e: unknown) => e instanceof AiError && e.code === "ai_provider_error" && e.httpStatus === 503,
+  );
+  assert.equal(f.calls.length, 1);
+  assert.equal(st.usage.length, 1);
+  assert.equal(st.usage[0]![7], false);
+});
+
+test("AI_FEATURES registers skill_draft with its §43 egress", () => {
+  const draft = AI_FEATURES.find((f) => f.key === "skill_draft");
+  assert.ok(draft);
+  assert.equal(draft.spec, "§43");
+  assert.match(draft.egress, /SKILL\.md/);
+  assert.match(draft.egress, /category names/);
 });
 
 test("aiComplete: 401 is not retried; failure → usage(error) + last call + throttled 502 system event", async () => {

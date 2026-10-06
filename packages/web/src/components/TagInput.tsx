@@ -13,12 +13,15 @@ export function TagInput({
   suggestions = [],
   placeholder = "Add…",
   max = 12,
+  badgeFor,
 }: {
   value: string[];
   onChange: (next: string[]) => void;
   suggestions?: string[];
   placeholder?: string;
   max?: number;
+  /** Optional small badge after a chip's label (e.g. the §43.4 "new" marker on AI-added categories). */
+  badgeFor?: (tag: string) => { label: string; title: string } | null;
 }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
@@ -70,12 +73,16 @@ export function TagInput({
   return (
     <div className="taginput" onClick={() => inputRef.current?.focus()}>
       <div className="taginput-box">
-        {value.map((t, i) => (
+        {value.map((t, i) => {
+          const badge = badgeFor?.(t) ?? null;
+          return (
           <span key={`${t}-${i}`} className="chip chip-accent taginput-chip">
             {t}
+            {badge && <span className="taginput-badge" title={badge.title}>{badge.label}</span>}
             <button type="button" aria-label={`remove ${t}`} onClick={(e) => { e.stopPropagation(); removeAt(i); }}>×</button>
           </span>
-        ))}
+          );
+        })}
         <input
           ref={inputRef}
           value={text}

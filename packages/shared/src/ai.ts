@@ -46,13 +46,19 @@ export interface AiFeature {
   spec: string;
 }
 
-/** The registered AI tasks (§40.7). The first is the skill quality assessment (§41.5). */
+/** The registered AI tasks (§40.7): the skill quality assessment (§41.5) and propose-form drafting (§43). */
 export const AI_FEATURES: readonly AiFeature[] = [
   {
     key: "skill_quality",
     label: "Skill quality assessment",
     egress: "The SKILL.md frontmatter and body (first 60,000 characters), the list of bundled file paths (first 200), and the deterministic quality findings, for each published version",
     spec: "§41",
+  },
+  {
+    key: "skill_draft",
+    label: "Propose-form drafting (description, usage, categories)",
+    egress: "The SKILL.md frontmatter and body (first 60,000 characters, secret-scanner lines redacted) of the skill being proposed, and the list of existing category names (first 500)",
+    spec: "§43",
   },
 ];
 /** The reserved feature key the admin connectivity test records its usage under. */
@@ -599,6 +605,8 @@ export interface AiCompleteOptions {
   messages: AiMessage[];
   maxTokens: number;
   json?: boolean;
+  /** false = a single attempt (interactive callers that must fail fast, §43.9). Default true. */
+  retry?: boolean;
 }
 
 export interface AiCompleteResult {
@@ -669,7 +677,7 @@ export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Pr
       break;
     } catch (err) {
       failure = err instanceof AiError ? err : new AiError("ai_provider_error", sanitizeAiError(String(err), token));
-      if (attempt === 0 && isRetryable(failure)) {
+      if (attempt === 0 && o.retry !== false && isRetryable(failure)) {
         await sleep(retryDelayMs(failure.retryAfter));
         continue;
       }
