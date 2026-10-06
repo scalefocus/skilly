@@ -110,7 +110,10 @@ export function normalizeAiBaseUrl(provider: AiProvider, raw: string | null | un
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return { ok: false, error: "the base URL must start with http:// or https://" };
   if (u.username || u.password) return { ok: false, error: "the base URL must not contain credentials" };
-  const path = u.pathname.replace(/\/+$/, "");
+  let path = u.pathname.replace(/\/+$/, "");
+  // §40.2: skilly appends `/api/...` for Open WebUI itself, so a pasted `https://host/api` would
+  // double it — strip one final `/api` segment (a deeper prefix like `/openwebui` is kept).
+  if (provider === "openwebui" && /\/api$/i.test(path)) path = path.slice(0, -4).replace(/\/+$/, "");
   return { ok: true, url: `${u.protocol}//${u.host}${path}` };
 }
 
@@ -192,6 +195,10 @@ function intOrNull(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.round(v)) : null;
 }
 
+/** §40.2: the error for a reply that ran out of tokens before writing any text. */
+export const AI_BUDGET_EXHAUSTED_MESSAGE =
+  "the model used its whole token budget before answering (it may be a reasoning model) — no text was returned";
+
 /** Parse a provider completion body; throws ai_provider_error on an unexpected shape. */
 export function parseCompletionResponse(provider: AiProvider, body: unknown): AiCompletionParsed {
   const b = (body ?? {}) as Record<string, any>;
@@ -205,8 +212,14 @@ export function parseCompletionResponse(provider: AiProvider, body: unknown): Ai
       outputTokens: intOrNull(b.usage?.output_tokens),
     };
   }
-  const content = b.choices?.[0]?.message?.content;
-  if (typeof content !== "string") throw new AiError("ai_provider_error", "unexpected response from the provider (no choices)");
+  const choice = b.choices?.[0];
+  const content = choice?.message?.content;
+  if (typeof content !== "string") {
+    // §40.2: a reasoning model can spend the whole budget in `reasoning_content` and never write
+    // `content` — name that cause instead of the generic shape error.
+    if (choice && choice.finish_reason === "length" && content == null) throw new AiError("ai_provider_error", AI_BUDGET_EXHAUSTED_MESSAGE);
+    throw new AiError("ai_provider_error", "unexpected response from the provider (no choices)");
+  }
   return {
     text: content,
     model: typeof b.model === "string" ? b.model : null,
@@ -280,6 +293,8 @@ export function parseAiJson(text: string): unknown {
 export const AI_RESPONSE_MAX_BYTES = 1024 * 1024;
 export const AI_CALL_TIMEOUT_MS = 60_000;
 export const AI_TEST_TIMEOUT_MS = 20_000;
+/** §40.5: room for a reasoning model to think and still answer "OK". */
+export const AI_TEST_MAX_TOKENS = 1024;
 export const AI_RETRY_AFTER_CAP_MS = 10_000;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 
@@ -386,7 +401,7 @@ export async function runAiTest(
     model: c.model,
     system: "You are a connectivity check.",
     messages: [{ role: "user", content: "Reply with the single word OK." }],
-    maxTokens: 16,
+    maxTokens: AI_TEST_MAX_TOKENS,
   });
   try {
     const body = await providerFetch(spec, { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl });

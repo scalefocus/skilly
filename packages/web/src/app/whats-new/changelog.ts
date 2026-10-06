@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.21.2",
+    date: "2026-10-06",
+    summary:
+      "The AI integration now works with reasoning models: the connection test and quality scoring give the model enough tokens to think and still answer, and a reply that runs out of budget says so plainly. An Open WebUI base URL ending in /api is now trimmed automatically.",
+  },
+  {
     version: "2.21.1",
     date: "2026-10-06",
     summary:

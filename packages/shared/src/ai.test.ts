@@ -4,6 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AI_BUDGET_EXHAUSTED_MESSAGE,
+  AI_TEST_MAX_TOKENS,
   AiError,
   aiAvailable,
   aiComplete,
@@ -68,6 +70,16 @@ test("normalizeAiBaseUrl: defaults, required, scheme, credentials, query/fragmen
   assert.equal(normalizeAiBaseUrl("anthropic", "https://x.example/" + "a".repeat(600)).ok, false);
 });
 
+test("normalizeAiBaseUrl: Open WebUI drops one trailing /api segment (§40.2); Anthropic does not", () => {
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://ai.example.com/api"), { ok: true, url: "https://ai.example.com" });
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://ai.example.com/api/"), { ok: true, url: "https://ai.example.com" });
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://ai.example.com/API"), { ok: true, url: "https://ai.example.com" });
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://h.example/openwebui/api"), { ok: true, url: "https://h.example/openwebui" });
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://h.example/openwebui"), { ok: true, url: "https://h.example/openwebui" });
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://h.example/rapid"), { ok: true, url: "https://h.example/rapid" });
+  assert.deepEqual(normalizeAiBaseUrl("anthropic", "https://gw.example/api"), { ok: true, url: "https://gw.example/api" });
+});
+
 test("validateAiModel / tokenLast4 / sanitizeAiError", () => {
   assert.equal(validateAiModel(" claude-sonnet-5-5 "), "claude-sonnet-5-5");
   assert.equal(validateAiModel(""), null);
@@ -122,6 +134,19 @@ test("parseCompletionResponse: text + usage for both providers; bad shapes throw
   assert.equal(ou.inputTokens, 4);
   assert.throws(() => parseCompletionResponse("anthropic", {}), (e: unknown) => e instanceof AiError && e.code === "ai_provider_error");
   assert.throws(() => parseCompletionResponse("openwebui", { choices: [] }), AiError);
+});
+
+test("parseCompletionResponse: a reasoning model that ran out of budget gets its own message (§40.2)", () => {
+  const exhausted = { choices: [{ finish_reason: "length", message: { role: "assistant", reasoning_content: "The user wants", content: null } }] };
+  assert.throws(
+    () => parseCompletionResponse("openwebui", exhausted),
+    (e: unknown) => e instanceof AiError && e.code === "ai_provider_error" && e.message === AI_BUDGET_EXHAUSTED_MESSAGE,
+  );
+  // Content missing for any other reason keeps the generic shape error.
+  assert.throws(
+    () => parseCompletionResponse("openwebui", { choices: [{ finish_reason: "stop", message: { content: null } }] }),
+    (e: unknown) => e instanceof AiError && /no choices/.test(e.message),
+  );
 });
 
 test("models list: endpoints per provider; parse sorts, de-dupes, rejects bad shape", () => {
@@ -186,8 +211,17 @@ test("runAiTest: pass reports latency + echoed model", async () => {
   assert.equal(r.ok, true);
   assert.equal(r.model, "claude-echo");
   assert.equal(r.error, null);
-  assert.equal(JSON.parse(f.calls[0]!.init.body as string).max_tokens, 16);
+  assert.equal(AI_TEST_MAX_TOKENS, 1024);
+  assert.equal(JSON.parse(f.calls[0]!.init.body as string).max_tokens, 1024);
   assert.equal(f.calls[0]!.init.redirect, "manual");
+});
+
+test("runAiTest: a reply cut off by the budget fails with the budget-exhausted message", async () => {
+  const f = fakeFetch([json({ model: "scale-gpt-3", choices: [{ finish_reason: "length", message: { content: null, reasoning_content: "thinking" } }] })]);
+  const r = await runAiTest({ provider: "openwebui", baseUrl: "https://owui", token: "tok", model: "scale-gpt" }, { fetchImpl: f.impl });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, AI_BUDGET_EXHAUSTED_MESSAGE);
+  assert.equal(r.errorCode, "ai_provider_error");
 });
 
 test("runAiTest: provider error is sanitized and token-redacted, no retry", async () => {

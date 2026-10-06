@@ -6,6 +6,7 @@ import {
   buildQualityPrompt, QUALITY_PROMPT_BODY_MAX, QUALITY_PROMPT_PATHS_MAX,
 } from "./quality.js";
 import {
+  QUALITY_AI_MAX_TOKENS,
   QUALITY_RULESET_VERSION, QUALITY_FINDINGS_PER_RULE, QUALITY_COUNTED_PER_RULE, QUALITY_LEVEL_OF, QUALITY_RULES,
   scoreQuality, qualityStars, finalQualityScore, validateQualityVerdict, aiScoreOf, qualityFindings, qualityRulesetOf,
   groupQualityFindings, qualityModeLine, formatStars, type QualityRule,
@@ -385,4 +386,8 @@ test("buildQualityPrompt: redacts secret-like lines, caps body and paths, lists 
   assert.ok(p.user.includes(`truncated at ${QUALITY_PROMPT_BODY_MAX}`));
   assert.ok(p.system.includes("JSON"));
   assert.ok(/composability/.test(p.system));
+});
+
+test("the AI scoring call asks for the aiComplete ceiling, 8192 tokens (§41.5 — room for a reasoning model)", () => {
+  assert.equal(QUALITY_AI_MAX_TOKENS, 8192);
 });

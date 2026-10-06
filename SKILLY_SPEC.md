@@ -8169,16 +8169,27 @@ the caller.
 | Base URL | **required** (e.g. `https://openwebui.corp.local`; a path prefix is allowed) | optional; default **`https://api.anthropic.com`** (override for a corporate gateway/proxy) |
 | Auth header | `Authorization: Bearer <token>` | `x-api-key: <token>` + `anthropic-version: 2023-06-01` |
 | Completion | `POST {base}/api/chat/completions` — OpenAI shape `{model, messages, max_tokens, stream:false}`; the system prompt is the first `system` message | `POST {base}/v1/messages` — `{model, system, messages, max_tokens}` |
-| Text | `choices[0].message.content` | concatenation of the `text` content blocks |
+| Text | `choices[0].message.content` — a `null`/absent content with `finish_reason: "length"` is the **budget-exhausted** error below | concatenation of the `text` content blocks |
 | Usage | `usage.prompt_tokens` / `usage.completion_tokens` (null when absent) | `usage.input_tokens` / `usage.output_tokens` |
 | Model list | `GET {base}/api/models` → `data[].id` | `GET {base}/v1/models?limit=1000` → `data[].id` |
 
 - **Base URL validation:** an absolute `http://` or `https://` URL, ≤ 500 chars, **no userinfo, query
-  or fragment**; a trailing `/` is stripped. `http://` is allowed (internal Open WebUI). No host
+  or fragment**; a trailing `/` is stripped. **Open WebUI only:** a final `/api` path segment is
+  stripped too — skilly appends `/api/...` itself, so the commonly pasted `https://host/api` becomes
+  `https://host` (a deeper prefix such as `/openwebui` is kept; `/openwebui/api` → `/openwebui`).
+  Normalization runs on every form action (Load models, Test, Save), so the saved value and the
+  stored-token match (§40.5) always use the stripped form. `http://` is allowed (internal Open WebUI). No host
   allow-list — platform admins are trusted to point it where they mean to (§40.10 covers the
   token-forwarding risk).
 - **Requests:** redirects are **not followed** (a 3xx is an error — a redirect must never carry the
   token to another host); response bodies are capped at **1 MB**; the token never appears in a URL.
+- **Budget exhausted (reasoning models).** A 2xx Open WebUI completion whose `choices[0].message.content`
+  is `null`/absent **and** whose `finish_reason` is `"length"` is `ai_provider_error` with the message
+  *"the model used its whole token budget before answering (it may be a reasoning model) — no text
+  was returned"* — not the generic *"unexpected response"*. Reasoning models (e.g. vLLM-served ones
+  that fill `reasoning_content` first) spend tokens thinking before they write `content`; this names
+  the cause on the Test result and in a scoring row's `ai_last_error` (§41.5). Any other missing
+  content keeps the generic unexpected-response error.
 - **The UI labels the token "API key / bearer token"** — Anthropic's header is `x-api-key`, Open
   WebUI's is a bearer; the admin pastes the same kind of value either way.
 
@@ -8240,8 +8251,11 @@ pattern), with the **status pill** as its header accessory.
 
 ### 40.5 The test
 - A minimal completion: system *"You are a connectivity check."*, user *"Reply with the single word
-  OK."*, `max_tokens` 16, **20 s timeout, no retry**. **Pass = HTTP 2xx with a parseable response**
-  (any text — the answer's wording is not checked). The result reports pass/fail, latency, the
+  OK."*, `max_tokens` **1024**, **20 s timeout, no retry**. **Pass = HTTP 2xx with a parseable response**
+  (any text — the answer's wording is not checked). The budget is generous so a **reasoning model**
+  can think and still answer; a non-reasoning model stops after "OK", and billing is per token
+  actually used. A reply that still runs out of budget fails with the budget-exhausted error
+  (§40.2). The result reports pass/fail, latency, the
   model id the provider echoes back, and on failure the provider's HTTP status and a sanitized
   one-line error (≤ 300 chars; never the token or request headers).
 - **Inputs:** provider, base URL, model and token **from the form**. A blank token means "use the
@@ -8370,7 +8384,10 @@ model-list calls and runtime calls are **not audited** (telemetry, in `ai_usage`
   parsing for both providers (text, usage, model list, error bodies); `json` mode incl. fenced JSON
   and the invalid-JSON error; retry policy (429/5xx/network retried once, other 4xx not, `Retry-After`
   capped); redirect = error; status derivation (all four states, "more recent signal wins");
-  stored-token rule (blank token + changed URL/provider → `ai_token_required`); unknown feature
+  stored-token rule (blank token + changed URL/provider → `ai_token_required`); Open WebUI
+  trailing-`/api` stripping (`/api`, `/api/`, `/openwebui/api`; Anthropic untouched); the
+  budget-exhausted error (`content: null` + `finish_reason: "length"`) vs the generic one; the test
+  request carries `max_tokens` 1024; unknown feature
   throws before any fetch; encrypt/decrypt round-trip with the AI key.
 - **Integration** (web API + DB, provider stubbed by a local HTTP server): every route's 403 for
   non-platform-admins; `ai_key_missing` without the key; save-pass persists + audits
@@ -8460,7 +8477,7 @@ in the new optional `ScanFinding.level` field (`error` | `warn` | `info`).
 ### 41.5 The AI assessment (feature key `skill_quality`)
 - **Registry entry** (`AI_FEATURES`): `{ key: 'skill_quality', label: 'Skill quality assessment', egress: 'The SKILL.md frontmatter and body (first 60,000 characters), the list of bundled file paths (first 200), and the deterministic quality findings, for each published version', spec: '§41' }`. Shown on the §40.4 egress notice.
 - **Sent to the provider:** exactly that. **Never sent:** the contents of scripts, references or assets, any line the §6 secret scanner flagged (replaced by `[redacted]`), credentials of any kind, audit rows, the System log, the user rating, or anything about who proposed or installed the skill. The body is truncated at the cap with a note to the model that it was.
-- **The prompt** asks for a JSON verdict (`json: true`, `maxTokens` 2048, `userId` null — background work) scoring **five dimensions 0–100**, each with a one-sentence remark: `clarity` (instructions are clear and actionable), `triggers` (the description uses phrases a user would actually say and is not merely technical), `domain` (the embedded domain knowledge and best practices are correct and sufficient), `workflow` (step ordering, dependencies, validation gates and rollback are coherent), `composability` (works alongside other skills without assuming it is the only one); plus `summary` (≤ 500 chars) and `suggestions` (≤ 5 strings, ≤ 300 chars each, concrete improvements). The model is told the deterministic findings so it does not re-count them and is instructed to judge only what the rules cannot.
+- **The prompt** asks for a JSON verdict (`json: true`, `maxTokens` **8192** — the `aiComplete` ceiling, so a reasoning model has room to think and still return the verdict; billing is per token used — `userId` null, background work) scoring **five dimensions 0–100**, each with a one-sentence remark: `clarity` (instructions are clear and actionable), `triggers` (the description uses phrases a user would actually say and is not merely technical), `domain` (the embedded domain knowledge and best practices are correct and sufficient), `workflow` (step ordering, dependencies, validation gates and rollback are coherent), `composability` (works alongside other skills without assuming it is the only one); plus `summary` (≤ 500 chars) and `suggestions` (≤ 5 strings, ≤ 300 chars each, concrete improvements). The model is told the deterministic findings so it does not re-count them and is instructed to judge only what the rules cannot.
 - **Verdict validation.** The JSON must have all five dimensions as integers 0–100; strings are trimmed to their caps; anything else is `ai_invalid_json` and counts as a failed attempt. The stored `ai_verdict` is the validated object plus the `model` that answered. **Remarks, summary and suggestions are rendered as escaped plain text everywhere**, never Markdown or HTML (they are model output about possibly hostile content).
 - **Attempts.** Each version gets up to **3** attempts, at least **1 hour** apart (`ai_next_attempt_at`); a refused call (`ai_disabled`, `ai_not_configured`, `ai_key_missing`) is not an attempt and leaves the row `off`/`pending` for a later pass. After the third failure `ai_status = 'failed'` (`ai_last_error` kept, sanitized) and the score stays rules-only until a re-assess or ruleset bump. Every attempt that reaches the provider is one `ai_usage` row, by §40.7.
 - **Visibility (§40.10):** the verdict is derived from one skill's own content and is only ever shown where that skill is visible. No cross-skill input, no org-wide aggregation of restricted content.
@@ -8518,7 +8535,7 @@ in the new optional `ScanFinding.level` field (`error` | `warn` | `info`).
 - `skill_version_quality` (§3), `skills.quality_score smallint`, `skills.quality_mode text`, `users.quality_notifications boolean NOT NULL DEFAULT true`. No backfill statement: the sweep's first run is the backfill (§41.6). Index `skills (quality_score DESC NULLS LAST)`.
 
 ### 41.13 Tests (ship with the change, §16 discipline)
-- **Unit** (`@skilly/shared`): every applied rule against the guide's own good/bad names, descriptions and frontmatter samples (the 7 names, 6 good and 5 bad descriptions, the p.25 wrong/correct frontmatter, `Settings > Extensions` body text) plus the skilly-specific FD-015 known keys; `qa-scanned` once per scan; per-file cap of 5; `severity` is always `info`; `scoreQuality` deductions and the 3-per-rule cap; `qualityStars` at every band edge (9, 10, 39, 40, 89, 90, 100); the 60/40 blend and rounding; the pinned ruleset hash; the AI prompt builder's egress (redacts secret-scanner lines, truncates at 60,000 chars and 200 paths, never includes script bodies); verdict validation (missing dimension, out-of-range, over-cap strings, fenced JSON).
+- **Unit** (`@skilly/shared`): every applied rule against the guide's own good/bad names, descriptions and frontmatter samples (the 7 names, 6 good and 5 bad descriptions, the p.25 wrong/correct frontmatter, `Settings > Extensions` body text) plus the skilly-specific FD-015 known keys; `qa-scanned` once per scan; per-file cap of 5; `severity` is always `info`; `scoreQuality` deductions and the 3-per-rule cap; `qualityStars` at every band edge (9, 10, 39, 40, 89, 90, 100); the 60/40 blend and rounding; the pinned ruleset hash; the scoring call's `maxTokens` 8192; the AI prompt builder's egress (redacts secret-scanner lines, truncates at 60,000 chars and 200 paths, never includes script bodies); verdict validation (missing dimension, out-of-range, over-cap strings, fenced JSON).
 - **Integration** (web API + DB, provider stubbed): publish writes the row and the skill columns; `refreshSkillQuality` follows `latest` across yank/restore/archive; the sweep backfills a report lacking `qa-scanned`, supersedes it without losing other findings, and takes exactly 3 AI rows per pass; attempt spacing, 3-strike `failed`, refused calls not counted; AI off → `off`, AI on later → picked up for latest versions only; `skill.quality_low` fires once at settle, respects the toggle, carries every finding, and re-fires only after a re-assess; re-assess 403/404/rate-limit and audit; rescore audit; `sort=quality`, `minQuality` and the default-ranking tiebreak under the visibility predicate (a restricted skill never shifts counts or order for an outsider); MCP `search_skills` parity; `GET /api/skills/:ns/:slug` never leaks the verdict of a restricted skill; migration 0086 applies.
 - **e2e:** propose a bundle with a `README.md` and a vague description → the propose page's Quality section lists FS-003 and DS-001/DS-003 with the stars; publish → the catalog card shows the shield badge beside the user rating; "Highest quality" sort and the `★ 4+` chip reorder/filter the grid; the detail page's Quality card shows the findings; with the stub AI provider enabled the card gains the AI assessment after the sweep; an admin's Re-assess resets it to pending.
 

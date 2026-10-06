@@ -15,7 +15,7 @@ import {
   qualityScanner, maxSeverity, buildQualityPrompt, isSecretLikeLine, qualityRulesetOf, resolveLatest,
   upsertQualityRules, refreshSkillQuality, settleQualityLow, recordQualityAiSuccess, recordQualityAiFailure,
   latestArtifactFindings, qualityMarkerFilter, validateQualityVerdict,
-  QUALITY_SCANNER, QUALITY_RULESET_VERSION, QUALITY_SWEEP_RULES_BATCH, QUALITY_SWEEP_AI_BATCH, QUALITY_AI_FEATURE,
+  QUALITY_SCANNER, QUALITY_RULESET_VERSION, QUALITY_SWEEP_RULES_BATCH, QUALITY_SWEEP_AI_BATCH, QUALITY_AI_FEATURE, QUALITY_AI_MAX_TOKENS,
   type ScanFinding, type BundleEntry,
 } from "@skilly/shared";
 import { aiAvailable, aiComplete, parseAiTokenKey, AiError, type AiEnv } from "@skilly/shared/ai";
@@ -161,7 +161,7 @@ export async function sweepQualityAi(pool: Pool, store: ArtifactStore, limit = Q
         userId: null,
         system: prompt.system,
         messages: [{ role: "user", content: prompt.user }],
-        maxTokens: 2048,
+        maxTokens: QUALITY_AI_MAX_TOKENS,
         json: true,
       });
       const verdict = validateQualityVerdict(res.json, res.model);

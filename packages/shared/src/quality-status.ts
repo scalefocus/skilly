@@ -31,6 +31,8 @@ export const QUALITY_SWEEP_RULES_BATCH = 50;
 export const QUALITY_SWEEP_AI_BATCH = 3;
 /** The §40.7 feature key. */
 export const QUALITY_AI_FEATURE = "skill_quality";
+/** §41.5: the scoring call's token budget — the aiComplete ceiling, so a reasoning model can think and still return the verdict. */
+export const QUALITY_AI_MAX_TOKENS = 8192;
 
 export type QualityRule =
   | "FS-003" | "FS-004" | "FS-005" | "FS-006"
