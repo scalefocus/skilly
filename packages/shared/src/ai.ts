@@ -243,11 +243,24 @@ export function providerErrorText(body: unknown, rawText: string): string {
 
 export const AI_JSON_INSTRUCTION = "Respond with a single JSON value only — no prose and no code fences.";
 
-/** Strip one surrounding ``` / ```json fence and parse; ai_invalid_json on failure. */
+/**
+ * Strip one surrounding ``` / ```json fence. Plain string slicing, NOT a regex: model output is
+ * untrusted, and a fence pattern with optional whitespace around a lazy body backtracks
+ * polynomially on input like "```" + many spaces (js/polynomial-redos).
+ */
+export function stripCodeFence(text: string): string {
+  const s = text.trim();
+  if (s.length < 6 || !s.startsWith("```") || !s.endsWith("```")) return s;
+  const inner = s.slice(3, -3);
+  const nl = inner.indexOf("\n");
+  if (nl === -1) return inner.trim();
+  // The opening line may carry only a language tag (```json); anything else is content.
+  return (/^[A-Za-z0-9_-]*$/.test(inner.slice(0, nl).trim()) ? inner.slice(nl + 1) : inner).trim();
+}
+
+/** Strip one surrounding code fence and parse; ai_invalid_json on failure. */
 export function parseAiJson(text: string): unknown {
-  let s = text.trim();
-  const fence = /^```[a-zA-Z0-9_-]*\s*\n?([\s\S]*?)\n?```$/.exec(s);
-  if (fence) s = fence[1]!.trim();
+  const s = stripCodeFence(text);
   try {
     return JSON.parse(s);
   } catch {

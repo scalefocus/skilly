@@ -23,6 +23,7 @@ import {
   retryDelayMs,
   runAiTest,
   sanitizeAiError,
+  stripCodeFence,
   tokenLast4,
   validateAiModel,
   type AiDb,
@@ -143,6 +144,18 @@ test("parseAiJson: plain, fenced, and invalid", () => {
   assert.deepEqual(parseAiJson('```json\n{"a":[1,2]}\n```'), { a: [1, 2] });
   assert.deepEqual(parseAiJson("```\n[true]\n```"), [true]);
   assert.throws(() => parseAiJson("Sure! here you go"), (e: unknown) => e instanceof AiError && e.code === "ai_invalid_json");
+  assert.deepEqual(parseAiJson('```{"one":"line"}```'), { one: "line" });
+  assert.deepEqual(parseAiJson('```json  \r\n{"crlf":true}\r\n```'), { crlf: true });
+});
+
+test("stripCodeFence: linear on adversarial input (CodeQL js/polynomial-redos)", () => {
+  const evil = "```" + " ".repeat(200_000) + "\n".repeat(50_000) + "x";
+  const t0 = Date.now();
+  assert.throws(() => parseAiJson(evil), (e: unknown) => (e as AiError).code === "ai_invalid_json");
+  assert.throws(() => parseAiJson(evil + "```"), (e: unknown) => (e as AiError).code === "ai_invalid_json");
+  assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
+  assert.equal(stripCodeFence("no fence"), "no fence");
+  assert.equal(stripCodeFence("``````"), "");
 });
 
 // ── retry policy ─────────────────────────────────────────────────────────────────────────────
