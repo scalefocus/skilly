@@ -8,6 +8,7 @@ import {
   hashToken,
   marketplaceName,
   type MarketplaceScope,
+  namespaceMarketplaceSkillSql,
 } from "@skilly/shared";
 import { pool } from "./db";
 import { M } from "./metrics";
@@ -148,7 +149,7 @@ export async function marketplacePluginCount(scope: MarketplaceScope, namespaceI
          from skills s
          join skill_versions sv on sv.skill_id = s.id and sv.status = 'active' and sv.git_published
         where s.status = 'active'
-          and ${scope.kind === "public" ? `s.visibility = 'org'` : `s.visibility = 'namespace' and s.namespace_id = $1`}
+          and ${scope.kind === "public" ? `s.visibility = 'org'` : namespaceMarketplaceSkillSql("$1::uuid", "s")}
      )
      select (select count(distinct c.slug)
                from q join skill_categories sc on sc.skill_id = q.id
@@ -165,7 +166,7 @@ export async function marketplaceSkillCount(scope: MarketplaceScope, namespaceId
        from skills s
        join skill_versions sv on sv.skill_id = s.id and sv.status = 'active' and sv.git_published
       where s.status = 'active'
-        and ${scope.kind === "public" ? `s.visibility = 'org'` : `s.visibility = 'namespace' and s.namespace_id = $1`}`,
+        and ${scope.kind === "public" ? `s.visibility = 'org'` : namespaceMarketplaceSkillSql("$1::uuid", "s")}`,
     scope.kind === "public" ? [] : [namespaceId],
   );
   return Number(rows[0]?.n ?? 0);

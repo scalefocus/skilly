@@ -1,6 +1,6 @@
 // Catalog read helpers (web). SKILLY_SPEC.md §6, §7, §10.
 import { pool } from "./db";
-import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, resolveSkillSearch, catalogOrderBy, collectionEligibleSql, type EffectiveAccess, type MatchMode } from "@skilly/shared";
+import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, sharedNamespaceIdsSql, seesViaGrantOnly, resolveSkillSearch, catalogOrderBy, collectionEligibleSql, type EffectiveAccess, type MatchMode } from "@skilly/shared";
 import { minQualityScore, qualityStars, type MinQuality, type QualityMode } from "@skilly/shared";
 
 /** §41.11: the skill-level quality summary from the denormalized columns. */
@@ -21,6 +21,8 @@ export interface SkillRow {
   id: string;
   namespaceId: string;
   namespaceSlug: string;
+  /** The owning namespace's display name (the §42 "Shared with your namespace by …" marker). */
+  namespaceDisplayName: string;
   slug: string;
   visibility: "org" | "namespace";
   status: "active" | "archived";
@@ -44,6 +46,8 @@ export interface SkillRow {
   /** §41.6 the latest stable version's system quality (denormalized), or null while unscored. */
   qualityScore: number | null;
   qualityMode: QualityMode | null;
+  /** §42 grantee namespaces (empty for org skills / unshared skills). Feeds `isSkillVisible`. */
+  sharedNamespaceIds: string[];
 }
 
 export async function findSkill(namespaceSlug: string, skillSlug: string): Promise<SkillRow | null> {
@@ -51,6 +55,7 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
     id: string;
     namespace_id: string;
     namespace_slug: string;
+    namespace_display_name: string;
     slug: string;
     visibility: "org" | "namespace";
     status: "active" | "archived";
@@ -64,9 +69,11 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
     icon_emoji: string | null;
     quality_score: number | null;
     quality_mode: QualityMode | null;
+    shared_namespace_ids: string[];
   }>(
-    `select s.id, s.namespace_id, n.slug as namespace_slug, s.slug, s.visibility, s.status, s.tool_harness, s.created_at,
+    `select s.id, s.namespace_id, n.slug as namespace_slug, n.display_name as namespace_display_name, s.slug, s.visibility, s.status, s.tool_harness, s.created_at,
             s.official_at, ob.display_name as official_by_name, s.featured_at, s.icon_sha256, s.icon_emoji, s.quality_score, s.quality_mode,
+            ${sharedNamespaceIdsSql("s")} as shared_namespace_ids,
             coalesce((select max(sv.created_at) from skill_versions sv where sv.skill_id = s.id), s.created_at) as updated_at
        from skills s join namespaces n on n.id = s.namespace_id
        left join users ob on ob.id = s.official_by
@@ -79,6 +86,7 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
         id: r.id,
         namespaceId: r.namespace_id,
         namespaceSlug: r.namespace_slug,
+        namespaceDisplayName: r.namespace_display_name,
         slug: r.slug,
         visibility: r.visibility,
         status: r.status,
@@ -90,6 +98,7 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
         officialByName: r.official_by_name,
         featured: r.featured_at != null,
         featuredAt: r.featured_at,
+        sharedNamespaceIds: r.shared_namespace_ids ?? [],
         icon: iconView(r.icon_sha256, r.icon_emoji),
         qualityScore: r.quality_score,
         qualityMode: r.quality_mode,
@@ -140,6 +149,9 @@ export interface CatalogEntry {
   skillId?: string;
   /** §41.11 the latest stable version's system quality, or null while unscored. */
   quality: { score: number; stars: number; mode: QualityMode } | null;
+  /** §42: the owning namespace's display name when the CALLER sees this skill only through a
+   *  grant — drives the "Shared with your namespace by <owner>" marker. Null otherwise. */
+  sharedFrom?: string | null;
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
@@ -272,7 +284,12 @@ export async function searchCatalog(
   // org-visible skills. An unknown slug simply matches nothing.
   if (opts.namespaceSlug) {
     params.push(opts.namespaceSlug);
-    where.push(`n.slug = $${params.length}`);
+    // §42: the namespace view also lists the restricted skills SHARED with that namespace (they are
+    // part of what its members see and of its marketplace). Visibility is still enforced above.
+    where.push(
+      `(n.slug = $${params.length} or (s.visibility = 'namespace' and exists (select 1 from skill_namespace_grants sng` +
+        ` join namespaces gn on gn.id = sng.namespace_id where sng.skill_id = s.id and gn.slug = $${params.length})))`,
+    );
   }
   // Collection views (§38.5): one collection's members, or the union of one person's collections.
   // The eligibility predicate is re-applied on top of the visibility predicate above, so a missed
@@ -315,8 +332,10 @@ export async function searchCatalog(
     created_at: string; updated_at: string; versions: string[] | null; official: boolean;
     icon_sha256: string | null; icon_emoji: string | null;
     quality_score: number | null; quality_mode: QualityMode | null;
+    namespace_id: string; namespace_display_name: string; shared_namespace_ids: string[];
   }>(
     `select s.id as skill_id, n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
+            s.namespace_id, n.display_name as namespace_display_name, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids,
             s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
             s.quality_score, s.quality_mode,
@@ -332,7 +351,7 @@ export async function searchCatalog(
        join namespaces n on n.id = s.namespace_id
        left join skill_versions sv on sv.skill_id = s.id
       where ${where.join(" and ")}
-      group by n.slug, s.slug, s.title, s.description, s.type, s.visibility, s.tool_harness, s.install_count, s.status, s.id
+      group by n.slug, n.display_name, s.slug, s.title, s.description, s.type, s.visibility, s.tool_harness, s.install_count, s.status, s.id
       order by ${orderBy}
       limit $${limitIdx}`,
     params,
@@ -365,6 +384,9 @@ export async function searchCatalog(
       isNew: !Number.isNaN(seenMs) && new Date(r.created_at).getTime() > seenMs,
       icon: iconView(r.icon_sha256, r.icon_emoji),
       quality: qualitySummary(r.quality_score, r.quality_mode),
+      sharedFrom: seesViaGrantOnly(access, { namespaceId: r.namespace_id, visibility: r.visibility, sharedNamespaceIds: r.shared_namespace_ids })
+        ? r.namespace_display_name
+        : null,
     };
   });
   return { skills, matchMode: engine?.matchMode ?? null };

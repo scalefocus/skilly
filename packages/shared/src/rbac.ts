@@ -94,15 +94,57 @@ export function canUseNamespaceMarketplace(a: EffectiveAccess, namespaceId: stri
   return a.isPlatformAdmin || a.namespaceRoles.has(namespaceId);
 }
 
+/** The skill fields the visibility decision reads. `sharedNamespaceIds` = the skill's
+ *  `skill_namespace_grants` (§42) — callers that load a restricted skill MUST supply it; omitting
+ *  it is only correct for an `org` skill or a skill known to have no grants. */
+export type VisibilitySubject = Pick<Skill, "namespaceId" | "visibility"> & {
+  sharedNamespaceIds?: readonly string[] | null;
+};
+
 /**
  * Is a skill visible to this user? org-wide skills are visible to all authenticated
- * users; namespace-scoped skills only to members of that namespace (any role) and
- * platform admins. INVARIANT: enforce this on EVERY search/list/fetch path.
+ * users; namespace-scoped skills only to members (any role) of the OWNING namespace or of a
+ * namespace the skill is shared with (§42), and platform admins.
+ * INVARIANT: enforce this on EVERY search/list/fetch path.
  */
-export function isSkillVisible(a: EffectiveAccess, skill: Pick<Skill, "namespaceId" | "visibility">): boolean {
+export function isSkillVisible(a: EffectiveAccess, skill: VisibilitySubject): boolean {
   if (skill.visibility === "org") return true;
   if (a.isPlatformAdmin) return true;
-  return a.namespaceRoles.has(skill.namespaceId);
+  if (a.namespaceRoles.has(skill.namespaceId)) return true;
+  return (skill.sharedNamespaceIds ?? []).some((id) => a.namespaceRoles.has(id));
+}
+
+/**
+ * Does this viewer see the skill ONLY through a §42 grant? Drives the presentational
+ * "Shared with your namespace by <owner>" marker: false for org skills, platform admins, and
+ * members of the owning namespace.
+ */
+export function seesViaGrantOnly(a: EffectiveAccess, skill: VisibilitySubject): boolean {
+  if (skill.visibility === "org" || a.isPlatformAdmin) return false;
+  if (a.namespaceRoles.has(skill.namespaceId)) return false;
+  return (skill.sharedNamespaceIds ?? []).some((id) => a.namespaceRoles.has(id));
+}
+
+// --- Namespace sharing authority (SKILLY_SPEC.md §42.2) ---
+
+/** Add a grantee namespace: platform admin, an admin of the OWNING namespace, or an explicit
+ *  maintainer of the skill (the caller resolves `isExplicitMaintainer` from skill_maintainers). */
+export function canShareSkill(a: EffectiveAccess, owningNamespaceId: string, isExplicitMaintainer: boolean): boolean {
+  if (a.isPlatformAdmin) return true;
+  if (a.namespaceRoles.get(owningNamespaceId) === "namespace_admin") return true;
+  return isExplicitMaintainer;
+}
+
+/** Revoke a grantee namespace: everyone who may share, plus an admin of the RECEIVING namespace
+ *  (who may only revoke the share into their own namespace). */
+export function canUnshareSkill(
+  a: EffectiveAccess,
+  owningNamespaceId: string,
+  granteeNamespaceId: string,
+  isExplicitMaintainer: boolean,
+): boolean {
+  if (canShareSkill(a, owningNamespaceId, isExplicitMaintainer)) return true;
+  return a.namespaceRoles.get(granteeNamespaceId) === "namespace_admin";
 }
 
 /** Namespace ids the user can see scoped (namespace-visibility) skills in. */

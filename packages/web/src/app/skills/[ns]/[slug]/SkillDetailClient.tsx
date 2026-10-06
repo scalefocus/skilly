@@ -1,4 +1,5 @@
 "use client";
+import { SharedWithPanel } from "./SharedWithPanel";
 import { useEffect, useRef, useState } from "react";
 import nextDynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
@@ -179,6 +180,9 @@ interface Detail {
   /** §41.11 the latest stable version's system quality summary, and its full card payload. */
   quality: QualitySummaryView | null;
   qualityDetail: QualityDetailView | null;
+  /** §42: true when this viewer sees the skill only through a namespace grant ⇒ the marker. */
+  sharedWithViewer?: boolean;
+  ownerNamespaceName?: string;
 }
 
 export default function SkillDetail() {
@@ -475,6 +479,11 @@ export default function SkillDetail() {
       <div className="muted mono" style={{ fontSize: 11.5, marginTop: 8 }}>
         created {fmt.date(data.createdAt)} · last updated {fmt.date(data.updatedAt)}
       </div>
+      {data.sharedWithViewer && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }} data-testid="shared-marker">
+          Shared with your namespace by <strong>{data.ownerNamespaceName ?? data.namespaceSlug}</strong>
+        </div>
+      )}
       {data.official && data.officialAt && (
         <div className="muted" style={{ fontSize: 12, marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
           <span className="chip chip-official"><span aria-hidden>✓</span> Official</span>
@@ -670,6 +679,8 @@ export default function SkillDetail() {
       {data.latest && <QualityCard detail={data.qualityDetail} base={base} onChanged={reload} />}
 
       <MaintainersPanel ns={ns} slug={slug} />
+
+      {data.visibility === "namespace" && <SharedWithPanel ns={ns} slug={slug} ownerNamespaceSlug={data.namespaceSlug} />}
 
       {data.canSeeContentRisk && data.contentRisk && (
         <ContentRiskCard ns={ns} slug={slug} initialStatus={data.contentRisk.status} onChanged={reload} />

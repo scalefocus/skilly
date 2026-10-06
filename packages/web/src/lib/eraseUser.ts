@@ -2,6 +2,7 @@
 // and scrubbed (a hard delete is impossible — messages/proposals FKs + append-only audit), its Entra
 // link detached (so the person can return later as a fresh account), and the user's personal data
 // deleted. Skills remain; messages/proposals/reviews de-identify to "<email> - Deleted" via userLabel.
+import { userCanSeeSkillSql } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { userLabel } from "./userLabel";
@@ -64,16 +65,11 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
         [targetUserId],
       );
       for (const m of maint.rows) {
-        const eligible = m.visibility === "org"
-          ? true
-          : (await client.query<{ ok: boolean }>(
-              `select exists (
-                 select 1 from group_memberships gm
-                 join role_mappings rm on rm.group_id = gm.group_id
-                 where gm.user_id = $1 and (rm.role = 'platform_admin' or rm.namespace_id = $2)
-               ) as ok`,
-              [transferTo, m.namespace_id],
-            )).rows[0]?.ok === true;
+        // Owner namespace ∪ §42 grantee namespaces, via the shared per-user predicate.
+        const eligible = (await client.query<{ ok: boolean }>(
+          `select exists (select 1 from skills sk where sk.id = $2::uuid and ${userCanSeeSkillSql("$1::uuid", "sk")}) as ok`,
+          [transferTo, m.skill_id],
+        )).rows[0]?.ok === true;
         if (!eligible) { skipped.push({ ns: m.ns_slug, slug: m.skill_slug }); continue; }
         const ins = await client.query(
           `insert into skill_maintainers (skill_id, user_id, added_by) values ($1, $2, $3) on conflict do nothing`,

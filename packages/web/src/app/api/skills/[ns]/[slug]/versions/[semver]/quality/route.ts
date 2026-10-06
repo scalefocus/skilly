@@ -15,7 +15,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ ns: string; sl
   const skill = await findSkill(ns, slug);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
   const ref = { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility };
-  const visible = skill.status === "archived" ? await canManageMaintainers(access, ref, access.userId) : isSkillVisible(access, ref);
+  const visible = skill.status === "archived" ? await canManageMaintainers(access, ref, access.userId) : isSkillVisible(access, skill);
   if (!visible) return Response.json({ error: "not found" }, { status: 404 });
   const detail = await skillQualityDetail(access, skill, semver);
   return Response.json({ quality: detail });

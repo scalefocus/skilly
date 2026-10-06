@@ -65,11 +65,13 @@ test("fan-out SQL: status + pause filters always; visibility gate only with a sk
   assert.doesNotMatch(plain.text, /role_mappings/);
   assert.deepEqual(plain.values.slice(0, 4), ["follow.achievement", JSON.stringify({ badgeKey: "k" }), "a", []]);
 
-  const gated = followFanOutSql({ type: "follow.new_skill", actorId: "a", payload: {}, skill: { namespaceId: "ns-1", visibility: "namespace" }, excludeUserIds: ["w1", "w2"] });
+  const gated = followFanOutSql({ type: "follow.new_skill", actorId: "a", payload: {}, skill: { id: "sk-1", namespaceId: "ns-1", visibility: "namespace" }, excludeUserIds: ["w1", "w2"] });
   assert.match(gated.text, /\$5::text = 'org'/);
   assert.match(gated.text, /rm\.role = 'platform_admin' or rm\.namespace_id = \$6::uuid/);
+  // §42: followers in a namespace the skill is shared with are in the audience too.
+  assert.match(gated.text, /skill_namespace_grants sng where sng\.skill_id = \$7::uuid/);
   assert.match(gated.text, /f\.follower_id <> all\(\$4::uuid\[\]\)/);
-  assert.deepEqual(gated.values.slice(3), [["w1", "w2"], "namespace", "ns-1"]);
+  assert.deepEqual(gated.values.slice(3), [["w1", "w2"], "namespace", "ns-1", "sk-1"]);
 });
 
 test("fan-out SQL rejects a non-follow type", () => {

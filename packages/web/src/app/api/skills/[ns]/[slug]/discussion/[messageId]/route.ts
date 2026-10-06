@@ -34,6 +34,7 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ ns: string;
     skillSlug: found.slug,
     visibility: found.visibility,
     archived: found.status === "archived",
+    sharedNamespaceIds: found.sharedNamespaceIds,
   };
   // Authority (and skill-thread membership) is re-verified inside deleteSkillDiscussionMessage.
   const r = await deleteSkillDiscussionMessage(access, skill, messageId);

@@ -3,7 +3,7 @@
 // (namespace admins of the skill's namespace, resolved live from role_mappings) ∪ the
 // explicit skill_maintainers list. Every add/remove is audited.
 import type { PoolClient } from "pg";
-import type { EffectiveAccess } from "@skilly/shared";
+import { userCanSeeSkillSql, type EffectiveAccess } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { awardAchievement, tryAward, isOriginalProposer } from "./achievements";
@@ -23,13 +23,12 @@ export interface MaintainerView {
   source: "admin" | "explicit"; // implicit namespace admin, or explicitly added
 }
 
-// A user can see a namespace-restricted skill iff they're a platform admin or hold any role
-// in that namespace (mirrors isSkillVisible). Used as the eligibility + read-time filter.
-const ELIGIBLE_EXISTS = `exists (
-  select 1 from group_memberships gm
-  join role_mappings rm on rm.group_id = gm.group_id
-  where gm.user_id = u.id and (rm.role = 'platform_admin' or rm.namespace_id = $2)
-)`;
+// Can user `u` see the skill bound at `$skillParam`? The shared per-user twin of isSkillVisible:
+// org, platform admin, or any role in the owning namespace OR a §42 grantee namespace. Used as the
+// eligibility + read-time filter. Reads the skill's CURRENT visibility + grants from the DB, so a
+// caller's possibly-stale MaintainerSkill.visibility never decides eligibility.
+const eligibleSql = (userExpr: string, skillParam: string) =>
+  `exists (select 1 from skills sk where sk.id = ${skillParam} and ${userCanSeeSkillSql(userExpr, "sk")})`;
 
 /**
  * Effective maintainers for a skill: live namespace admins ∪ explicit users. For restricted
@@ -51,8 +50,8 @@ export async function getEffectiveMaintainers(skill: MaintainerSkill): Promise<M
          from skill_maintainers sm
          join users u on u.id = sm.user_id and u.status = 'active'
         where sm.skill_id = $1
-          and ($3 = 'org' or ${ELIGIBLE_EXISTS})`,
-      [skill.id, skill.namespaceId, skill.visibility],
+          and ${eligibleSql("u.id", "$1")}`,
+      [skill.id],
     ),
   ]);
 
@@ -81,17 +80,9 @@ export async function canRemoveMaintainer(access: EffectiveAccess, skill: Mainta
 
 /** Can this (existing, active) user *see* the skill — and thus be a maintainer? (invariant #3) */
 async function userEligible(userId: string, skill: MaintainerSkill): Promise<boolean> {
-  if (skill.visibility === "org") {
-    const { rowCount } = await pool.query(`select 1 from users where id = $1 and status = 'active'`, [userId]);
-    return (rowCount ?? 0) > 0;
-  }
   const { rows } = await pool.query<{ ok: boolean }>(
-    `select exists (
-       select 1 from group_memberships gm
-       join role_mappings rm on rm.group_id = gm.group_id
-       where gm.user_id = $1 and (rm.role = 'platform_admin' or rm.namespace_id = $2)
-     ) as ok`,
-    [userId, skill.namespaceId],
+    `select exists (select 1 from users where id = $1 and status = 'active') and ${eligibleSql("$1::uuid", "$2::uuid")} as ok`,
+    [userId, skill.id],
   );
   return rows[0]?.ok ?? false;
 }
@@ -123,27 +114,48 @@ export async function listCandidates(skill: MaintainerSkill, q: string, limit = 
        from users u
       where u.status = 'active'
         and (u.display_name ilike $1 escape '\\' or u.email ilike $1 escape '\\')
-        and not exists (select 1 from skill_maintainers sm where sm.skill_id = $3 and sm.user_id = u.id)
-        and ($4 = 'org' or ${ELIGIBLE_EXISTS})
+        and not exists (select 1 from skill_maintainers sm where sm.skill_id = $2 and sm.user_id = u.id)
+        and ${eligibleSql("u.id", "$2")}
       order by u.display_name asc
-      limit $5`,
-    [like, skill.namespaceId, skill.id, skill.visibility, limit],
+      limit $3`,
+    [like, skill.id, limit],
   );
   return rows.map((r) => ({ userId: r.id, displayName: userLabel(r.display_name, r.email), email: r.email, avatar: r.avatar }));
 }
 
 /** Shared eligibility check for the auto-add triggers below: can `userId` currently see `skill`? (invariant #3) */
 async function isEligibleForAutoAdd(client: PoolClient, skill: MaintainerSkill, userId: string): Promise<boolean> {
-  if (skill.visibility === "org") return true;
-  const { rows } = await client.query<{ ok: boolean }>(
-    `select exists (
-       select 1 from group_memberships gm
-       join role_mappings rm on rm.group_id = gm.group_id
-       where gm.user_id = $1 and (rm.role = 'platform_admin' or rm.namespace_id = $2)
-     ) as ok`,
-    [userId, skill.namespaceId],
-  );
+  // Runs inside the materialize transaction on `client`, so a just-inserted skill row and its
+  // just-synced §42 grants are visible to this probe.
+  const { rows } = await client.query<{ ok: boolean }>(`select ${eligibleSql("$1::uuid", "$2::uuid")} as ok`, [userId, skill.id]);
   return rows[0]?.ok === true;
+}
+
+/**
+ * §42.4 / §19: after a grant is revoked, remove every EXPLICIT maintainer of the skill who can no
+ * longer see it, in the caller's transaction, each audited `skill.maintainer_removed`. Returns the
+ * removed user ids. Actor = whoever revoked (null for a system cascade).
+ */
+export async function pruneIneligibleMaintainers(client: PoolClient, skill: MaintainerSkill, actorUserId: string | null, via: string): Promise<string[]> {
+  const { rows } = await client.query<{ user_id: string }>(
+    `delete from skill_maintainers sm
+      where sm.skill_id = $1
+        and not ${eligibleSql("sm.user_id", "$1")}
+      returning sm.user_id`,
+    [skill.id],
+  );
+  for (const r of rows) {
+    await appendAudit(client, {
+      actorUserId,
+      action: "skill.maintainer_removed",
+      targetType: "skill",
+      targetId: skill.id,
+      namespaceId: skill.namespaceId,
+      before: { userId: r.user_id },
+      after: { reason: "no_longer_visible", via },
+    });
+  }
+  return rows.map((r) => r.user_id);
 }
 
 /** True if `userId` is already an IMPLICIT maintainer of `skill` (a namespace admin of its own

@@ -29,6 +29,7 @@ async function authorize(ns: string, slug: string) {
     skillSlug: found.slug,
     visibility: found.visibility,
     archived: found.status === "archived",
+    sharedNamespaceIds: found.sharedNamespaceIds,
   };
   // Archived skills are owner-only (§7); otherwise the skill's own visibility applies (#3).
   const isOwner = skill.archived

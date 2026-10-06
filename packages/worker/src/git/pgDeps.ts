@@ -1,6 +1,6 @@
 // Postgres-backed implementation of the git server's dependencies. SKILLY_SPEC.md §9.
 import type { Pool } from "pg";
-import { resolveAccess, hashToken, resolveLatest, PUBLIC_SCOPE, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
+import { resolveAccess, hashToken, resolveLatest, PUBLIC_SCOPE, sharedNamespaceIdsSql, namespaceMarketplaceSkillSql, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
 import type { GitServerDeps } from "./server.js";
 import type { MarketplaceRef, SkillRef, TokenPrincipal } from "./authorize.js";
 import { M } from "../metrics.js";
@@ -14,14 +14,15 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
         namespace_id: string;
         visibility: "org" | "namespace";
         status: "active" | "archived";
+        shared_namespace_ids: string[];
       }>(
-        `select s.id, s.namespace_id, s.visibility, s.status
+        `select s.id, s.namespace_id, s.visibility, s.status, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
            from skills s join namespaces n on n.id = s.namespace_id
           where n.slug = $1 and s.slug = $2`,
         [namespaceSlug, skillSlug],
       );
       const r = rows[0];
-      return r ? { id: r.id, namespaceId: r.namespace_id, visibility: r.visibility, status: r.status } : null;
+      return r ? { id: r.id, namespaceId: r.namespace_id, visibility: r.visibility, status: r.status, sharedNamespaceIds: r.shared_namespace_ids ?? [] } : null;
     },
 
     async findMarketplace(scope): Promise<MarketplaceRef | null> {
@@ -212,7 +213,7 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
           const { rows } = await client.query<{ id: string }>(
             scope.kind === "public"
               ? `select id from skills where slug = any($1::text[]) and status = 'active' and visibility = 'org'`
-              : `select id from skills where slug = any($1::text[]) and status = 'active' and visibility = 'namespace' and namespace_id = $2`,
+              : `select s.id from skills s where s.slug = any($1::text[]) and s.status = 'active' and ${namespaceMarketplaceSkillSql("$2::uuid", "s")}`,
             scope.kind === "public" ? [slugs] : [slugs, namespaceId],
           );
           for (const { id } of rows) {

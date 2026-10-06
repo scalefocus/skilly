@@ -44,6 +44,7 @@ import { isSingleEmoji } from "@skilly/shared/icon";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
 import { findDuplicateSkill, type DuplicateMatch } from "./duplicate";
+import { syncGrants, validateGrantTargets, GRANT_TARGET_MESSAGES, type GrantVia } from "./grants";
 import { fulfilOriginRequest } from "./requests";
 import { M } from "./metrics";
 
@@ -69,6 +70,14 @@ export interface ProposalMetadata {
   iconSha256?: string | null;
   iconEmoji?: string | null;
   iconSource?: "frontmatter" | "bundle" | "upload" | null;
+  /**
+   * §42 — the namespaces this restricted skill is SHARED with (grantee namespace ids). Editable on
+   * new-skill AND new-version proposals (the one access-surface field a re-version may change),
+   * by the proposer and by a reviewer edit; synced add/remove-to-match at accept / direct publish.
+   * `undefined` = not resent (legacy/MCP caller — MCP strips it) and leaves the skill's grants
+   * untouched; `[]` = explicitly no grants. Cleared to `[]` for an org-visible skill.
+   */
+  sharedNamespaceIds?: string[];
 }
 
 /**
@@ -200,6 +209,28 @@ export async function verifySubmissionPayload(
     const catErr = await categoryListError(db, payload.metadata.categories);
     if (catErr) return catErr;
   }
+  // §42 shared namespaces: validated + normalized against the skill that will hold them — the
+  // TARGET skill on a new version (its owner + its current, frozen visibility), else the payload's
+  // own visibility and target namespace. An org skill has no grants, so the list is cleared.
+  if (payload.metadata?.sharedNamespaceIds !== undefined) {
+    const raw = payload.metadata.sharedNamespaceIds;
+    if (!Array.isArray(raw) || raw.some((x) => typeof x !== "string")) return "sharedNamespaceIds must be a list of namespace ids";
+    let owner: string | null = null;
+    let visibility: "org" | "namespace" = payload.metadata.visibility;
+    if (opts.targetSkillId) {
+      const t = (await db.query<{ namespace_id: string; visibility: "org" | "namespace" }>(`select namespace_id, visibility from skills where id = $1`, [opts.targetSkillId])).rows[0];
+      if (t) { owner = t.namespace_id; visibility = t.visibility; }
+    } else if (opts.namespaceSlug !== undefined) {
+      owner = (await db.query<{ id: string }>(`select id from namespaces where slug = $1`, [opts.namespaceSlug.trim().toLowerCase()])).rows[0]?.id ?? null;
+    }
+    if (visibility === "org") {
+      payload.metadata.sharedNamespaceIds = [];
+    } else {
+      const v = await validateGrantTargets(db, owner, raw);
+      if (!v.ok) return GRANT_TARGET_MESSAGES[v.error];
+      payload.metadata.sharedNamespaceIds = [...v.ids].sort();
+    }
+  }
   // Free-form tags were removed (§10). A stale client may still send `tags`; it is ignored
   // silently (never a 400) and stripped so it is not persisted into the revision payload.
   if (payload.metadata && "tags" in (payload.metadata as unknown as Record<string, unknown>)) {
@@ -301,12 +332,13 @@ async function reuseNoopError(
 ): Promise<string | null> {
   const { rows } = await db.query<{
     title: string; description: string; tool_harness: string; categories: string[] | null;
-    icon_sha256: string | null; icon_emoji: string | null;
+    icon_sha256: string | null; icon_emoji: string | null; shared_namespace_ids: string[];
   }>(
     `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji,
             coalesce((select array_agg(c.name) from skill_categories sc
                         join categories c on c.id = sc.category_id
-                       where sc.skill_id = s.id), '{}') as categories
+                       where sc.skill_id = s.id), '{}') as categories,
+            coalesce((select array_agg(g.namespace_id::text) from skill_namespace_grants g where g.skill_id = s.id), '{}') as shared_namespace_ids
        from skills s where s.id = $1`,
     [skillId],
   );
@@ -319,10 +351,12 @@ async function reuseNoopError(
     !sameSet(normSet(meta.categories, true), normSet(cur.categories, true)) ||
     ((meta.usageExamples ?? "").trim() || null) !== ((reusedUsage ?? "").trim() || null) ||
     (meta.iconSha256 !== undefined && (meta.iconSha256 ?? null) !== cur.icon_sha256) ||
-    (meta.iconEmoji !== undefined && (meta.iconEmoji ?? null) !== cur.icon_emoji);
+    (meta.iconEmoji !== undefined && (meta.iconEmoji ?? null) !== cur.icon_emoji) ||
+    // §42: a changed shared-namespaces list is a real change ("also share with team-b").
+    (meta.sharedNamespaceIds !== undefined && !sameSet(normSet(meta.sharedNamespaceIds), normSet(cur.shared_namespace_ids)));
   return changed
     ? null
-    : "nothing changed — edit at least one field (title, description, categories, tool/harness, or usage), or provide a new source";
+    : "nothing changed — edit at least one field (title, description, categories, tool/harness, usage, or shared namespaces), or provide a new source";
 }
 
 /** The server-resolved "Keep current files" snapshot (§8). */
@@ -646,6 +680,9 @@ function payloadUnchanged(prev: RevisionPayload, next: RevisionPayload): boolean
     eqText(a.whatChanged, b.whatChanged) &&
     (a.iconSha256 ?? null) === (b.iconSha256 ?? null) &&
     (a.iconEmoji ?? null) === (b.iconEmoji ?? null) &&
+    // §42: an omitted list (keep current grants) differs from any explicit list, even an empty one.
+    (a.sharedNamespaceIds === undefined) === (b.sharedNamespaceIds === undefined) &&
+    sameSet(normSet(a.sharedNamespaceIds), normSet(b.sharedNamespaceIds)) &&
     (prev.artifactObjectKey ?? null) === (next.artifactObjectKey ?? null) &&
     samePointer(prev.pointer, next.pointer) &&
     (prev.reuse?.fromVersionId ?? null) === (next.reuse?.fromVersionId ?? null)
@@ -783,6 +820,8 @@ export async function performProposalAction(
         semver: p.proposed_semver,
         submittedBy: p.submitted_by,
         payload,
+        actorUserId: input.actorUserId,
+        via: "proposal_accept",
       });
       materializedVersionId = result.versionId; // undefined for pointer (worker mirrors it)
       // §37.6: accepting over gate-tripping content findings acknowledges them for this version.
@@ -981,6 +1020,10 @@ export interface MaterializeInput {
   semver: string;
   submittedBy: string;
   payload: RevisionPayload;
+  /** §42 grant provenance: who is applying this version (the accepting reviewer, or the direct
+   *  publisher) and through which path — `granted_by` + the audit `via`. Defaults: submitter / accept. */
+  actorUserId?: string | null;
+  via?: GrantVia;
 }
 export interface MaterializeResult {
   skillId: string;
@@ -995,6 +1038,20 @@ export interface MaterializeResult {
  * POINTER enqueues a pending_mirror (the worker clones the pinned ref, scans, then inserts
  * the version). Reused by proposal-accept, direct-publish, and promotion. SKILLY_SPEC.md §6,§8.
  */
+/**
+ * The submitted grant list as of NOW: validated at submit, but a namespace may have been deleted
+ * (or become the owner) between submit and accept — such ids are dropped silently rather than
+ * failing the accept on an FK / guard-trigger error.
+ */
+async function liveGrantTargets(client: PoolClient, ownerNamespaceId: string, ids: readonly string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await client.query<{ id: string }>(
+    `select id from namespaces where id = any($1::uuid[]) and slug <> 'global' and id <> $2`,
+    [[...new Set(ids)], ownerNamespaceId],
+  );
+  return rows.map((r) => r.id);
+}
+
 export async function materializeVersion(client: PoolClient, input: MaterializeInput): Promise<MaterializeResult> {
   const { payload } = input;
   const meta = payload.metadata;
@@ -1026,6 +1083,17 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
     skillId = rows[0]!.id;
     // Categories are multi-valued labels; created on the fly and linked via skill_categories.
     await syncCategories(client, skillId, meta.categories ?? []);
+    // §42 initial grants — BEFORE the maintainer auto-add, so a proposer who sees the skill only
+    // through a grantee namespace is still eligible.
+    if (meta.visibility === "namespace" && meta.sharedNamespaceIds?.length) {
+      await syncGrants(
+        client,
+        { id: skillId, namespaceId: input.targetNamespaceId, visibility: "namespace" },
+        await liveGrantTargets(client, input.targetNamespaceId, meta.sharedNamespaceIds),
+        input.actorUserId ?? input.submittedBy,
+        input.via ?? "proposal_accept",
+      );
+    }
     // The submitter becomes the first explicit maintainer of a brand-new skill (if eligible). §19.
     await autoAddSubmitter(client, { id: skillId, namespaceId: input.targetNamespaceId, visibility: meta.visibility }, input.submittedBy);
   } else {
@@ -1067,6 +1135,18 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
       [skillId],
     );
     const cur = curRows[0]!;
+    // §42: the shared-namespaces list is the one access-surface field a re-version may change —
+    // synced add/remove-to-match (audited, notified, maintainers pruned on removal). Omitted ⇒ the
+    // skill's grants are untouched. Runs before the auto-add so the eligibility probe sees them.
+    if (meta.sharedNamespaceIds !== undefined) {
+      await syncGrants(
+        client,
+        { id: skillId, namespaceId: cur.namespace_id, visibility: cur.visibility },
+        cur.visibility === "namespace" ? await liveGrantTargets(client, cur.namespace_id, meta.sharedNamespaceIds) : [],
+        input.actorUserId ?? input.submittedBy,
+        input.via ?? "proposal_accept",
+      );
+    }
     await autoAddSubmitterOnNewVersion(client, { id: skillId, namespaceId: cur.namespace_id, visibility: cur.visibility }, input.submittedBy);
   }
 
@@ -1220,6 +1300,8 @@ export async function directPublish(
       semver: input.semver,
       submittedBy: input.actorUserId,
       payload: input.payload,
+      actorUserId: input.actorUserId,
+      via: "direct_publish",
     });
     // §31.11 Encore: a direct publish of a new version is a submission too. Awarded here, not in
     // materializeVersion(), which review acceptance also runs. A hosted version already evaluated
@@ -1576,6 +1658,9 @@ export interface TargetSkillCurrent {
   /** The skill's current icon (§33), for the review page's old → new icon diff. */
   iconSha256: string | null;
   iconEmoji: string | null;
+  /** §42: the skill's frozen visibility and its current grantee namespace ids (the share diff). */
+  visibility: "org" | "namespace";
+  sharedNamespaceIds: string[];
 }
 
 /**
@@ -1696,12 +1781,13 @@ export async function getProposalDetail(
   if (p.target_skill_id) {
     const { rows: srows } = await pool.query<{
       title: string; description: string; tool_harness: string; categories: string[] | null;
-      icon_sha256: string | null; icon_emoji: string | null;
+      icon_sha256: string | null; icon_emoji: string | null; visibility: "org" | "namespace"; shared_namespace_ids: string[];
     }>(
-      `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji,
+      `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji, s.visibility,
               coalesce((select array_agg(c.name order by c.name) from skill_categories sc
                           join categories c on c.id = sc.category_id
-                         where sc.skill_id = s.id), '{}') as categories
+                         where sc.skill_id = s.id), '{}') as categories,
+              coalesce((select array_agg(g.namespace_id::text) from skill_namespace_grants g where g.skill_id = s.id), '{}') as shared_namespace_ids
          from skills s where s.id = $1`,
       [p.target_skill_id],
     );
@@ -1721,6 +1807,8 @@ export async function getProposalDetail(
         latestStable,
         iconSha256: s.icon_sha256,
         iconEmoji: s.icon_emoji,
+        visibility: s.visibility,
+        sharedNamespaceIds: s.shared_namespace_ids ?? [],
       };
     }
   }

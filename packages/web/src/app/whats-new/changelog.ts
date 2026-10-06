@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.21.0",
+    date: "2026-10-06",
+    summary:
+      "Restricted skills can now be shared with other namespaces. Pick them under Share with namespaces when you propose a skill or a new version, or share and revoke from the skill page's new Shared with card. Members of those namespaces can find, install and discuss the skill, and see who shared it; review and management stay with the owning namespace.",
+  },
+  {
     version: "2.20.0",
     date: "2026-10-06",
     summary:
