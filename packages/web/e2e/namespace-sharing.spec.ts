@@ -76,13 +76,14 @@ test.describe("§42 namespace sharing", () => {
       await card.getByRole("button", { name: `stop sharing with ${TARGET_NAME}` }).click();
       await confirmed;
       await expect(card.getByText(TARGET_NAME)).toHaveCount(0, { timeout: 15_000 });
-      expect(await grantIds(page, slug)).toEqual([]);
+      await expect.poll(() => grantIds(page, slug), { timeout: 15_000 }).toEqual([]);
 
       // ── Re-share through the card's namespace picker. ──
       await card.getByRole("textbox", { name: "Share with namespaces" }).fill("E2E Share");
       await card.getByRole("option", { name: new RegExp(TARGET_NAME) }).click();
+      // The chip renders as soon as it's picked; the PUT may still be in flight — poll the API.
       await expect(card.getByText(TARGET_NAME)).toBeVisible({ timeout: 15_000 });
-      expect(await grantIds(page, slug)).toEqual([targetId]);
+      await expect.poll(() => grantIds(page, slug), { timeout: 15_000 }).toEqual([targetId]);
 
       // ── A Keep-current-files new version whose ONLY change is the share list is valid. ──
       const meta = (await (await page.request.get(`/api/skills/team-a/${slug}`)).json()).meta;

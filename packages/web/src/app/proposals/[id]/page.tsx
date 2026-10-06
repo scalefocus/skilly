@@ -361,6 +361,19 @@ function ProposalDetailInner() {
         ? `${avThreats.length} threat${avThreats.length === 1 ? "" : "s"}`
         : `clean · ${avFindings.length} file${avFindings.length === 1 ? "" : "s"}`;
 
+  // §42 share list for the edited payload. A revision that OMITTED the list ("keep current grants"
+  // / none for a new skill) stays omitted while the picker still holds the value the form opened
+  // with: the server's no-op guard counts omitted vs explicit as a change, so turning an untouched
+  // picker into an explicit list would make "Save changes" with no edits a new revision.
+  const editedShares = (prevShares: string[] | undefined): string[] | undefined => {
+    if (!edit) return prevShares;
+    const restricted = (data?.targetSkillId ? data.targetSkillCurrent?.visibility ?? "namespace" : edit.visibility) === "namespace";
+    const next = restricted ? edit.sharedNamespaceIds.filter((nsId) => nsId !== ownerNsId) : [];
+    if (prevShares !== undefined) return next;
+    const opened = (data?.targetSkillCurrent?.sharedNamespaceIds ?? []).filter((nsId) => nsId !== ownerNsId);
+    return diffSameSet(diffNormSet(next), diffNormSet(restricted ? opened : [])) ? undefined : next;
+  };
+
   // Build the edited revision payload (latest payload + metadata changes + proposer file/pointer
   // replacement).
   const editedPayload = () => {
@@ -382,11 +395,8 @@ function ProposalDetailInner() {
         // Skill icon (§33) — always resent; a reviewer's edit can only have cleared it (Remove).
         iconSha256: edit.iconSha256,
         iconEmoji: edit.iconEmoji,
-        // §42: always resent from the edit form; cleared when the skill is (or becomes) org-wide.
-        sharedNamespaceIds:
-          (data?.targetSkillId ? data.targetSkillCurrent?.visibility ?? "namespace" : edit.visibility) === "namespace"
-            ? edit.sharedNamespaceIds.filter((nsId) => nsId !== ownerNsId)
-            : [],
+        // §42: resent from the edit form; cleared when the skill is (or becomes) org-wide.
+        sharedNamespaceIds: editedShares(latestRev.payload.metadata.sharedNamespaceIds),
       },
     };
     // Proposer replaced the hosted bundle: swap in the freshly-uploaded artifact (keeps the same
