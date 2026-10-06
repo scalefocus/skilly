@@ -16,6 +16,7 @@
 import type { Pool } from "pg";
 import { GraphSendError } from "@skilly/shared/email";
 import { followNotificationContent, isFollowNotificationType, notificationTitle, contentRiskRuleLabel } from "@skilly/shared";
+import { formatStars, qualityRuleHint } from "@skilly/shared/quality";
 
 const MAX_ATTEMPTS = Number(process.env.NOTIFY_MAX_ATTEMPTS ?? 5);
 const BATCH = Number(process.env.NOTIFY_BATCH ?? 50);
@@ -178,6 +179,38 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
       subject: s,
       text: `The content check flagged ${slug} v${p.semver ?? ""}${labels ? `: ${labels}` : ""}. ${cta("Review the findings", path)}`,
       webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, rules, url: abs(path) },
+    };
+  }
+
+  // §41.9: a version's quality assessment settled at 2 stars or below. The full findings list and
+  // the AI recommendations ride along so the maintainer can act without opening the page.
+  if (n.type === "skill.quality_low" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#quality`;
+    const stars = typeof p.stars === "number" ? formatStars(p.stars) : "?";
+    const score = typeof p.score === "number" ? p.score : null;
+    const mode = p.mode === "rules+ai" ? "rules + AI assessment" : "rules only";
+    const findings = Array.isArray(p.findings) ? (p.findings as Array<Record<string, unknown>>) : [];
+    const order: Record<string, number> = { error: 0, warn: 1, info: 2 };
+    const lines = [...findings]
+      .sort((a, b) => (order[String(a.level)] ?? 3) - (order[String(b.level)] ?? 3))
+      .map((f) => {
+        const where = typeof f.path === "string" ? `${f.path}${typeof f.line === "number" ? `:${f.line}` : ""}` : "";
+        return `- ${String(f.rule)} [${String(f.level ?? "info")}]${where ? ` ${where}` : ""} — ${String(f.message ?? "")}. ${qualityRuleHint(String(f.rule))}`.trim();
+      });
+    const suggestions = Array.isArray(p.suggestions) ? (p.suggestions as unknown[]).filter((x): x is string => typeof x === "string") : [];
+    const summary = typeof p.summary === "string" && p.summary ? p.summary : null;
+    const body =
+      `${slug} v${p.semver ?? ""} scored ${stars} ★${score !== null ? ` (${score}/100, ${mode})` : ""}.` +
+      (lines.length ? `\n\nFindings:\n${lines.join("\n")}` : "\n\nNo rule findings.") +
+      (summary ? `\n\nAI assessment: ${summary}` : "") +
+      (suggestions.length ? `\n\nRecommendations:\n${suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}` : "") +
+      `\n\nOpen the Quality card to re-check after you publish a fix. ${cta("Open the Quality card", path)}`;
+    const s = subj(title);
+    return {
+      subject: s,
+      text: body,
+      webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, stars: p.stars ?? null, score, url: abs(path) },
     };
   }
 

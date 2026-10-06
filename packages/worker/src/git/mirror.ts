@@ -21,6 +21,7 @@ import { runScanPipeline } from "../scan/pipeline.js";
 import { writeArtifactScanReport } from "../scan/report.js";
 import { fetchSkillsHubBundle } from "./skillsHub.js";
 import { recordContentRiskOnset } from "../scan/contentRisk.js";
+import { recordQualityAtMirror } from "../scan/quality.js";
 
 const GIT_CLONE_TIMEOUT_MS = Number(process.env.MIRROR_CLONE_TIMEOUT_MS ?? 120_000);
 
@@ -306,6 +307,12 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
   }
   // §34.3: the files are in hand — index the SKILL.md text now (write-once, advisory).
   await fillSearchText(pool, rows[0]!.id, files);
+  // §41.6: a pointer version is scored from its mirror-time report. Advisory: never fails the mirror.
+  try {
+    await recordQualityAtMirror(pool, { versionId: rows[0]!.id, skillId: input.skillId, artifactKey }, findings);
+  } catch (err) {
+    console.error(JSON.stringify({ level: "warn", msg: "quality write failed at mirror", skillId: input.skillId, err: String(err) }));
+  }
   // §37.5: a pointer version is first scanned here. If it is flagged with nothing acknowledged
   // (e.g. accepted while its pre-scan was still pending), that is an onset. Advisory: never fails
   // the mirror.

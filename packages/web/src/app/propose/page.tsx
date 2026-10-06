@@ -22,6 +22,9 @@ import { SkillIcon } from "../../components/SkillIcon";
 import { useIconCropFlow } from "../../components/IconCropDialog";
 import { reportFeatureUse } from "../../lib/surveyClient";
 import { ContentRiskFindingsList, type ContentRiskFinding } from "../../components/ContentRisk";
+import { QualityFindingsList, type QualityFindingItem } from "../../components/QualityFindingsList";
+import { QualityStars } from "../../components/QualityBadge";
+import { formatStars } from "@skilly/shared/quality";
 
 // Defined at MODULE scope (stable identity). Previously these lived inside the component, so
 // every keystroke created a new `Row` component type and React remounted the inputs — which
@@ -182,7 +185,12 @@ function ProposeForm() {
   const [dropErr, setDropErr] = useState<string | null>(null);
   const dragStateRef = useRef<{ canDrop: boolean; accept: (f: File | null) => void }>({ canDrop: false, accept: () => {} });
   const [busy, setBusy] = useState(false);
-  const [scan, setScan] = useState<{ severity: string; findings: unknown[] } | null>(null);
+  const [scan, setScan] = useState<{ severity: string; findings: { severity?: string; scanner?: string }[] } | null>(null);
+  // §41.3: the upload's rules-only quality — early lint feedback before submitting.
+  const [quality, setQuality] = useState<{ rulesScore: number; stars: number; findings: QualityFindingItem[] } | null>(null);
+  const [qualityOpen, setQualityOpen] = useState(false);
+  // The "N findings" count means real issues: info-level rows (AV clean entries, markers, the quality lint) don't count.
+  const scanIssueCount = scan ? scan.findings.filter((f) => f.severity !== "info").length : 0;
   // §37.4: a direct publish the content check flagged, for a submitter who may override it. Any
   // edit to the form or a different file clears the confirmation, so it can't carry over unseen files.
   const [contentOverride, setContentOverride] = useState<{ findings: ContentRiskFinding[]; severity: string | null } | null>(null);
@@ -616,6 +624,7 @@ function ProposeForm() {
       throw new Error(bundleUploadError(up.status, j.error, file.size));
     }
     setScan(j.scan);
+    setQuality(j.quality ?? null);
     // Bundle-borne icon (§33): a bundle's own frontmatter `icon:`/root icon.* beats whatever the
     // proposer separately uploaded/picked — preview it so the form is honest about what will ship.
     setBundleIcon(j.bundleIcon ?? null);
@@ -1380,7 +1389,24 @@ function ProposeForm() {
         {scan && (
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Pill tone={scan.severity === "info" ? "ok" : scan.severity === "high" || scan.severity === "critical" ? "danger" : "warn"}>scan: {scan.severity}</Pill>
-            <span className="muted" style={{ fontSize: 13 }}>{scan.findings.length} finding{scan.findings.length === 1 ? "" : "s"}</span>
+            <span className="muted" style={{ fontSize: 13 }}>{scanIssueCount} finding{scanIssueCount === 1 ? "" : "s"}</span>
+          </div>
+        )}
+        {/* §41.3: the rules-only quality of the uploaded bundle, so the author sees the lint before submitting. */}
+        {quality && (
+          <div className="card card-pad" data-testid="propose-quality" style={{ padding: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>Quality</span>
+              <QualityStars stars={quality.stars} size={15} />
+              <span className="mono" style={{ fontSize: 13, fontWeight: 600 }} data-testid="propose-quality-stars">{formatStars(quality.stars)}</span>
+              <span className="muted mono" style={{ fontSize: 11 }}>{quality.rulesScore} / 100 · rules only · AI assessment runs after publish</span>
+              {quality.findings.length > 0 && (
+                <button type="button" className="btn-ghost mono" style={{ fontSize: 11, marginLeft: "auto" }} aria-expanded={qualityOpen} onClick={() => setQualityOpen((o) => !o)}>
+                  {qualityOpen ? "▾" : "▸"} {quality.findings.length} finding{quality.findings.length === 1 ? "" : "s"}
+                </button>
+              )}
+            </div>
+            {qualityOpen && <div style={{ marginTop: 10 }}><QualityFindingsList findings={quality.findings} compact /></div>}
           </div>
         )}
         {err && <div ref={errRef} style={{ color: "var(--danger)", fontSize: 13.5, borderRadius: "var(--radius-sm)" }}>{err}</div>}

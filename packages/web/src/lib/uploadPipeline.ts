@@ -5,6 +5,7 @@
 // two upload paths can never drift in behavior or response shape.
 import { randomUUID, createHash } from "node:crypto";
 import { pool } from "./db";
+import { proposalQuality } from "./quality";
 import { s3ArtifactStore } from "./objectStore";
 import { extractBundle } from "./bundle";
 import { findDuplicateSkill } from "./duplicate";
@@ -128,7 +129,7 @@ export async function processBundleUpload(
     // `artifactFilename` (the original upload's name) rides along so the proposal/version persists
     // it and the detail-page download can serve the bundle back with its original extension (§6/§10).
     // `bundleIcon` + `warnings` (§33) let the propose form preview the effective icon before submit.
-    { artifactObjectKey, artifactSha256, contentSha256, artifactFilename: filename ?? null, scan: { severity, findings }, duplicate, duplicateEnforcement, bundleIcon, warnings: iconWarnings },
+    { artifactObjectKey, artifactSha256, contentSha256, artifactFilename: filename ?? null, scan: { severity, findings }, quality: proposalQuality(findings), duplicate, duplicateEnforcement, bundleIcon, warnings: iconWarnings },
     { status: 201 },
   );
 }

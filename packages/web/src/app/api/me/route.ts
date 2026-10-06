@@ -14,6 +14,7 @@ import {
   setUserNewVersionNotifications,
   setUserDiscussionNotifications,
   setUserContentRiskNotifications,
+  setUserQualityNotifications,
   setUserDirectoryHidden,
   setUserAchievementsHidden,
   setUserAllowFollows,
@@ -55,6 +56,7 @@ export async function GET() {
             new_version_notifications: boolean;
             discussion_notifications: boolean;
             content_risk_notifications: boolean;
+            quality_notifications: boolean;
             directory_hidden: boolean;
             achievements_hidden: boolean;
             allow_follows: boolean;
@@ -65,7 +67,7 @@ export async function GET() {
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -110,6 +112,8 @@ export async function GET() {
     discussionNotifications: prefs?.discussion_notifications ?? true,
     // §37.9 content-check flags on skills they maintain (row-level, like drift).
     contentRiskNotifications: prefs?.content_risk_notifications ?? true,
+    // §41.9 low quality scores on skills they maintain (row-level, like content risk).
+    qualityNotifications: prefs?.quality_notifications ?? true,
     // §28 directory opt-out: hide job title / office / department from other people's hover cards.
     directoryHidden: prefs?.directory_hidden ?? false,
     // §31 achievements opt-out: hide earned badges from other people (the hall + hover card).
@@ -169,6 +173,7 @@ export async function PATCH(req: Request) {
     newVersionNotifications?: boolean;
     discussionNotifications?: boolean;
     contentRiskNotifications?: boolean;
+    qualityNotifications?: boolean;
     directoryHidden?: boolean;
     achievementsHidden?: boolean;
     allowFollows?: boolean;
@@ -202,6 +207,9 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.contentRiskNotifications === "boolean") {
     await setUserContentRiskNotifications(access.userId, body.contentRiskNotifications);
+  }
+  if (typeof body.qualityNotifications === "boolean") {
+    await setUserQualityNotifications(access.userId, body.qualityNotifications);
   }
   if (typeof body.directoryHidden === "boolean") {
     await setUserDirectoryHidden(access.userId, body.directoryHidden);

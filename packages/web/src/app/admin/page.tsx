@@ -13,6 +13,7 @@ import { McpCard } from "./McpCard";
 import { AiCard } from "./AiCard";
 import { SearchCard } from "./SearchCard";
 import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
+import { QualityLine } from "./QualityLine";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
@@ -1019,6 +1020,7 @@ function MaintenanceCard({ open, onToggle }: { open: boolean; onToggle: () => vo
       </p>
       <SearchIndexLine />
       <ContentCheckLine />
+      <QualityLine />
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ fontWeight: 600, fontSize: 14 }}>“Skills you might like” index</div>

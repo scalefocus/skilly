@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.20.0",
+    date: "2026-10-06",
+    summary:
+      "Every published version now gets a system-computed quality rating (the ⛨ badge beside the user rating on cards, rows and the skill page) from the SKILL.md authoring rules, blended with an AI assessment when the AI integration is on. The Quality card lists every finding with how to fix it; proposers and reviewers see the rules score before publish. Sort by \"Highest quality\", filter with the ★ 3+/4+/4.5+ chips, and maintainers are notified with the full findings when a version scores 2 stars or below (opt-out on your profile).",
+  },
+  {
     version: "2.19.0",
     date: "2026-10-06",
     summary:

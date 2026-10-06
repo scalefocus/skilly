@@ -4,6 +4,8 @@
 import type { BundleEntry } from "./validate.js";
 import { decodeScanText } from "./scan-text.js";
 import { contentRiskScanner } from "./content-risk.js";
+import { qualityScanner } from "./quality.js";
+import type { QualityLevel } from "./quality-status.js";
 
 export { decodeScanText };
 
@@ -21,6 +23,8 @@ export interface ScanFinding {
   excerpt?: string;
   /** The content-check ruleset that produced this finding (content-risk only, §37.2). */
   ruleset?: number;
+  /** The guide's level of a quality finding (quality only, §41.2) — never a scan severity. */
+  level?: QualityLevel;
 }
 
 export interface Scanner {
@@ -76,7 +80,12 @@ export const heuristicScanner: Scanner = {
   scan: (files) => scanWith("static-heuristics", HEURISTIC_PATTERNS, files),
 };
 
-export const PURE_SCANNERS: Scanner[] = [secretScanner, heuristicScanner, contentRiskScanner];
+export const PURE_SCANNERS: Scanner[] = [secretScanner, heuristicScanner, contentRiskScanner, qualityScanner];
+
+/** True when a line matches one of the §6 secret patterns — the §41.5 prompt redaction predicate. */
+export function isSecretLikeLine(line: string): boolean {
+  return SECRET_PATTERNS.some((p) => p.re.test(line));
+}
 
 export async function runScanners(files: BundleEntry[], scanners: Scanner[]): Promise<ScanFinding[]> {
   const results = await Promise.all(scanners.map((s) => s.scan(files)));

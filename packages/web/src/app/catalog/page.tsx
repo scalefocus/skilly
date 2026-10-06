@@ -76,7 +76,9 @@ function Catalog() {
   const [category, setCategory] = useState<string | null>(null);
   const [tool, setTool] = useState<string | null>(null);
   const [type, setType] = useState<"hosted" | "pointer" | null>(null);
-  const [sort, setSort] = useState<"relevance" | "top_rated" | "latest">("relevance");
+  const [sort, setSort] = useState<"relevance" | "top_rated" | "latest" | "quality">("relevance");
+  // §41.7 minimum-quality facet (stars): 3 | 4 | 4.5, or null for no floor.
+  const [minQuality, setMinQuality] = useState<3 | 4 | 4.5 | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   // "My Skills": only skills the current user explicitly maintains (server resolves via skill_maintainers).
   const [mine, setMine] = useState(false);
@@ -102,11 +104,12 @@ function Catalog() {
     try {
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
-        const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; type: "hosted" | "pointer" | null; sort: "relevance" | "top_rated" | "latest"; showArchived: boolean; mine: boolean; official: boolean; view: "cards" | "list"; categoryOpen: boolean }>;
+        const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; type: "hosted" | "pointer" | null; sort: "relevance" | "top_rated" | "latest" | "quality"; minQuality: 3 | 4 | 4.5 | null; showArchived: boolean; mine: boolean; official: boolean; view: "cards" | "list"; categoryOpen: boolean }>;
         if ("category" in p) setCategory(p.category ?? null);
         if ("tool" in p) setTool(p.tool ?? null);
         if ("type" in p) setType(p.type ?? null);
-        if (p.sort === "relevance" || p.sort === "top_rated" || p.sort === "latest") setSort(p.sort);
+        if (p.sort === "relevance" || p.sort === "top_rated" || p.sort === "latest" || p.sort === "quality") setSort(p.sort);
+        if (p.minQuality === 3 || p.minQuality === 4 || p.minQuality === 4.5) setMinQuality(p.minQuality);
         if (typeof p.showArchived === "boolean") setShowArchived(p.showArchived);
         if (typeof p.mine === "boolean") setMine(p.mine);
         if (typeof p.official === "boolean") setOfficial(p.official);
@@ -138,9 +141,9 @@ function Catalog() {
   useEffect(() => {
     if (!prefsLoaded || nsView || collectionView) return;
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, showArchived, mine, official, view, categoryOpen: categoryOpenPref }));
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, minQuality, showArchived, mine, official, view, categoryOpen: categoryOpenPref }));
     } catch { /* private mode etc. */ }
-  }, [prefsLoaded, nsView, collectionView, category, tool, type, sort, showArchived, mine, official, view, categoryOpenPref]);
+  }, [prefsLoaded, nsView, collectionView, category, tool, type, sort, minQuality, showArchived, mine, official, view, categoryOpenPref]);
   // Managers (platform/namespace admins or maintainers) may surface archived skills to restore them.
   const { data: me } = useApi<{ isPlatformAdmin: boolean; namespaceRoles: { role: string }[]; maintainsSkills: boolean }>("/api/me");
   const canManage = !!me && (me.isPlatformAdmin || (me.namespaceRoles ?? []).some((r) => r.role === "namespace_admin") || me.maintainsSkills);
@@ -162,9 +165,11 @@ function Catalog() {
     if (showArchived && canManage) qs.set("archived", "1");
     if (mine) qs.set("mine", "1");
     if (official) qs.set("official", "1");
+    if (minQuality) qs.set("minQuality", String(minQuality));
   }
   if (sort === "top_rated") qs.set("sort", "top_rated");
   else if (sort === "latest") qs.set("sort", "latest");
+  else if (sort === "quality") qs.set("sort", "quality");
 
   // Hold the grid while a `?collection=` banner is still resolving, so it never flashes the full catalog.
   const skillsUrl = collection === "loading" ? null : `/api/skills${qs.toString() ? `?${qs}` : ""}`;
@@ -329,8 +334,24 @@ function Catalog() {
               ✓ Official
             </button>
           </FacetRow>
-          {(category || tool || type || mine || official) && (
-            <button className="btn-ghost mono" style={{ fontSize: 12, alignSelf: "flex-start" }} onClick={() => { setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); }}>
+          {/* §41.7 minimum-quality facet: single-select stars floor; unscored skills drop out while active. */}
+          <FacetRow label="Quality">
+            {([3, 4, 4.5] as const).map((q) => (
+              <button
+                key={q}
+                type="button"
+                className={`facet${minQuality === q ? " facet-on" : ""}`}
+                aria-pressed={minQuality === q}
+                title={`Only skills with a system quality rating of ${q} stars or more`}
+                data-testid={`min-quality-${q}`}
+                onClick={() => setMinQuality(minQuality === q ? null : q)}
+              >
+                ⛨ {q}+
+              </button>
+            ))}
+          </FacetRow>
+          {(category || tool || type || mine || official || minQuality) && (
+            <button className="btn-ghost mono" style={{ fontSize: 12, alignSelf: "flex-start" }} onClick={() => { setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setMinQuality(null); }}>
               ✕ clear filters
             </button>
           )}
@@ -371,6 +392,9 @@ function Catalog() {
                   </button>
                   <button type="button" className={`sort-opt${sort === "latest" ? " sort-on" : ""}`} onClick={() => setSort("latest")}>
                     ↻ Latest
+                  </button>
+                  <button type="button" className={`sort-opt${sort === "quality" ? " sort-on" : ""}`} onClick={() => setSort("quality")} title="Highest system quality score first" data-testid="sort-quality">
+                    ⛨ Highest quality
                   </button>
                 </div>
                 <div className="sort-toggle" role="group" aria-label="View mode">

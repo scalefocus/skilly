@@ -24,6 +24,9 @@ import { SkillIcon } from "../../../components/SkillIcon";
 import { useIconCropFlow } from "../../../components/IconCropDialog";
 import { reportFeatureUse } from "../../../lib/surveyClient";
 import { ContentRiskFindingsList } from "../../../components/ContentRisk";
+import { QualityFindingsList, type QualityFindingItem } from "../../../components/QualityFindingsList";
+import { QualityStars } from "../../../components/QualityBadge";
+import { formatStars } from "@skilly/shared/quality";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string; line?: number; excerpt?: string; ruleset?: number }
 interface Meta {
@@ -66,6 +69,8 @@ interface Detail {
   id: string; state: string; targetNamespaceSlug: string; targetSkillId: string | null; proposedSemver: string;
   decisionReason: string | null; materializedVersionId: string | null; createdAt: string;
   revisions: Revision[]; scanReport: { severity: string | null; status: string; findings: Finding[]; createdAt: string } | null;
+  /** §41.3: the rules-only quality of the latest revision, computed on read; null until the quality scanner ran. */
+  quality?: { rulesScore: number; stars: number; findings: QualityFindingItem[] } | null;
   caps: { isReviewer: boolean; isSubmitter: boolean }; allowedActions: string[];
   /** §29: the MCP client that submitted this, or null for a browser submission. */
   viaMcpClient?: string | null;
@@ -1007,6 +1012,36 @@ function ProposalDetailInner() {
             </>
           )
         )}
+      </div>
+
+      {/* Quality (§41.7): the rules-only authoring score of the latest revision's report. The AI
+          assessment runs after publish, so reviewers see the deterministic part here. */}
+      <div className="card card-pad" style={{ marginTop: 26 }} id="quality" data-testid="quality-section">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 19 }}>Quality</h2>
+          {!data.scanReport || data.scanReport.status === "pending" || data.scanReport.status === "unreachable" ? (
+            <Pill tone="muted">quality check pending</Pill>
+          ) : !data.quality ? (
+            <Pill tone="muted">not checked</Pill>
+          ) : (
+            <>
+              <QualityStars stars={data.quality.stars} size={16} />
+              <span className="mono" style={{ fontSize: 13, fontWeight: 600 }} data-testid="quality-section-stars">{formatStars(data.quality.stars)}</span>
+              <span className="muted mono" style={{ fontSize: 11 }}>{data.quality.rulesScore} / 100 · rules only</span>
+            </>
+          )}
+          {data.quality && <span className="muted mono" style={{ fontSize: 11, marginLeft: "auto" }}>{data.quality.findings.length} finding{data.quality.findings.length === 1 ? "" : "s"}</span>}
+        </div>
+        {data.quality ? (
+          <>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+              The SKILL.md authoring rules. Advisory — nothing here blocks acceptance. The AI assessment runs after publish.
+            </p>
+            <QualityFindingsList findings={data.quality.findings} compact />
+          </>
+        ) : data.scanReport && data.scanReport.status !== "pending" && data.scanReport.status !== "unreachable" ? (
+          <p className="muted" style={{ fontSize: 13, margin: 0 }}>This report was produced before the quality check existed. It runs automatically on the next upload or revision.</p>
+        ) : null}
       </div>
 
       {/* Discussion: who submitted + the review chat (submitter ∪ reviewers ∪ maintainers). */}

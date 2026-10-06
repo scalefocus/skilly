@@ -31,6 +31,7 @@ import { rollupRum, pruneRum } from "./rum.js";
 import { pruneAiUsage } from "@skilly/shared/ai";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
 import { sweepContentRisk } from "./scan/contentRisk.js";
+import { sweepQuality } from "./scan/quality.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
 import { sweepSearchIndex, reindexSearchLanguage } from "./searchIndex.js";
 import { mcpRouter } from "./mcp/server.js";
@@ -319,6 +320,25 @@ async function leaderLoops(): Promise<void> {
   };
   void contentSweep();
   setInterval(contentSweep, Number(process.env.CONTENT_RISK_SWEEP_INTERVAL_MS ?? 600_000)); // 10 min
+
+  // Quality sweep (§41.6): score every published version at the current ruleset (the backfill
+  // after this ships, and again after a ruleset bump or an admin rescore), then — with AI on —
+  // judge up to 3 versions per pass. Never overlaps itself; not awaited.
+  let qualitySweepRunning = false;
+  const qualitySweep = async () => {
+    if (!isLeader || qualitySweepRunning) return;
+    qualitySweepRunning = true;
+    try {
+      const r = await sweepQuality(pool, store);
+      if (r.scored > 0 || r.aiAttempted > 0) console.log(JSON.stringify({ level: "info", msg: "quality sweep", scored: r.scored, aiAttempted: r.aiAttempted }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "quality sweep failed", err: String(err) }));
+    } finally {
+      qualitySweepRunning = false;
+    }
+  };
+  void qualitySweep();
+  setInterval(qualitySweep, Number(process.env.QUALITY_SWEEP_INTERVAL_MS ?? 600_000)); // 10 min
 
   // Search index (§34.9/§34.10): first rebuild any vectors built with another search language (a
   // language switch), then extract SKILL.md text for pending versions — the post-migration backfill,
