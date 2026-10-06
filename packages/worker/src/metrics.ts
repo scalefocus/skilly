@@ -31,4 +31,8 @@ export const M = {
   // §37.13 content risk.
   contentRiskFindings: metrics.counter("skilly_content_risk_findings_total", "Content-risk findings recorded at scan time, by rule and severity"),
   contentRiskSweepPending: metrics.gauge("skilly_content_risk_sweep_pending", "Active versions not yet checked at the current content ruleset"),
+  // §41.10 skill quality.
+  qualitySweepRuns: metrics.counter("skilly_quality_sweep_runs_total", "Quality sweep passes, by phase (rules|ai)"),
+  qualityAiAttempts: metrics.counter("skilly_quality_ai_attempts_total", "Quality AI assessment attempts, by outcome (ok|failed|invalid|refused)"),
+  qualityVersions: metrics.gauge("skilly_quality_versions", "Active versions by quality status (scored|ai_done|ai_failed|unscored)"),
 };

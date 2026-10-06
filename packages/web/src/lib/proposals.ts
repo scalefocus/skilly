@@ -36,6 +36,7 @@ import {
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { latestArtifactReport, recordAcknowledgement } from "./contentRisk";
+import { writeQualityForVersion, proposalQuality, type QualityFindingView } from "./quality";
 import { awardAchievement } from "./achievements";
 import { categoryListError, upsertCategory } from "./categories";
 import { normalizeCategoryNames } from "@skilly/shared";
@@ -1107,6 +1108,20 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
     await awardAchievement(client, input.submittedBy, "first_published");
     if (existing.length > 0) await awardAchievement(client, input.submittedBy, "first_new_version", { noHabits: true });
   }
+  // §41.6: score the version from its artifact's report (rules now; the AI part lands via the
+  // worker sweep). Advisory: a quality failure must never fail a publish.
+  // A savepoint, because a failed statement aborts the surrounding publish transaction even when
+  // the JS error is caught; rolling back to it keeps the publish alive.
+  let savepoint = false;
+  try {
+    await client.query("savepoint skilly_quality_write");
+    savepoint = true;
+    await writeQualityForVersion(client, { versionId: vrows[0]!.id, skillId, artifactKey: payload.artifactObjectKey ?? null });
+    await client.query("release savepoint skilly_quality_write");
+  } catch (err) {
+    if (savepoint) await client.query("rollback to savepoint skilly_quality_write").catch(() => {});
+    console.error(JSON.stringify({ level: "warn", msg: "quality write failed at publish", skillId, semver: input.semver, err: String(err) }));
+  }
   return { skillId, versionId: vrows[0]!.id };
 }
 
@@ -1530,6 +1545,8 @@ export interface ProposalDetail {
   routedReason: string | null;
   revisions: ProposalRevisionView[];
   scanReport: { severity: string | null; status: string; findings: unknown; createdAt: string } | null;
+  /** §41.3: the rules-only quality of the latest revision's report, computed on read; null until the quality scanner ran. */
+  quality: { rulesScore: number; stars: number; findings: QualityFindingView[] } | null;
   caps: { isReviewer: boolean; isSubmitter: boolean };
   allowedActions: ProposalAction[];
   /**
@@ -1724,6 +1741,7 @@ export async function getProposalDetail(
     routedReason: p.routed_reason,
     revisions,
     scanReport,
+    quality: scanReport && scanReport.status !== "pending" && scanReport.status !== "unreachable" ? proposalQuality(scanReport.findings) : null,
     caps,
     allowedActions,
     duplicate,

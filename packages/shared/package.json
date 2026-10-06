@@ -47,6 +47,10 @@
       "types": "./dist/content-risk-status.d.ts",
       "default": "./dist/content-risk-status.js"
     },
+    "./quality": {
+      "types": "./dist/quality-status.d.ts",
+      "default": "./dist/quality-status.js"
+    },
     "./email": {
       "types": "./dist/email.d.ts",
       "default": "./dist/email.js"

@@ -46,8 +46,15 @@ export interface AiFeature {
   spec: string;
 }
 
-/** v1 ships no AI task — the registry is empty (§40.7). */
-export const AI_FEATURES: readonly AiFeature[] = [];
+/** The registered AI tasks (§40.7). The first is the skill quality assessment (§41.5). */
+export const AI_FEATURES: readonly AiFeature[] = [
+  {
+    key: "skill_quality",
+    label: "Skill quality assessment",
+    egress: "The SKILL.md frontmatter and body (first 60,000 characters), the list of bundled file paths (first 200), and the deterministic quality findings, for each published version",
+    spec: "§41",
+  },
+];
 /** The reserved feature key the admin connectivity test records its usage under. */
 export const AI_TEST_FEATURE = "test";
 

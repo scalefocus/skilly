@@ -7,6 +7,7 @@
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
 // from a description — absent from the code.
 import type { Pool } from "pg";
+import { parseMinQuality } from "@skilly/shared";
 import {
   MCP_TOOL_NAMES,
   buildSkillResourceUri,
@@ -108,7 +109,8 @@ export function toolDefinitions(): ToolDefinition[] {
           category: str("Restrict to one category label."),
           tool: str("Restrict to one tool/harness slug (e.g. claude-code)."),
           type: { type: "string", enum: ["hosted", "pointer"], description: "'hosted' = the bytes live in this registry; 'pointer' = mirrored from an external repo." },
-          sort: { type: "string", enum: ["relevance", "top_rated", "latest"], description: "Default 'relevance' (match-quality tiers — every word in the name first — then popularity)." },
+          sort: { type: "string", enum: ["relevance", "top_rated", "latest", "quality"], description: "Default 'relevance' (match-quality tiers — every word in the name first — then popularity). 'quality' = the registry's system-computed quality score, highest first." },
+          minQuality: { type: "number", enum: [3, 4, 4.5], description: "Only skills whose system quality rating is at least this many stars (3, 4 or 4.5); unscored skills are excluded." },
           limit: num("Max results, 1–50 (default 20)."),
           offset: num("Skip this many results (pagination)."),
         },
@@ -524,7 +526,8 @@ export async function callTool(
         category: s(args, "category"),
         tool: s(args, "tool"),
         type: (s(args, "type") as "hosted" | "pointer" | undefined) ?? null,
-        sort: (s(args, "sort") as "relevance" | "top_rated" | "latest" | undefined) ?? null,
+        sort: (s(args, "sort") as "relevance" | "top_rated" | "latest" | "quality" | undefined) ?? null,
+        minQuality: parseMinQuality(typeof args.minQuality === "number" ? String(args.minQuality) : undefined) ?? null,
         limit: n(args, "limit"),
         offset: n(args, "offset"),
       });

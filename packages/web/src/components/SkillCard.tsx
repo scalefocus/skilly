@@ -5,6 +5,7 @@ import { Pill, formatCount } from "./ui";
 import { useDateFmt } from "./DateFormat";
 import { plainText, descTooltip } from "../lib/cardText";
 import { SkillIcon } from "./SkillIcon";
+import { QualityBadge, type QualitySummaryView } from "./QualityBadge";
 
 export interface CatalogEntry {
   namespaceSlug: string;
@@ -32,6 +33,8 @@ export interface CatalogEntry {
   official?: boolean;
   /** The skill id (catalog listings) — the collection owner's remove control uses it (§38.5). */
   skillId?: string;
+  /** §41.11 the system quality summary, or null/absent while unscored (no badge). */
+  quality?: QualitySummaryView | null;
 }
 
 /** The "Official" badge marks platform-endorsed (first-party / sanctioned) skills (§7). It is an
@@ -115,6 +118,7 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
           must not wrap — a second line would fall outside the card's fixed height (§14). */}
       <div className="meta skill-card-stats" style={{ paddingTop: 10, borderTop: "1px solid var(--line)" }}>
         <RatingBadge s={s} withCount />
+        <QualityBadge quality={s.quality} />
         <span style={{ marginLeft: "auto", display: "inline-flex", gap: 10, alignItems: "center" }}>
           <WatchBadge s={s} />
           <span className="muted mono" style={{ fontSize: 11 }}>{formatCount(s.installCount)} installs</span>
@@ -149,6 +153,7 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
         {/* Grouped so on mobile (when the row wraps) rating + installs drop to their own bottom row. */}
         <span className="skill-row-stats">
           <RatingBadge s={s} />
+          <QualityBadge quality={s.quality} />
           <WatchBadge s={s} />
           <span className="muted mono" style={{ fontSize: 11, minWidth: 72, textAlign: "right" }}>{formatCount(s.installCount)} installs</span>
         </span>

@@ -1,6 +1,13 @@
 // Catalog read helpers (web). SKILLY_SPEC.md §6, §7, §10.
 import { pool } from "./db";
 import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, resolveSkillSearch, catalogOrderBy, collectionEligibleSql, type EffectiveAccess, type MatchMode } from "@skilly/shared";
+import { minQualityScore, qualityStars, type MinQuality, type QualityMode } from "@skilly/shared";
+
+/** §41.11: the skill-level quality summary from the denormalized columns. */
+export function qualitySummary(score: number | null | undefined, mode: QualityMode | null | undefined): { score: number; stars: number; mode: QualityMode } | null {
+  if (score == null || !mode) return null;
+  return { score: Number(score), stars: qualityStars(Number(score)), mode };
+}
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
 
@@ -34,6 +41,9 @@ export interface SkillRow {
   featuredAt: string | null;
   /** Optional skill icon (§33) — image and/or emoji, or null when the skill has none. */
   icon: SkillIconView | null;
+  /** §41.6 the latest stable version's system quality (denormalized), or null while unscored. */
+  qualityScore: number | null;
+  qualityMode: QualityMode | null;
 }
 
 export async function findSkill(namespaceSlug: string, skillSlug: string): Promise<SkillRow | null> {
@@ -52,9 +62,11 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
     featured_at: string | null;
     icon_sha256: string | null;
     icon_emoji: string | null;
+    quality_score: number | null;
+    quality_mode: QualityMode | null;
   }>(
     `select s.id, s.namespace_id, n.slug as namespace_slug, s.slug, s.visibility, s.status, s.tool_harness, s.created_at,
-            s.official_at, ob.display_name as official_by_name, s.featured_at, s.icon_sha256, s.icon_emoji,
+            s.official_at, ob.display_name as official_by_name, s.featured_at, s.icon_sha256, s.icon_emoji, s.quality_score, s.quality_mode,
             coalesce((select max(sv.created_at) from skill_versions sv where sv.skill_id = s.id), s.created_at) as updated_at
        from skills s join namespaces n on n.id = s.namespace_id
        left join users ob on ob.id = s.official_by
@@ -79,6 +91,8 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
         featured: r.featured_at != null,
         featuredAt: r.featured_at,
         icon: iconView(r.icon_sha256, r.icon_emoji),
+        qualityScore: r.quality_score,
+        qualityMode: r.quality_mode,
       }
     : null;
 }
@@ -124,6 +138,8 @@ export interface CatalogEntry {
   icon: SkillIconView | null;
   /** The skill id — set on catalog listings; the collection owner's remove control needs it (§38.5). */
   skillId?: string;
+  /** §41.11 the latest stable version's system quality, or null while unscored. */
+  quality: { score: number; stars: number; mode: QualityMode } | null;
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
@@ -154,7 +170,9 @@ function ilikeSearch(params: unknown[], q: string, where: string[]): string {
 }
 
 export interface CatalogSearchOpts {
-  q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest"; limit?: number;
+  q?: string; category?: string; tool?: string; type?: "hosted" | "pointer"; sort?: "top_rated" | "latest" | "quality"; limit?: number;
+  /** §41.7 the minimum-quality facet (stars); unscored skills are excluded while active. */
+  minQuality?: MinQuality;
   archivedOnly?: boolean; officialOnly?: boolean; featuredOnly?: boolean; ownerUserId?: string | null;
   maintainerUserId?: string | null; namespaceSlug?: string | null; catalogSeenAt?: string | null;
   /** §38.5 one collection's members (`?collection=`). */
@@ -222,6 +240,11 @@ export async function searchCatalog(
   if (opts.type) {
     params.push(opts.type);
     where.push(`s.type = $${params.length}`);
+  }
+  // Minimum quality (§41.7): the stars threshold as its lowest qualifying score; unscored excluded.
+  if (opts.minQuality) {
+    params.push(minQualityScore(opts.minQuality));
+    where.push(`s.quality_score >= $${params.length}`);
   }
   // "Official only" facet (§7): platform-endorsed skills. No param needed — a static predicate.
   if (opts.officialOnly) {
@@ -291,10 +314,12 @@ export async function searchCatalog(
     rating_sum: string; rating_count: string; watcher_count: string; status: "active" | "archived";
     created_at: string; updated_at: string; versions: string[] | null; official: boolean;
     icon_sha256: string | null; icon_emoji: string | null;
+    quality_score: number | null; quality_mode: QualityMode | null;
   }>(
     `select s.id as skill_id, n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
             s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
+            s.quality_score, s.quality_mode,
             (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji,
             s.created_at as created_at,
             coalesce(max(sv.created_at), s.created_at) as updated_at,
@@ -339,6 +364,7 @@ export async function searchCatalog(
       official: r.official,
       isNew: !Number.isNaN(seenMs) && new Date(r.created_at).getTime() > seenMs,
       icon: iconView(r.icon_sha256, r.icon_emoji),
+      quality: qualitySummary(r.quality_score, r.quality_mode),
     };
   });
   return { skills, matchMode: engine?.matchMode ?? null };
@@ -396,11 +422,12 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
     rating_sum: string; rating_count: string; watcher_count: string; status: "active" | "archived";
     created_at: string; updated_at: string; versions: string[] | null; official: boolean; installed: boolean;
     icon_sha256: string | null; icon_emoji: string | null;
+    quality_score: number | null; quality_mode: QualityMode | null;
   }>(
     `select n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
             s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
-            (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji, s.created_at as created_at,
+            (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji, s.quality_score, s.quality_mode, s.created_at as created_at,
             coalesce(max(sv.created_at), s.created_at) as updated_at,
             s.watcher_count::text as watcher_count,
             exists (select 1 from skill_installs si where si.skill_id = s.id and si.user_id = $${viewerIdx}) as installed,
@@ -439,6 +466,7 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
       official: r.official,
       icon: iconView(r.icon_sha256, r.icon_emoji),
       isNew: false, // not a catalog listing — the "new to you" badge doesn't apply here
+      quality: qualitySummary(r.quality_score, r.quality_mode),
     };
   };
   const related = rows.filter((r) => !r.installed).slice(0, Math.max(1, show)).map(toEntry);

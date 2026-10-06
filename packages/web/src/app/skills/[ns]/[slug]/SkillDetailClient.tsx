@@ -17,6 +17,8 @@ import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
 import { ContentRiskCard } from "./ContentRiskCard";
+import { QualityCard, type QualityDetailView } from "./QualityCard";
+import { QualityBadge, QualityStars, type QualitySummaryView } from "../../../../components/QualityBadge";
 import { ContentRiskChip } from "../../../../components/ContentRisk";
 import type { ContentRiskStatus } from "@skilly/shared/content-risk-status";
 import { FollowButton } from "../../../../components/FollowButton";
@@ -40,7 +42,7 @@ const SERIES_RANGES: { key: SeriesRange; label: string }[] = [
 const toSeriesRange = (s: string): SeriesRange => (s === "7d" || s === "90d" || s === "all" ? s : "30d");
 interface SkillSeries { range: SeriesRange; bucket: "day" | "week" | "month"; points: { date: string; views: number; installs: number }[] }
 
-interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked"; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null }
+interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked"; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null; quality?: QualitySummaryView | null }
 interface RatingView { avg: number; count: number; distribution: number[]; mine: number | null }
 interface MaintainerView { userId: string; displayName: string; email: string; avatar: string | null; source: "admin" | "explicit"; followable?: boolean }
 
@@ -100,6 +102,12 @@ function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canMana
           <span className="mono" style={{ fontWeight: 500 }}>v{v.semver}</span>
           {v.channel === "beta" ? <Pill tone="warn">beta</Pill> : <Pill tone="ok">stable</Pill>}
           {v.status === "yanked" && <Pill tone="danger">yanked</Pill>}
+          {/* §41.7: each version's own system quality, or a pending marker. */}
+          {v.quality ? (
+            <span className="version-quality" title={`Quality ${v.quality.stars} / 5 (${v.quality.score})`} data-testid="version-quality"><QualityStars stars={v.quality.stars} size={12} /></span>
+          ) : v.status === "active" ? (
+            <span className="muted mono" style={{ fontSize: 10.5 }} title="Quality check pending">⛨ pending</span>
+          ) : null}
           {expandable && (
             <button type="button" className="btn-ghost mono" style={{ fontSize: 11, padding: "1px 6px" }} aria-expanded={open} onClick={() => setOpen((o) => !o)} title="What changed in this version">
               {open ? "▾" : "▸"} what changed
@@ -168,6 +176,9 @@ interface Detail {
   canSeeContentRisk: boolean;
   /** Optional skill icon (§33) — image and/or emoji, or null. */
   icon: { url: string | null; emoji: string | null } | null;
+  /** §41.11 the latest stable version's system quality summary, and its full card payload. */
+  quality: QualitySummaryView | null;
+  qualityDetail: QualityDetailView | null;
 }
 
 export default function SkillDetail() {
@@ -654,6 +665,9 @@ export default function SkillDetail() {
       )}
 
       <RatingPanel rating={data.rating} busy={busy} onRate={rate} readOnly={data.archived} />
+
+      {/* §41.7: the system-computed quality of the latest stable version — everyone who can see the skill sees it. */}
+      {data.latest && <QualityCard detail={data.qualityDetail} base={base} onChanged={reload} />}
 
       <MaintainersPanel ns={ns} slug={slug} />
 

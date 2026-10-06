@@ -500,6 +500,11 @@ export async function setUserContentRiskNotifications(userId: string, enabled: b
   await pool.query(`update users set content_risk_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
+/** §41.9: the low-quality-score opt-out — row-level like the content-check toggle. */
+export async function setUserQualityNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set quality_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
 export async function setUserDiscussionNotifications(userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set discussion_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }

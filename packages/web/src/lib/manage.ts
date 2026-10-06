@@ -7,6 +7,7 @@ import { canYankOrArchive, evictFromCollections, type EffectiveAccess } from "@s
 import { appendAudit } from "./audit";
 import { findSkill } from "./catalog";
 import { getMaxFeaturedSkills } from "./settings";
+import { refreshSkillQualityColumns } from "./quality";
 
 type Result = { ok: true } | { ok: false; status: number; error: string };
 
@@ -24,6 +25,8 @@ export async function setVersionYanked(
     [skill.id, input.semver, status],
   );
   if (!rowCount) return { ok: false, status: 404, error: "version not found" };
+  // §41.6: `latest` may have moved — the skill's quality columns follow it.
+  await refreshSkillQualityColumns(skill.id).catch((err) => console.error(JSON.stringify({ level: "warn", msg: "quality refresh failed", err: String(err) })));
   await appendAudit(pool, {
     actorUserId: input.actorUserId,
     action: input.yanked ? "version.yanked" : "version.restored",
@@ -76,6 +79,7 @@ export async function setSkillArchived(
   } else {
     await pool.query(`update skills set status = 'active' where id = $1`, [skill.id]);
   }
+  await refreshSkillQualityColumns(skill.id).catch((err) => console.error(JSON.stringify({ level: "warn", msg: "quality refresh failed", err: String(err) })));
   await appendAudit(pool, {
     actorUserId: input.actorUserId,
     action: input.archived ? "skill.archived" : "skill.restored",

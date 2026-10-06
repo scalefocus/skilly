@@ -24,6 +24,10 @@ import {
   type EffectiveAccess,
   type MatchMode,
   type SearchField,
+  minQualityScore,
+  qualityStars,
+  type MinQuality,
+  type QualityMode,
 } from "@skilly/shared";
 
 export interface SkillHit {
@@ -41,6 +45,8 @@ export interface SkillHit {
   official: boolean;
   latest: string | null;
   updatedAt: string;
+  /** §41.11: the latest stable version's system quality (score 0–100, half-stars, mode), or null while unscored. */
+  quality: { score: number; stars: number; mode: QualityMode } | null;
   /** The MCP resource URI for this skill's latest stable SKILL.md — saves the agent a guess. */
   resourceUri: string;
   /** With a query (§34.11): the fields any query word matched. */
@@ -53,7 +59,7 @@ export interface SkillHit {
 const HIT_COLUMNS = `s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
         s.visibility, s.tool_harness, s.install_count::text as install_count,
         s.rating_sum::text as rating_sum, s.rating_count::text as rating_count,
-        (s.official_at is not null) as official,
+        (s.official_at is not null) as official, s.quality_score, s.quality_mode,
         coalesce(max(sv.created_at), s.created_at) as updated_at,
         coalesce((select array_agg(c.name order by c.name)
                     from skill_categories sc join categories c on c.id = sc.category_id
@@ -61,7 +67,7 @@ const HIT_COLUMNS = `s.id, n.slug as namespace_slug, s.slug as skill_slug, s.tit
         array_remove(array_agg(sv.semver) filter (where sv.status = 'active'), null) as versions`;
 
 const HIT_GROUP_BY = `group by n.slug, s.slug, s.title, s.description, s.type, s.visibility,
-        s.tool_harness, s.install_count, s.rating_sum, s.rating_count, s.official_at, s.created_at, s.id`;
+        s.tool_harness, s.install_count, s.rating_sum, s.rating_count, s.official_at, s.quality_score, s.quality_mode, s.created_at, s.id`;
 
 interface HitRow {
   id: string;
@@ -77,6 +83,8 @@ interface HitRow {
   rating_sum: string;
   rating_count: string;
   official: boolean;
+  quality_score: number | null;
+  quality_mode: QualityMode | null;
   updated_at: string;
   versions: string[] | null;
 }
@@ -98,6 +106,7 @@ function toHit(r: HitRow): SkillHit {
     official: r.official,
     latest: resolveLatest(r.versions ?? []),
     updatedAt: r.updated_at,
+    quality: r.quality_score == null || !r.quality_mode ? null : { score: Number(r.quality_score), stars: qualityStars(Number(r.quality_score)), mode: r.quality_mode },
     resourceUri: buildSkillResourceUri(r.namespace_slug, r.skill_slug),
   };
 }
@@ -107,7 +116,9 @@ export interface SearchOpts {
   category?: string | null;
   tool?: string | null;
   type?: "hosted" | "pointer" | null;
-  sort?: "relevance" | "top_rated" | "latest" | null;
+  sort?: "relevance" | "top_rated" | "latest" | "quality" | null;
+  /** §41.7 the minimum-quality facet. */
+  minQuality?: MinQuality | null;
   limit?: number;
   offset?: number;
 }
@@ -159,6 +170,10 @@ export async function searchSkills(
   if (opts.type) {
     params.push(opts.type);
     where.push(`s.type = $${params.length}`);
+  }
+  if (opts.minQuality) {
+    params.push(minQualityScore(opts.minQuality));
+    where.push(`s.quality_score >= $${params.length}`);
   }
   // Free text: the shared §34 engine, resolved after every filter so its any-word fallback probe
   // sees exactly what this call can list — the web catalog makes the identical call.

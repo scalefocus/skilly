@@ -1,5 +1,6 @@
 // Visibility-filtered catalog search. SKILLY_SPEC.md §10 (auth-required, strictly filtered).
 import { getServerSession } from "next-auth";
+import { parseMinQuality } from "@skilly/shared";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { searchCatalog } from "../../../lib/catalog";
@@ -40,6 +41,9 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const archivedOnly = url.searchParams.get("archived") === "1";
+  const minQualityRaw = url.searchParams.get("minQuality");
+  const minQuality = parseMinQuality(minQualityRaw);
+  if (minQualityRaw && minQuality === undefined) return Response.json({ error: "minQuality must be 3, 4 or 4.5" }, { status: 422 });
   // Collection views (§38.5). Both are viewer-visibility-scoped AND eligibility-filtered in searchCatalog.
   const collectionId = uuidParam(url, "collection");
   const collectionsByUserId = collectionId ? undefined : uuidParam(url, "collectionsBy");
@@ -54,7 +58,9 @@ export async function GET(req: Request) {
     category: url.searchParams.get("category") ?? undefined,
     tool: url.searchParams.get("tool") ?? undefined,
     type: url.searchParams.get("type") === "hosted" ? "hosted" : url.searchParams.get("type") === "pointer" ? "pointer" : undefined,
-    sort: url.searchParams.get("sort") === "top_rated" ? "top_rated" : url.searchParams.get("sort") === "latest" ? "latest" : undefined,
+    sort: url.searchParams.get("sort") === "top_rated" ? "top_rated" : url.searchParams.get("sort") === "latest" ? "latest" : url.searchParams.get("sort") === "quality" ? "quality" : undefined,
+    // §41.7 minimum-quality facet: 3 | 4 | 4.5 stars; anything else is 422.
+    minQuality,
     // `?archived=1` flips to showing ONLY archived skills, owner-scoped in the query (a
     // non-owner gets none). The UI only shows the toggle to managers.
     archivedOnly,

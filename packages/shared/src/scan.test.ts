@@ -32,8 +32,11 @@ test("clean bundle yields no findings; binary skipped", async () => {
     { path: "img.bin", bytes: new Uint8Array([0, 1, 2, 0, 3]) }, // NUL => skipped
   ];
   const findings = await runScanners(f, PURE_SCANNERS);
-  // Only the content check's info-level "ran at ruleset N" marker (§37.2) — nothing that counts.
-  assert.deepEqual(findings.map((x) => x.rule), ["cr-scanned"]);
+  // Only info-level findings: the content check's marker (§37.2) and the quality lint (§41) — nothing that counts.
+  assert.ok(findings.map((x) => x.rule).includes("cr-scanned"));
+  assert.ok(findings.map((x) => x.rule).includes("qa-scanned"));
+  assert.ok(findings.every((x) => x.severity === "info"));
+  assert.ok(findings.every((x) => x.scanner === "content-risk" || x.scanner === "quality"));
   assert.equal(maxSeverity(findings), "info");
   assert.equal(requiresOverride(maxSeverity(findings)), false);
 });

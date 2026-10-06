@@ -560,11 +560,29 @@ export const BAYES_RATING_SQL =
  * `left join skill_versions sv` + GROUP BY. Total order (… namespace slug, skill slug) so offset
  * pagination is stable.
  */
-export function catalogOrderBy(sort: "relevance" | "top_rated" | "latest" | null | undefined, relevance: string): string {
+export type CatalogSort = "relevance" | "top_rated" | "latest" | "quality";
+
+export function catalogOrderBy(sort: CatalogSort | null | undefined, relevance: string): string {
   if (sort === "top_rated") return `${BAYES_RATING_SQL} desc, s.rating_count desc, s.install_count desc, s.title asc, n.slug asc, s.slug asc`;
   if (sort === "latest") return `coalesce(max(sv.created_at), s.created_at) desc, s.install_count desc, s.title asc, n.slug asc, s.slug asc`;
-  // Official is a gentle final tiebreaker (§7) so it nudges without overriding a better match.
-  return `${relevance}s.install_count desc, ${BAYES_RATING_SQL} desc, (s.official_at is not null) desc, s.title asc, n.slug asc, s.slug asc`;
+  // "Highest quality" (§41.7): the system score, unscored last, then the default order.
+  if (sort === "quality") return `s.quality_score desc nulls last, s.install_count desc, ${BAYES_RATING_SQL} desc, s.title asc, n.slug asc, s.slug asc`;
+  // The smoothed rating, then the system quality score (§41.7, nulls last), then Official as a gentle
+  // final tiebreaker (§7) so it nudges without overriding a better match.
+  return `${relevance}s.install_count desc, ${BAYES_RATING_SQL} desc, s.quality_score desc nulls last, (s.official_at is not null) desc, s.title asc, n.slug asc, s.slug asc`;
+}
+
+/** The `?minQuality=` facet values (§41.7) — stars thresholds, compared against qualityStars(quality_score). */
+export const MIN_QUALITY_VALUES = [3, 4, 4.5] as const;
+export type MinQuality = (typeof MIN_QUALITY_VALUES)[number];
+export function parseMinQuality(raw: string | null | undefined): MinQuality | undefined {
+  if (raw == null || raw === "") return undefined;
+  const n = Number(raw);
+  return (MIN_QUALITY_VALUES as readonly number[]).includes(n) ? (n as MinQuality) : undefined;
+}
+/** The lowest 0–100 score whose stars reach `min` (§41.4 bands): 3 → 50, 4 → 70, 4.5 → 80. */
+export function minQualityScore(min: MinQuality): number {
+  return Math.round((min * 2 - 1) * 10);
 }
 
 // ── MCP explanations (§34.11) ──────────────────────────────────────────────────────────────────

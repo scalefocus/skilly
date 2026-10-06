@@ -10,6 +10,8 @@ import { skillDiscussionCount } from "../../../../../lib/messages";
 import { logView } from "../../../../../lib/usage";
 import { withSystemLog } from "../../../../../lib/apiLog";
 import { skillContentRiskSummary } from "../../../../../lib/contentRisk";
+import { skillQualityDetail, skillVersionQualities } from "../../../../../lib/quality";
+import { qualitySummary } from "../../../../../lib/catalog";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, resolveLatest } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +39,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   // Record the view only for live consumption — not an owner inspecting an archived skill. §21.
   if (!archived && access.userId) logView(skill.id, skill.namespaceId, access.userId);
 
-  const [versions, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner] = await Promise.all([
+  const [versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality] = await Promise.all([
     listVersions(skill.id),
     latestStableSemver(skill.id),
     access.userId ? isWatching(access.userId, skill.id) : Promise.resolve(false),
@@ -53,7 +55,12 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     skillContentRiskSummary(skill.id),
     // §37.8: owners (maintainers, namespace admins, platform admins) also get the full card.
     access.userId ? canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId) : Promise.resolve(false),
+    // §41.7: each version's own stars for the Versions list.
+    skillVersionQualities(skill.id),
   ]);
+  const versions = versions0.map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
+  // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
+  const qualityDetail = latest ? await skillQualityDetail(access, skill, latest) : null;
   const isGlobal = skill.namespaceSlug === "global";
   // INSTALLABLE = latest stable version whose serving git repo is actually synthesized
   // (git_published). A freshly published version is `active` (so `latest` is set) but its repo
@@ -88,6 +95,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     discussionCount,
     contentRisk,
     canSeeContentRisk: isOwner,
+    quality: qualitySummary(skill.qualityScore, skill.qualityMode),
+    qualityDetail,
     createdAt: skill.createdAt,
     updatedAt: skill.updatedAt,
     archived,
