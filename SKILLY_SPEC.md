@@ -135,7 +135,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `skills`
 - `id`, `namespace_id`, `slug`, `title`, `description`, `category_id` (nullable FK to `categories` — **back-compat shadow**; since migration 0010 the authoritative skill↔category mapping is the **`skill_categories`** join, supporting multiple categories), `tool_harness` (TEXT — the skill's **coding agent**, a **closed vocabulary**: `generic` (default) ∪ the agents the consumer tool supports; drives the install command's `--agent` flag, §6/§9), `type` (`hosted` | `pointer`), `visibility` (`org` | `namespace`), `status` (`active` | `archived`), `promoted_from_skill_version_id` (nullable, provenance), `install_count`, `featured_at` (nullable timestamptz; non-null ⇒ **Featured** homepage spotlight, §7), `featured_by` (nullable FK `users`, provenance), **`icon_sha256`** (nullable FK → `skill_icons`, the effective icon image, §33), **`icon_emoji`** (nullable TEXT — a single emoji grapheme, the fallback when no image resolves, §33), **`icon_source`** (nullable — `frontmatter` | `bundle` | `upload`: where `icon_sha256` came from, §33), `created_at`. *(The former free-form `tags TEXT[]` column was **dropped in migration 0068** — §10 *Taxonomy*; the FTS trigger was rewritten without it in the same migration.)*
-- Denormalized/derived columns (trigger-maintained): `search_tsv` (FTS `tsvector` — A title + slug, B description, C category names, D usage + `SKILL.md` body of the **indexed version**, §34.3), `search_lang` (the text-search configuration `search_tsv` was built with — the §34.9 reindex job's work list, migration 0077), `usage_search` (the **indexed version's** usage examples — latest stable, else highest active prerelease, §34.3; before migration 0077 the newest-*created* active version, §20), `content_search` (the indexed version's `SKILL.md` body, from `skill_version_search`, migration 0077), `watcher_count` (count of `skill_watches` rows), plus `rating_sum` / `rating_count` (below).
+- Denormalized/derived columns (trigger-maintained): `search_tsv` (FTS `tsvector` — A title + slug, B description, C category names, D usage + `SKILL.md` body of the **indexed version**, §34.3), `search_lang` (the text-search configuration `search_tsv` was built with — the §34.9 reindex job's work list, migration 0077), `usage_search` (the **indexed version's** usage examples — latest stable, else highest active prerelease, §34.3; before migration 0077 the newest-*created* active version, §20), `content_search` (the indexed version's `SKILL.md` body, from `skill_version_search`, migration 0077), `watcher_count` (count of `skill_watches` rows), plus `rating_sum` / `rating_count` (below), plus **`quality_score`** / **`quality_mode`** (the latest stable active version's system-computed quality, §41.6 — refreshed by `refreshSkillQuality`, not by trigger).
 
 #### Tool/harness = coding agent (closed vocabulary)
 - `tool_harness` names the **coding agent** the skill targets, chosen from a **closed, curated list** (the agents `npx skills add --agent <slug>` supports — e.g. `claude-code`, `cursor`, `gemini-cli`, `windsurf`, …). The single source of truth is `shared/agents.ts` (`{ slug, label }[]`); the slug is stored, the label is displayed.
@@ -309,6 +309,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`ai_integration`** — **single row** (`id = 1`): the platform's one LLM provider connection — `enabled`, `provider` (`openwebui` | `anthropic`), `base_url`, `model`, `token_enc` (AES-256-GCM under the env `AI_TOKEN_ENC_KEY`, §13 — never logged, never in audit payloads), `token_last4`, the `last_test_*` / `last_call_*` health columns, `last_failure_logged_at` (System-log throttle), `updated_by_user_id`, `updated_at`. *Remove integration* hard-deletes the row.
 - **`ai_usage`** — one row per provider call: `created_at`, `feature`, `user_id` (nullable, SET NULL; nulled on GDPR erasure), `provider`, `model`, `input_tokens`, `output_tokens`, `latency_ms`, `ok`, `error_code`. **Never prompts, responses or the token.** 365-day retention (worker prune).
 
+### `skill_version_quality` (migration 0086, detailed in §41)
+- One row per **scored version**: `skill_version_id` (PK, FK → `skill_versions`, CASCADE), `skill_id` (FK, CASCADE), `ruleset` (the `QUALITY_RULESET_VERSION` the rules part was computed at), `rules_score` (smallint 0—100), `ai_status` (`off` | `pending` | `done` | `failed`), `ai_score` (nullable smallint 0—100), `ai_model` (nullable text), `ai_verdict` (nullable JSONB — the structured §41.5 verdict; derived skill content, visibility-gated like the skill), `ai_attempts` (smallint, default 0), `ai_last_error` (nullable, sanitized one line), `ai_next_attempt_at` (nullable timestamptz), `final_score` (smallint 0—100 — `rules_score` while `ai_score` is null, else `round(0.6 × rules + 0.4 × ai)`), `mode` (`rules` | `rules+ai`), `low_notified_at` (nullable — the §41.9 once-per-assessment guard), `scored_at`, `updated_at`. **Findings are not duplicated here** — they live in the artifact's latest `scan_reports` row under scanner `quality` (§41.3). Index on `(ai_status, ai_next_attempt_at)`.
+- `skills` gains denormalized **`quality_score`** / **`quality_mode`** (nullable — the latest stable active version's `final_score` / `mode`; §41.6) and `users` gains **`quality_notifications`** (`BOOLEAN NOT NULL DEFAULT true`, §41.9).
+
 ---
 
 ## 4. RBAC model & permission matrix
@@ -338,6 +342,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Approve promotion to global | ✅ | ❌ | ❌ | ❌ |
 | Yank version / archive skill | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Override security finding on publish | ✅ | ✅ (own ns) | ❌ | ❌ |
+| Re-assess skill quality (§41.8) | ✅ | ✅ (own ns) | ❌ | ❌ |
 | Acknowledge a flagged content-risk finding (§37.6) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | View audit log | ✅ (all) | ✅ (own ns) | own proposals | own proposals |
 | Consume (search/install visible) | ✅ | ✅ | ✅ | ✅ |
@@ -744,7 +749,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   log.
 
 ### Security scanning — pluggable pipeline
-- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns). Plus **(d) content risk** (§37): hidden Unicode, look-alike letters, override phrasing and credential theft, read as instructions to an agent.
+- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns). Plus **(d) content risk** (§37): hidden Unicode, look-alike letters, override phrasing and credential theft, read as instructions to an agent. Plus **(e) quality lint** (§41): the deterministic SKILL.md authoring rules — its findings are always `info` severity, never raise a report's severity and never trip the override gate; they feed the quality rating, not the security verdict.
 - **Pre-accept, for both types** (so reviewers never approve blind): **Hosted** is scanned at upload (artifact-keyed report); **Pointer** is scanned by a worker loop that clones the proposal's pinned ref while it sits in review (proposal-keyed report, deduped per ref). Until that loop runs a pointer proposal reads as **`scan pending`** (not "not scanned"); a ref that can't be fetched reads **`source unreachable`**. Pointer versions are scanned again at mirror time on accept (artifact-keyed) and periodically refreshed.
 - Report attached to proposal, surfaced in review dashboard.
 - **Validation blocks; security findings are advisory** — a reviewer may publish over a finding, **explicitly and audit-logged**.
@@ -990,7 +995,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Clear affordance (`✕`) — universal, all five modes.** The shared top-bar box carries a **clear control on its right edge, in the same slot as the `CTRL+K` hint**: the hint shows when the box is **empty**, and the moment the box holds **any** text the hint is **replaced by a small `✕` button** — only ever one of the two visible at a time, toggling instantly as the box goes empty/non-empty. The trigger is purely **"box is non-empty"**, so it is **independent** of the 2-char query floor, of whether the typeahead dropdown or the "Nothing found" bubble is showing, and of which of the five behaviors is active — including on the four **live-filter pages when the box is seeded from `?q=` on arrival** (a shared `/catalog?q=foo`-style link shows the `✕`, not the hint, on load). **Clicking `✕` or pressing `Escape`** (while the box is focused) **clears the box in one action** and **keeps keyboard focus in it**, ready to retype — it never blurs or navigates. `Escape` therefore **always clears** now, **superseding** its former job of merely closing the typeahead dropdown (emptying the query closes any open dropdown and dismisses the "Nothing found" bubble as a consequence). On a **live-filter page** (catalog / installed / usage / requests) clearing **drops `?q=` immediately** via `router.replace` — **not** waiting for the ~250ms live-filter debounce — so the full unfiltered list snaps back at once. The `✕` is a real **`type="button"`** labelled **"Clear search"** (keyboard-focusable, Tab-reachable, non-submitting), rendered as a **thin-stroke glyph** matching the box's search magnifier and the rest of the topbar icon set (not an emoji or heavy character). `Ctrl`/`Cmd+K` is **unchanged** (focus + select the box); if it selects pre-existing text the box is still non-empty, so the `✕` remains shown.
 - **Skill icon on every skill surface (§33).** Catalog **cards** render the icon **left of the title at 40 px** — and render **no slot at all** when the skill has none (titles may start at different x positions; accepted). The **list-view row** (32 px), the **Featured spotlight** (40 px), the **search-suggest dropdown** (24 px), **`#skill` mention chips** (16 px, inline), and the **Installed page** rows (24 px) follow the same *present-or-absent* rule. Only where a **single skill is the subject** does the **default** render — the **skill detail page header** (64 px, the skilly **wordmark + diamond lockup**) and the §33 share card. Every rendering sits on a **neutral tile with a 1 px border** so transparent PNGs survive both themes; images `object-fit: cover`, emoji centred; **alt text = the skill title**. The catalog/detail/suggest APIs expose `icon: { url, emoji } | null` (`url` = `/skill-icons/<sha256>.png`), visibility-filtered like every other field.
 - **Strictly visibility-filtered, auth-required.** A restricted skill must **never** appear in search, autocomplete, or counts for users outside its namespace. **No anonymous browsing.**
-- **Facets (implemented):** category, tool/harness, hosted-vs-pointer. The hosted-vs-pointer facet is labelled **"Source"** in the catalog UI with options **"Hosted"** and **"External"** — "External" being the one user-facing name for pointer skills, matching the `external` pill on catalog cards and the "External source" panel on the detail page (never "Mirrored"; mirroring is the internal mechanism, not the user-facing name). (Namespace, channel/stable-vs-beta, and scan-status facets are **deferred** — not computed or surfaced in v1.)
+- **Facets (implemented):** category, tool/harness, hosted-vs-pointer, **minimum quality** (`?minQuality=3|4|4.5`, §41.7). Sorts gain **"Highest quality"** (`sort=quality`, §41.7). The hosted-vs-pointer facet is labelled **"Source"** in the catalog UI with options **"Hosted"** and **"External"** — "External" being the one user-facing name for pointer skills, matching the `external` pill on catalog cards and the "External source" panel on the detail page (never "Mirrored"; mirroring is the internal mechanism, not the user-facing name). (Namespace, channel/stable-vs-beta, and scan-status facets are **deferred** — not computed or surfaced in v1.)
 - **`?category=<name>` arrival parameter.** The catalog accepts a category **name** in the URL
   (alongside the existing `?q=`, `?ns=`/`?nsName=` and `?maintainer=`/`?by=`): on arrival it
   **selects that category chip** exactly as a click would — it overrides the browser-remembered
@@ -1103,6 +1108,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
+  - **Skill quality (§41.10):** `skill.quality_reassess_requested` (actor; skill, version) and `job.quality_rescore_requested` (actor; row count). The sweep's own writes, AI calls and notifications are telemetry, **not audited**.
   - **AI integration (§40.11):** `ai.config_updated` (provider / base URL / model before→after plus a `token_rotated` flag — **never the token or any part of it**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests, model-list calls and AI runtime calls are **not audited** (they are telemetry in `ai_usage`).
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
@@ -1153,6 +1159,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
   - To **effective maintainers**: `skill.content_risk` when the re-scan sweep first flags a published version (§37.5, **once per onset**), gated by `content_risk_notifications` (§37.9).
+  - To **effective maintainers**: `skill.quality_low` when a version's quality assessment **settles at 2 stars or below** (§41.9, **once per assessment**), carrying the full list of findings and the AI recommendations; gated by `quality_notifications`.
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
@@ -1199,6 +1206,7 @@ current or future type can ever leak JSON to a user.
   | `skill.new_version` | New version published | {ns}/{slug} published version {semver}. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.discussion` | New discussion comment | {fromName} commented on {ns}/{slug}. | View the discussion → `/skills/{ns}/{slug}#discussion` |
   | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
+  | `skill.quality_low` | Low quality score | {ns}/{slug} v{semver} scored {stars} ★ ({score}/100, {mode}). *(+ the full findings list, then the AI summary and suggestions when present — §41.9)* | Open the Quality card → `/skills/{ns}/{slug}#quality` |
   | `skill.marked_official` | Skill marked official | {ns}/{slug} was marked official. | View the skill → `/skills/{ns}/{slug}` |
   | `request.fulfilled` | Skill request fulfilled | Your skill request "{requestTitle}" was fulfilled by {byName} with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
   | `proposal.submitted` | Proposal submitted | Your skill proposal was submitted and is awaiting review. | View it → `/proposals/{proposalId}` |
@@ -1223,7 +1231,7 @@ current or future type can ever leak JSON to a user.
 
 ### Maintainer notification preferences (per-type opt-outs)
 
-- **Four per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
+- **Five per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
   `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
@@ -1236,6 +1244,9 @@ current or future type can ever leak JSON to a user.
   The fourth is **"Content check flags on skills I maintain"** (`users.content_risk_notifications`,
   `BOOLEAN NOT NULL DEFAULT true`, migration 0081, §37.9); `PATCH /api/me` also accepts
   `contentRiskNotifications`.
+  The fifth is **"Low quality scores on skills I maintain"** (`users.quality_notifications`,
+  `BOOLEAN NOT NULL DEFAULT true`, migration 0086, §41.9); `PATCH /api/me` also accepts
+  `qualityNotifications`.
   Toggling is **silent** (not audited), matching the other profile prefs.
 - **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
   filtered out of the recipient set **at insert time** in the worker (the publish sweep's
@@ -1259,6 +1270,7 @@ current or future type can ever leak JSON to a user.
     mention toggle: opting out of discussion chatter opts out of being pinged by name too.
   - `content_risk_notifications` gates `skill.content_risk` entirely, like the drift toggle: it
     only ever targets effective maintainers (§37.9).
+  - `quality_notifications` gates `skill.quality_low` entirely, the same way (§41.9).
 - **No safety floor — deliberately.** Namespace admins can opt out like anyone, so a skill whose
   effective maintainers have all opted out drifts with **no one pinged**. Accepted: the toggle
   silences the *ping*, never the *record* — the `pointer.drift_detected` audit row, the
@@ -1561,7 +1573,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7).
 - `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once, and **never listed as an installation** on the Installed Skills page (§23).
 - `POST /api/skills/:ns/:slug/install` — mint a **reusable** skill-scoped install command (interactive); body `{ semver?, expiresAt?, system? }` — `system: true` mints a **system installation** (§23), **platform-admin only, re-verified server-side**; **409** for a not-yet-`git_published` version (§6/§23). *(Endpoint is `install`, not `install-url`; tokens are reusable, not one-time.)*
-- `PUT|DELETE /api/skills/:ns/:slug/rating` (§18). `GET|PUT|DELETE /api/skills/:ns/:slug/maintainers` + `GET .../maintainers/candidates?q=` (§19). `POST /api/skills/:ns/:slug/watch` (watch/follow).
+- `PUT|DELETE /api/skills/:ns/:slug/rating` (§18). `POST /api/skills/:ns/:slug/versions/:semver/quality/reassess` + `GET /api/admin/jobs/quality` (§41.11); `GET /api/skills` accepts `sort=quality` and `?minQuality=`; skill payloads carry `quality` (§41.11). `GET|PUT|DELETE /api/skills/:ns/:slug/maintainers` + `GET .../maintainers/candidates?q=` (§19). `POST /api/skills/:ns/:slug/watch` (watch/follow).
 - `GET /api/skills/:ns/:slug/usage-series?range=<7d|30d|90d|all>` — aggregate installs+views over time (visibility-gated; §21).
 - `GET /api/skills/:ns/:slug/versions/:semver/changes` — the published version's **file changes vs its immediate predecessor** (§10): `{ available, baselineSemver, added, modified, removed, unchanged, files[] }`, or `{ available: false, reason }` when there's no predecessor / no stored artifact yet. `?path=<file>` returns that file's unified line diff (or a `binary` / `tooLarge` marker). Gated by the **skill's own visibility** (invariant #3; archived → owners only, §7), rate-limited like `download`, cached by `(skill, semver)` — the reviewer counterpart is `GET /api/proposals/:id/changes` (§8).
 - `POST /api/skills/:ns/:slug/promote` — initiate promotion to global. `POST /api/skills/:ns/:slug/yank`, `.../archive`, `.../delete` (permanent; platform-admin, archived-only).
@@ -1797,7 +1809,7 @@ A lightweight quality signal layered on top of the catalog. Designed v1 to be **
 ### Aggregation, ranking & display
 - **Denormalized** `rating_sum` + `rating_count` on `skills`, maintained by a `BEFORE/AFTER` trigger on `skill_ratings` that applies deltas on INSERT / UPDATE / DELETE. This keeps `searchSkills` a clean scalar read with no join fan-out.
 - **Sort** uses a **Bayesian-smoothed** score `(rating_sum + C·m) / (rating_count + C)` where `m` = global mean rating and `C` ≈ 5 prior votes, so a single 5★ skill does not outrank a well-established 4.6★ one. Raw average (`sum/count`) is shown to users; the smoothed score drives ordering.
-- **Default ranking** stays `install_count`-led with the smoothed rating as the **final tiebreaker**; a dedicated **"Top rated"** sort orders by the smoothed score directly.
+- **Default ranking** stays `install_count`-led with the smoothed rating as the tiebreaker and the system quality score (§41.7) as the **final tiebreaker** after it; a dedicated **"Top rated"** sort orders by the smoothed score directly.
 - **UI (v1):** catalog card badge (`4.6 ★ · 23`), a detail-page **distribution histogram** + the caller's own clickable star control, and the "Top rated" sort. **No star facet-filter** yet (low value until there's volume).
 
 ### Moderation & notifications
@@ -3843,8 +3855,8 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 **Core read (7)**
 | Tool | Behavior |
 |---|---|
-| `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`), same sorts, same visibility filter. Paginated. Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
-| `get_skill` | §15 detail: metadata, versions, rating aggregate, maintainers, `latestInstallable`, `publishing`, external-source panel data. |
+| `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`, `minQuality`), same sorts (incl. `quality`), same visibility filter. Paginated. Each hit carries `quality` (§41.11). Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
+| `get_skill` | §15 detail: metadata, versions, rating aggregate, **quality** (score, stars, mode — never the AI remarks, §41.11), maintainers, `latestInstallable`, `publishing`, external-source panel data. |
 | `get_skill_content` | Raw `SKILL.md` for a version (default: latest stable). The tool twin of the resource read, with identical counting (§29 *Adoption*). |
 | `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
 | `get_skill_file` | One file from a version's bundle. Text inline; binary as a base64 blob; over `mcp_max_resource_bytes` → a clear error naming the `download` route. |
@@ -8248,7 +8260,8 @@ pattern), with the **status pill** as its header accessory.
 - **Feature registry:** `AI_FEATURES` in `@skilly/shared/ai` — each entry `{ key, label, egress, spec }`
   (e.g. `egress: "Skill name, description and SKILL.md body of org-visible skills"`,
   `spec: "§41"`). Calling with an **unregistered key throws `ai_unknown_feature`** before any
-  network call. `test` is reserved. **v1 ships the registry empty.**
+  network call. `test` is reserved. The registry shipped empty; its **first entry is
+  `skill_quality`** (§41.5).
 - **Recording:** every call that reaches the provider (success or failure) writes **one**
   `ai_usage` row with its final outcome — a retried call is still one row — and updates `last_call_*`. Calls
   refused before the network (`ai_not_configured`, `ai_disabled`, `ai_key_missing`,
@@ -8341,3 +8354,146 @@ model-list calls and runtime calls are **not audited** (telemetry, in `ai_usage`
   provider) → models load → **Test** passes → **Save** → enable → pill shows *Operational*; a
   failing token on Save shows the error and the pill stays as before; **Remove integration** returns
   the card to *Not configured*.
+
+---
+
+## 41. Skill quality rating
+
+A second five-star signal next to the user rating (§18): a **system-computed quality score** for
+each published version, derived from the deterministic SKILL.md authoring rules in *The Complete
+Guide to Building Skills for Claude* and, when the §40 AI integration is operational, from an LLM
+judgement of the things those rules cannot check. It is the **first registered AI task** (§40.7).
+It is advisory: it never blocks, gates or changes the state of anything.
+
+### 41.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Per version**, displayed as the **latest stable active version's** score on cards, rows and the detail page; each version shows its own in the Versions list. | Scans are per artifact; versions are immutable. |
+| 2 | Pointer skills are scored from the **mirrored artifact** at mirror time, like content risk. | No special-casing; the bytes skilly serves are the bytes assessed. |
+| 3 | The deterministic rules run as a **pure scanner `quality`** in `PURE_SCANNERS`; reviewers see the rules-only score on the review page and proposers on the propose/proposal page right after upload. | Early lint feedback with no new wiring; the §37 model already does this. |
+| 4 | **Advisory only.** No gate, no override, no minimum-to-publish, no state change. | Quality is a signal for consumers and authors, not a governance verdict. |
+| 5 | Unsupported checks are **dropped**, not approximated (§41.2). | No interpreters in the worker image, no MCP manifests, no runtime evals. |
+| 6 | Score = **100 minus weighted deductions**, mapped to **half-star** steps (§41.4); thresholds are **hard-coded constants** in a versioned `QUALITY_RULESET_VERSION`. | Same discipline as `CONTENT_RULESET_VERSION`; admin-tunable thresholds deferred. |
+| 7 | The AI judges **only Part C** of the guide (the human-judgement items); the rules stay authoritative for what they cover. **Final = 60 % rules + 40 % AI** when AI ran, else 100 % rules. | The model fills the gap the guide leaves; it never re-litigates a rule. |
+| 8 | AI runs **only in the worker**, asynchronously, in **batches of 3 per sweep pass**, and only for **each skill's latest stable active version** plus **every newly published version**. | Upload must not wait 60 s on a provider; ~100 skills backfill in a few hours; bounded cost. |
+| 9 | The rules score is stored and shown **immediately**; the AI part lands later and the display says **"rules only"** until it does. AI failure never hides the score. | A broken provider degrades to the deterministic rating, nothing worse. |
+| 10 | Turning AI **on** queues AI judgement for every latest version that lacks it; turning AI **off** leaves existing `rules+ai` scores as they are, stamped with their mode. | Consistency is less valuable than not throwing away paid-for judgement. |
+| 11 | Admins (the "Override security finding on publish" holders) may **re-assess** a version on demand; a ruleset bump re-scores the whole catalog through the sweep. | Immutable versions need one assessment each, plus a human escape hatch. |
+| 12 | Maintainers are **notified at 2 stars or below** with the full list of findings and the AI recommendations. | Authors must learn *what* to fix, not just that they scored low. |
+| 13 | Quality is a **catalog sort**, the **final tiebreaker** of the default ranking after the smoothed user rating, and a **minimum-quality facet**. It never touches search relevance. | Discoverable without distorting relevance. |
+
+### 41.2 Rule catalog (ruleset 1)
+Rule ids, levels and checks follow the guide's linter extraction verbatim unless noted. Levels map to
+deductions in §41.4. **Levels are not scan severities**: every quality finding carries `severity:
+'info'` so it never raises a report's severity or trips the override gate; the guide's level travels
+in the new optional `ScanFinding.level` field (`error` | `warn` | `info`).
+
+**Applied (by group).**
+- **Files (FS):** FS-003 (`README*` at the skill root → *error*; in a sub-folder → *warn*), FS-004 (unexpected top-level entry or OS junk → *warn*), FS-005 (stray `.md`/`.txt` at root → *warn*), FS-006 (empty `scripts/`, `references/` or `assets/` → *info*).
+- **Frontmatter syntax (FM):** FM-001 only its BOM clause (a UTF-8 BOM before `---` → *warn*), FM-005 (YAML tags → *error*), FM-006 (`<` or `>` anywhere in the frontmatter → *error*), FM-007 (anchors, aliases, merge keys → *warn*).
+- **Frontmatter fields (FD):** FD-003 (`claude` or `anthropic` anywhere in `name`, case-insensitive → *error*), FD-006 (`description` > 1024 code points → *error*), FD-007 (`<`/`>` in `description` → *error*, reported against the field; FM-006 is then not repeated for the same characters), FD-008 (`compatibility` present but not a 1–500-char string → *error*), FD-009 (`license` present but empty → *warn*; not a recognised SPDX id → *info*), FD-010 (`metadata` not a mapping → *warn*), FD-011 (`metadata.version` absent → *info*; present but not `x.y.z` → *info*), FD-012 (`metadata.author` absent → *info*), FD-013 (body mentions MCP but no `metadata.mcp-server` → *info*), FD-014 (`allowed-tools` not a string of valid tokens → *warn*), FD-015 (unknown top-level key → *warn*; **skilly's own keys are known**: `name`, `description`, `license`, `allowed-tools`, `compatibility`, `metadata`, `category`, `tool`, `harness`, `usage_examples`, `version`, `icon`).
+- **Description quality (DS):** DS-001 (no WHEN/trigger clause → *warn*), DS-002 (no quoted trigger phrase → *info*), DS-003 (< 10 words → *warn*), DS-004 (leads with `Use`/`When`/`Trigger` → *info*), DS-005 (no negative trigger → *info*), DS-006 (bundle handles file types the description never names → *info*), DS-007 (no specific token → *info*).
+- **Body (BD):** BD-002 (> 5,000 words → *warn*), BD-003 (H1 count ≠ 1 → *info*), BD-004 (no instructions/steps section → *warn*), BD-005 (no examples → *warn*), BD-006 (no error handling → *warn*), BD-007 (no lists → *info*), BD-008 (an *Important*/*Critical* heading outside the first 40 % of lines → *info*), BD-009 (no runnable instruction → *info*), BD-010 (vague phrases → *info*, one finding per matching line, capped), BD-011 (encouragement boilerplate → *info*), BD-012 (script invocation with no expected-output line within 5 lines → *info*).
+- **Resources (RF):** RF-001 (referenced bundled path missing → *error*), RF-002 (bundled file never referenced → *warn*), RF-003 (body > 2,500 words with no `references/` → *warn*), RF-004 (relative Markdown link target missing → *info*), RF-005 (code in `references/` or docs in `scripts/` → *info*).
+- **Scripts (SC):** SC-004 only (a Python script imports a non-stdlib module, or `requirements.txt` exists, and `compatibility` is absent → *info*; stdlib = a pinned list for Python 3.12).
+- **Portability & security (PT):** PT-001 (machine-specific absolute path → *warn*), PT-002 (embedded secret pattern → *warn*; the §6 secret scanner remains the security finding), PT-003 (XML-like tag in the body outside code → *info*; a bare `>` never matches).
+
+**Not applied** (listed so the boundary is explicit):
+| Rules | Why |
+|---|---|
+| FS-001, FM-001 (delimiter clause), FM-002, FM-003, FM-004, FD-001, FD-002, FD-005, FD-016, BD-001 | **Blocking validation at ingest** (§6 hard validation). A published version cannot fail them. |
+| FS-002, FD-004 | Skilly strips the wrapper folder and enforces **`name` == slug**; there is no folder name to compare. |
+| PK-001 to PK-003 | Wrapper stripping and junk-entry removal at extraction make them unobservable. |
+| EN-001, EN-002 | Environment-level, not a property of one skill. |
+| SC-001, SC-002, SC-003 | Need interpreters, POSIX mode bits or an MCP manifest the pipeline does not have. |
+| Part B (EV-*) | Runtime evals; out of scope. |
+| Part C | Not programmatically checkable; this is what the AI judges (§41.5). |
+
+- **Which files.** Every text file in the bundle (the §37 NUL-byte rule skips binaries); frontmatter and body checks run on the root `SKILL.md`; path checks on the extracted file list.
+- **Markers.** `qa-scanned` (*info*, carries `ruleset`) is emitted exactly once per scan, like `cr-scanned`; it is how a scan proves which ruleset it ran and how the sweep finds stale reports.
+- **Caps and cost.** At most **5** findings per rule per file; the fifth states how many were left out. Same 2 MB per-file cap and linear-time pattern rule as §37.1. No author suppression (no frontmatter opt-out), for the same reason as §37.2.
+- **Versioned.** `QUALITY_RULESET_VERSION` (integer, starting at **1**) in `@skilly/shared`; a unit test pins a hash of the catalog and the §41.4 constants, so changing either without a bump fails the build. A bump re-scores the catalog (§41.6).
+- **English phrasing only**, like §37.
+
+### 41.3 Where the rules run
+- The scanner is named **`quality`**, lives in `@skilly/shared` and joins **`PURE_SCANNERS`**, so it runs on every path that runs the secret, heuristic and content-risk scanners: hosted upload (web), MCP hosted proposals, the worker pointer pre-scan, mirror-at-accept and pointer refresh. Its findings land in the same `scan_reports` row as the others, under `scanner: 'quality'`.
+- The **Security scan** and **Content risk** sections never list `quality` findings; a new **"Quality"** section (§41.7) does.
+- A proposal's quality is **computed on read** from its latest revision's report by the pure function `scoreQuality(findings)`; nothing is stored for proposals. A pending pointer pre-scan reads as *Quality check pending*.
+
+### 41.4 The score
+- **Rules score** (0–100): start at 100 and subtract per counted finding: **error 20, warn 6, info 2**. **Per rule, at most 3 findings count** (the scanner may report 5 per file; the score counts the first 3 across the bundle), so one noisy rule costs at most 60, 18 or 6 points and cannot zero the score alone. Marker findings (`qa-scanned`) cost nothing. Floor at 0.
+- **AI score** (0–100): the mean of the §41.5 dimension scores, rounded.
+- **Final score**: `rules` when no AI verdict exists; otherwise `round(0.6 × rules + 0.4 × ai)`.
+- **Stars** (half-star steps, derived on read by `qualityStars(score)` in `@skilly/shared`): `min(5, max(0.5, 0.5 × (floor(score / 10) + 1)))` — 90+ → 5, 80–89 → 4.5, 70–79 → 4, 60–69 → 3.5, 50–59 → 3, 40–49 → 2.5, 30–39 → 2, 20–29 → 1.5, 10–19 → 1, under 10 → 0.5. **"2 stars or below" means `final_score < 40`.**
+- The raw 0–100 is shown beside the stars on the detail page and in tooltips, never alone on cards.
+
+### 41.5 The AI assessment (feature key `skill_quality`)
+- **Registry entry** (`AI_FEATURES`): `{ key: 'skill_quality', label: 'Skill quality assessment', egress: 'The SKILL.md frontmatter and body (first 60,000 characters), the list of bundled file paths (first 200), and the deterministic quality findings, for each published version', spec: '§41' }`. Shown on the §40.4 egress notice.
+- **Sent to the provider:** exactly that. **Never sent:** the contents of scripts, references or assets, any line the §6 secret scanner flagged (replaced by `[redacted]`), credentials of any kind, audit rows, the System log, the user rating, or anything about who proposed or installed the skill. The body is truncated at the cap with a note to the model that it was.
+- **The prompt** asks for a JSON verdict (`json: true`, `maxTokens` 2048, `userId` null — background work) scoring **five dimensions 0–100**, each with a one-sentence remark: `clarity` (instructions are clear and actionable), `triggers` (the description uses phrases a user would actually say and is not merely technical), `domain` (the embedded domain knowledge and best practices are correct and sufficient), `workflow` (step ordering, dependencies, validation gates and rollback are coherent), `composability` (works alongside other skills without assuming it is the only one); plus `summary` (≤ 500 chars) and `suggestions` (≤ 5 strings, ≤ 300 chars each, concrete improvements). The model is told the deterministic findings so it does not re-count them and is instructed to judge only what the rules cannot.
+- **Verdict validation.** The JSON must have all five dimensions as integers 0–100; strings are trimmed to their caps; anything else is `ai_invalid_json` and counts as a failed attempt. The stored `ai_verdict` is the validated object plus the `model` that answered. **Remarks, summary and suggestions are rendered as escaped plain text everywhere**, never Markdown or HTML (they are model output about possibly hostile content).
+- **Attempts.** Each version gets up to **3** attempts, at least **1 hour** apart (`ai_next_attempt_at`); a refused call (`ai_disabled`, `ai_not_configured`, `ai_key_missing`) is not an attempt and leaves the row `off`/`pending` for a later pass. After the third failure `ai_status = 'failed'` (`ai_last_error` kept, sanitized) and the score stays rules-only until a re-assess or ruleset bump. Every attempt that reaches the provider is one `ai_usage` row, by §40.7.
+- **Visibility (§40.10):** the verdict is derived from one skill's own content and is only ever shown where that skill is visible. No cross-skill input, no org-wide aggregation of restricted content.
+
+### 41.6 Lifecycle: when scores are written
+- **Publish (web)** of a hosted version, or an accept whose artifact already exists (Keep current files): read the artifact's latest report, compute `rules_score`, insert the `skill_version_quality` row with `ai_status = 'pending'` when `aiAvailable()` else `'off'`, then `refreshSkillQuality(skillId)`.
+- **Mirror (worker)** of a pointer version: the same, from the mirror-time report.
+- **`refreshSkillQuality(skillId)`** recomputes `skills.quality_score` / `quality_mode` from the **latest stable active version** (§7 `latest`, else null) and runs after every quality write and after publish, yank, restore, archive and un-archive. It is the only writer of those two columns.
+- **`qualitySweep`** (leader-only worker job, at boot then every **10 minutes**), two phases per pass:
+  1. **Rules.** Up to **50** active versions whose artifact's latest report has no `qa-scanned` finding at the current ruleset: re-run **only the `quality` scanner**, write a **superseding `scan_reports` row** that carries every other finding forward verbatim (the §37.5 mechanism), upsert the row's `rules_score`/`ruleset`, and — because the rules changed — set `ai_status` back to `pending` (AI on) or `off` so the blend is recomputed on the current rules. The **first run after deploy is the backfill**; a ruleset bump re-runs it automatically. Several versions sharing one artifact are covered by one re-scan.
+  2. **AI.** When `aiAvailable()`: up to **3** rows with `ai_status IN ('pending', 'off')`, `ai_next_attempt_at` null or past, whose version is **its skill's latest stable active version** or was **published in the last 7 days**, newest publish first. Each gets one §41.5 call; on success `ai_score`, `ai_model`, `ai_verdict`, `final_score`, `mode = 'rules+ai'`, `ai_status = 'done'`; on failure the attempt bookkeeping. Then `refreshSkillQuality`. At ~100 skills the backfill completes in roughly 35 passes (about 6 hours).
+- **A version that stops being latest** keeps its row; a version that **becomes** latest later (a yank) and has `ai_status = 'off'` is picked up by phase 2 on the next pass when AI is on.
+- **Yanked / archived:** rows survive (restoring brings them back); the skill-level columns follow `latest`. Deleting a version (admin hard-delete paths) cascades the row.
+- **Re-assess** (§41.8) deletes the AI part of one version's row (`ai_status = 'pending'`, attempts 0, verdict null), re-runs the rules scanner for that artifact immediately in-request (superseding report), and lets the sweep do the AI call.
+
+### 41.7 Surfaces
+- **Visual language.** The quality signal is a **shield-check glyph** in the accent colour followed by the star value (e.g. `⛨ 4.5`), never the gold `★` of the user rating, with the tooltip *"Quality 4.5 / 5 (87) — computed by skilly from the authoring rules and an AI assessment"* or *"… from the authoring rules only"*. Everywhere it appears it sits **immediately after** the user-rating badge.
+- **Catalog cards and list rows:** the badge, only when `skills.quality_score` is non-null; nothing is rendered while unscored.
+- **Catalog sort:** **"Highest quality"** (`sort=quality`) orders by `quality_score` desc, unscored last, then the default order. **Default ranking:** `install_count` → smoothed rating → `quality_score` (nulls last).
+- **Minimum-quality facet:** a single-select chip row **"Quality"** with `★ 3+`, `★ 4+`, `★ 4.5+` (`?minQuality=3|4|4.5`, compared against `qualityStars(quality_score)`); unscored skills are excluded while it is active. Persisted in `skilly.catalogPrefs` with the other filters; hidden in the maintained-by view like the other facets.
+- **Detail page — the "Quality" card**, directly below the user-rating histogram: big stars + `87 / 100`, the mode line (*"Rules + AI assessment (claude-…)"* / *"Rules only — AI assessment pending"* / *"Rules only — AI assessment unavailable"* / *"Rules only"*), then **Findings** grouped *error / warn / info* with rule id, path, line and the guide's hint, then — when present — **AI assessment**: the five dimensions as small bars with their remarks, the summary and the numbered suggestions. **Everyone who can see the skill sees all of it.** Unscored: *"Quality check pending"*. The **Versions** list shows each version's stars (or a pending marker) beside its "What changed" note.
+- **Re-assess** button on the card for §4 "Re-assess skill quality" holders, with a confirm (*"This re-runs the rules and, if AI is on, sends the SKILL.md to <provider> again"*).
+- **Review page (proposal):** a **"Quality"** section below **"Content risk"** showing the rules-only stars, score and grouped findings, with the line *"AI assessment runs after publish"*. **Propose page / proposal page:** the same section appears as soon as the upload's scan report returns, so the author sees the lint before submitting. Pending pointer pre-scan → *Quality check pending*.
+- **Installed skills page:** no change (deferred).
+- **Administration — Maintenance card:** a line **"Quality: 97 / 100 versions scored · 61 with AI · 2 AI failed"** (over active versions) and a **"Re-run quality assessment"** button that marks every active version's report stale (deletes nothing; the sweep re-scans and, with AI on, re-judges latest versions in batches of 3). Audited `job.quality_rescore_requested`. **AI integration card:** the `skill_quality` egress entry and its 30-day usage line come from §40 as-is.
+
+### 41.8 Re-assess (per version)
+- `POST /api/skills/:ns/:slug/versions/:semver/quality/reassess` — allowed for Platform Admins (any skill) and Namespace Admins (own namespace); 403 otherwise; the usual visibility 404 first. Rate-limited `enforceRateLimit("quality-reassess", userId, 10/min)`. Does the §41.6 re-assess steps and returns the fresh rules-only payload; the AI part lands via the sweep. Audited `skill.quality_reassess_requested`.
+
+### 41.9 Notification — `skill.quality_low`
+- **When.** A version's assessment **settles** at `final_score < 40` (2 stars or below). *Settled* means: the AI part is `done`, or `failed`, or `off` at scoring time with AI unavailable — i.e. the rules-only score is final because no AI judgement is coming. A `pending` row never notifies; if AI later lands and the final score is still under 40, that is the settle point.
+- **Once per assessment.** `low_notified_at` is set when the notification is created; a re-assess or ruleset re-score clears it, so a version can notify again only after a new assessment settles low. A version that improves above 40 never notifies.
+- **Recipients.** Effective maintainers (explicit maintainers ∪ namespace admins, §19) minus `quality_notifications` opt-outs, visibility-filtered at insert. Row-level gating like `content_risk_notifications`; no safety floor (the card still shows everything).
+- **Content.** Subject *"Quality check: <title> v<semver> scored 2 ★"*. Body: the score and mode, then **every finding** (`error` first) as *rule — path:line — hint*, then the AI summary and the numbered suggestions when present, then *"Open the Quality card to re-check after you publish a fix."* CTA → the skill page's Quality card. Delivered on every channel (in-app, email, webhook) subject to the channel-level `email_notifications` toggle. Rendered as escaped plain text (§41.5).
+- Added to the §12 catalogue and the §12 *Notification content* table.
+
+### 41.10 Audit, metrics, governance
+- **Audit (§11):** `skill.quality_reassess_requested`, `job.quality_rescore_requested`. The sweep, the AI calls and the notification are not audited.
+- **Metrics:** `skilly_quality_sweep_runs_total{phase}`, `skilly_quality_ai_attempts_total{outcome}`, `skilly_quality_versions{status}` gauge (scored / ai_done / ai_failed / unscored).
+- **Invariant #3:** the score, findings and verdict are served only through the skill payload and the proposal payload, both already visibility-gated; counts and facets apply the viewer's visibility predicate before filtering by quality.
+- **Invariant #5:** nothing here touches `audit_log` beyond the two audited actions.
+- **GDPR:** no personal data; `ai_usage.user_id` is null for sweep calls and the re-assess actor appears only in audit.
+- **Air-gap (§17):** with AI off the feature is fully functional (rules only); nothing reaches the network.
+
+### 41.11 API surface
+- `GET /api/skills` items and `GET /api/skills/:ns/:slug` gain `quality: { score, stars, mode, scoredAt } | null` (skill-level, from the denormalized columns). `GET /api/skills` accepts `sort=quality` and `minQuality=3|4|4.5` (422 otherwise).
+- `GET /api/skills/:ns/:slug` additionally returns, **for the latest stable active version**, `qualityDetail: { semver, ruleset, rulesScore, aiStatus, aiScore, aiModel, finalScore, stars, mode, findings[], verdict | null, canReassess }`, and each entry in `versions[]` gains `quality: { score, stars, mode } | null`. `GET /api/skills/:ns/:slug/versions/:semver/quality` returns the same `qualityDetail` for any visible version.
+- Proposal payloads (`GET /api/proposals/:id`, and the upload response) gain `quality: { rulesScore, stars, findings[] } | null` computed on read.
+- `POST /api/skills/:ns/:slug/versions/:semver/quality/reassess` (§41.8).
+- `GET /api/admin/jobs/quality` (platform admin) → `{ active, scored, aiDone, aiFailed, aiPending, ruleset }`; `POST /api/admin/jobs/quality/rescore` → 202, audited.
+- `PATCH /api/me { qualityNotifications }`; `GET /api/me` returns it.
+- **MCP (§29):** `search_skills` accepts `sort: 'quality'` and `minQuality`, hits and `get_skill` carry `quality` (score, stars, mode); the findings and the verdict are **not** exposed through MCP in v1.
+
+### 41.12 Migration 0086
+- `skill_version_quality` (§3), `skills.quality_score smallint`, `skills.quality_mode text`, `users.quality_notifications boolean NOT NULL DEFAULT true`. No backfill statement: the sweep's first run is the backfill (§41.6). Index `skills (quality_score DESC NULLS LAST)`.
+
+### 41.13 Tests (ship with the change, §16 discipline)
+- **Unit** (`@skilly/shared`): every applied rule against the guide's own good/bad names, descriptions and frontmatter samples (the 7 names, 6 good and 5 bad descriptions, the p.25 wrong/correct frontmatter, `Settings > Extensions` body text) plus the skilly-specific FD-015 known keys; `qa-scanned` once per scan; per-file cap of 5; `severity` is always `info`; `scoreQuality` deductions and the 3-per-rule cap; `qualityStars` at every band edge (9, 10, 39, 40, 89, 90, 100); the 60/40 blend and rounding; the pinned ruleset hash; the AI prompt builder's egress (redacts secret-scanner lines, truncates at 60,000 chars and 200 paths, never includes script bodies); verdict validation (missing dimension, out-of-range, over-cap strings, fenced JSON).
+- **Integration** (web API + DB, provider stubbed): publish writes the row and the skill columns; `refreshSkillQuality` follows `latest` across yank/restore/archive; the sweep backfills a report lacking `qa-scanned`, supersedes it without losing other findings, and takes exactly 3 AI rows per pass; attempt spacing, 3-strike `failed`, refused calls not counted; AI off → `off`, AI on later → picked up for latest versions only; `skill.quality_low` fires once at settle, respects the toggle, carries every finding, and re-fires only after a re-assess; re-assess 403/404/rate-limit and audit; rescore audit; `sort=quality`, `minQuality` and the default-ranking tiebreak under the visibility predicate (a restricted skill never shifts counts or order for an outsider); MCP `search_skills` parity; `GET /api/skills/:ns/:slug` never leaks the verdict of a restricted skill; migration 0086 applies.
+- **e2e:** propose a bundle with a `README.md` and a vague description → the propose page's Quality section lists FS-003 and DS-001/DS-003 with the stars; publish → the catalog card shows the shield badge beside the user rating; "Highest quality" sort and the `★ 4+` chip reorder/filter the grid; the detail page's Quality card shows the findings; with the stub AI provider enabled the card gains the AI assessment after the sweep; an admin's Re-assess resets it to pending.
+
+### 41.14 Accepted trade-offs
+- A version published with AI off and never re-assessed stays rules-only even after AI is enabled, unless it is (or becomes) its skill's latest — older versions are not retro-judged, by design (cost).
+- AI judgement drifts with the provider's model; two versions judged months apart are not strictly comparable. The `ai_model` stamp makes this visible.
+- The guide's thresholds (10 words, 2,500 words, 40 %, 5 lines) are constants; changing them is a ruleset bump and a catalog re-score, not a setting.
+- A low score is advisory; nothing stops a 1-star skill from being installed. The §18 user rating and the §37 content check remain the signals they were.
