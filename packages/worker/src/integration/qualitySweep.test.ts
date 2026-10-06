@@ -191,8 +191,10 @@ test("quality sweep: rules backfill, low-score notification, AI batch and blend"
     await pool.query(`update skill_version_quality set ai_status = 'failed' where skill_version_id = any($1::uuid[])`, [parked.map((r) => r.skill_version_id)]);
 
     let badCalls = 0;
+    const budgets: number[] = [];
     const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
-      const prompt = JSON.parse(String(init?.body ?? "{}")) as { messages: { content: string }[] };
+      const prompt = JSON.parse(String(init?.body ?? "{}")) as { messages: { content: string }[]; max_tokens?: number };
+      budgets.push(prompt.max_tokens ?? -1);
       // The bad skill gets a failing answer on its first attempt (the call and its one retry);
       // everything else a verdict of 50.
       if (/name: bad/.test(prompt.messages[0]?.content ?? "") && badCalls++ < 2) return new Response("boom", { status: 500 });
@@ -202,6 +204,7 @@ test("quality sweep: rules backfill, low-score notification, AI batch and blend"
 
     const first = await sweepQualityAi(pool, store, 3, { env: aiEnv });
     assert.equal(first, 3, "at most 3 per pass");
+    assert.ok(budgets.length > 0 && budgets.every((b) => b === 8192), "the scoring call asks for the 8192-token budget (§41.5)");
     const second = await sweepQualityAi(pool, store, 3, { env: aiEnv });
     assert.ok(second <= 3);
     // The old, non-latest version of the two-version skill is never judged.
