@@ -108,6 +108,16 @@ test("validateDraftOutput: trims to caps, folds description newlines, processes 
   assert.deepEqual(out.categories, [{ name: "pdf", isNew: false }, { name: "brand new", isNew: true }]);
 });
 
+test("validateDraftOutput: folds blank lines and CRLF; linear on long whitespace runs", () => {
+  const out = validateDraftOutput({ description: "  one \r\n\n\n  two\t\n three  ", usage: "u", categories: [] }, known);
+  assert.equal(out?.description, "one two three");
+  const spaces = " ".repeat(200_000);
+  const started = Date.now();
+  const big = validateDraftOutput({ description: `a${spaces}\n${spaces}b`, usage: "u", categories: [] }, known);
+  assert.ok(Date.now() - started < 500, "no polynomial backtracking");
+  assert.equal(big?.description, "a b");
+});
+
 test("draftDailyCapDecision: rolling 24 h window, retryAt when the pivot call ages out", () => {
   const now = new Date("2026-10-06T12:00:00Z");
   const minsAgo = (m: number) => new Date(now.getTime() - m * 60_000);

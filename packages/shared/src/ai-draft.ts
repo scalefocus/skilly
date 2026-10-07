@@ -143,8 +143,11 @@ export function validateDraftOutput(json: unknown, known: readonly KnownCategory
   if (!json || typeof json !== "object" || Array.isArray(json)) return null;
   const o = json as Record<string, unknown>;
   if (typeof o.description !== "string" || typeof o.usage !== "string" || !Array.isArray(o.categories)) return null;
-  // The description is plain text on one paragraph: fold any line breaks the model added.
-  const description = sliceCodePointSafe(o.description.replace(/\s*\n\s*/g, " ").trim(), AI_DRAFT_DESCRIPTION_MAX).trim();
+  // The description is plain text on one paragraph: fold any line breaks the model added. Split +
+  // trim rather than a /\s*\n\s*/ regex — that backtracks quadratically on long whitespace runs
+  // in (untrusted) model output.
+  const folded = o.description.split("\n").map((l) => l.trim()).filter(Boolean).join(" ");
+  const description = sliceCodePointSafe(folded, AI_DRAFT_DESCRIPTION_MAX).trim();
   const usage = sliceCodePointSafe(o.usage.trim(), AI_DRAFT_USAGE_MAX).trim();
   if (!description || !usage) return null;
   return { description, usage, categories: processDraftCategories(o.categories, known) };
