@@ -6,13 +6,14 @@ import { parseFrontmatter } from "./validate.js";
 import { decodeScanText } from "./scan-text.js";
 import { isOsJunkPath } from "./quality.js";
 import { WHAT_CHANGED_MAX_LEN } from "./proposal.js";
+import { AI_DRAFT_FEATURE_KEY, AI_DRAFT_RUN_CAP_DEFAULT_MS } from "./ai-timeouts.js";
 import {
   QUALITY_LEVEL_OF, qualityFindings, qualityRuleHint, qualityRulesetOf, QUALITY_RULESET_VERSION,
   type QualityFindingLike, type QualityLevel, type QualityRule, type QualityVerdict,
 } from "./quality-status.js";
 
 /** The §40.7 feature key. */
-export const DRAFT_AI_FEATURE = "skill_quality_draft";
+export const DRAFT_AI_FEATURE = AI_DRAFT_FEATURE_KEY;
 /** Output-token budget per call (the feature's registered ceiling). */
 export const DRAFT_MAX_TOKENS = 32_768;
 /** At most this many files go to the AI per run (SKILL.md included). */
@@ -27,8 +28,8 @@ export const DRAFT_SUMMARY_MAX = 200;
 export const DRAFT_ADDRESSED_MAX = 50;
 /** Parallel calls per run. */
 export const DRAFT_CONCURRENCY = 5;
-/** The whole run's cap. */
-export const DRAFT_RUN_CAP_MS = 30 * 60_000;
+/** The whole run's default cap (admin-tunable 5–120 min, §40.15). */
+export const DRAFT_RUN_CAP_MS = AI_DRAFT_RUN_CAP_DEFAULT_MS;
 /** The stream's keep-alive interval. */
 export const DRAFT_HEARTBEAT_MS = 15_000;
 /** Runs per user per window. */

@@ -1,7 +1,7 @@
 // Unit tests for the §40 AI integration helper: base-URL normalization, both providers' wire
 // formats, JSON mode, the retry policy, redirects, status derivation, the feature registry gate,
 // usage/System-log bookkeeping (against a fake DB) and token crypto. SKILLY_SPEC.md §40.13.
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AI_BUDGET_EXHAUSTED_MESSAGE,
@@ -574,4 +574,44 @@ test("aiComplete: an aborted signal ends the call as ai_cancelled — recorded, 
   assert.equal(st.usage.length, 1);
   assert.equal(st.usage[0]![8], "ai_cancelled");
   assert.equal(st.events.length, 0);
+});
+
+// ── §40.15 admin timeout overrides ──────────────────────────────────────────────────────────────
+
+/** Runs one call against a provider that never answers and reports whether it was aborted at each tick. */
+async function abortedAt(row: Record<string, unknown>, ticks: number[]): Promise<boolean[]> {
+  const st = stateWith(row);
+  let signal: AbortSignal | null = null;
+  const f = fakeFetch([
+    (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        signal = init.signal ?? null;
+        init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      }),
+  ]);
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const call = aiComplete(fakeDb(st), env(f.impl), { feature: "summarize", messages: MSG, maxTokens: 5 }).catch((e: unknown) => e);
+    while (f.calls.length === 0) await new Promise((r) => setImmediate(r));
+    const seen: boolean[] = [];
+    for (const t of ticks) {
+      mock.timers.tick(t);
+      seen.push(Boolean((signal as AbortSignal | null)?.aborted));
+    }
+    mock.timers.tick(AI_FEATURE_TIMEOUT_CEILING_MS);
+    const err = await call;
+    assert.ok(err instanceof AiError && err.code === "ai_timeout", String(err));
+    return seen;
+  } finally {
+    mock.timers.reset();
+  }
+}
+
+test("aiComplete: the stored admin override (§40.15) sets the attempt timeout", async () => {
+  assert.deepEqual(await abortedAt({ ai_timeouts: { calls: { summarize: 15_000 } } }, [14_999, 1]), [false, true]);
+});
+
+test("aiComplete: without an override for this feature the registered default (60 s) applies", async () => {
+  assert.deepEqual(await abortedAt({ ai_timeouts: { calls: { other_feature: 15_000 } } }, [15_000, 44_999, 1]), [false, false, true]);
+  assert.deepEqual(await abortedAt({}, [59_999, 1]), [false, true]);
 });

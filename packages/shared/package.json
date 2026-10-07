@@ -111,6 +111,10 @@
       "types": "./dist/ai-name.d.ts",
       "default": "./dist/ai-name.js"
     },
+    "./ai-timeouts": {
+      "types": "./dist/ai-timeouts.d.ts",
+      "default": "./dist/ai-timeouts.js"
+    },
     "./deprecation": {
       "types": "./dist/deprecation.d.ts",
       "default": "./dist/deprecation.js"

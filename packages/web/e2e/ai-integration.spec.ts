@@ -3,6 +3,8 @@
 // is collapsed by default; models load into the dropdown; Test passes; a Save with a bad token is
 // rejected with the error shown and nothing saved; a good Save stores the token (shown only as
 // "Set · ends …"); enabling flips the pill to Operational; Remove returns it to Not configured.
+// Also the §40.15 Timeouts row: set a per-call timeout → Save → it persists across a reload; a run cap
+// shorter than the draft call timeout is refused; Reset to defaults → Save → the placeholders return.
 //
 // Needs AI_TOKEN_ENC_KEY on the dev server (CI sets a fixed test key); skipped without it. Serial:
 // the integration is one platform-wide row.
@@ -71,6 +73,7 @@ async function openCard(page: Page): Promise<boolean> {
 // specs (e.g. quality, §41) behave differently while AI is enabled.
 test.afterEach(async ({ page }) => {
   await page.request.delete("/api/admin/ai").catch(() => {});
+  await page.request.put("/api/admin/ai/timeouts", { data: {} }).catch(() => {});
 });
 
 test("configure Open WebUI: models, test, rejected save, save, enable, remove", async ({ page }) => {
@@ -124,4 +127,47 @@ test("configure Open WebUI: models, test, rejected save, save, enable, remove", 
   await dialog;
   expect((await removed).status()).toBe(204);
   await expect(header(page)).toContainText("Not configured");
+});
+
+test("timeouts: save a per-call timeout, refuse a too-short run cap, reset to defaults", async ({ page }) => {
+  // The Timeouts row works without AI_TOKEN_ENC_KEY and with no provider configured (§40.15).
+  await devSignIn(page);
+  await page.request.put("/api/admin/ai/timeouts", { data: {} });
+  const open = async () => {
+    await gotoLoaded(page, "/admin", "/api/admin/ai");
+    if ((await header(page).getAttribute("aria-expanded")) !== "true") await header(page).click();
+    await expect(header(page)).toHaveAttribute("aria-expanded", "true");
+  };
+  await open();
+  const row = card(page).getByTestId("ai-timeouts");
+  const draft = row.getByTestId("ai-timeout-skill_quality_draft");
+  const cap = row.getByTestId("ai-timeout-draft-run-cap");
+  await expect(draft).toHaveValue("");
+  await expect(draft).toHaveAttribute("placeholder", "360");
+  await expect(cap).toHaveAttribute("placeholder", "30");
+
+  await draft.fill("600");
+  await clickAndAwait(page, () => row.getByTestId("ai-timeouts-save").click(), "/api/admin/ai/timeouts", { method: "PUT" });
+  await expect(row.getByText("Saved — new calls use these timeouts.")).toBeVisible();
+
+  await open();
+  await expect(draft).toHaveValue("600");
+
+  // A 5-minute run cap is shorter than the 600 s draft call timeout.
+  await cap.fill("5");
+  const refused = page.waitForResponse((r) => r.url().endsWith("/api/admin/ai/timeouts") && r.request().method() === "PUT");
+  await row.getByTestId("ai-timeouts-save").click();
+  expect((await refused).status()).toBe(422);
+  await expect(row.getByRole("status")).toContainText("draftRunCapMs");
+
+  await row.getByTestId("ai-timeouts-reset").click();
+  await expect(draft).toHaveValue("");
+  await expect(cap).toHaveValue("");
+  await clickAndAwait(page, () => row.getByTestId("ai-timeouts-save").click(), "/api/admin/ai/timeouts", { method: "PUT" });
+  const st = (await (await page.request.get("/api/admin/ai")).json()) as { timeouts: { features: { key: string; overrideMs: number | null }[]; draftRunCap: { overrideMs: number | null } } };
+  expect(st.timeouts.features.every((f) => f.overrideMs === null)).toBeTruthy();
+  expect(st.timeouts.draftRunCap.overrideMs).toBeNull();
+  await open();
+  await expect(draft).toHaveValue("");
+  await expect(draft).toHaveAttribute("placeholder", "360");
 });

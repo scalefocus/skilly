@@ -7,6 +7,13 @@
 //
 // Deliberately imports nothing from @skilly/shared/ai — that subpath is server-only (node:crypto).
 import { useCallback, useEffect, useState } from "react";
+import {
+  AI_CALL_TIMEOUT_MAX_MS,
+  AI_CALL_TIMEOUT_MIN_MS,
+  AI_DRAFT_RUN_CAP_MAX_MS,
+  AI_DRAFT_RUN_CAP_MIN_MS,
+  type AiTimeoutsView,
+} from "@skilly/shared/ai-timeouts";
 import { Pill, Switch, formatCount, useApi } from "../../components/ui";
 import { useDateFmt } from "../../components/DateFormat";
 import { CollapsibleCard } from "./CollapsibleCard";
@@ -40,6 +47,8 @@ interface AiState {
   features: { key: string; label: string; egress: string; spec: string }[];
   /** §40.14 the end-user name for the AI. */
   displayName: string;
+  /** §40.15 per-call timeouts and the draft run cap. */
+  timeouts: AiTimeoutsView;
 }
 
 interface TestResult {
@@ -466,6 +475,7 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
         </>
       )}
 
+      {data && <TimeoutsRow saved={data.timeouts} onSaved={reload} />}
       {data && <DisplayNameRow saved={data.displayName} onSaved={reload} />}
     </CollapsibleCard>
   );
@@ -515,6 +525,123 @@ function DisplayNameRow({ saved, onSaved }: { saved: string; onSaved: () => void
         />
         <button type="button" className="btn btn-sm" disabled={busy || !dirty} onClick={() => void save()} data-testid="ai-display-name-save">
           {busy ? "saving…" : "Save name"}
+        </button>
+      </div>
+      {msg && (
+        <p role="status" style={{ fontSize: 13, margin: "8px 0 0", color: msg.tone === "ok" ? "var(--ok, var(--muted))" : "var(--danger, crimson)" }}>
+          {msg.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A stored override as the field shows it ("" = the default, shown as the placeholder). */
+const fieldOf = (ms: number | null, unitMs: number) => (ms === null ? "" : String(ms / unitMs));
+
+/**
+ * §40.15 the timeouts: a seconds field per registered feature and a minutes field for the draft run
+ * cap. Blank = the default (its placeholder). Its own Save, independent of the provider form —
+ * usable with no provider configured and without AI_TOKEN_ENC_KEY, kept on Remove integration.
+ */
+function TimeoutsRow({ saved, onSaved }: { saved: AiTimeoutsView; onSaved: () => void }) {
+  const initial = useCallback(
+    () => ({
+      calls: Object.fromEntries(saved.features.map((f) => [f.key, fieldOf(f.overrideMs, 1000)])) as Record<string, string>,
+      cap: fieldOf(saved.draftRunCap.overrideMs, 60_000),
+    }),
+    [saved],
+  );
+  const [form, setForm] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+  useEffect(() => setForm(initial()), [initial]);
+  const dirty = JSON.stringify(form) !== JSON.stringify(initial());
+  const blank = Object.values(form.calls).every((v) => v.trim() === "") && form.cap.trim() === "";
+
+  const save = async () => {
+    setMsg(null);
+    const toMs = (v: string, unitMs: number): number | null | undefined => {
+      const t = v.trim();
+      if (t === "") return null;
+      return /^\d+$/.test(t) ? Number(t) * unitMs : undefined;
+    };
+    const calls: Record<string, number | null> = {};
+    for (const f of saved.features) {
+      const ms = toMs(form.calls[f.key] ?? "", 1000);
+      if (ms === undefined) return setMsg({ tone: "danger", text: `${f.label}: enter a whole number of seconds, or leave it empty for the default.` });
+      calls[f.key] = ms;
+    }
+    const draftRunCapMs = toMs(form.cap, 60_000);
+    if (draftRunCapMs === undefined) return setMsg({ tone: "danger", text: "Draft run cap: enter a whole number of minutes, or leave it empty for the default." });
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/ai/timeouts", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ calls, draftRunCapMs }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail ?? j.error ?? `HTTP ${r.status}`);
+      setMsg({ tone: "ok", text: "Saved — new calls use these timeouts." });
+      onSaved();
+    } catch (e) {
+      setMsg({ tone: "danger", text: String((e as Error).message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const row = (label: string, testid: string, value: string, placeholder: string, unit: string, min: number, max: number, onChange: (v: string) => void) => (
+    <label key={testid} style={{ display: "contents" }}>
+      <span style={{ fontSize: 13 }}>{label}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input
+          className="input"
+          style={{ width: 96 }}
+          type="number"
+          inputMode="numeric"
+          min={min}
+          max={max}
+          step={1}
+          value={value}
+          placeholder={placeholder}
+          aria-label={`${label} (${unit})`}
+          disabled={busy}
+          onChange={(e) => onChange(e.target.value)}
+          data-testid={testid}
+        />
+        <span className="muted" style={{ fontSize: 12 }}>{unit} · default {placeholder}</span>
+      </span>
+    </label>
+  );
+
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }} data-testid="ai-timeouts">
+      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Timeouts</h3>
+      <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
+        How long skilly waits for the provider on each call ({AI_CALL_TIMEOUT_MIN_MS / 1000}–{AI_CALL_TIMEOUT_MAX_MS / 1000} s; a failed call is retried
+        once, so one call can take up to twice this), and how long a whole quality-draft run may last ({AI_DRAFT_RUN_CAP_MIN_MS / 60_000}–
+        {AI_DRAFT_RUN_CAP_MAX_MS / 60_000} min). Leave a field empty for its default. Calls already running keep their timeout.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, max-content) auto", gap: "8px 16px", alignItems: "center" }}>
+        {saved.features.map((f) =>
+          row(f.label, `ai-timeout-${f.key}`, form.calls[f.key] ?? "", String(f.defaultMs / 1000), "s", AI_CALL_TIMEOUT_MIN_MS / 1000, AI_CALL_TIMEOUT_MAX_MS / 1000, (v) =>
+            setForm((p) => ({ ...p, calls: { ...p.calls, [f.key]: v } })),
+          ),
+        )}
+        {row("Draft run cap", "ai-timeout-draft-run-cap", form.cap, String(saved.draftRunCap.defaultMs / 60_000), "min", AI_DRAFT_RUN_CAP_MIN_MS / 60_000, AI_DRAFT_RUN_CAP_MAX_MS / 60_000, (v) =>
+          setForm((p) => ({ ...p, cap: v })),
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+        <button type="button" className="btn btn-sm" disabled={busy || !dirty} onClick={() => void save()} data-testid="ai-timeouts-save">
+          {busy ? "saving…" : "Save timeouts"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          disabled={busy || blank}
+          onClick={() => setForm((p) => ({ calls: Object.fromEntries(Object.keys(p.calls).map((k) => [k, ""])), cap: "" }))}
+          data-testid="ai-timeouts-reset"
+        >
+          Reset to defaults
         </button>
       </div>
       {msg && (

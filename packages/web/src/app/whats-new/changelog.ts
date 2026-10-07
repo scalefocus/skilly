@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.25.0",
+    date: "2026-10-07",
+    summary:
+      "Platform admins can now tune AI timeouts under Administration → AI integration → Timeouts: how long skilly waits for the provider on each AI feature (10 s–15 min), and how long a whole Draft improvements run may last (5–120 min). Leave a field empty to keep its default.",
+  },
+  {
     version: "2.24.1",
     date: "2026-10-07",
     summary:
