@@ -40,7 +40,7 @@ interface CreateBody {
   reuseCurrentFiles?: boolean;
   /** Skill request this proposal was started from (§26) — the explicit fulfilment link. */
   originRequestId?: string | null;
-  /** §43.8: proof the hosted bundle was drafted by the §43 AI task (ignored when it doesn't verify). */
+  /** §44.8: proof the hosted bundle was drafted by the §44 AI task (ignored when it doesn't verify). */
   aiDraftToken?: string | null;
 }
 
@@ -173,7 +173,7 @@ export const POST = withSystemLog("/api/proposals", async function POST(req: Req
     proposedSemver: body.semver,
     originRequestId,
     payload,
-    // §43.8: provenance only — an invalid / mismatched token is ignored silently.
+    // §44.8: provenance only — an invalid / mismatched token is ignored silently.
     aiDraftModel: aiDraftModelFromToken(body.aiDraftToken, { userId: access.userId, skillId: targetSkillId, artifactKey: payload.artifactObjectKey }),
   });
   return Response.json({ id }, { status: 201 });

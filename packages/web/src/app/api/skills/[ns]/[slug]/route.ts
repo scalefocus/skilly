@@ -66,7 +66,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   const versions = versions0.map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
   // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
   const qualityDetail0 = latest ? await skillQualityDetail(access, skill, latest) : null;
-  // §43.2: whether this viewer may draft improvements with AI (hidden = available:false, reason:null).
+  // §44.2: whether this viewer may draft improvements with AI (hidden = available:false, reason:null).
   const qualityDetail = qualityDetail0 && !archived
     ? { ...qualityDetail0, aiDraft: await aiDraftAvailability(access, skill.namespaceSlug, skill.slug) }
     : qualityDetail0 && { ...qualityDetail0, aiDraft: { available: false, reason: null } };

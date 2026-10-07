@@ -1,6 +1,6 @@
--- AI-drafted quality improvements (SKILLY_SPEC.md §43.8).
+-- AI-drafted quality improvements (SKILLY_SPEC.md §44.8).
 --
---   proposals.ai_draft_model   the model that drafted the submitted files through the §43 AI task,
+--   proposals.ai_draft_model   the model that drafted the submitted files through the §44 AI task,
 --                              set once at creation from a valid `aiDraftToken` and never changed
 --                              or cleared afterwards (revise, resubmit and reviewer edits keep it).
 --                              NULL = not AI-drafted. Drives the reviewer-facing "Drafted with …"

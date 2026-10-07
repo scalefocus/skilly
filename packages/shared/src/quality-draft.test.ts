@@ -1,9 +1,9 @@
-// AI-drafted quality improvements — the pure parts (SKILLY_SPEC.md §43.12 unit): eligibility
+// AI-drafted quality improvements — the pure parts (SKILLY_SPEC.md §44.12 unit): eligibility
 // reasons, the file plan, the prompt's egress, response validation, line endings and the note.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  planDraft, buildDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftWhatChangedNote, matchLineEndings,
+  planDraft, buildQualityDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftWhatChangedNote, matchLineEndings,
   DRAFT_MAX_FILES, DRAFT_FILE_MAX_CHARS, DRAFT_OUTPUT_MAX_CHARS, DRAFT_PATHS_MAX,
 } from "./quality-draft.js";
 import { QUALITY_RULESET_VERSION, type QualityFindingLike, type QualityVerdict } from "./quality-status.js";
@@ -111,24 +111,24 @@ test("planDraft: SKILL.md first, then by worst level, then path; queued beyond 2
 
 // ── The prompt ─────────────────────────────────────────────────────────────────────────────────
 
-test("buildDraftPrompt: SKILL.md gets other files' findings and the verdict; other files don't", () => {
+test("buildQualityDraftPrompt: SKILL.md gets other files' findings and the verdict; other files don't", () => {
   const findings = [marker, q("DS-001", "SKILL.md", "warn", 2), q("RF-002", "references/a.md", "warn")];
   const base = { skillSlug: "pdf-tools", skillTitle: "PDF tools", skillName: "pdf-tools", skillDescription: "Does PDF things", filePaths: ["SKILL.md", "references/a.md"], findings, verdict: VERDICT };
-  const sk = buildDraftPrompt({ ...base, path: "SKILL.md", content: SKILL }).user;
+  const sk = buildQualityDraftPrompt({ ...base, path: "SKILL.md", content: SKILL }).user;
   assert.match(sk, /## Findings in this file \(1\)\n- DS-001 \[warn\] SKILL\.md:2/);
   assert.match(sk, /Findings in other files, for context \(1\)\n- RF-002/);
   assert.match(sk, /S1: Add trigger phrases/);
   assert.match(sk, /## File: SKILL\.md\n---\nname: pdf-tools/);
-  const other = buildDraftPrompt({ ...base, path: "references/a.md", content: "secret-free text" }).user;
+  const other = buildQualityDraftPrompt({ ...base, path: "references/a.md", content: "secret-free text" }).user;
   assert.doesNotMatch(other, /S1:|Reviewer assessment|Findings in other files/);
   assert.match(other, /## Findings in this file \(1\)\n- RF-002/);
   assert.doesNotMatch(other, /DS-001/);
   assert.doesNotMatch(other, /# PDF tools/); // SKILL.md's body is not context for another file
 });
 
-test("buildDraftPrompt: the path list is capped at 200; the marker is never listed", () => {
+test("buildQualityDraftPrompt: the path list is capped at 200; the marker is never listed", () => {
   const paths = Array.from({ length: 250 }, (_, i) => `references/r${i}.md`);
-  const user = buildDraftPrompt({ skillSlug: "s", skillTitle: "S", skillName: "s", skillDescription: "", filePaths: paths, path: "SKILL.md", content: SKILL, findings: [marker, q("DS-001")], verdict: null }).user;
+  const user = buildQualityDraftPrompt({ skillSlug: "s", skillTitle: "S", skillName: "s", skillDescription: "", filePaths: paths, path: "SKILL.md", content: SKILL, findings: [marker, q("DS-001")], verdict: null }).user;
   assert.match(user, new RegExp(`## Bundled files \\(250, first ${DRAFT_PATHS_MAX} shown\\)`));
   assert.ok(user.includes("references/r199.md"));
   assert.ok(!user.includes("references/r200.md"));
@@ -195,9 +195,9 @@ test("draftWhatChangedNote: one line per kept change, removals marked", () => {
   assert.ok(long.endsWith("…"));
 });
 
-test("buildDraftPrompt: a finding message with a huge run of spaces stays linear (js/polynomial-redos)", () => {
+test("buildQualityDraftPrompt: a finding message with a huge run of spaces stays linear (js/polynomial-redos)", () => {
   const evil = `x${" ".repeat(100_000)}x`;
   const started = Date.now();
-  buildDraftPrompt({ skillSlug: "s", skillTitle: "S", skillName: "s", skillDescription: "", filePaths: ["SKILL.md"], path: "SKILL.md", content: SKILL, findings: [marker, { ...q("DS-001"), message: evil }], verdict: null });
+  buildQualityDraftPrompt({ skillSlug: "s", skillTitle: "S", skillName: "s", skillDescription: "", filePaths: ["SKILL.md"], path: "SKILL.md", content: SKILL, findings: [marker, { ...q("DS-001"), message: evil }], verdict: null });
   assert.ok(Date.now() - started < 1000);
 });

@@ -478,7 +478,7 @@ function Catalog() {
   );
 }
 
-/** §43.9 My Skills: "Draft improvements with <AI>" — opens the skill's Quality card with the draft dialog. */
+/** §44.9 My Skills: "Draft improvements with <AI>" — opens the skill's Quality card with the draft dialog. */
 function AiDraftAction({ s, aiName }: { s: CatalogEntry; aiName: string }) {
   return (
     <Link href={`/skills/${s.namespaceSlug}/${s.skillSlug}?draft=ai#quality`} className="collection-remove ai-draft-action" data-testid="ai-draft-action">

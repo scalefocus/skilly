@@ -1,4 +1,4 @@
-// AI-drafted quality improvements (SKILLY_SPEC.md §43) on the web side: eligibility, the file plan,
+// AI-drafted quality improvements (SKILLY_SPEC.md §44) on the web side: eligibility, the file plan,
 // the streamed run (one §40 call per file, bounded concurrency, a whole-run cap), the stateless
 // run/draft tokens, and assembling the kept changes into a staged hosted bundle through the
 // ordinary upload pipeline. Nothing here stores AI output — the browser holds the results until the
@@ -7,7 +7,7 @@ import { createHmac, createHash, randomBytes, timingSafeEqual } from "node:crypt
 import AdmZip from "adm-zip";
 import {
   canReviewNamespace, isSkillVisible, latestArtifactFindings, loadVersionQuality, bundleContentCap, diffLines,
-  planDraft, buildDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftReasonText, draftWhatChangedNote,
+  planDraft, buildQualityDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftReasonText, draftWhatChangedNote,
   parseFrontmatter, decodeScanText, resolveLatest,
   DRAFT_AI_FEATURE, DRAFT_MAX_TOKENS, DRAFT_CONCURRENCY, DRAFT_RUN_CAP_MS, DRAFT_HEARTBEAT_MS, DRAFT_TOKEN_TTL_MS,
   type EffectiveAccess, type BundleEntry, type ScanFinding, type QualityVerdict, type DraftPlanFile, type DraftFileResult,
@@ -24,7 +24,7 @@ import { getMaxBundleBytes } from "./settings";
 import { processBundleUpload } from "./uploadPipeline";
 import { M } from "./metrics";
 
-// ── Context & eligibility (§43.2) ───────────────────────────────────────────────────────────────
+// ── Context & eligibility (§44.2) ───────────────────────────────────────────────────────────────
 
 /** The caller: resolved access plus (when known) the user id. */
 type Viewer = EffectiveAccess & { userId?: string | null };
@@ -85,14 +85,14 @@ async function latestStable(skillId: string): Promise<{ id: string; semver: stri
   return v ? { id: v.id, semver: v.semver, artifactKey: v.artifact_object_key } : null;
 }
 
-/** Platform admin, a namespace admin of the owning namespace, or an explicit maintainer (§43.2). */
+/** Platform admin, a namespace admin of the owning namespace, or an explicit maintainer (§44.2). */
 export async function mayDraft(access: Viewer, skill: Pick<DraftSkill, "id" | "namespaceId">): Promise<boolean> {
   if (canReviewNamespace(access, skill.namespaceId)) return true;
   return access.userId ? isExplicitMaintainer(skill.id, access.userId) : false;
 }
 
 /**
- * Resolve everything a plan / run / assemble needs, enforcing §43.2 in order: visibility (404),
+ * Resolve everything a plan / run / assemble needs, enforcing §44.2 in order: visibility (404),
  * role (403), the hidden conditions and the disabled reasons (409 `ai_draft_unavailable`).
  */
 export async function loadDraftContext(access: Viewer, ns: string, slug: string): Promise<DraftContextResult> {
@@ -117,7 +117,7 @@ export async function loadDraftContext(access: Viewer, ns: string, slug: string)
   return { ok: true, ctx: { skill, semver: v.semver, versionId: v.id, artifactKey: v.artifactKey, findings: (report?.findings ?? []) as ScanFinding[], verdict } };
 }
 
-/** `qualityDetail.aiDraft` on the skill payload (§43.2): `available:false, reason:null` = hidden. */
+/** `qualityDetail.aiDraft` on the skill payload (§44.2): `available:false, reason:null` = hidden. */
 export async function aiDraftAvailability(access: Viewer, ns: string, slug: string): Promise<{ available: boolean; reason: DraftUnavailableReason | null }> {
   const r = await loadDraftContext(access, ns, slug);
   if (r.ok) return { available: true, reason: null };
@@ -125,13 +125,13 @@ export async function aiDraftAvailability(access: Viewer, ns: string, slug: stri
   return { available: false, reason: r.reason && (disabled as string[]).includes(r.reason) ? (r.reason as DraftUnavailableReason) : null };
 }
 
-/** `canAiDraft` for My Skills rows (§43.9): AI operational and the skill hosted, active and scored. */
+/** `canAiDraft` for My Skills rows (§44.9): AI operational and the skill hosted, active and scored. */
 export async function canAiDraftFlags(items: { type?: string; status?: string; quality?: unknown }[]): Promise<boolean[]> {
   const on = items.length > 0 && (await aiAvailable());
   return items.map((s) => on && s.type === "hosted" && (s.status ?? "active") === "active" && s.quality != null);
 }
 
-// ── Plan (§43.3) ────────────────────────────────────────────────────────────────────────────────
+// ── Plan (§44.3) ────────────────────────────────────────────────────────────────────────────────
 
 export interface PlanFileView extends DraftPlanFile {
   reasonText?: string;
@@ -147,7 +147,7 @@ export async function draftPlan(ctx: DraftContext, deps: { store?: ArtifactStore
   return { files, plan };
 }
 
-// ── Tokens (§43.5 / §43.7) ──────────────────────────────────────────────────────────────────────
+// ── Tokens (§44.5 / §44.7) ──────────────────────────────────────────────────────────────────────
 
 // HMAC key: the Auth.js secret (always set in a real deployment); a per-process random key keeps
 // dev/test working — tokens then simply don't survive a restart.
@@ -219,7 +219,7 @@ export function signDraftToken(p: Omit<DraftTokenPayload, "k" | "iat">, now = Da
 }
 
 /**
- * §43.8: the model a valid aiDraftToken vouches for — only when it was issued to this user for
+ * §44.8: the model a valid aiDraftToken vouches for — only when it was issued to this user for
  * this skill and names exactly the submitted artifact. Anything else is null (silently ignored).
  */
 export function aiDraftModelFromToken(token: unknown, expect: { userId: string; skillId: string | null; artifactKey: string | null | undefined }, now = Date.now()): string | null {
@@ -229,7 +229,7 @@ export function aiDraftModelFromToken(token: unknown, expect: { userId: string; 
   return typeof p.m === "string" && p.m ? p.m.slice(0, 200) : null;
 }
 
-// ── The run (§43.5) ─────────────────────────────────────────────────────────────────────────────
+// ── The run (§44.5) ─────────────────────────────────────────────────────────────────────────────
 
 export type DraftEvent =
   | { type: "plan"; baseSemver: string; files: PlanFileView[] }
@@ -319,7 +319,7 @@ export async function runDraft(
       return;
     }
     emit({ type: "start", path: p.path });
-    const prompt = buildDraftPrompt({
+    const prompt = buildQualityDraftPrompt({
       skillSlug: ctx.skill.slug,
       skillTitle: ctx.skill.title,
       skillName: fm.name ?? ctx.skill.slug,
@@ -378,8 +378,8 @@ export async function runDraft(
 
   const outcome: "complete" | "capped" | "cancelled" = capped ? "capped" : opts.signal?.aborted ? "cancelled" : "complete";
   const runToken = signRunToken({ u: access.userId, s: ctx.skill.id, v: ctx.semver, m: model, c: signed });
-  M.aiDraftRuns.inc({ outcome });
-  for (const st of ["modified", "deleted", "unchanged", "failed", "skipped"]) if (counts[st]) M.aiDraftFiles.add(counts[st]!, { status: st });
+  M.aiQualityDraftRuns.inc({ outcome });
+  for (const st of ["modified", "deleted", "unchanged", "failed", "skipped"]) if (counts[st]) M.aiQualityDraftFiles.add(counts[st]!, { status: st });
   await appendAudit(pool, {
     actorUserId: access.userId,
     action: "skill.ai_draft_generated",
@@ -391,7 +391,7 @@ export async function runDraft(
   emit({ type: "done", model, calls, runToken, outcome });
 }
 
-// ── Assemble (§43.7) ────────────────────────────────────────────────────────────────────────────
+// ── Assemble (§44.7) ────────────────────────────────────────────────────────────────────────────
 
 export interface AssembleChange {
   path: string;

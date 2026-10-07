@@ -228,7 +228,7 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
       (summary ? `\n\n${aiName} assessment: ${summary}` : "") +
       (suggestions.length ? `\n\nRecommendations:\n${suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}` : "") +
       `\n\nOpen the Quality card to re-check after you publish a fix. ${cta("Open the Quality card", path)}` +
-      // §43.9: the second CTA, when the skill was hosted and AI operational at creation.
+      // §44.9: the second CTA, when the skill was hosted and AI operational at creation.
       (p.aiDraft === true ? ` ${cta(`Draft improvements with ${aiName}`, `/skills/${p.namespaceSlug}/${p.skillSlug}?draft=ai#quality`)}` : "");
     const s = subj(title);
     return {

@@ -1,7 +1,7 @@
 "use client";
-// The §43.6 draft dialog: the plan (what will be sent, removed, skipped) → a streamed run with
+// The §44.6 draft dialog: the plan (what will be sent, removed, skipped) → a streamed run with
 // per-file progress → per-file results with a diff and an Include checkbox → "Open in propose
-// form", which assembles the kept changes into a staged bundle (§43.7) and hands it to the
+// form", which assembles the kept changes into a staged bundle (§44.7) and hands it to the
 // new-version propose form through sessionStorage. Results live only in this component: closing
 // discards them (after a confirm). All model output is rendered as escaped plain text.
 import { useCallback, useEffect, useRef, useState } from "react";

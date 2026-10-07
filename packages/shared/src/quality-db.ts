@@ -171,7 +171,7 @@ export async function loadAiDisplayName(db: QualityDb): Promise<string> {
  * §41.9: once a version's assessment has settled at 2 stars or below, notify the effective
  * maintainers (minus opt-outs) with the full findings and the AI recommendations. Once per
  * assessment: `low_notified_at` is set here and cleared only by a rewrite of the rules part.
- * `aiOn` (AI operational at settle time) together with a hosted skill adds the §43.9 draft CTA;
+ * `aiOn` (AI operational at settle time) together with a hosted skill adds the §44.9 draft CTA;
  * the §40.14 display name is captured into the payload. Returns true when a notification was created.
  */
 export async function settleQualityLow(

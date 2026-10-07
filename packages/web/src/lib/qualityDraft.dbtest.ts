@@ -1,4 +1,4 @@
-// Live-DB integration test for AI-drafted quality improvements (SKILLY_SPEC.md §43.12) and the AI
+// Live-DB integration test for AI-drafted quality improvements (SKILLY_SPEC.md §44.12) and the AI
 // display name (§40.14). Gated by SKILLY_DB_E2E=1. The provider is a local Anthropic-shaped stub
 // that answers per file; the object store is in memory.
 //

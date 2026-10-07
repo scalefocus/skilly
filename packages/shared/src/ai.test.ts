@@ -434,6 +434,26 @@ test("aiComplete: 503 then success = one retry, ONE usage row (ok)", async () =>
   assert.equal(st.usage[0]![7], true);
 });
 
+test("aiComplete: retry:false makes exactly one attempt on a 503 (§43.9)", async () => {
+  const st = stateWith();
+  const f = fakeFetch([json({ error: { message: "overloaded" } }, 503), json({ content: [{ type: "text", text: "ok" }] })]);
+  await assert.rejects(
+    aiComplete(fakeDb(st), env(f.impl), { feature: "summarize", messages: MSG, maxTokens: 5, retry: false }),
+    (e: unknown) => e instanceof AiError && e.code === "ai_provider_error" && e.httpStatus === 503,
+  );
+  assert.equal(f.calls.length, 1);
+  assert.equal(st.usage.length, 1);
+  assert.equal(st.usage[0]![7], false);
+});
+
+test("AI_FEATURES registers skill_draft with its §43 egress", () => {
+  const draft = AI_FEATURES.find((f) => f.key === "skill_draft");
+  assert.ok(draft);
+  assert.equal(draft.spec, "§43");
+  assert.match(draft.egress, /SKILL\.md/);
+  assert.match(draft.egress, /category names/);
+});
+
 test("aiComplete: 401 is not retried; failure → usage(error) + last call + throttled 502 system event", async () => {
   const st = stateWith();
   const f = fakeFetch([json({ error: { message: "invalid x-api-key sk-live-token" } }, 401)]);
@@ -503,7 +523,7 @@ test("aiAvailable: configured + enabled + decryptable", async () => {
   assert.equal(await aiAvailable(fakeDb({ row: null, usage: [], events: [], claimOpen: true }), { key: KEY }), false);
 });
 
-// ── §40.7 per-feature ceilings & cancellation (§43) ─────────────────────────────────────────────
+// ── §40.7 per-feature ceilings & cancellation (§44) ─────────────────────────────────────────────
 
 test("aiFeatureMaxTokens / aiFeatureTimeoutMs: defaults, declared values, and the clamps", () => {
   assert.equal(aiFeatureMaxTokens({}), 8192);
@@ -514,10 +534,10 @@ test("aiFeatureMaxTokens / aiFeatureTimeoutMs: defaults, declared values, and th
   assert.equal(aiFeatureTimeoutMs({ timeoutMs: 9_999_999 }), AI_FEATURE_TIMEOUT_CEILING_MS);
 });
 
-test("AI_FEATURES registers skill_quality_draft (§43.4) with the 32,768-token / 360 s ceilings", () => {
+test("AI_FEATURES registers skill_quality_draft (§44.4) with the 32,768-token / 360 s ceilings", () => {
   const f = AI_FEATURES.find((x) => x.key === "skill_quality_draft");
   assert.ok(f);
-  assert.equal(f!.spec, "§43");
+  assert.equal(f!.spec, "§44");
   assert.equal(f!.maxTokens, 32_768);
   assert.equal(f!.timeoutMs, 360_000);
   assert.match(f!.egress, /never sent/);

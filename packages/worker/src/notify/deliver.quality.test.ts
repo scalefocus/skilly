@@ -53,7 +53,7 @@ test("renderNotification: skill.quality_low without AI or findings still reads a
   assert.doesNotMatch(r.text, /Recommendations:/);
 });
 
-test("renderNotification: skill.quality_low uses the captured AI name and adds the §43.9 draft CTA", () => {
+test("renderNotification: skill.quality_low uses the captured AI name and adds the §44.9 draft CTA", () => {
   process.env.PUBLIC_BASE_URL = BASE;
   const r = renderNotification({
     type: "skill.quality_low",

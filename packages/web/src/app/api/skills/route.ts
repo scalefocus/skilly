@@ -89,7 +89,7 @@ export async function GET(req: Request) {
   if (collectionsByUserId) {
     return Response.json({ skills, matchMode, collections: await listNonEmptyCollectionsOf(collectionsByUserId) });
   }
-  // §43.9 My Skills: the "Draft improvements with <AI>" action per item (the detail page re-checks).
+  // §44.9 My Skills: the "Draft improvements with <AI>" action per item (the detail page re-checks).
   if (url.searchParams.get("mine") === "1" && !archivedOnly) {
     const flags = await canAiDraftFlags(skills);
     return Response.json({ skills: skills.map((s, i) => ({ ...s, canAiDraft: flags[i] })), matchMode });

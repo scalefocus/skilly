@@ -154,7 +154,7 @@ export interface CreateProposalInput {
   routedReason?: "content_risk" | null;
   /** The content-risk rules that caused the routing — audit context only. */
   routedRules?: string[];
-  /** §43.8: the model that drafted the submitted files (from a verified aiDraftToken), else null. */
+  /** §44.8: the model that drafted the submitted files (from a verified aiDraftToken), else null. */
   aiDraftModel?: string | null;
 }
 
@@ -1246,7 +1246,7 @@ export async function directPublish(
     /** Override holders confirming an audited publish over gate-tripping content findings. */
     override?: boolean;
     overrideReason?: string | null;
-    /** §43.8: the model that drafted the files (from a verified aiDraftToken), else null. */
+    /** §44.8: the model that drafted the files (from a verified aiDraftToken), else null. */
     aiDraftModel?: string | null;
   },
 ): Promise<DirectPublishResult> {
@@ -1630,7 +1630,7 @@ export interface ProposalDetail {
   viaMcpClient: string | null;
   /** §37.4: 'content_risk' when this was a direct publish the content check routed to review. */
   routedReason: string | null;
-  /** §43.8: the model that drafted the submitted files, or null. */
+  /** §44.8: the model that drafted the submitted files, or null. */
   aiDraftModel: string | null;
   revisions: ProposalRevisionView[];
   scanReport: { severity: string | null; status: string; findings: unknown; createdAt: string } | null;

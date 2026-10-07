@@ -1,32 +1,29 @@
-// e2e: AI-drafted quality improvements (SKILLY_SPEC.md §43.12) and the AI display name (§40.14),
-// against a local Open WebUI-shaped stub provider started in the test process. The dev user is a
-// platform admin, so it may draft on any hosted skill.
-//   1. With the display name set to "Aria", a low-scoring hosted skill's Quality card offers
-//      "Draft improvements with Aria" and reads "Aria assessment"-style copy.
-//   2. The dialog shows the plan → Generate → the stub's SKILL.md rewrite (with a diff) and the
-//      README removal → untick the removal → Open in propose form.
-//   3. The propose form carries the drafted bundle and the pre-filled note → Submit for review →
-//      the proposal page shows "Drafted with Aria" and the improved rules score.
+// e2e: "Draft with AI" on the propose form (SKILLY_SPEC.md §43.12) against a local Open WebUI-shaped
+// stub provider (started in the test process; the dev server reaches it on 127.0.0.1). Covers: with
+// AI enabled, attaching a bundle → Draft with AI fills Description, Usage and categories (an invented
+// category carries the "new" badge) → Undo restores the previous state; with text already typed the
+// confirm dialog appears and "Fill empty fields only" keeps it; with AI removed the button is absent.
 //
 // Needs AI_TOKEN_ENC_KEY on the dev server (CI sets a fixed test key); skipped without it. Serial:
-// the integration and the display name are platform-wide. Self-cleaning.
-import AdmZip from "adm-zip";
-import { randomBytes } from "node:crypto";
+// the integration is one platform-wide row, and it is always removed afterwards.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import AdmZip from "adm-zip";
 import { test, expect, devSignIn, type Page } from "./fixtures";
-import { deleteSkillFully } from "./helpers/skills";
-import { clickAndAwait, gotoLoaded, NAV_TIMEOUT } from "./helpers/ready";
+import { awaitApi, gotoLoaded } from "./helpers/ready";
 
 test.describe.configure({ mode: "serial" });
 
-const TOKEN = "owui-e2e-draft-token-4455";
-const BETTER = (slug: string) =>
-  `---\nname: ${slug}\ndescription: Reviews PDF contracts. Use this when the user says "review this contract". Do not use for spreadsheets.\n---\n\n# ${slug}\n\n## Instructions\n\n1. Read the contract.\n2. List the risky clauses.\n\n## Examples\n\nUser says: "review this contract"\n\n## Troubleshooting\n\nIf the PDF has no text layer, ask for a text copy.\n`;
+const GOOD = "owui-e2e-draft-token-5511";
+const NEW_CAT = `e2e draft ${Date.now().toString(36)}`;
+const DRAFT = {
+  description: "Reviews PDF contracts and flags risky clauses.",
+  usage: "Ask it to \"review this contract\".\n\n- \"summarize clause 4\"\n- \"flag indemnities\"",
+  categories: [NEW_CAT],
+};
 
 let server: Server;
 let stubUrl = "";
-let slugForStub = "";
 
 test.beforeAll(async () => {
   server = createServer((req, res) => {
@@ -34,26 +31,23 @@ test.beforeAll(async () => {
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       res.setHeader("content-type", "application/json");
-      if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+      if (req.headers.authorization !== `Bearer ${GOOD}`) {
         res.statusCode = 401;
         res.end(JSON.stringify({ detail: "invalid token" }));
         return;
       }
       if (req.url === "/api/models") {
-        res.end(JSON.stringify({ data: [{ id: "stub-drafter" }] }));
+        res.end(JSON.stringify({ data: [{ id: "stub-llama" }] }));
         return;
       }
-      const parsed = JSON.parse(body || "{}") as { model?: string; messages?: { role: string; content: string }[] };
-      const user = parsed.messages?.find((m) => m.role === "user")?.content ?? "";
-      let content = "OK";
-      if (user.includes("## File: SKILL.md")) {
-        content = JSON.stringify({ action: "modify", content: BETTER(slugForStub), summary: "Added triggers, steps, examples and troubleshooting", addressed: ["DS-001", "BD-004"] });
-      } else if (user.includes("## File: README.md")) {
-        content = JSON.stringify({ action: "delete", summary: "Documentation belongs in SKILL.md", addressed: ["FS-003"] });
-      } else if (user.includes("## File:")) {
-        content = JSON.stringify({ action: "keep", summary: "fine" });
+      if (req.url === "/api/chat/completions") {
+        // The §43 draft prompt carries the delimited SKILL.md; the connectivity test does not.
+        const content = body.includes("SKILL_MD") ? JSON.stringify(DRAFT) : "OK";
+        res.end(JSON.stringify({ model: "stub-llama", choices: [{ message: { role: "assistant", content } }], usage: { prompt_tokens: 9, completion_tokens: 3 } }));
+        return;
       }
-      res.end(JSON.stringify({ model: parsed.model ?? "stub-drafter", choices: [{ message: { role: "assistant", content } }], usage: { prompt_tokens: 9, completion_tokens: 9 } }));
+      res.statusCode = 404;
+      res.end("{}");
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -64,109 +58,79 @@ test.afterAll(async () => {
   server?.close();
 });
 
-// Never leave AI enabled or the name changed: later specs (quality §41, the AI card §40) assume neither.
+// Never leave a configured (stub) integration behind: later specs behave differently with AI on.
 test.afterEach(async ({ page }) => {
   await page.request.delete("/api/admin/ai").catch(() => {});
-  await page.request.put("/api/admin/ai/display-name", { data: { displayName: "" } }).catch(() => {});
 });
 
+/** Save + enable the stub integration through the admin API; false when the dev server has no AI key. */
 async function enableAi(page: Page): Promise<boolean> {
-  await page.request.delete("/api/admin/ai");
-  const st = await (await page.request.get("/api/admin/ai")).json();
-  if (!st.keyConfigured) return false;
-  const saved = await page.request.put("/api/admin/ai", { data: { provider: "openwebui", baseUrl: stubUrl, model: "stub-drafter", token: TOKEN } });
+  const saved = await page.request.put("/api/admin/ai", { data: { provider: "openwebui", baseUrl: stubUrl, model: "stub-llama", token: GOOD } });
+  if (saved.status() === 409) return false; // ai_key_missing
   expect(saved.ok(), await saved.text()).toBeTruthy();
-  const on = await page.request.patch("/api/admin/ai", { data: { enabled: true } });
-  expect(on.ok(), await on.text()).toBeTruthy();
+  expect((await page.request.patch("/api/admin/ai", { data: { enabled: true } })).ok()).toBeTruthy();
   return true;
 }
 
-async function publishLowQuality(page: Page, slug: string): Promise<void> {
+function bundle(): Buffer {
   const zip = new AdmZip();
-  zip.addFile("SKILL.md", Buffer.from(`---\nname: ${slug}\ndescription: Helps.\n---\n\n# ${slug}\n\nMake sure to do things properly. salt=${randomBytes(6).toString("hex")}\n`));
-  zip.addFile("README.md", Buffer.from("# readme\n"));
-  const up = await page.request.post("/api/uploads", { multipart: { bundle: { name: `${slug}.skill`, mimeType: "application/zip", buffer: zip.toBuffer() }, skillSlug: slug } });
-  expect(up.ok(), await up.text()).toBeTruthy();
-  const upload = await up.json();
-  const res = await page.request.post("/api/proposals", {
-    data: {
-      namespaceSlug: "global",
-      semver: "1.0.0",
-      metadata: { skillSlug: slug, title: `E2E ${slug}`, description: "e2e fixture proposal (safe to delete)", toolHarness: "generic", visibility: "org", categories: [] },
-      artifactObjectKey: upload.artifactObjectKey,
-      artifactSha256: upload.artifactSha256,
-      contentSha256: upload.contentSha256,
-      artifactFilename: upload.artifactFilename,
-    },
-  });
-  expect(res.status(), await res.text()).toBe(201);
-  const id = (await res.json()).id as string;
-  const detail = await (await page.request.get(`/api/proposals/${id}`)).json();
-  expect((await page.request.post(`/api/proposals/${id}/actions`, { data: { action: "start_review" } })).ok()).toBeTruthy();
-  const acc = await page.request.post(`/api/proposals/${id}/actions`, { data: { action: "accept", revisionNo: detail.revisions.at(-1).revisionNo } });
-  expect(acc.ok(), await acc.text()).toBeTruthy();
+  zip.addFile("SKILL.md", Buffer.from("---\nname: draft-me\ndescription: Use when the user asks to review a PDF contract.\n---\n# Contract review\n\n1. Read the PDF.\n"));
+  return zip.toBuffer();
 }
 
-test("draft improvements with a branded AI: plan → generate → review → propose → Drafted with badge", async ({ page }) => {
-  test.setTimeout(240_000);
+const description = (page: Page) => page.getByPlaceholder("What does this skill do?");
+const usage = (page: Page) => page.getByPlaceholder(/^Shown as a quick-start/);
+const draftButton = (page: Page) => page.getByRole("button", { name: "Draft with AI" });
+const newChip = (page: Page) => page.locator(".taginput-chip", { hasText: NEW_CAT });
+
+async function attachBundle(page: Page): Promise<void> {
+  await page.getByRole("tab", { name: "Hosted upload" }).click();
+  await page.locator('input[type="file"][accept*=".skill"]').setInputFiles({ name: "draft-me.skill", mimeType: "application/zip", buffer: bundle() });
+}
+
+test("draft fills description, usage and categories; undo; fill-empty-only; hidden when AI is off", async ({ page }) => {
+  // The first draft compiles the propose page's draft path and the route under `next dev`.
+  test.setTimeout(180_000);
   await devSignIn(page);
+  await page.request.delete("/api/admin/ai");
   test.skip(!(await enableAi(page)), "AI_TOKEN_ENC_KEY is not set on the dev server");
-  const named = await page.request.put("/api/admin/ai/display-name", { data: { displayName: "Aria" } });
-  expect(named.ok(), await named.text()).toBeTruthy();
-  const me = await (await page.request.get("/api/me")).json();
-  expect(me.aiDisplayName).toBe("Aria");
 
-  const slug = `e2e-ai-draft-${Date.now().toString(36)}`;
-  slugForStub = slug;
-  try {
-    await publishLowQuality(page, slug);
-    const skill = await (await page.request.get(`/api/skills/global/${slug}`)).json();
-    expect(skill.qualityDetail.aiDraft).toEqual({ available: true, reason: null });
-    const before = skill.qualityDetail.rulesScore as number;
+  await gotoLoaded(page, "/propose", "/api/propose/ai-draft");
+  await expect(draftButton(page)).toBeVisible();
+  await expect(draftButton(page)).toBeDisabled(); // no source yet
+  await attachBundle(page);
+  await expect(draftButton(page)).toBeEnabled();
 
-    // ── 1. The card offers the branded action. ──
-    await gotoLoaded(page, `/skills/global/${slug}`, `/api/skills/global/${slug}`);
-    const card = page.getByTestId("quality-card");
-    await expect(card).toBeVisible({ timeout: NAV_TIMEOUT });
-    const btn = card.getByTestId("quality-ai-draft");
-    await expect(btn).toHaveText(/Draft improvements with Aria/);
+  // Empty fields → no dialog; the draft fills all three.
+  const drafted = awaitApi(page, "/api/propose/ai-draft", { method: "POST" });
+  await draftButton(page).click();
+  await drafted;
+  await expect(description(page)).toHaveValue(DRAFT.description);
+  await expect(usage(page)).toHaveValue(DRAFT.usage);
+  await expect(newChip(page)).toBeVisible();
+  await expect(newChip(page).locator(".taginput-badge")).toHaveText("new");
 
-    // ── 2. Plan → generate → results. ──
-    await clickAndAwait(page, () => btn.click(), `/quality/draft/plan`);
-    const dialog = page.getByTestId("ai-draft-dialog");
-    await expect(dialog).toBeVisible();
-    await expect(page.getByTestId("ai-draft-plan-sent")).toContainText("SKILL.md");
-    await expect(page.getByTestId("ai-draft-plan-sent")).toContainText("README.md");
-    await page.getByTestId("ai-draft-generate").click();
-    const skillRow = dialog.locator('[data-testid="ai-draft-file"][data-path="SKILL.md"]');
-    const readmeRow = dialog.locator('[data-testid="ai-draft-file"][data-path="README.md"]');
-    await expect(skillRow).toHaveAttribute("data-status", "modified", { timeout: NAV_TIMEOUT });
-    await expect(readmeRow).toHaveAttribute("data-status", "deleted");
-    await expect(skillRow).toContainText("Added triggers, steps, examples and troubleshooting");
-    await skillRow.getByRole("button", { name: /diff/ }).click();
-    await expect(skillRow.getByText("2. List the risky clauses.")).toBeVisible();
-    // Keep the rewrite, drop the README removal.
-    await readmeRow.getByTestId("ai-draft-include").uncheck();
-    await expect(page.getByTestId("ai-draft-included")).toContainText("1 change included");
+  // Undo restores the pre-draft state.
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(description(page)).toHaveValue("");
+  await expect(usage(page)).toHaveValue("");
+  await expect(newChip(page)).toHaveCount(0);
 
-    // ── 3. The propose form carries the drafted bundle and the note. ──
-    await clickAndAwait(page, () => page.getByTestId("ai-draft-open-propose").click(), `/quality/draft/assemble`, { method: "POST" });
-    await page.waitForURL(/\/propose\?newVersion=1/, { timeout: NAV_TIMEOUT });
-    await expect(page.getByTestId("ai-draft-notice")).toContainText("Files drafted with Aria from v1.0.0", { timeout: NAV_TIMEOUT });
-    await expect(page.getByTestId("ai-draft-attached")).toBeVisible();
-    await expect(page.locator("textarea").filter({ hasText: "SKILL.md: Added triggers" })).toBeVisible();
-    const created = await clickAndAwait(page, () => page.getByRole("button", { name: "Submit for review →" }).click(), "/api/proposals", { method: "POST" });
-    const proposalId = ((await created.json()) as { id: string }).id;
-    await page.waitForURL(new RegExp(`/proposals/${proposalId}`), { timeout: NAV_TIMEOUT });
-    await expect(page.getByTestId("ai-drafted-badge")).toHaveText(/Drafted with Aria/, { timeout: NAV_TIMEOUT });
+  // Typed text → confirm first; "Fill empty fields only" keeps it and fills Usage.
+  await description(page).fill("My own description");
+  await draftButton(page).click();
+  const dialog = page.getByRole("dialog", { name: "Replace your text?" });
+  await expect(dialog).toBeVisible();
+  const again = awaitApi(page, "/api/propose/ai-draft", { method: "POST" });
+  await dialog.getByRole("button", { name: "Fill empty fields only" }).click();
+  await again;
+  await expect(description(page)).toHaveValue("My own description");
+  await expect(usage(page)).toHaveValue(DRAFT.usage);
+  await expect(newChip(page)).toBeVisible();
 
-    const proposal = await (await page.request.get(`/api/proposals/${proposalId}`)).json();
-    expect(proposal.aiDraftModel).toBe("stub-drafter");
-    expect(proposal.quality.rulesScore).toBeGreaterThan(before);
-    // The README removal was unticked, so the bundle still carries it (FS-003 remains).
-    expect(proposal.quality.findings.map((f: { rule: string }) => f.rule)).toContain("FS-003");
-    expect(proposal.revisions.at(-1).payload.metadata.whatChanged).toContain("SKILL.md: Added triggers");
-  } finally {
-    await deleteSkillFully(page, "global", slug);
-  }
+  // AI removed → the button is not rendered at all.
+  expect((await page.request.delete("/api/admin/ai")).ok()).toBeTruthy();
+  await gotoLoaded(page, "/propose", "/api/propose/ai-draft");
+  await expect(page.getByPlaceholder("What does this skill do?")).toBeVisible();
+  await expect(draftButton(page)).toHaveCount(0);
 });

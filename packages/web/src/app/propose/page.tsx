@@ -8,7 +8,8 @@ import { parseInstallCommand } from "@skilly/shared/external-tool";
 import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
-import { Pill, ScrollToTop } from "../../components/ui";
+import { Modal, Pill, ScrollToTop } from "../../components/ui";
+import { useDateFmt } from "../../components/DateFormat";
 import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
 import { NamespaceMultiPicker, useShareTargets } from "../../components/NamespaceMultiPicker";
@@ -28,7 +29,7 @@ import { QualityStars } from "../../components/QualityBadge";
 import { formatStars } from "@skilly/shared/quality";
 import { useAiName } from "../../components/AiName";
 
-/** §43.7 the AI draft handed over from the skill page's draft dialog (sessionStorage). */
+/** §44.7 the AI draft handed over from the skill page's draft dialog (sessionStorage). */
 const AI_DRAFT_HANDOFF_KEY = "skilly.aiDraft";
 interface AiDraftHandoff {
   ns: string;
@@ -169,6 +170,19 @@ function ProposeForm() {
   });
   const [categories, setCategories] = useState<string[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<{ name: string; slug: string }[]>([]);
+  const fmt = useDateFmt();
+
+  // "Draft with AI" (§43): a proposer-clicked draft of the description, usage and categories from
+  // the source's SKILL.md. Rendered only when the AI integration is available. The confirm dialog
+  // runs BEFORE the call (Cancel sends nothing); Undo restores the pre-draft text and drops the
+  // categories the draft added, and goes away as soon as Description or Usage is edited again.
+  const [aiDraftAvailable, setAiDraftAvailable] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [draftMsg, setDraftMsg] = useState<string | null>(null);
+  const [draftConfirm, setDraftConfirm] = useState<string[] | null>(null);
+  const [draftUndo, setDraftUndo] = useState<{ description: string; usage: string; added: string[] } | null>(null);
+  const [aiNewCats, setAiNewCats] = useState<string[]>([]);
+  const draftAbort = useRef<AbortController | null>(null);
 
   // Skill icon (§33) — optional. `iconCrop` holds the proposer's image: checked, framed in the crop
   // dialog and rendered to the 256×256 PNG in the browser (§33.3–§33.4; re-normalized server-side
@@ -345,15 +359,15 @@ function ProposeForm() {
   // Supplying a real source clears it; any keystroke in the field makes the note the proposer's,
   // and it is then never rewritten in either direction.
   const noteIsDefault = useRef(false);
-  // §43.7 AI draft handoff: the staged bundle + token + note from the skill page's draft dialog.
+  // §44.7 AI draft handoff: the staged bundle + token + note from the skill page's draft dialog.
   // It stands in for an attached file until the proposer attaches a different bundle.
-  const [aiDraft, setAiDraft] = useState<AiDraftHandoff | null>(null);
-  const aiDraftApplied = useRef(false);
+  const [qualityDraft, setQualityDraft] = useState<AiDraftHandoff | null>(null);
+  const qualityDraftApplied = useRef(false);
   useEffect(() => {
     if (params.get("aiDraft") !== "1" || !isNewVersion) return;
     try {
       const h = JSON.parse(sessionStorage.getItem(AI_DRAFT_HANDOFF_KEY) ?? "null") as AiDraftHandoff | null;
-      if (h && h.ns === nvNs && h.slug === nvSlug && h.upload?.artifactObjectKey && h.aiDraftToken) setAiDraft(h);
+      if (h && h.ns === nvNs && h.slug === nvSlug && h.upload?.artifactObjectKey && h.aiDraftToken) setQualityDraft(h);
     } catch {
       /* no handoff — the form behaves as plain new-version mode */
     }
@@ -362,15 +376,15 @@ function ProposeForm() {
   // Once the new-version pre-fill has run, the draft overrides it: a fresh (hosted) source instead
   // of Keep current files, the AI's per-file summaries as the note, and the draft's scan/quality.
   useEffect(() => {
-    if (!aiDraft || !ready || aiDraftApplied.current) return;
-    aiDraftApplied.current = true;
+    if (!qualityDraft || !ready || qualityDraftApplied.current) return;
+    qualityDraftApplied.current = true;
     setReuseFiles(false);
     noteIsDefault.current = false;
-    setF((prev) => ({ ...prev, whatChanged: aiDraft.whatChanged || prev.whatChanged }));
-    setScan(aiDraft.upload.scan ?? null);
-    setQuality(aiDraft.upload.quality ?? null);
-    setBundleIcon(aiDraft.upload.bundleIcon ?? null);
-  }, [aiDraft, ready]);
+    setF((prev) => ({ ...prev, whatChanged: qualityDraft.whatChanged || prev.whatChanged }));
+    setScan(qualityDraft.upload.scan ?? null);
+    setQuality(qualityDraft.upload.quality ?? null);
+    setBundleIcon(qualityDraft.upload.bundleIcon ?? null);
+  }, [qualityDraft, ready]);
   // Snapshot of the skill's current metadata at pre-fill, for the client-side §8 no-op guard
   // (with reused files, at least one field must differ; the server re-enforces with a 422).
   const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; categories: string[]; usageExamples: string; sharedNamespaceIds: string[] } | null>(null);
@@ -417,6 +431,10 @@ function ProposeForm() {
     fetch("/api/namespaces")
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => j?.namespaces?.length && setNamespaceOptions(j.namespaces))
+      .catch(() => {});
+    fetch("/api/propose/ai-draft")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setAiDraftAvailable(j?.available === true))
       .catch(() => {});
     fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
@@ -641,7 +659,7 @@ function ProposeForm() {
     }
     setDropErr(null);
     setDup(null); // a new bundle invalidates any prior content-duplicate verdict (re-checked on submit)
-    setAiDraft(null); // §43.7: a different bundle replaces the AI-drafted one (and drops its token)
+    setQualityDraft(null); // §44.7: a different bundle replaces the AI-drafted one (and drops its token)
     setReuseFiles(false); // attaching a bundle = explicitly supplying a source (§8)
     dropDefaultNote();
     setFile(picked);
@@ -717,9 +735,100 @@ function ProposeForm() {
     };
   }
 
+  // §43.2: why the Draft with AI button is disabled, or null when there is a source to read.
+  const draftBlocked: string | null = (() => {
+    if (lock && reuseFiles) return null; // Keep current files: the reused artifact is the source
+    if (sourceType === "hosted") {
+      if (!file) return "Attach a bundle first.";
+      if (file.size > uploadChunkBytes) return "Bundle too large to draft from.";
+      return null;
+    }
+    if (!f.externalUrl.trim() || !f.externalRef.trim()) return hubSource ? "Enter the skills-hub skill and version first." : "Enter the repository URL and ref first.";
+    if (refProbeError) return "The source couldn’t be checked — fix the URL first.";
+    if (!refsForUrl) return "Checking the source…";
+    if (refMissingUpstream) return "Pick a ref that exists upstream first.";
+    return null;
+  })();
+
+  function startDraft() {
+    setDraftMsg(null);
+    const nonEmpty = [f.description.trim() ? "Description" : "", f.usageExamples.trim() ? "Usage" : ""].filter(Boolean);
+    if (nonEmpty.length) setDraftConfirm(nonEmpty);
+    else void runDraft("replace");
+  }
+
+  async function runDraft(fill: "replace" | "empty") {
+    setDraftConfirm(null);
+    setDraftMsg(null);
+    const ctl = new AbortController();
+    draftAbort.current = ctl;
+    setDrafting(true);
+    const before = { description: f.description, usage: f.usageExamples, categories };
+    try {
+      let init: RequestInit;
+      if (lock && reuseFiles) {
+        init = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "reuse", namespace: nvNs, skill: nvSlug }) };
+      } else if (sourceType === "hosted" && file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        init = { method: "POST", body: fd };
+      } else {
+        const skillSlug = f.skillSlug.trim() || subdirLast || "skill";
+        init = {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ source: "pointer", externalUrl: f.externalUrl.trim(), externalRef: f.externalRef.trim(), externalSubdir: f.externalSubdir.trim() || null, skillSlug }),
+        };
+      }
+      const r = await fetch("/api/propose/ai-draft", { ...init, signal: ctl.signal });
+      const j = (await r.json().catch(() => ({}))) as {
+        description?: string; usage?: string; categories?: { name: string; isNew: boolean }[];
+        error?: string; message?: string; scope?: string; cap?: number; retryAt?: string;
+      };
+      if (!r.ok) {
+        if (j.error === "ai_unavailable") setAiDraftAvailable(false);
+        if (j.error === "draft_rate_limited" && j.scope === "day" && j.retryAt) {
+          setDraftMsg(`Daily ${aiName} draft limit reached (${j.cap ?? 50} in 24 hours) — you can draft again after ${fmt.dateTime(j.retryAt)}.`);
+        } else {
+          setDraftMsg(j.message ?? "Couldn’t draft right now — try again or write it yourself.");
+        }
+        return;
+      }
+      const description = fill === "replace" || !before.description.trim() ? j.description ?? "" : before.description;
+      const usage = fill === "replace" || !before.usage.trim() ? j.usage ?? "" : before.usage;
+      setF((prev) => ({ ...prev, description, usageExamples: usage }));
+      // Categories are only ever ADDED to the proposer's picks (§43.4), within the field's cap of 12.
+      const selected = new Set(before.categories.map((c) => c.trim().toLowerCase()));
+      const added: string[] = [];
+      for (const c of j.categories ?? []) {
+        if (selected.has(c.name) || before.categories.length + added.length >= 12) continue;
+        selected.add(c.name);
+        added.push(c.name);
+      }
+      setCategories([...before.categories, ...added]);
+      setAiNewCats((j.categories ?? []).filter((c) => c.isNew && added.includes(c.name)).map((c) => c.name));
+      setDraftUndo({ description: before.description, usage: before.usage, added });
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") setDraftMsg("Couldn’t draft right now — try again or write it yourself.");
+    } finally {
+      draftAbort.current = null;
+      setDrafting(false);
+    }
+  }
+
+  function undoDraft() {
+    if (!draftUndo) return;
+    const { description, usage, added } = draftUndo;
+    setF((prev) => ({ ...prev, description, usageExamples: usage }));
+    setCategories((prev) => prev.filter((c) => !added.includes(c)));
+    setAiNewCats([]);
+    setDraftUndo(null);
+  }
+
   async function submit(mode: "review" | "direct") {
     setErr(null);
     setScan(null);
+    setDraftUndo(null);
     if (categoryError) { setErr(categoryError); return; } // §10 — the server would 422 with the same text
     setBusy(true);
     try {
@@ -744,7 +853,7 @@ function ProposeForm() {
       }
 
       const reusing = isNewVersion && reuseFiles;
-      let usedAiDraft = false;
+      let usedQualityDraft = false;
       let artifact: { artifactObjectKey?: string; artifactSha256?: string; contentSha256?: string; artifactFilename?: string | null } = {};
       let pointer: { url: string; ref: string; subdir?: string | null } | undefined;
       if (reusing) {
@@ -777,18 +886,18 @@ function ProposeForm() {
           throw new Error("Nothing changed — edit at least one field (title, description, categories, tool/harness, usage, or shared namespaces), or provide a new source.");
         }
       } else if (sourceType === "hosted") {
-        // §43.7: the AI-drafted bundle is already uploaded, validated and scanned — use it as is.
-        const up = aiDraft && !file
+        // §44.7: the AI-drafted bundle is already uploaded, validated and scanned — use it as is.
+        const up = qualityDraft && !file
           ? {
-              artifactObjectKey: aiDraft.upload.artifactObjectKey,
-              artifactSha256: aiDraft.upload.artifactSha256,
-              contentSha256: aiDraft.upload.contentSha256,
-              artifactFilename: aiDraft.upload.artifactFilename,
-              duplicate: aiDraft.upload.duplicate ?? null,
-              enforcement: aiDraft.upload.duplicateEnforcement === "warn" ? ("warn" as const) : ("block" as const),
+              artifactObjectKey: qualityDraft.upload.artifactObjectKey,
+              artifactSha256: qualityDraft.upload.artifactSha256,
+              contentSha256: qualityDraft.upload.contentSha256,
+              artifactFilename: qualityDraft.upload.artifactFilename,
+              duplicate: qualityDraft.upload.duplicate ?? null,
+              enforcement: qualityDraft.upload.duplicateEnforcement === "warn" ? ("warn" as const) : ("block" as const),
             }
           : await uploadBundle();
-        if (aiDraft && !file) usedAiDraft = true;
+        if (qualityDraft && !file) usedQualityDraft = true;
         // Hosted duplicate gate (§8): block stops here and offers "propose a new version"; warn
         // surfaces a notice but proceeds. Never gates a new-version proposal (it's intentional).
         if (up.duplicate && !isNewVersion) {
@@ -845,8 +954,8 @@ function ProposeForm() {
         pointer,
         // Keep current files (§8): the server resolves the reuse snapshot itself.
         ...(reusing ? { reuseCurrentFiles: true } : {}),
-        // §43.8: provenance of an AI-drafted bundle (the server ignores a token that doesn't verify).
-        ...(usedAiDraft && aiDraft ? { aiDraftToken: aiDraft.aiDraftToken } : {}),
+        // §44.8: provenance of an AI-drafted bundle (the server ignores a token that doesn't verify).
+        ...(usedQualityDraft && qualityDraft ? { aiDraftToken: qualityDraft.aiDraftToken } : {}),
         // Fulfilment link (§26): accepted proposal → the originating request is fulfilled.
         ...(originRequestId && !isNewVersion ? { originRequestId } : {}),
         // §37.4: the confirmed, audited override of a flagged direct publish.
@@ -867,7 +976,7 @@ function ProposeForm() {
           throw new Error(j.error ?? "Could not create proposal");
         }
         reportFeatureUse("propose"); // §36.3
-        if (usedAiDraft) clearAiDraftHandoff();
+        if (usedQualityDraft) clearAiDraftHandoff();
         router.push(`/proposals/${j.id}`);
       } else {
         const r = await fetch("/api/publish", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -887,7 +996,7 @@ function ProposeForm() {
           throw new Error(j.error ?? "Could not publish");
         }
         reportFeatureUse("propose"); // §36.3
-        if (usedAiDraft) clearAiDraftHandoff();
+        if (usedQualityDraft) clearAiDraftHandoff();
         if (r.status === 202 && j.routed === "review" && j.proposalId) {
           // §37.4: the content check sent this direct publish to review instead.
           router.push(`/proposals/${j.proposalId}`);
@@ -1080,9 +1189,9 @@ function ProposeForm() {
         {mode === "have" && !(lock && reuseFiles) && (sourceType === "hosted" ? (
           <div>
             <label style={label}>SKILL.md bundle (.tar.gz, .zip, or .skill)</label>
-            {aiDraft && !file && (
+            {qualityDraft && !file && (
               <div className="card card-pad" data-testid="ai-draft-notice" style={{ marginBottom: 10, fontSize: 13, lineHeight: 1.5, background: "var(--accent-soft)", borderColor: "color-mix(in oklab, var(--accent) 30%, var(--line))" }}>
-                ✦ Files drafted with {aiName} from <span className="mono">v{aiDraft.baseSemver}</span> — review before submitting. Attaching a different bundle replaces them.
+                ✦ Files drafted with {aiName} from <span className="mono">v{qualityDraft.baseSemver}</span> — review before submitting. Attaching a different bundle replaces them.
               </div>
             )}
             {/* Drops are handled page-wide (see the window listeners above); this box keeps the
@@ -1096,11 +1205,11 @@ function ProposeForm() {
                   <span className="mono">{file.name}</span>
                   <button type="button" className="dropzone-clear" onClick={() => { setFile(null); setDropErr(null); }} title="Remove file">✕ remove</button>
                 </span>
-              ) : aiDraft ? (
+              ) : qualityDraft ? (
                 <span className="dropzone-file" data-testid="ai-draft-attached">
-                  <span className="mono">{aiDraft.upload.artifactFilename ?? "draft.zip"}</span>
+                  <span className="mono">{qualityDraft.upload.artifactFilename ?? "draft.zip"}</span>
                   <span className="muted" style={{ fontSize: 12 }}>· drafted with {aiName}</span>
-                  <button type="button" className="dropzone-clear" onClick={() => { setAiDraft(null); clearAiDraftHandoff(); setScan(null); setQuality(null); }} title="Discard the drafted files">✕ discard</button>
+                  <button type="button" className="dropzone-clear" onClick={() => { setQualityDraft(null); clearAiDraftHandoff(); setScan(null); setQuality(null); }} title="Discard the drafted files">✕ discard</button>
                 </span>
               ) : (
                 <div className="dropzone-lead">Drag &amp; drop your skill bundle here</div>
@@ -1419,7 +1528,50 @@ function ProposeForm() {
             square — or a single emoji. Skills without an icon show the skilly logo.
           </p>
         </div>
-        <div>
+        {mode === "have" && (aiDraftAvailable || draftMsg) && (
+          <div className="ai-draft-row" data-testid="ai-draft">
+            {aiDraftAvailable && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={drafting || !!draftBlocked}
+                  title={draftBlocked ?? undefined}
+                  onClick={startDraft}
+                >
+                  {drafting ? "Drafting…" : `Draft with ${aiName}`}
+                </button>
+                {drafting && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => draftAbort.current?.abort()}>Cancel</button>
+                )}
+                {!drafting && draftUndo && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={undoDraft}>Undo</button>
+                )}
+                <span className="muted ai-draft-help">{draftBlocked ?? "Drafts the description, usage and categories from the SKILL.md."}</span>
+              </>
+            )}
+            {draftMsg && <p role="alert" className="field-error" style={{ flexBasis: "100%", margin: 0 }}>{draftMsg}</p>}
+          </div>
+        )}
+        {draftConfirm && (
+          <Modal
+            title="Replace your text?"
+            onCancel={() => setDraftConfirm(null)}
+            footer={
+              <>
+                <button type="button" className="btn btn-ghost" onClick={() => setDraftConfirm(null)}>Cancel</button>
+                <button type="button" className="btn" onClick={() => void runDraft("empty")}>Fill empty fields only</button>
+                <button type="button" className="btn btn-primary" onClick={() => void runDraft("replace")}>Replace</button>
+              </>
+            }
+          >
+            <p style={{ margin: 0 }}>
+              {draftConfirm.join(" and ")} already {draftConfirm.length > 1 ? "have" : "has"} text. The {aiName} draft can replace it, or fill only the
+              empty fields. Suggested categories are added to the ones you picked either way.
+            </p>
+          </Modal>
+        )}
+        <div inert={drafting} className={drafting ? "ai-draft-busy" : undefined}>
           <label style={label}>
             Categories
             {/* ⓘ bubble (§10): categories also decide the marketplace plugin(s) carrying the skill (§30.3). */}
@@ -1430,7 +1582,13 @@ function ProposeForm() {
             </InfoTip>
           </label>
           {/* Editable in new-version mode too — synced to the skill on accept (§8). */}
-          <TagInput value={categories} onChange={setCategories} suggestions={categoryOptions.map((c) => c.name)} placeholder="Search or create categories…" />
+          <TagInput
+            value={categories}
+            onChange={setCategories}
+            suggestions={categoryOptions.map((c) => c.name)}
+            placeholder="Search or create categories…"
+            badgeFor={(t) => (aiNewCats.includes(t) ? { label: "new", title: "Creates a new category (and its marketplace plugin) when the skill is published." } : null)}
+          />
           {categoryError && <p role="alert" style={{ fontSize: 12.5, marginTop: 7, color: "var(--danger, #c0392b)" }}>{categoryError}</p>}
           <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
             {lock
@@ -1438,16 +1596,16 @@ function ProposeForm() {
               : "Type to search existing categories, or enter a new one and press Enter. Add as many as fit."}
           </p>
         </div>
-        <div>
+        <div inert={drafting} className={drafting ? "ai-draft-busy" : undefined}>
           <label style={label}>Description <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· Markdown</span></label>
           {/* Description stays editable in new-version mode (like categories) — on accept the skill's
               description is updated to match. Other skill-level metadata stays locked. §8. */}
-          <MarkdownField value={f.description} onChange={(v) => setF((prev) => ({ ...prev, description: v }))} rows={3} placeholder="What does this skill do?" className="input input-lg" />
+          <MarkdownField value={f.description} onChange={(v) => { setDraftUndo(null); setF((prev) => ({ ...prev, description: v })); }} rows={3} placeholder="What does this skill do?" className="input input-lg" />
           {lock && <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Editing the description updates the skill's description when this version is accepted.</p>}
         </div>
-        <div>
+        <div inert={drafting} className={drafting ? "ai-draft-busy" : undefined}>
           <label style={label}>Usage <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· how it's triggered, options (Markdown)</span></label>
-          <MarkdownField value={f.usageExamples} onChange={(v) => setF((prev) => ({ ...prev, usageExamples: v }))} rows={4} mono className="input input-lg" placeholder={"Shown as a quick-start above SKILL.md. e.g.\n\nTrigger by asking to \"summarize a PDF\".\n\nOptions:\n- `pages`: page range"} />
+          <MarkdownField value={f.usageExamples} onChange={(v) => { setDraftUndo(null); setF((prev) => ({ ...prev, usageExamples: v })); }} rows={4} mono className="input input-lg" placeholder={"Shown as a quick-start above SKILL.md. e.g.\n\nTrigger by asking to \"summarize a PDF\".\n\nOptions:\n- `pages`: page range"} />
         </div>
         {/* "What changed" note (§8): per-version release note. New-version mode only — a skill's
             first version has no predecessor to describe. Plain text (no Markdown), required. */}

@@ -55,8 +55,8 @@ export const AI_FEATURE_MAX_TOKENS_CEILING = 32_768;
 export const AI_FEATURE_TIMEOUT_CEILING_MS = 360_000;
 
 /**
- * The registered AI tasks (§40.7): the skill quality assessment (§41.5) and the AI-drafted
- * quality improvements (§43.4).
+ * The registered AI tasks (§40.7): the skill quality assessment (§41.5), propose-form drafting
+ * (§43) and the AI-drafted quality improvements (§44.4).
  */
 export const AI_FEATURES: readonly AiFeature[] = [
   {
@@ -66,10 +66,16 @@ export const AI_FEATURES: readonly AiFeature[] = [
     spec: "§41",
   },
   {
+    key: "skill_draft",
+    label: "Propose-form drafting (description, usage, categories)",
+    egress: "The SKILL.md frontmatter and body (first 60,000 characters, secret-scanner lines redacted) of the skill being proposed, and the list of existing category names (first 500)",
+    spec: "§43",
+  },
+  {
     key: "skill_quality_draft",
     label: "Draft quality improvements",
     egress: "On a maintainer's request, for one hosted skill: the full text of SKILL.md and of every text file carrying a quality finding (up to 25 files, 100,000 characters each; files with a flagged secret are never sent), the bundle's file paths (first 200), and that version's quality findings and stored AI assessment",
-    spec: "§43",
+    spec: "§44",
     maxTokens: AI_FEATURE_MAX_TOKENS_CEILING,
     timeoutMs: AI_FEATURE_TIMEOUT_CEILING_MS,
   },
@@ -629,6 +635,8 @@ export interface AiCompleteOptions {
   messages: AiMessage[];
   maxTokens: number;
   json?: boolean;
+  /** false = a single attempt (interactive callers that must fail fast, §43.9). Default true. */
+  retry?: boolean;
   /** Aborts the call (and its retry); the attempt is recorded as `ai_cancelled`. */
   signal?: AbortSignal;
 }
@@ -714,7 +722,7 @@ export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Pr
       break;
     } catch (err) {
       failure = err instanceof AiError ? err : new AiError("ai_provider_error", sanitizeAiError(String(err), token));
-      if (attempt === 0 && isRetryable(failure) && !o.signal?.aborted) {
+      if (attempt === 0 && o.retry !== false && isRetryable(failure) && !o.signal?.aborted) {
         await sleep(retryDelayMs(failure.retryAfter));
         continue;
       }

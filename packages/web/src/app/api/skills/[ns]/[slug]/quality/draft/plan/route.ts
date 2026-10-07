@@ -1,6 +1,6 @@
-// The §43 draft plan: which files would be sent to the AI, removed, or skipped (and why). No AI
+// The §44 draft plan: which files would be sent to the AI, removed, or skipped (and why). No AI
 // call. Same eligibility as the run (404 visibility, 403 role, 409 ai_draft_unavailable).
-// SKILLY_SPEC.md §43.5.
+// SKILLY_SPEC.md §44.5.
 import { currentAccess } from "../../../../../../../../lib/guard";
 import { withSystemLog } from "../../../../../../../../lib/apiLog";
 import { loadDraftContext, draftPlan } from "../../../../../../../../lib/qualityDraft";

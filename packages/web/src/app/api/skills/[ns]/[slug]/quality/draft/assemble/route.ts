@@ -1,4 +1,4 @@
-// Assemble an AI quality draft into a staged hosted bundle (SKILLY_SPEC.md §43.7): every kept change
+// Assemble an AI quality draft into a staged hosted bundle (SKILLY_SPEC.md §44.7): every kept change
 // must be vouched for by the run token; the base version's files plus the changes go through the
 // ordinary upload pipeline. Returns the upload response + aiDraftToken + the pre-filled note.
 import { currentAccess } from "../../../../../../../../lib/guard";

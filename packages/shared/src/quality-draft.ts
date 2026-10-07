@@ -1,5 +1,5 @@
-// AI-drafted quality improvements (SKILLY_SPEC.md §43): the pure parts — the eligibility reasons,
-// the file plan (§43.3), the per-file prompt (§43.4), response validation and the "What changed"
+// AI-drafted quality improvements (SKILLY_SPEC.md §44): the pure parts — the eligibility reasons,
+// the file plan (§44.3), the per-file prompt (§44.4), response validation and the "What changed"
 // note. No I/O, no network, no node: web runs the calls, assembles the bundle and signs the tokens.
 import type { BundleEntry } from "./validate.js";
 import { parseFrontmatter } from "./validate.js";
@@ -39,11 +39,11 @@ export const DRAFT_TOKEN_TTL_MS = 2 * 60 * 60_000;
 /** The §6 secret scanner's name — a file it flagged is never sent. */
 export const DRAFT_SECRET_SCANNER = "secret-scan";
 
-/** Why the action is shown disabled (§43.2). */
+/** Why the action is shown disabled (§44.2). */
 export type DraftUnavailableReason = "quality_pending" | "nothing_to_draft" | "secret_in_skill_md";
-/** Why a file is not drafted (§43.3). */
+/** Why a file is not drafted (§44.3). */
 export type DraftSkipReason = "directory" | "secret" | "binary" | "too_large" | "over_limit";
-/** Why a drafted file failed (§43.4). */
+/** Why a drafted file failed (§44.4). */
 export type DraftFailReason =
   | "invalid_response" | "skill_md_delete" | "changed_name" | "invalid_frontmatter" | "too_large_to_rewrite" | "timed_out" | "cancelled" | string;
 
@@ -85,7 +85,7 @@ function findingPath(f: QualityFindingLike): string {
 }
 
 /**
- * §43.2 disabled reasons, from the version's latest report and stored verdict — null when the
+ * §44.2 disabled reasons, from the version's latest report and stored verdict — null when the
  * action is enabled. `report` null = no report / no quality row yet.
  */
 export function draftUnavailableReason(input: {
@@ -113,7 +113,7 @@ export interface DraftPlanFile {
 }
 
 /**
- * The §43.3 file plan: SKILL.md ∪ every path with a quality finding, classified (OS junk → delete,
+ * The §44.3 file plan: SKILL.md ∪ every path with a quality finding, classified (OS junk → delete,
  * directory / secret / binary / too large → skipped, else queued), ordered SKILL.md first then by
  * worst level then path, with queued files beyond DRAFT_MAX_FILES skipped `over_limit`.
  */
@@ -173,7 +173,7 @@ export function planDraft(input: { files: BundleEntry[]; findings: QualityFindin
   return out;
 }
 
-// ── The prompt (§43.4) ─────────────────────────────────────────────────────────────────────────
+// ── The prompt (§44.4) ─────────────────────────────────────────────────────────────────────────
 
 export const DRAFT_PROMPT_SYSTEM =
   "You improve one file of an Agent Skill (a SKILL.md-format skill that instructs an LLM agent) so " +
@@ -190,7 +190,7 @@ export const DRAFT_PROMPT_SYSTEM =
     addressed: ["the rule ids (e.g. DS-001) and suggestion ids (e.g. S2) this resolves"],
   });
 
-export interface DraftPromptInput {
+export interface QualityDraftPromptInput {
   skillSlug: string;
   skillTitle: string;
   /** The SKILL.md frontmatter name / description (context for every file). */
@@ -213,13 +213,13 @@ function findingLine(f: QualityFindingLike): string {
 }
 
 /** The ids a response may claim to address for this file. */
-export function draftKnownIds(input: Pick<DraftPromptInput, "path" | "findings" | "verdict">): Set<string> {
+export function draftKnownIds(input: Pick<QualityDraftPromptInput, "path" | "findings" | "verdict">): Set<string> {
   const ids = new Set(qualityFindings(input.findings).filter((f) => input.path === "SKILL.md" || findingPath(f) === input.path).map((f) => f.rule));
   if (input.path === "SKILL.md") (input.verdict?.suggestions ?? []).forEach((_, i) => ids.add(`S${i + 1}`));
   return ids;
 }
 
-export function buildDraftPrompt(input: DraftPromptInput): { system: string; user: string } {
+export function buildQualityDraftPrompt(input: QualityDraftPromptInput): { system: string; user: string } {
   const quality = qualityFindings(input.findings);
   const own = quality.filter((f) => findingPath(f) === input.path);
   const isSkillMd = input.path === "SKILL.md";
@@ -249,7 +249,7 @@ export function buildDraftPrompt(input: DraftPromptInput): { system: string; use
   return { system: DRAFT_PROMPT_SYSTEM, user };
 }
 
-// ── Response validation (§43.4) ────────────────────────────────────────────────────────────────
+// ── Response validation (§44.4) ────────────────────────────────────────────────────────────────
 
 export interface DraftFileResult {
   path: string;
@@ -301,7 +301,7 @@ export function validateDraftResponse(json: unknown, ctx: { path: string; origin
 }
 
 /**
- * The pre-filled "What changed" note (§43.7): one line per kept change, capped at the note's
+ * The pre-filled "What changed" note (§44.7): one line per kept change, capped at the note's
  * maximum length.
  */
 export function draftWhatChangedNote(kept: { path: string; action: "modify" | "delete"; summary: string }[]): string {

@@ -9,7 +9,7 @@ import { QualityFindingsList, type QualityFindingItem } from "../../../../compon
 import { useAiName } from "../../../../components/AiName";
 import { AiDraftDialog } from "./AiDraftDialog";
 
-/** §43.2 why the draft action is disabled; null reason with available:false = hidden. */
+/** §44.2 why the draft action is disabled; null reason with available:false = hidden. */
 const DRAFT_DISABLED_TEXT: Record<string, string> = {
   quality_pending: "The quality check for this version is still running — try again shortly.",
   nothing_to_draft: "Nothing to improve — the latest version has no quality findings or suggestions.",
@@ -30,7 +30,7 @@ export interface QualityDetailView {
   findings: QualityFindingItem[];
   verdict: QualityVerdict | null;
   canReassess: boolean;
-  /** §43.2: whether the viewer may draft improvements with AI. */
+  /** §44.2: whether the viewer may draft improvements with AI. */
   aiDraft?: { available: boolean; reason: string | null };
 }
 
@@ -48,7 +48,7 @@ export function QualityCard({ detail, base, ns, slug, onChanged }: { detail: Qua
   const draft = detail?.aiDraft;
   const draftShown = !!draft && (draft.available || !!draft.reason);
 
-  // §43.6: `?draft=ai` (the notification / My Skills link) opens the dialog when the action is enabled.
+  // §44.6: `?draft=ai` (the notification / My Skills link) opens the dialog when the action is enabled.
   useEffect(() => {
     if (!detail || typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);

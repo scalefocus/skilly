@@ -1,4 +1,4 @@
-// Run an AI quality draft (SKILLY_SPEC.md §43.5): one §40 call per planned file, streamed back as
+// Run an AI quality draft (SKILLY_SPEC.md §44.5): one §40 call per planned file, streamed back as
 // NDJSON (plan → start/file events → heartbeat every 15 s → done with the run token). Nothing is
 // stored; closing the connection cancels the files not yet finished. Effective maintainers and
 // platform admins only; 10 runs per user per 10 minutes.

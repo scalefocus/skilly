@@ -36,7 +36,7 @@ interface Body {
   /** §37.4: an override holder confirming a publish over gate-tripping content findings. */
   override?: boolean;
   overrideReason?: string | null;
-  /** §43.8: proof the hosted bundle was drafted by the §43 AI task (ignored when it doesn't verify). */
+  /** §44.8: proof the hosted bundle was drafted by the §44 AI task (ignored when it doesn't verify). */
   aiDraftToken?: string | null;
 }
 
@@ -135,7 +135,7 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
     access, actorUserId: access.userId, namespaceSlug: b.namespaceSlug, semver: b.semver, payload,
     originRequestId: b.originRequestId, contentCheck,
     override: b.override === true, overrideReason: typeof b.overrideReason === "string" ? b.overrideReason.slice(0, 2000) : null,
-    // §43.8: provenance only — an invalid / mismatched token is ignored silently.
+    // §44.8: provenance only — an invalid / mismatched token is ignored silently.
     aiDraftModel: aiDraftModelFromToken(b.aiDraftToken, { userId: access.userId, skillId: existing?.id ?? null, artifactKey: payload.artifactObjectKey }),
   });
   if (!r.ok) {

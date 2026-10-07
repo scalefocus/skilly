@@ -82,7 +82,7 @@ interface Detail {
   viaMcpClient?: string | null;
   /** §37.4: 'content_risk' when a direct publish was routed here by the content check. */
   routedReason?: string | null;
-  /** §43.8: the model that drafted the submitted files, or null. */
+  /** §44.8: the model that drafted the submitted files, or null. */
   aiDraftModel?: string | null;
   submitterCard: SubmitterCard | null;
   conversationId: string | null;
@@ -536,7 +536,7 @@ function ProposalDetailInner() {
         <span className="chip">{data.targetSkillId ? "new version" : "new skill"}</span>
         {/* §29 attribution — the reviewer sees, on the proposal itself, that an agent submitted it. */}
         <ViaMcp client={data.viaMcpClient} />
-        {/* §43.8 provenance: the files were drafted by the AI and reviewed by the proposer before submission. */}
+        {/* §44.8 provenance: the files were drafted by the AI and reviewed by the proposer before submission. */}
         {data.aiDraftModel && (
           <span
             className="chip"
