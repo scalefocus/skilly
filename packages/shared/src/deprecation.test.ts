@@ -133,9 +133,16 @@ test("hint: no frontmatter → banner only; CRLF preserved", () => {
   assert.ok(!/[^\r]\n/.test(o2), "every newline is CRLF");
 });
 
-test("hint: a note containing the comment terminator cannot close the banner early", () => {
-  const out = buildDeprecationHint(MD, { successor: null, note: "x --> y", successorUrl: null });
-  assert.equal((out.match(/-->/g) ?? []).length, 2);
+test("hint: a note cannot forge or close the banner markers (both comment terminators, and the opener)", () => {
+  const note = "x --> y\nz --!> w\n<!-- /skilly:deprecation -->";
+  const out = buildDeprecationHint(MD, { successor: null, note, successorUrl: null });
+  // Exactly the two real markers survive; every note-borne form is broken apart.
+  assert.equal((out.match(/<!-- \/?skilly:deprecation -->/g) ?? []).length, 2);
+  assert.ok(out.includes("> x - -> y"));
+  assert.ok(out.includes("> z - -!> w"));
+  assert.ok(out.includes("> <!- - /skilly:deprecation - ->"));
+  // …so a re-run still finds the one banner and stays idempotent.
+  assert.equal(buildDeprecationHint(out, { successor: null, note, successorUrl: null }), out);
 });
 
 test("deprecationDescriptionPrefix", () => {

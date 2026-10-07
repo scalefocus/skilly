@@ -203,10 +203,19 @@ function buildBanner(input: DeprecationHintInput): string[] {
   }
   if (input.note) {
     out.push(">");
-    for (const l of input.note.replace(/-->/g, "- ->").split(/\r?\n/)) out.push(l ? `> ${l}` : ">");
+    for (const l of neutralizeComments(input.note).split(/\r?\n/)) out.push(l ? `> ${l}` : ">");
   }
   out.push(BANNER_CLOSE);
   return out;
+}
+
+/**
+ * A note is plain text, but it is emitted between two HTML-comment markers that a re-run locates by
+ * string search. Break every comment opener and BOTH comment terminators (`-->` and the legacy
+ * `--!>`) so no note can forge or close a marker: `<!--` → `<!- -`, `-->` → `- ->`, `--!>` → `- -!>`.
+ */
+function neutralizeComments(note: string): string {
+  return note.replace(/<!--|--!?>/g, (m) => m.replace("--", "- -"));
 }
 
 function stripExistingBanner(md: string): string {
