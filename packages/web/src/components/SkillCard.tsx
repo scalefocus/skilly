@@ -40,6 +40,17 @@ export interface CatalogEntry {
   /** §42: the owning namespace's display name when this viewer sees the skill only through a
    *  namespace grant ⇒ the "Shared with your namespace by …" marker. */
   sharedFrom?: string | null;
+  /** §45: present when the skill is deprecated; the successor only when this viewer can see it. */
+  deprecation?: { note: string | null; successor: { namespaceSlug: string; skillSlug: string; title: string } | null } | null;
+}
+
+/** §45.5 the `deprecated` pill — its tooltip / accessible name carries the full sentence. */
+export function DeprecatedPill({ d }: { d?: CatalogEntry["deprecation"] }) {
+  if (!d) return null;
+  const text = d.successor ? `Deprecated — use ${d.successor.title} instead` : "Deprecated";
+  return (
+    <span title={text} aria-label={text} data-testid="deprecated-pill"><Pill tone="warn">deprecated</Pill></span>
+  );
 }
 
 /** The "Official" badge marks platform-endorsed (first-party / sanctioned) skills (§7). It is an
@@ -109,6 +120,7 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
           ? <span title={`Shared with your namespace by ${s.sharedFrom}`} aria-label={`Shared with your namespace by ${s.sharedFrom}`}><Pill tone="warn">shared</Pill></span>
           : <Pill tone="warn">restricted</Pill>)}
         {s.status === "archived" && <Pill tone="danger">archived</Pill>}
+        <DeprecatedPill d={s.deprecation} />
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <SkillIcon icon={s.icon} title={s.title} size={40} />
@@ -148,6 +160,11 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
           <div style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</div>
           <div className="ns mono" style={{ fontSize: 11.5 }}>@{s.namespaceSlug}/{s.skillSlug}</div>
           {s.sharedFrom && <div className="muted" style={{ fontSize: 11.5 }}>Shared with your namespace by {s.sharedFrom}</div>}
+          {s.deprecation && (
+            <div className="muted" style={{ fontSize: 11.5 }}>
+              Deprecated{s.deprecation.successor ? <> — use <strong>{s.deprecation.successor.title}</strong> instead</> : null}
+            </div>
+          )}
         </div>
       </div>
       <p className="desc muted skill-row-desc">{plainText(s.description)}</p>
@@ -157,6 +174,7 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
         {s.visibility === "namespace" && <Pill tone="warn">{s.sharedFrom ? "shared" : "restricted"}</Pill>}
         {s.status === "archived" && <Pill tone="danger">archived</Pill>}
+        <DeprecatedPill d={s.deprecation} />
         <span className="chip">{agentLabel(s.toolHarness)}</span>
         {/* Grouped so on mobile (when the row wraps) rating + installs drop to their own bottom row. */}
         <span className="skill-row-stats">

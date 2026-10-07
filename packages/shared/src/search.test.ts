@@ -323,11 +323,13 @@ test("relevance keys are never bare integers (ORDER BY 5 would sort by the fifth
   }
 });
 
-test("catalogOrderBy: one total order for every surface, relevance keys first", () => {
-  assert.match(catalogOrderBy("relevance", "T asc, "), /^T asc, s\.install_count desc, .* s\.title asc, n\.slug asc, s\.slug asc$/);
-  assert.match(catalogOrderBy(undefined, ""), /^s\.install_count desc/);
-  assert.match(catalogOrderBy("top_rated", "IGNORED"), /^\(\(s\.rating_sum/);
-  assert.match(catalogOrderBy("latest", "IGNORED"), /^coalesce\(max\(sv\.created_at\)/);
+test("catalogOrderBy: one total order for every surface, relevance keys first, deprecated last (§45.5)", () => {
+  const dep = "\\(s\\.deprecated_at is not null\\) asc";
+  assert.match(catalogOrderBy("relevance", "T asc, "), new RegExp(`^T asc, ${dep}, s\\.install_count desc, .* s\\.title asc, n\\.slug asc, s\\.slug asc$`));
+  assert.match(catalogOrderBy(undefined, ""), new RegExp(`^${dep}, s\\.install_count desc`));
+  assert.match(catalogOrderBy("top_rated", "IGNORED"), new RegExp(`^${dep}, \\(\\(s\\.rating_sum`));
+  assert.match(catalogOrderBy("latest", "IGNORED"), new RegExp(`^${dep}, coalesce\\(max\\(sv\\.created_at\\)`));
+  assert.match(catalogOrderBy("quality", "IGNORED"), new RegExp(`^${dep}, s\\.quality_score desc nulls last`));
 });
 
 // ── SKILL.md text (§34.3) ──────────────────────────────────────────────────────────────────────

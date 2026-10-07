@@ -163,6 +163,10 @@ export default function NotificationsPage() {
             // §35.6 follow.* — the shared sentence + CTA (the email renderer uses the same one), in
             // place of the generic per-field links below.
             const follow = followNotificationContent(n.type, n.payload);
+            // §45.6 skill.deprecated: the successor (named only when THIS recipient could see it at insert).
+            const succNs = n.type === "skill.deprecated" && typeof n.payload.successorNamespaceSlug === "string" ? n.payload.successorNamespaceSlug : null;
+            const succSlug = n.type === "skill.deprecated" && typeof n.payload.successorSlug === "string" ? n.payload.successorSlug : null;
+            const succTitle = typeof n.payload.successorTitle === "string" ? n.payload.successorTitle : succSlug;
             return (
               <div className="row" key={n.id} style={{ alignItems: "flex-start", gap: 12, opacity: n.readAt ? 0.62 : 1 }}>
                 {!n.readAt && <span aria-hidden className="glow-accent" style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--accent)", marginTop: 7, flexShrink: 0 }} />}
@@ -199,6 +203,16 @@ export default function NotificationsPage() {
                   {!follow && requestId && (
                     <Link href={`/requests/${requestId}`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                       view request →
+                    </Link>
+                  )}
+                  {n.type === "skill.deprecated" && (
+                    <p style={{ fontSize: 13.5, margin: "8px 0 0" }}>
+                      {skillName} is deprecated{succNs && succSlug ? <> — use <strong>{succTitle}</strong> instead.</> : "."}
+                    </p>
+                  )}
+                  {succNs && succSlug && (
+                    <Link href={`/skills/${succNs}/${succSlug}`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginRight: 12 }} data-testid="notification-successor">
+                      open the successor →
                     </Link>
                   )}
                   {!follow && skillHref && (

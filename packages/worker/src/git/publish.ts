@@ -8,7 +8,8 @@ import { resolveLatest, validateBundle, versionTag, bundleContentCap, fanOutToFo
 import { getMaxBundleBytes } from "../settings.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { repoPath } from "./repoStore.js";
-import { synthesizeVersion, listTags, pointMainAtTag } from "./synth.js";
+import { synthesizeVersion, listTags } from "./synth.js";
+import { ensureMain, loadDeprecationState } from "./mainRef.js";
 import { extractBundle } from "./bundle.js";
 import type { SkillFile } from "./synth.js";
 import { fillSearchText } from "../searchIndex.js";
@@ -119,6 +120,12 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
       }
 
       await synthesizeVersion({ bareRepoPath, semver: row.semver, files, isLatestStable });
+      // §45.4: a deprecated skill's `main` carries the deprecation-hint commit on top of the new
+      // latest-stable tag — the tag itself stays byte-identical to the artifact.
+      if (isLatestStable) {
+        const state = await loadDeprecationState(pool, row.skill_id);
+        if (state.deprecated) await ensureMain(bareRepoPath, versionTag(row.semver), state);
+      }
     } catch (err) {
       // If the tag already exists (e.g. a prior crash after synth but before flag flip),
       // treat as published and move on; otherwise re-throw to retry next sweep.
@@ -297,13 +304,16 @@ export async function reprovisionMissingRepos(pool: Pool, deps: PublishDeps): Pr
       }
     }
 
-    // 2) Ensure `main` tracks the latest stable even when that tag already existed — the
+    // 2) Ensure `main` sits at its EXPECTED commit even when the tag already existed — the
     //    "tags present but main unborn/stale" case that a fragment-less clone surfaces as empty.
+    //    Expected = the latest-stable tag's commit, or the deprecation-hint commit on top of it
+    //    for a deprecated skill (§45.4) — never the bare tag commit for a deprecated one.
     if (latestStable) {
       try {
-        if (await pointMainAtTag(bareRepoPath, versionTag(latestStable))) {
+        const out = await ensureMain(bareRepoPath, versionTag(latestStable), await loadDeprecationState(pool, first.skill_id));
+        if (out === "updated") {
           healed++;
-          console.log(JSON.stringify({ level: "warn", msg: "repointed main at latest stable (self-heal)", ns: first.ns_slug, slug: first.skill_slug, semver: latestStable }));
+          console.log(JSON.stringify({ level: "warn", msg: "repointed main at its expected commit (self-heal)", ns: first.ns_slug, slug: first.skill_slug, semver: latestStable }));
         }
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "reprovision: could not repoint main", ns: first.ns_slug, slug: first.skill_slug, err: String(err) }));

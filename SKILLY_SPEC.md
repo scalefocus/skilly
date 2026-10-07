@@ -24,6 +24,7 @@ Every decision below was explicitly confirmed.
 | Visibility | **Per-skill**: org-wide OR restricted to its **owning** namespace **plus any namespaces it is explicitly shared with** (§42 — one owner, N grantee namespaces, unilateral grant by the owner side). No per-individual private, no per-version visibility |
 | Search | **PostgreSQL full-text search only** (§34): stemmed and weighted (title/slug › description › categories › usage + `SKILL.md` body), admin-curated synonyms, typo + substring fallback tiers, `"phrase"` / `-exclude` / `OR` syntax, admin-selectable language. **No vector store, no new extension.** One engine for the catalog, the header search and MCP |
 | Skill icons | **Optional, skill-level** image or emoji (§33): resolved from the bundle (`icon:` frontmatter → root `icon.png`) before the proposer's upload/emoji; re-encoded to 256×256 PNG; default = the skilly wordmark. Shown on every skill surface and on the **signed share link's** Open Graph card — the only per-skill unfurl, gated by a 7-day token minted by a signed-in viewer |
+| Skill deprecation | **Per-skill "deprecated, use X instead"** (§45): a third lifecycle state between served and yanked/archived — the skill **keeps serving and installing**, but every surface marks it (catalog card, detail page, Installed page, MCP results), **watchers, maintainers and current installers are notified once**, and the git-served `main` carries a **deterministic hint commit** that rewrites `SKILL.md`'s frontmatter/body so agents see it too; tags stay byte-identical. The successor is an optional FK whose audience must cover the deprecated skill's; namespace/platform admins only |
 | Feedback survey | **Anonymous in-app survey** (§36): general satisfaction + two questions on a feature the user just used for the first time, 1–5 stars + optional free text. A 1-in-3 random roll on an eligible first use, **at most once per 30 days**, 14-day grace for new users, never alongside What's new. Profile opt-out + platform switch; users can also **give feedback on demand** (profile / account menu, once per 7 days, feature of their choice, §36.16); results for platform admins on Monitoring, with any figure over fewer than 5 responses withheld |
 | Skill collections | **User-owned, shareable lists of org-visible skills** (§38): any user adds a skill from its detail page; a collection opens as the catalog filtered to it (`/catalog?collection=<id>`), is found through the header dropdown, and mints nothing (no bulk install). Restricted skills can never be members; a skill that narrows, archives or loses its last version is evicted |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
@@ -134,7 +135,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `platform_admin` rows have `namespace_id = null`.
 
 ### `skills`
-- `id`, `namespace_id`, `slug`, `title`, `description`, `category_id` (nullable FK to `categories` — **back-compat shadow**; since migration 0010 the authoritative skill↔category mapping is the **`skill_categories`** join, supporting multiple categories), `tool_harness` (TEXT — the skill's **coding agent**, a **closed vocabulary**: `generic` (default) ∪ the agents the consumer tool supports; drives the install command's `--agent` flag, §6/§9), `type` (`hosted` | `pointer`), `visibility` (`org` | `namespace` — for `namespace` the audience is the owning `namespace_id` **∪ the rows in `skill_namespace_grants`**, §42), `status` (`active` | `archived`), `promoted_from_skill_version_id` (nullable, provenance), `install_count`, `featured_at` (nullable timestamptz; non-null ⇒ **Featured** homepage spotlight, §7), `featured_by` (nullable FK `users`, provenance), **`icon_sha256`** (nullable FK → `skill_icons`, the effective icon image, §33), **`icon_emoji`** (nullable TEXT — a single emoji grapheme, the fallback when no image resolves, §33), **`icon_source`** (nullable — `frontmatter` | `bundle` | `upload`: where `icon_sha256` came from, §33), `created_at`. *(The former free-form `tags TEXT[]` column was **dropped in migration 0068** — §10 *Taxonomy*; the FTS trigger was rewritten without it in the same migration.)*
+- `id`, `namespace_id`, `slug`, `title`, `description`, `category_id` (nullable FK to `categories` — **back-compat shadow**; since migration 0010 the authoritative skill↔category mapping is the **`skill_categories`** join, supporting multiple categories), `tool_harness` (TEXT — the skill's **coding agent**, a **closed vocabulary**: `generic` (default) ∪ the agents the consumer tool supports; drives the install command's `--agent` flag, §6/§9), `type` (`hosted` | `pointer`), `visibility` (`org` | `namespace` — for `namespace` the audience is the owning `namespace_id` **∪ the rows in `skill_namespace_grants`**, §42), `status` (`active` | `archived`), `promoted_from_skill_version_id` (nullable, provenance), `install_count`, `featured_at` (nullable timestamptz; non-null ⇒ **Featured** homepage spotlight, §7), `featured_by` (nullable FK `users`, provenance), **`icon_sha256`** (nullable FK → `skill_icons`, the effective icon image, §33), **`icon_emoji`** (nullable TEXT — a single emoji grapheme, the fallback when no image resolves, §33), **`icon_source`** (nullable — `frontmatter` | `bundle` | `upload`: where `icon_sha256` came from, §33), **`deprecated_at`** (nullable timestamptz; non-null ⇒ **Deprecated**, §45), **`deprecated_by`** (nullable FK `users`, `ON DELETE SET NULL`, provenance), **`successor_skill_id`** (nullable FK → `skills`, `ON DELETE SET NULL`; `CHECK (successor_skill_id <> id)`; the "use X instead" skill, §45), **`deprecation_note`** (nullable TEXT ≤ 1,000 chars, plain text — the admin's reason/instructions, §45; a CHECK pins `deprecated_at IS NULL ⇒ successor_skill_id IS NULL AND deprecation_note IS NULL`; all four added by **migration 0089**), `created_at`. *(The former free-form `tags TEXT[]` column was **dropped in migration 0068** — §10 *Taxonomy*; the FTS trigger was rewritten without it in the same migration.)*
 - Denormalized/derived columns (trigger-maintained): `search_tsv` (FTS `tsvector` — A title + slug, B description, C category names, D usage + `SKILL.md` body of the **indexed version**, §34.3), `search_lang` (the text-search configuration `search_tsv` was built with — the §34.9 reindex job's work list, migration 0077), `usage_search` (the **indexed version's** usage examples — latest stable, else highest active prerelease, §34.3; before migration 0077 the newest-*created* active version, §20), `content_search` (the indexed version's `SKILL.md` body, from `skill_version_search`, migration 0077), `watcher_count` (count of `skill_watches` rows), plus `rating_sum` / `rating_count` (below), plus **`quality_score`** / **`quality_mode`** (the latest stable active version's system-computed quality, §41.6 — refreshed by `refreshSkillQuality`, not by trigger).
 
 #### Tool/harness = coding agent (closed vocabulary)
@@ -266,7 +267,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `usage_events` is documented above (§21).
 
 ### `related_skills` (migration 0046)
-- Precomputed "Skills you might like" neighbours: `skill_id`, `related_skill_id` (PK pair), `shared_count`. Rebuilt **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the co-install ledger `skill_installs`: `shared_count` = number of users who adopted both skills. Stores a wider top-N candidate list per skill (top ~12 by shared adopters, active skills only) so the read path can drop any the viewer can't see and still fill the top 3 visible. Purely derived/advisory — rebuilt wholesale each run. Surfaced on the detail page (§10).
+- Precomputed "Skills you might like" neighbours: `skill_id`, `related_skill_id` (PK pair), `shared_count`. Rebuilt **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the co-install ledger `skill_installs`: `shared_count` = number of users who adopted both skills. Stores a wider top-N candidate list per skill (top ~12 by shared adopters, active **and non-deprecated** skills only as *neighbours* — a deprecated skill is never recommended, though it still has its own neighbours, §45) so the read path can drop any the viewer can't see and still fill the top 3 visible. Purely derived/advisory — rebuilt wholesale each run. Surfaced on the detail page (§10).
 
 ### `skill_requests` (+ `skill_request_categories`) (migration 0048; `skill_request_files` dropped in 0049; detailed in §26)
 - "Request a skill": org-visible wishes for skills that don't exist yet. `skill_requests`: `id`, `requester_user_id`, `title`, `description`, `usage_examples`, `tool_harness`, `state` (`open` | `fulfilled` | `withdrawn` | `removed`), `fulfilled_skill_id`, `fulfilled_by_user_id`, `fulfilled_at`, `created_at`, `updated_at`. Categories via `skill_request_categories` (FK to the shared `categories` vocabulary). Requests are **text-only** — no file attachments (the original `skill_request_files` table was dropped in migration 0049). Fulfilment fields are set once (a snapshot) when a linked proposal is accepted; the row is never deleted on fulfilment (state flips). §26.
@@ -344,6 +345,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Initiate promotion to global | ✅ | ✅ (own ns) | ✅ (own ns) | ❌ |
 | Approve promotion to global | ✅ | ❌ | ❌ | ❌ |
 | Yank version / archive skill | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
+| **Deprecate / edit / un-deprecate a skill** (§45) | ✅ (any) | ✅ (owner ns) | ❌ | ❌ (explicit maintainers and grantee-namespace admins have no authority either) |
 | Override security finding on publish | ✅ | ✅ (own ns) | ❌ | ❌ |
 | Re-assess skill quality (§41.8) | ✅ | ✅ (own ns) | ❌ | ❌ |
 | Acknowledge a flagged content-risk finding (§37.6) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
@@ -645,9 +647,14 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   tags exist but whose `main` is unborn/stale returns an empty fragment-less ("latest") clone.
   Each sweep therefore, per `git_published` skill: (1) re-synthesizes any active version whose
   `v<semver>` tag is absent (idempotent — an existing tag is left untouched), then (2) repoints
-  `refs/heads/main` at the latest-stable tag's commit when it has drifted or was never written.
-  This converges any partial state (lost volume, crash mid-sweep, tag-missing, main-missing) back
-  to the canonical artifact store within one sweep.
+  `refs/heads/main` at its **expected commit** when it has drifted or was never written: the
+  latest-stable tag's commit for a normal skill, or — for a **deprecated** skill (§45) — the
+  **deterministic deprecation-hint commit** whose parent is that tag commit (same fixed
+  author/date as tag synthesis, so recomputing it yields the same SHA). The sweep computes the
+  expected commit from the DB every pass, so deprecating, editing or un-deprecating a skill
+  converges `main` within one sweep without touching any tag.
+  This converges any partial state (lost volume, crash mid-sweep, tag-missing, main-missing,
+  stale hint) back to the canonical artifact store within one sweep.
 
 ### Format contract (Hosted)
 - **Accepted upload formats: `.tar.gz`/`.tgz`, `.zip`, and `.skill`.** The format is detected
@@ -776,7 +783,8 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Yank a version:** hidden from search/`latest` **and withdrawn from serving**. A leader sweep deletes the version's git tag from the served repo, so a pinned `npx skills add …#v<semver>` fails with *"remote branch not found"*. If it was the latest stable, the default branch repoints to the next stable. Authority: NS Admin (own) / Platform Admin (any). Yanking a skill's **last remaining version** (all versions yanked) also clears its **Featured** spotlight (§7).
 - **Restore re-publishes** the identical tag — synthesis is deterministic (fixed author/date), so the re-created tag points at the same commit; the version row/artifact are never mutated (invariant #2).
 - **Archive a skill:** soft-delete + audit. Withdrawn from the catalog, search, and the git server (clone → 404). **Reversible:** owners (platform/namespace admin or a maintainer) can still open an archived skill read-only via the detail page and **restore** it (admins); a manager-only **"Archived"** catalog toggle switches the catalog to show **only** the caller's owned archived skills (ownership-scoped, so it can't leak). Consumers get 404. Same authority for archive/restore. Archiving also **clears any Featured spotlight** — restoring does **not** re-pin it (§7).
-- **Pinned-to-yanked install is BLOCKED** (the tag is removed). This deliberately favors governance/safety over strict reproducibility — a yanked version is meant to be un-consumable; restore it if a pin must keep working. (A plain `git clone` has no channel to emit a "deprecated but proceed" warning, so the choice is binary: served or withdrawn.)
+- **Deprecate a skill (§45):** a **skill-level**, reversible marker *between* served and withdrawn — "deprecated, use X instead". The skill **keeps serving and installing** (every tag, `main`, download, MCP) and keeps accepting new versions (security fixes); it is **marked** on every surface, **sorted after** non-deprecated skills, **excluded from recommendations, Featured and request fulfilment**, and its watchers, maintainers and current installers are notified once. Authority: NS Admin (owner ns) / Platform Admin (any) — the same as archive. Deprecating **clears any Featured spotlight** (audited `skill.unfeatured`, like archive); un-deprecating does **not** re-pin it. Deprecation is independent of `status`: archiving a deprecated skill keeps the marker stored and restoring re-applies it.
+- **Pinned-to-yanked install is BLOCKED** (the tag is removed). This deliberately favors governance/safety over strict reproducibility — a yanked version is meant to be un-consumable; restore it if a pin must keep working. (A plain `git clone` has no channel to emit a "deprecated but proceed" warning for a **version**, so per-version the choice stays binary: served or withdrawn. The per-**skill** deprecation above is the soft middle state, and its only in-band channel is the `main` branch's hint commit, §45.4 — a pinned `#v<semver>` clone is byte-identical to the tag and carries no hint.)
 - Pointer versions pin an immutable external ref + a skilly semver label.
 
 ### Official skills (endorsement badge)
@@ -1107,7 +1115,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 
 - **Governance audit** (`audit_log`, append-only — enforced by the `audit_guard()` trigger; see the §3 note on the migration-0024 admin-trim carve-out, which is the only path that may UPDATE/DELETE and is itself audited):
   - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
-  - Catalog mutations (publish, new version, yank, archive, **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive or last-version yank, §7), visibility change, namespace reassignment, **`skill.namespace_shared` / `skill.namespace_unshared`** (§42 — payload: the grantee `namespace_id` + slug, and `via` = `manage` | `proposal_accept` | `direct_publish` | `visibility_org` — a reviewer's edit of the list lands at accept, so it is audited as `proposal_accept` with the accepting reviewer as actor), plus the existing `skill.maintainer_removed` for maintainers pruned by an unshare).
+  - Catalog mutations (publish, new version, yank, archive, **deprecate / un-deprecate** (`skill.deprecated` / `skill.undeprecated`, §45 — payload: `successorSkillId` + `successorSlug` (nullable), `note`, and on an edit `previousSuccessorSkillId`; **no actor PII beyond the standard actor columns**), **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive, last-version yank or **deprecation**, §7), visibility change, namespace reassignment, **`skill.namespace_shared` / `skill.namespace_unshared`** (§42 — payload: the grantee `namespace_id` + slug, and `via` = `manage` | `proposal_accept` | `direct_publish` | `visibility_org` — a reviewer's edit of the list lands at accept, so it is audited as `proposal_accept` with the accepting reviewer as actor), plus the existing `skill.maintainer_removed` for maintainers pruned by an unshare).
   - **Scan overrides** (`proposal.scan_override`).
   - **Content risk (§37.12):** `proposal.routed_to_review`, `skill.publish_scan_override`, `skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
@@ -1171,6 +1179,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To **effective maintainers**: `skill.content_risk` when the re-scan sweep first flags a published version (§37.5, **once per onset**), gated by `content_risk_notifications` (§37.9).
   - To **effective maintainers**: `skill.quality_low` when a version's quality assessment **settles at 2 stars or below** (§41.9, **once per assessment**), carrying the full list of findings and the AI recommendations; gated by `quality_notifications`.
   - To the **admins of each namespace a restricted skill is shared with** (§42): `skill.shared` when the grant is created (who shared it, from which namespace, CTA → the skill), and `skill.shared_new_version` when a new version of a skill shared with their namespace is published — they can see the skill but do not govern it, so this is awareness, not a review-queue item. Both are per-recipient, **deduped** against a `skill.new_version` row the same person already receives as watcher/maintainer, delivered over the same channels as `skill.new_version`, and **not** sent to platform admins who merely inherit access. No per-type opt-out in v1.
+  - To **watchers ∪ effective maintainers ∪ current installers** of a skill (§45.6): `skill.deprecated` when an admin deprecates it, or later **changes its successor** (a note-only edit does not re-fire; un-deprecating notifies nobody). *Current installer* = a user holding a **used, non-expired** personal `install` token on the skill (**inactive** installs are excluded — an expired credential is not a running installation), plus the **minting admin** of each active **system** install (`created_by_user_id`, when still present). Minus the actor; **one row per recipient** however many ways they qualify; visibility-filtered at insert, and the body names the successor **only for recipients who can see it**. Delivered over the same channels as `skill.new_version` (in-app + email/webhook), gated by the channel-level `email_notifications` toggle **only** — **no per-type opt-out** (it is actionable: something the recipient runs is being retired). Fired synchronously by the deprecation endpoint (web tier), like `skill.shared`.
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
@@ -1219,6 +1228,7 @@ current or future type can ever leak JSON to a user.
   | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
   | `skill.quality_low` | Low quality score | {ns}/{slug} v{semver} scored {stars} ★ ({score}/100, {mode}). *(+ the full findings list, then the AI summary and suggestions when present — §41.9)* | Open the Quality card → `/skills/{ns}/{slug}#quality`; plus **Draft improvements with {aiName}** → `/skills/{ns}/{slug}?draft=ai#quality` when §44.9 applies |
   | `skill.marked_official` | Skill marked official | {ns}/{slug} was marked official. | View the skill → `/skills/{ns}/{slug}` |
+  | `skill.deprecated` | Skill deprecated | {ns}/{slug} is deprecated — use {succNs}/{succSlug} instead. {note} *(without a visible successor: "{ns}/{slug} is deprecated. {note}")* | **Open the successor** → `/skills/{succNs}/{succSlug}` when the recipient can see it, else View the skill → `/skills/{ns}/{slug}` |
   | `request.fulfilled` | Skill request fulfilled | Your skill request "{requestTitle}" was fulfilled by {byName} with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
   | `proposal.submitted` | Proposal submitted | Your skill proposal was submitted and is awaiting review. | View it → `/proposals/{proposalId}` |
   | `proposal.needs_review` | New proposal to review | A new skill proposal is awaiting your review. | Review it → `/proposals/{proposalId}` |
@@ -1581,14 +1591,15 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Catalog & skills**
 - `GET /api/skills` — search/list (visibility-filtered, faceted); `q` runs the §34 engine and the response is `{ skills, matchMode }` (`"all" | "any"`, `null` without a query).
 - `GET /api/skills/featured` — the **Featured skills** home-page feed (§7): visibility-filtered, **live-published only**, most-recent-featured first, **not** sliced to the cap; an empty result ⇒ the section is omitted.
-- `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7).
+- `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7) + `deprecation` / `replaces[]` / `canDeprecate` (§45.8).
 - `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once, and **never listed as an installation** on the Installed Skills page (§23).
 - `POST /api/skills/:ns/:slug/install` — mint a **reusable** skill-scoped install command (interactive); body `{ semver?, expiresAt?, system? }` — `system: true` mints a **system installation** (§23), **platform-admin only, re-verified server-side**; **409** for a not-yet-`git_published` version (§6/§23). *(Endpoint is `install`, not `install-url`; tokens are reusable, not one-time.)*
 - `PUT|DELETE /api/skills/:ns/:slug/rating` (§18). `POST /api/skills/:ns/:slug/versions/:semver/quality/reassess` + `GET /api/admin/jobs/quality` (§41.11); `GET /api/skills` accepts `sort=quality` and `?minQuality=`; skill payloads carry `quality` (§41.11). `GET|PUT|DELETE /api/skills/:ns/:slug/maintainers` + `GET .../maintainers/candidates?q=` (§19). `POST /api/skills/:ns/:slug/watch` (watch/follow).
 - `GET /api/skills/:ns/:slug/usage-series?range=<7d|30d|90d|all>` — aggregate installs+views over time (visibility-gated; §21).
 - `GET /api/skills/:ns/:slug/versions/:semver/changes` — the published version's **file changes vs its immediate predecessor** (§10): `{ available, baselineSemver, added, modified, removed, unchanged, files[] }`, or `{ available: false, reason }` when there's no predecessor / no stored artifact yet. `?path=<file>` returns that file's unified line diff (or a `binary` / `tooLarge` marker). Gated by the **skill's own visibility** (invariant #3; archived → owners only, §7), rate-limited like `download`, cached by `(skill, semver)` — the reviewer counterpart is `GET /api/proposals/:id/changes` (§8).
 - `POST /api/skills/:ns/:slug/promote` — initiate promotion to global. `POST /api/skills/:ns/:slug/yank`, `.../archive`, `.../delete` (permanent; platform-admin, archived-only).
-- `POST /api/skills/:ns/:slug/feature { featured }` — Featured spotlight toggle (platform-admin, re-verified; **409** at the `max_featured_skills` cap; rejected for a non-installable/archived skill), §7.
+- `POST /api/skills/:ns/:slug/feature { featured }` — Featured spotlight toggle (platform-admin, re-verified; **409** at the `max_featured_skills` cap; rejected for a non-installable/archived/**deprecated** skill), §7.
+- `PUT /api/skills/:ns/:slug/deprecation { successor: "<ns>/<slug>" | null, note: string | null }` / `DELETE /api/skills/:ns/:slug/deprecation` — deprecate (or edit the deprecation) / un-deprecate a skill (§45.8). Platform admin or owning-namespace admin; **403** visible-but-unauthorized, **404** invisible, **409** archived skill, **422** ineligible successor (`not_found` · `self` · `archived` · `deprecated` · `audience`) or an over-long note. `GET /api/skills/suggest?scope=successor&for=<ns>/<slug>` — the successor picker (eligible candidates only, §45.3).
 - `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>`; audited `skill.share_link_created`. **404** for a skill the caller cannot see.
 - `GET /api/skills/:ns/:slug/grants` — the skill's shared namespaces (§42): `{ grants: [{ namespaceId, slug, displayName, grantedAt, grantedBy }], canManage, canRevoke: namespaceId[] }` (`canRevoke` = the chips this caller may remove — every chip for a sharer, only their own namespace's chip for a receiving-namespace admin); visible to anyone who can see the skill (archived: owners only), **404** otherwise. `PUT|DELETE /api/skills/:ns/:slug/grants/:namespaceId` — add / revoke a grant, **idempotent**; authority per the §4 matrix (**403** when visible but unauthorized, **404** when invisible); **409** when the skill is `org`-visible, archived, or the target is the owning namespace or `global`; **422** for an unknown namespace. Audited (§11). `GET /api/namespaces/share-targets` — the share picker's directory: every namespace except `global` as `{ id, slug, displayName }`, any signed-in user (names only, never skills).
 
@@ -2403,7 +2414,13 @@ works for both protocol versions).
   (see below). Rows are ordered **alphabetically by
   skill title** (case-insensitive, ascending; ties broken by most-recent `used_at`).
 - Edge actions (styled like the detail-page version buttons): **Uninstall** always; **Activate**
-  (date/Never picker) only when inactive. `GET /api/installs`, `DELETE /api/installs/[id]`,
+  (date/Never picker) only when inactive; **Install latest** (§45.5) on a row whose skill is
+  **deprecated with a visible, installable successor** — it mints a personal install of the
+  **successor at latest** (the same expiry picker as Activate, the same `POST
+  /api/skills/:ns/:slug/install` the detail page uses — no new endpoint) and shows the command
+  in an **inline copy-command panel under the row**; it never uninstalls the deprecated row. **Mine scope only**
+  (system installs are minted from the admin surface, §23). Deprecated rows also carry the
+  **`deprecated` pill** and a *"Use **<successor title>** instead"* link (§45.5). `GET /api/installs`, `DELETE /api/installs/[id]`,
   `PATCH /api/installs/[id] {expiresAt}` — owner-checked for personal rows; on **system** rows
   the check is **platform admin** instead (any admin, not just the minter).
 - **System installs view (platform admins only):** a **"Mine / System installs" toggle filter**
@@ -3409,9 +3426,11 @@ happens first on a given request wins; the other simply no-ops once the request 
 The second fulfilment path: instead of building something new, any user can point a request at a
 skill that **already** satisfies it.
 - On an **open** request's detail page, next to **"Propose a skill →"**, an inline search-and-select
-  control lets the user look up a skill by name. It searches **org-visible skills only**
-  (`visibility = 'org'`) — namespace-restricted skills are excluded even if the searching user has
-  access to them, so the resulting link is always openable by the requester and everyone else.
+  control lets the user look up a skill by name. It searches **org-visible, non-deprecated skills only**
+  (`visibility = 'org'` and not deprecated, §45) — namespace-restricted skills are excluded even if the searching user has
+  access to them, so the resulting link is always openable by the requester and everyone else, and a
+  deprecated skill is excluded (and refused server-side with **409 `deprecated`**) because a request
+  must never be "fulfilled" with something already being retired.
   Reuses the existing header-search autocomplete (`GET /api/skills/suggest`) with a new
   `scope=org` mode — same auth requirement, 2-char floor, result cap, and per-user rate limit as
   today's header search. It keeps **substring name matching** rather than the §34 engine (§34.2).
@@ -3917,8 +3936,8 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 **Core read (7)**
 | Tool | Behavior |
 |---|---|
-| `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`, `minQuality`), same sorts (incl. `quality`), same visibility filter. Paginated. Each hit carries `quality` (§41.11). Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
-| `get_skill` | §15 detail: metadata, versions, rating aggregate, **quality** (score, stars, mode — never the AI remarks, §41.11), maintainers, `latestInstallable`, `publishing`, external-source panel data. |
+| `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`, `minQuality`), same sorts (incl. `quality`), same visibility filter. Paginated. Each hit carries `quality` (§41.11) and **`deprecation`** (`null`, or `{ note, successor: { namespaceSlug, slug, title } | null }` — the successor only when the caller can see it, §45.7). Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
+| `get_skill` | §15 detail: metadata, versions, rating aggregate, **quality** (score, stars, mode — never the AI remarks, §41.11), maintainers, `latestInstallable`, `publishing`, external-source panel data, **`deprecation`** and **`replaces[]`** (§45.7). |
 | `get_skill_content` | Raw `SKILL.md` for a version (default: latest stable). The tool twin of the resource read, with identical counting (§29 *Adoption*). |
 | `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
 | `get_skill_file` | One file from a version's bundle. Text inline; binary as a base64 blob; over `mcp_max_resource_bytes` → a clear error naming the `download` route. |
@@ -3928,8 +3947,8 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 **Install (4)**
 | Tool | Behavior |
 |---|---|
-| `install_skill` | Mints a **personal** §23 install token (`semver?`, `expiresAt?` honoring `install_max_ttl_months`) and returns the `npx skills add …` command. **`system: true` is refused** — system installations are platform-admin-only and administration is out of surface. **409** for a not-yet-`git_published` version, exactly as `POST /api/skills/:ns/:slug/install`. |
-| `list_installed_skills` | The caller's own installations with their derived state (§23) **and their freshness** (§23 *Installed-version freshness*): each row carries `installedVersion` (= `lastServedSemver`), `latestVersion`, `freshness` (`current` \| `behind` \| `withdrawn` \| `unknown`), `pinned` (bool), and for a behind/withdrawn row a `refresh` hint — `{ action: "rerun" }` (latest-tracking: re-run the **same** `npx skills add` command the caller already holds, or `npx skills update`; no re-mint — tokens are **hashed at rest**, so the registry cannot rebuild the command and never hands a credential back) or `{ action: "reinstall", semver }` (pinned: call `install_skill` with the new `semver`; the old pinned installation stays until `uninstall_skill`). Optional input `onlyBehind: true` returns just the behind/withdrawn rows. **This is the "check for updates" tool** — folded in rather than added, so the §29 tool ceiling holds (no new tool). Personal installs only (`?scope=system` has no MCP equivalent); a check is a read — no audit row, no `access_log`, no stamp. |
+| `install_skill` | Mints a **personal** §23 install token (`semver?`, `expiresAt?` honoring `install_max_ttl_months`) and returns the `npx skills add …` command. **`system: true` is refused** — system installations are platform-admin-only and administration is out of surface. **409** for a not-yet-`git_published` version, exactly as `POST /api/skills/:ns/:slug/install`. A **deprecated** skill still installs; the response then carries a **`warning`** string naming the successor the caller can see (§45.7). |
+| `list_installed_skills` | The caller's own installations with their derived state (§23) **and their freshness** (§23 *Installed-version freshness*): each row carries `installedVersion` (= `lastServedSemver`), `latestVersion`, `freshness` (`current` \| `behind` \| `withdrawn` \| `unknown`), `pinned` (bool), and for a behind/withdrawn row a `refresh` hint — `{ action: "rerun" }` (latest-tracking: re-run the **same** `npx skills add` command the caller already holds, or `npx skills update`; no re-mint — tokens are **hashed at rest**, so the registry cannot rebuild the command and never hands a credential back) or `{ action: "reinstall", semver }` (pinned: call `install_skill` with the new `semver`; the old pinned installation stays until `uninstall_skill`). Each row also carries **`deprecation`** (§45.7, same shape as `search_skills`). Optional input `onlyBehind: true` returns just the behind/withdrawn rows. **This is the "check for updates" tool** — folded in rather than added, so the §29 tool ceiling holds (no new tool). Personal installs only (`?scope=system` has no MCP equivalent); a check is a read — no audit row, no `access_log`, no stamp. |
 | `uninstall_skill` | Hard-deletes one of the caller's own install tokens. *(This is not "irreversible destruction" in the §29 exclusion sense — it destroys a credential the caller owns, not catalog content or history; install counts are preserved per §23.)* |
 | `reactivate_install` | Sets a new `expires_at` on the caller's inactive install (§23). |
 
@@ -3966,7 +3985,7 @@ authors; a human decides. The tool descriptions say so, so the boundary isn't a 
 - **Irreversible destruction** — permanent skill delete, proposal delete, GDPR erase, audit trim.
 - **All of `/api/admin/*`** — settings, namespaces, role mappings, the email channel, user search,
   presence.
-- **Catalog governance** — yank, archive, promote, feature/un-feature, mark-Official.
+- **Catalog governance** — yank, archive, promote, feature/un-feature, mark-Official, **deprecate / un-deprecate** (§45).
 - **Audit and system-log reads** (§11/§25), and **direct person-to-person messaging** (§24 chats).
 - **The `system` install flag** (§23).
 - **Collection writes** — create, rename, delete, add or remove members (§38.9). Agents read collections; people curate them.
@@ -4530,7 +4549,10 @@ panel's default tab changes — the fallback is already specced and implemented.
   synthesis rewrites a whole repo and must not sit in the publish path.
 - Each sweep computes, per enabled marketplace, a **content hash** over its qualifying
   skills (namespace slug, slug, title, description, the sorted **category slugs**, latest-stable
-  semver, bundle `content_sha256`) plus the sorted list of merged component files per plugin.
+  semver, bundle `content_sha256`, and the **deprecation inputs** — `deprecated_at`, successor
+  `ns/slug`, note — because a deprecated member's embedded `skills/<slug>/SKILL.md` is written
+  **through the same §45.4 hint rewrite** as its own repo's `main`) plus the sorted list of merged
+  component files per plugin.
   Unchanged ⇒ no commit. Changed ⇒ the repo is rebuilt and **one commit** is written to `main`
   whose message enumerates the added/updated/removed **skill** slugs — that message is the
   attribution ledger §30.7 reads and it **stays skill-level**: plugins are a delivery grouping,
@@ -6289,8 +6311,10 @@ popularity keys **within** each tier:
 | **4** | *(any-word fallback only)* **some** positive units match — sub-ordered by **how many** units matched (desc), then hits within A–C before hits only in usage/body |
 | **5** | **substring or typo only** — sub-ordered substring in the name › substring in description/usage › typo |
 
-- **Within a tier:** `install_count` desc → Bayesian-smoothed rating desc (§18) → Official first (§7)
+- **Within a tier:** **non-deprecated first** (§45 — a deprecated skill never outranks a live one that
+  matched equally well) → `install_count` desc → Bayesian-smoothed rating desc (§18) → Official first (§7)
   → title → namespace slug → skill slug. The order is **total**, so MCP `offset` pagination is stable.
+  The same **deprecated-last** key leads **every** catalog sort and the no-query ordering (§45.5).
 - **Why the tiers split name / description + categories / anywhere:** a body is long and matches
   common words incidentally. A single "anywhere" tier would let a popular skill whose instructions
   happen to mention *pdf* and *table* outrank one *described* as "Extract tables from PDFs".
@@ -9256,3 +9280,258 @@ Computed server-side from the base version's artifact and its latest scan report
   the user re-runs (rate limit permitting) or drafts fewer files.
 - The model can "fix" a finding wrongly or change meaning; the per-file diff, the proposer's own
   submit and the normal review are the controls — the draft carries no authority of its own.
+
+---
+
+## 45. Skill deprecation with a successor
+
+Lifecycle was binary: a skill is **served** or it is **withdrawn** (a yanked version, an archived
+skill). Real retirements are softer — *"this still works, but use that instead"* — and the binary
+model forced owners to either leave consumers uninformed or cut them off. §45 adds a **per-skill,
+reversible "deprecated, use X instead" state** that keeps serving while marking every surface,
+notifying the people who run the skill, and leaving an in-band hint in the git-served `main` so
+**agents** see it too.
+
+### 45.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Skill-level, not version-level.** One marker per skill; no per-version deprecation. | Matches the visibility and Official precedents (§7); "use X instead" is about the skill, and per-version would re-open the yank design. |
+| 2 | **Keeps serving, keeps installing, keeps accepting versions.** Every tag, `main`, download, MCP read and `install` keep working; new versions (security fixes) may still be published. | Deprecation is advice, not withdrawal — yank/archive remain the withdrawal tools. |
+| 3 | **Successor is an optional FK to a skilly skill**, plus an optional plain-text note. "Deprecated, no replacement" is valid. | A link that is a real skill can be rendered, visibility-filtered, installed and notified; free text cannot. The note carries anything else. |
+| 4 | **Successor audience must cover the deprecated skill's audience** at set time (45.3). | Invariant #3: an `org` skill naming a restricted successor would show its name to everyone. |
+| 5 | **Render-time visibility filter is the guarantee**, the set-time check is UX. A viewer who cannot see the successor sees "deprecated" with **no successor named**. | Grants and visibility can change after the fact; the filter holds regardless. |
+| 6 | **The hint lives on `main` only**, as a deterministic commit on top of the latest-stable tag. Tags are **byte-identical** to the version artifact; a pinned clone carries no hint. | Invariants #2 and §7's "skilly never rewrites the file": only the mutable default branch may differ from the artifact. |
+| 7 | **Authority = archive's**: platform admin (any), owning-namespace admin. Not maintainers, not grantee-namespace admins, **no MCP tool**. | Deprecation retires something people depend on; it is governance, not maintenance. The MCP exclusion list already names catalog governance (§29). |
+| 8 | **Notify once**, to watchers ∪ effective maintainers ∪ current installers, emailed, no per-type opt-out; re-notify only when the successor changes. | The people who run the skill must hear it; a note edit is not a new event. |
+| 9 | **Deprecated skills stay in search and the catalog**, sorted after live ones; no new filter. | Hiding them breaks "find the thing I installed"; a visible marker plus sort penalty is enough. |
+| 10 | **Excluded from** Featured (cleared on deprecate), recommendations (§3 `related_skills`), request fulfilment (§26) and promotion to global (§8). **Official is left alone.** | Those surfaces *promote* a skill; promoting a retired one is a contradiction. Official is a provenance claim, not a promotion. |
+| 11 | **Independent of `status`.** Archiving a deprecated skill keeps the marker stored; restore re-applies it. Un-deprecating clears all four columns. | One axis per concept; no state explosion. |
+
+### 45.2 Data model (migration 0089)
+- `skills.deprecated_at timestamptz NULL`, `skills.deprecated_by uuid NULL` (FK `users`, `ON DELETE
+  SET NULL`), `skills.successor_skill_id uuid NULL` (FK `skills`, `ON DELETE SET NULL`),
+  `skills.deprecation_note text NULL` (≤ 1,000 chars, **plain text** — rendered escaped with newlines
+  preserved, no Markdown, like `what_changed`).
+- Constraints: `CHECK (successor_skill_id IS DISTINCT FROM id)`; `CHECK (deprecated_at IS NOT NULL OR
+  (successor_skill_id IS NULL AND deprecation_note IS NULL))`. Index on `successor_skill_id` (the
+  reverse "replaces" lookup).
+- **Deprecated ⇔ `deprecated_at IS NOT NULL`.** The successor's own row is **not** changed by being
+  named (no back-pointer column; `replaces[]` is a query).
+- Nothing on `skill_versions`, `skill_version_search` or the FTS columns changes: the hint (45.4) is
+  never indexed and never alters `content_sha256`, `artifact_sha256` or the body text (§34.3).
+
+### 45.3 Setting, editing and clearing
+- **Who:** per the §4 matrix row — platform admin, or an admin of the **owning** namespace
+  (`skills.namespace_id`). Explicit maintainers and grantee-namespace admins (§42) have no authority.
+- **Preconditions on the skill:** `status = 'active'` (**409** for an archived skill — restore first).
+  A skill with zero published versions may be deprecated (nothing to serve yet, but the catalog
+  marker is still meaningful).
+- **Successor eligibility (all checked server-side at set time, `422` with a reason code):**
+  - `not_found` — no such `ns/slug`, or one the **actor** cannot see (never distinguished).
+  - `self` — the skill itself.
+  - `archived` — successor `status <> 'active'`.
+  - `deprecated` — the successor is itself deprecated (no chains at set time; see *Later changes*).
+  - `audience` — the successor's audience does not cover the deprecated skill's: a successor with
+    `visibility = 'org'` is always eligible; a `namespace` successor is eligible **only if** the
+    deprecated skill is also `namespace` **and** (owner ∪ grants)(deprecated) ⊆ (owner ∪
+    grants)(successor) (§42). The check is a pure function in `@skilly/shared`
+    (`successorEligibility`), unit-tested.
+- **Picker:** `GET /api/skills/suggest?scope=successor&for=<ns>/<slug>` — the header-suggest
+  endpoint's third special scope (after `mention` and `org`, §34.2): substring matching, 2-char
+  floor, same cap and rate limit, returning **only eligible candidates** for the given skill (the
+  server re-validates on `PUT` regardless).
+- **Edit** = `PUT` again with a different successor and/or note (idempotent; `deprecated_at` and
+  `deprecated_by` are **not** rewritten by an edit — they record the original deprecation).
+  **Clear** = `DELETE` (idempotent; **204** even when not deprecated).
+- **Side effects on deprecate:** clears Featured if set (audited `skill.unfeatured`, actor = the
+  deprecating admin); audit `skill.deprecated`; notifications (45.6); the `main` hint lands at the
+  next publish/self-heal sweep (≤ 60 s). **On un-deprecate:** audit `skill.undeprecated`; `main`
+  returns to the tag commit at the next sweep; no notification.
+- **Later changes (no automatic action, by decision 5):**
+  - Successor **archived** → treated as **absent** on every surface and in the hint (no name, no
+    link; the row keeps `successor_skill_id`), so un-archiving it brings it back. Admins see a
+    *"successor is archived — pick another"* hint on the banner.
+  - Successor **deprecated later** (a chain) → shown as the direct successor only; no chain
+    resolution. Admins see *"Successor is itself deprecated"*.
+  - Successor **hard-deleted** → `ON DELETE SET NULL`; the note survives.
+  - Successor's visibility narrowed / grants revoked → the render-time filter hides it from
+    viewers who lost access; the deprecating admin is **not** warned (accepted trade-off, 45.11).
+- **Promotion to global** (§8) of a deprecated skill is refused (**409 `deprecated`**); the
+  promoted copy of a *non*-deprecated skill starts un-deprecated (nothing to carry).
+
+### 45.4 The install hint (git `main`)
+- **Where:** the skill's served repo **`main` branch only** (and the embedded copy inside its
+  marketplace plugin, §30.5). **Every `v<semver>` tag stays byte-identical** to its artifact; a
+  pinned `npx skills add …#v1.2.0` sees no hint. Pointer mirrors behave identically (the served
+  repo is skilly's).
+- **What:** a single commit, **parent = the latest-stable tag's commit**, same fixed author/date and
+  message convention as tag synthesis (`skilly: deprecation notice`), whose only change is the
+  root `SKILL.md` rewritten by the pure function `buildDeprecationHint(skillMd, { successor, note,
+  successorUrl })` in `@skilly/shared`:
+  1. **Frontmatter** (a **line-based** rewrite — the registry has no YAML library and validation's
+     own parser is line-based — so every untouched line stays byte-identical): `deprecated: true`
+     and, when a successor is set **and active**, `superseded_by: "<ns>/<slug>"` inserted right
+     after the opening `---` (any earlier copies of those keys are dropped first); `description`
+     **prefixed** with `DEPRECATED — use <ns>/<slug> instead. ` (or `DEPRECATED. ` without a
+     successor) — in place for an inline scalar, quoted or not, and as the block's first content
+     line for a `|`/`>` block scalar. The prefix is what triggering-time agents read; `name` is
+     never touched (it must still equal the slug).
+  2. **Body:** a banner inserted immediately after the frontmatter, wrapped in
+     `<!-- skilly:deprecation -->` … `<!-- /skilly:deprecation -->` marker comments (so a re-run
+     replaces rather than stacks it) — a blockquote *"**Deprecated.** Use `<ns>/<slug>` instead —
+     &lt;successorUrl&gt;"* (or *"**Deprecated.**"*) followed by the note, line by line, when
+     present; one blank line separates it from the body, which is otherwise untouched.
+     `successorUrl` = `<APP_URL>/skills/<ns>/<slug>` (the catalog page — auth-required like every
+     catalog link; never a clone URL, never a token).
+  - If the frontmatter fails to parse (impossible for an ingested bundle, defensive only) the
+    frontmatter is left as-is and only the banner is inserted.
+  - **Deterministic**: same inputs ⇒ same bytes ⇒ same commit SHA, so the self-heal sweep (§6)
+    recomputes and compares instead of tracking state; the function is unit-tested for
+    idempotence (applying it to already-hinted content yields the same output). The worker caches
+    the hint SHA in a small marker file inside the bare repo keyed by (base tag commit, hint
+    inputs), so the steady-state check reads refs from the filesystem and spawns no git process;
+    the marker is advisory — deleting it merely recomputes the same SHA.
+- **When:** every writer of `main` goes through one `ensureMain` — the publish sweep (right after
+  a new latest-stable tag), the self-heal sweep, the yank withdrawal (which now reconciles `main`
+  unconditionally, so a `main` sitting on a hint commit whose parent tag was yanked is repaired
+  too) and a dedicated **deprecation sync** that runs each sweep over every served skill (the
+  self-heal sweep's batch window would otherwise delay a change on a large catalog). Expected =
+  hint commit when deprecated, tag commit otherwise. A new latest-stable version of a deprecated
+  skill therefore gets a fresh hint commit on top of the new tag in the same pass, and a
+  (un)deprecation lands within one sweep (≤ 60 s).
+- **Freshness (§23/§39):** a latest-tracking clone is stamped with the semver of `main`'s **base
+  tag** — the hint commit's parent when deprecated — never "unknown" because `main` is not itself a
+  tag commit. `last_served_semver` semantics are otherwise unchanged.
+- **Marketplaces (§30):** the member copy at `skills/<slug>/SKILL.md` is written through the same
+  function; the deprecation inputs join the content hash so a (un)deprecation triggers a rebuild.
+- **Not affected:** `GET …/readme` and MCP `get_skill_content` render the **version's** `SKILL.md`
+  (artifact bytes, no hint) — the UI banner and the `deprecation` field are the signal there;
+  download, FTS, `skill_version_search`, `content_sha256`, duplicate detection.
+- **Visibility of the hint:** the hint names `ns/slug` to every cloner. A cloner holds a token to
+  the deprecated skill, hence can see it; by 45.3 the successor's audience covers it at set time.
+  System installs (no viewer) and later grant changes are the accepted gap (45.11).
+
+### 45.5 Surfaces
+- **Catalog card / list row / Featured feed / collections (§38) / header suggest:** a
+  **`deprecated` pill** (warning tone, beside `restricted`/`shared`/`external`), whose tooltip and
+  accessible name are the full text *"Deprecated — use <successor title> instead"* or
+  *"Deprecated"*. The list row and the suggest hit render the text inline. The successor is named
+  **only** when the viewer can see it (45.1 #5). A deprecated skill is never Featured, so the feed
+  case is moot after the auto-clear.
+- **Sorting:** **non-deprecated first** is the leading key of **every** catalog sort (Relevance
+  within each tier, §34.6; Top rated, Latest, Highest quality, and the no-query popularity order),
+  including `?mine=1`. No new facet or filter.
+- **Detail page:** a **banner** directly under the header — *"This skill is deprecated. Use
+  **<successor title>** instead."* with the note beneath, and a **"Go to <successor title> →"**
+  button (visible successor only). The **Install panel keeps the command**, with the same warning
+  line and the same button above it. **Rating, watching, discussion, download and new-version
+  proposals stay open.** The actions row gains **Deprecate…** (a dialog: successor picker +
+  note), **Edit deprecation…** and **Un-deprecate** for authorized users (`canDeprecate`); the
+  banner's provenance line carries the 45.3 successor hints for them. The quality card, content-risk and AI drafting (§37/§41/§44) are unchanged.
+- **Successor's detail page:** a muted **"Replaces <ns>/<slug>"** line under the header for each
+  active, visible skill that names it as successor (`replaces[]`, visibility-filtered; hidden when
+  empty). Read-only.
+- **Installed page (§23):** each row of a deprecated skill carries the `deprecated` pill and *"Use
+  <successor title> instead"* (link) and — when the successor is visible and installable
+  (`latestInstallable` non-null) — the **Install latest** edge action: mints a personal install of
+  the successor at latest via the detail page's install endpoint after the standard expiry picker,
+  shows the command in an inline copy panel under the row, and leaves the deprecated row untouched (uninstalling is a
+  separate choice; §39's freshness axis is orthogonal — deprecation never makes a row *behind*).
+  Mine scope only. The header live-filter matches the same fields as before (not the successor).
+- **Archived view:** the manager-only Archived catalog toggle shows the pill as well.
+- **Proposals / review pages:** a new-version proposal **to** a deprecated skill shows a one-line
+  notice *"This skill is deprecated (use <successor>)"* so reviewers know; it blocks nothing.
+
+### 45.6 Notifications
+- **Type `skill.deprecated`** (§12). **Recipients:** explicit watchers (`skill_watches`) ∪ effective
+  maintainers (§19) ∪ **current installers** — users with a **used, non-expired** personal
+  `install` token on the skill (`used_at NOT NULL AND (expires_at IS NULL OR expires_at > now())`)
+  — ∪ the **minting admin** of each active **system** install (`created_by_user_id`, if the user
+  still exists). Minus the actor. **One row per user.** Visibility-filtered at insert (all qualify
+  by construction; the filter is defence-in-depth).
+- **Content:** per §12's table; the body names the successor **only for recipients who can see it**
+  (per-recipient check at insert); the CTA is the successor when visible, else the skill.
+- **Channels:** in-app + email/webhook like `skill.new_version`; gated by the channel-level
+  `email_notifications` toggle only; **no per-type opt-out**; not coalesced.
+- **When:** on `PUT` that *starts* a deprecation, and on a `PUT` that **changes the successor**
+  (including to/from `null`). A note-only edit and `DELETE` notify nobody. No `follow.*` fan-out.
+
+### 45.7 MCP (§29) — fields, not tools
+- `search_skills` hits, `list_installed_skills` rows and `get_skill` carry **`deprecation`**: `null`,
+  or `{ deprecatedAt, note, successor: { namespaceSlug, slug, title } | null }` — the successor
+  only when the caller can see it. `get_skill` also returns `replaces[]`.
+- `install_skill` still mints for a deprecated skill and adds **`warning`**: *"<ns>/<slug> is
+  deprecated — use <succ> instead"* (or without the successor).
+- `get_skill_content` is unchanged (artifact bytes). Tool descriptions of `search_skills` and
+  `install_skill` mention the field. **No new tool**; the tool-count test still asserts the §29
+  ceiling (25 since §38.9).
+- Deprecate / un-deprecate are **not** reachable via MCP (excluded surface).
+
+### 45.8 API surface
+- `PUT /api/skills/:ns/:slug/deprecation { successor: "<ns>/<slug>" | null, note: string | null }` →
+  `200 { deprecation }`; `DELETE /api/skills/:ns/:slug/deprecation` → `204`. Errors per §15:
+  **403 / 404 / 409 `archived` / 422** (`not_found` · `self` · `archived` · `deprecated` ·
+  `audience` · `note_too_long`). Rate-limited with the other management writes.
+- `GET /api/skills/:ns/:slug` gains **`deprecation`**: `null` or `{ deprecatedAt, deprecatedBy:
+  { id, displayName } | null, note, successor: { namespaceSlug, slug, title, icon, installable }
+  | null, successorState: 'ok' | 'hidden' | 'archived' | 'deprecated' | 'none' }` (`successorState`
+  is `hidden` for a viewer who cannot see it — the successor object is then `null`; `archived` /
+  `deprecated` are returned **only** to `canDeprecate` viewers, everyone else gets `hidden`),
+  **`replaces`**: `[{ namespaceSlug, slug, title }]`, and **`canDeprecate`**.
+- `GET /api/skills` items, `GET /api/skills/suggest` hits, `GET /api/skills/featured`, collection
+  items (§38) and `GET /api/installs` rows gain the light **`deprecation`** `{ note, successor:
+  { namespaceSlug, slug, title } | null } | null` (visibility-filtered).
+- `GET /api/skills/suggest?scope=successor&for=<ns>/<slug>` (45.3).
+- `POST /api/skills/:ns/:slug/feature`, `POST …/promote` and the §26 fulfil-with-existing path
+  return **409 `deprecated`** for a deprecated skill.
+
+### 45.9 Security, visibility & governance
+- **Invariant #3:** the successor is rendered, notified and returned **only** to viewers who can
+  see it; the set-time audience rule keeps the git hint honest for every token holder. A `422
+  not_found` is returned for an invisible candidate exactly as for a missing one.
+- **Invariant #2:** no tag, artifact or version row changes; only `main` (already mutable) differs.
+- **Invariant #5:** two new append-only audit actions; `deprecated_by` is provenance, not audit.
+- **Invariant #6:** the hint carries a catalog URL, never a clone URL or token.
+- **Metrics:** `skilly_skills_deprecated` (gauge) joins the catalog gauges.
+
+### 45.10 Tests (ship with the change)
+- **Unit (`@skilly/shared`):** `successorEligibility` over org/namespace/grants combinations
+  (org→org ✓, org→ns ✗, ns→org ✓, ns→ns same owner ✓, ns→ns grants-superset ✓, ns→ns grants-subset ✗,
+  self ✗, archived ✗, deprecated ✗); `buildDeprecationHint` — frontmatter keys added, `description`
+  prefixed with and without a successor, `name` untouched, banner placement, note escaping,
+  unparsable frontmatter → banner only, **idempotence**, determinism (same input ⇒ same bytes);
+  the catalog sort key (deprecated last in every sort).
+- **Integration (web API + DB):** `PUT`/`DELETE` authority matrix (platform admin / owner-ns admin
+  200; grantee-ns admin, explicit maintainer, member 403; invisible 404; archived 409); every 422
+  reason; idempotent edit and clear; audit rows (`skill.deprecated` incl. `previousSuccessorSkillId`
+  on edit, `skill.undeprecated`, automatic `skill.unfeatured`); notification recipients (watcher,
+  explicit maintainer, namespace admin, **active** installer, **inactive installer excluded**,
+  system-install minter, actor excluded, one row for a watcher-who-installed; successor omitted for
+  a recipient who cannot see it; re-fire on successor change, none on note edit or un-deprecate);
+  detail/list/suggest/installs payloads incl. `successorState: hidden` for an outsider; `replaces[]`;
+  feature/promote/fulfil 409; `related_skills` recompute never emits a deprecated neighbour;
+  `scope=successor` suggest returns only eligible candidates; MCP fields + the tool-ceiling assertion;
+  migration 0089 applies and its CHECKs reject an orphan note.
+- **Integration (worker):** publish sweep writes the hint commit on `main` with the tag commit as
+  parent and **every tag SHA unchanged**; clone of `main` yields the rewritten `SKILL.md`, clone of
+  `#v<semver>` yields the artifact bytes; self-heal converges a stale/missing hint and restores
+  `main` to the tag commit after un-deprecate; a new stable version of a deprecated skill gets a
+  hint on top of the new tag; freshness stamping yields the base tag's semver; marketplace rebuild
+  embeds the hinted member and its hash changes.
+- **e2e:** admin deprecates skill A with successor B and a note → the catalog card shows the pill
+  and sorts A after B → A's detail shows the banner and *Go to B* while *Install* still works →
+  the Installed page row for A shows the marker and **Install latest** mints B's command → the
+  bell shows *Skill deprecated* → a member who cannot see restricted B sees "deprecated" with no
+  successor → **Un-deprecate** clears the banner and pill.
+
+### 45.11 Out of scope & accepted trade-offs
+- **Out of scope:** per-version deprecation; a "hide deprecated" catalog filter; automatic
+  migration of installs to the successor; deprecation via MCP or SCIM; a sunset date / scheduled
+  auto-archive; chain resolution to a final successor; notifying on un-deprecate.
+- **Pinned clones carry no hint** — the price of byte-identical tags.
+- **The git hint is not per-viewer.** A later grant revocation on the successor, or a system
+  install, can expose the successor's `ns/slug` (never its content) to a cloner who cannot open it.
+- **Agents that only read a pinned tag or `get_skill_content`** see no hint; the `deprecation`
+  field on `search_skills` / `get_skill` is the MCP signal.
+- The deprecating admin is not warned when a later visibility change hides the successor from
+  part of the audience.

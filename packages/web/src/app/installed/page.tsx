@@ -2,7 +2,7 @@
 import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
+import { useApi, Pill, EmptyState, ScrollToTop, CopyCommand } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
@@ -22,6 +22,8 @@ interface Install {
   clientUserAgent: string | null;
   clientIp: string | null;
   skillArchived: boolean;
+  /** §45: the skill is deprecated (successor only when this viewer can see it). */
+  skillDeprecation?: { note: string | null; successor: { namespaceSlug: string; skillSlug: string; title: string } | null } | null;
   /** System-installs view only (§23): the platform admin who minted it. */
   mintedBy?: string | null;
   /** Optional skill icon (§33) — image and/or emoji, or null. */
@@ -100,6 +102,29 @@ function InstalledInner() {
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [activateIso, setActivateIso] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
+  // §45.5 "Install latest": mint a personal install of the SUCCESSOR at latest from a deprecated row.
+  const [successorFor, setSuccessorFor] = useState<string | null>(null);
+  const [successorIso, setSuccessorIso] = useState<string | null>(null);
+  const [successorPending, setSuccessorPending] = useState(false);
+  const [successorCmd, setSuccessorCmd] = useState<{ rowId: string; command: string; expiresAt: string | null } | null>(null);
+
+  const installSuccessor = async (i: Install) => {
+    const succ = i.skillDeprecation?.successor;
+    if (!succ) return;
+    if (successorPending) { setMsg({ kind: "err", text: "Pick an expiry date first, or switch the expiry to Never." }); return; }
+    setBusyId(i.id); setMsg(null);
+    try {
+      const r = await fetch(`/api/skills/${succ.namespaceSlug}/${succ.skillSlug}/install`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ semver: null, expiresAt: successorIso }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { command?: string; expiresAt?: string | null; error?: string };
+      if (!r.ok || !j.command) throw new Error(j.error ?? "Failed to generate the install command");
+      setSuccessorCmd({ rowId: i.id, command: j.command, expiresAt: j.expiresAt ?? null });
+      setMsg({ kind: "ok", text: `Install command for ${succ.title} generated — run it, then uninstall this one when you're ready.` });
+    } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusyId(null); }
+  };
 
   const uninstall = async (i: Install) => {
     const what = scope === "system" ? `the SYSTEM install of ${i.namespaceSlug}/${i.skillSlug}? Anything using it (CI, org tools) will lose access` : `${i.namespaceSlug}/${i.skillSlug}? The install URL will stop working`;
@@ -209,6 +234,9 @@ function InstalledInner() {
                   {i.freshness === "withdrawn" && <Pill tone="danger">Withdrawn</Pill>}
                   {scope === "system" && <Pill tone="accent">System install</Pill>}
                   {i.skillArchived && <Pill tone="warn">archived</Pill>}
+                  {i.skillDeprecation && (
+                    <span title={i.skillDeprecation.successor ? `Deprecated — use ${i.skillDeprecation.successor.title} instead` : "Deprecated"} data-testid="installed-deprecated-pill"><Pill tone="warn">deprecated</Pill></span>
+                  )}
                   {i.inactive ? <Pill tone="danger">inactive</Pill> : <Pill tone="ok">active</Pill>}
                   <span className="muted mono" style={{ fontSize: 11 }} title={i.clientUserAgent ?? ""}>{clientLabel(i.clientUserAgent)}</span>
                   {i.clientIp && <span className="muted mono" style={{ fontSize: 11 }} title="IP this skill was installed from">from {i.clientIp}</span>}
@@ -220,10 +248,28 @@ function InstalledInner() {
                 <div className="install-freshness muted mono" data-freshness={i.freshness} style={{ flexBasis: "100%", fontSize: 11, marginTop: 4 }}>
                   {freshnessLine(i, fmt.date)}
                 </div>
+                {i.skillDeprecation?.successor && (
+                  // §45.5: the marker's sentence + a link to the successor (the row click still opens THIS skill).
+                  <div className="muted" style={{ flexBasis: "100%", fontSize: 12, marginTop: 2 }} onClick={(e) => e.stopPropagation()}>
+                    Deprecated — use <Link href={`/skills/${i.skillDeprecation.successor.namespaceSlug}/${i.skillDeprecation.successor.skillSlug}`} style={{ fontWeight: 600 }}>{i.skillDeprecation.successor.title}</Link> instead.
+                  </div>
+                )}
               </div>
               {/* Interactive controls stop the click from bubbling to the row's navigate handler —
                   otherwise "uninstall"/"activate" would both fire their action AND navigate away. */}
               <div className="version-actions" onClick={(e) => e.stopPropagation()}>
+                {scope === "mine" && i.skillDeprecation?.successor && (
+                  // §45.5 Install latest: mints the SUCCESSOR at latest (Mine scope only); never uninstalls this row.
+                  <button
+                    className="btn btn-sm btn-primary"
+                    disabled={busyId === i.id}
+                    onClick={() => { setSuccessorFor(successorFor === i.id ? null : i.id); setSuccessorIso(null); setSuccessorCmd(null); setActivatingId(null); }}
+                    title={`Generate an install command for ${i.skillDeprecation.successor.title} (latest)`}
+                    data-testid="install-latest"
+                  >
+                    install latest
+                  </button>
+                )}
                 {i.inactive && (
                   <button className="btn btn-sm" disabled={busyId === i.id} onClick={() => { setActivatingId(activatingId === i.id ? null : i.id); setActivateIso(null); }}>
                     activate
@@ -241,6 +287,29 @@ function InstalledInner() {
                   <span className="muted" style={{ fontSize: 12.5 }}>new expiry</span>
                   <ExpiryPicker maxMonths={me?.installMaxTtlMonths ?? 12} onChange={setActivateIso} />
                   <button className="btn btn-sm btn-primary" disabled={busyId === i.id} onClick={() => reactivate(i)}>Reactivate</button>
+                </div>
+              )}
+              {successorFor === i.id && i.skillDeprecation?.successor && (
+                <div
+                  style={{ flexBasis: "100%", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="install-latest-panel"
+                >
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="muted" style={{ fontSize: 12.5 }}>install <strong>{i.skillDeprecation.successor.title}</strong> (latest) · expires</span>
+                    <ExpiryPicker maxMonths={me?.installMaxTtlMonths ?? 12} onChange={setSuccessorIso} onPendingChange={setSuccessorPending} />
+                    <button className="btn btn-sm btn-primary" disabled={busyId === i.id} onClick={() => installSuccessor(i)} data-testid="install-latest-generate">
+                      {busyId === i.id ? "Working…" : "Generate command"}
+                    </button>
+                  </div>
+                  {successorCmd?.rowId === i.id && (
+                    <>
+                      <CopyCommand command={successorCmd.command} autoCopy />
+                      <div className="muted mono" style={{ fontSize: 11, marginTop: 8 }}>
+                        latest · {successorCmd.expiresAt ? `expires ${fmt.dateTime(successorCmd.expiresAt)}` : "never expires"} · this install stays until you uninstall it
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

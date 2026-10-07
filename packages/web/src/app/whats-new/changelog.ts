@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.24.0",
+    date: "2026-10-07",
+    summary:
+      "Skills can now be deprecated with a successor: a namespace or platform admin marks a skill \"deprecated, use X instead\" and it keeps installing while the catalog, its detail page, the Installed page and MCP results carry the marker. Watchers, maintainers and current installers are notified once, the Installed page offers one-click install of the successor, and the served SKILL.md on the default branch gains a deprecation hint so agents see it too (pinned versions stay byte-identical).",
+  },
+  {
     version: "2.23.1",
     date: "2026-10-07",
     summary:

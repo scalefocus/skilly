@@ -117,7 +117,7 @@ test("installs: freshness fields across current / behind / withdrawn / unknown, 
   // Yank 1.1.0 → the install that holds it is withdrawn.
   await pool.query(`update skill_versions set status = 'yanked' where skill_id = $1 and semver = '1.1.0'`, [skillA]);
 
-  const mine = await listInstalls(user);
+  const mine = await listInstalls(user, { isPlatformAdmin: true, namespaceRoles: new Map() });
   const by = (id: string) => mine.find((i) => i.id === id)!;
   assert.deepEqual(
     [tLatest, tPinnedOld, tPinnedBeta, tWillYank, tNoStamp, tBetaOnly].map((t) => by(t).freshness),
@@ -131,7 +131,7 @@ test("installs: freshness fields across current / behind / withdrawn / unknown, 
   assert.ok(!mine.some((i) => i.id === tSystem), "system rows never list under Mine");
 
   // System installs carry the same fields (the admin view IS the system scope + the filter).
-  const sys = (await listSystemInstalls()).find((i) => i.id === tSystem)!;
+  const sys = (await listSystemInstalls({ isPlatformAdmin: true, namespaceRoles: new Map() })).find((i) => i.id === tSystem)!;
   assert.equal(sys.freshness, "behind");
   assert.equal(sys.latestSemver, "1.2.0");
   assert.equal(sys.mintedBy, "Fresh Admin");
@@ -144,7 +144,7 @@ test("installs: freshness fields across current / behind / withdrawn / unknown, 
       where type = 'install' and used_at is not null and pinned_semver is not null and last_served_semver is null and id in ($1,$2)`,
     [tLegacyPinned, tLegacyLatest],
   );
-  const mine2 = await listInstalls(user);
+  const mine2 = await listInstalls(user, { isPlatformAdmin: true, namespaceRoles: new Map() });
   assert.equal(mine2.find((i) => i.id === tLegacyPinned)!.freshness, "behind");
   assert.equal(mine2.find((i) => i.id === tLegacyLatest)!.freshness, "unknown");
 

@@ -13,6 +13,7 @@ import { workerRateLimiter, mcpIpRateLimiter } from "./rateLimit.js";
 import { pgGitDeps } from "./git/pgDeps.js";
 import { publishPendingVersions, reprovisionMissingRepos } from "./git/publish.js";
 import { withdrawYankedVersions } from "./git/withdraw.js";
+import { syncDeprecationMains } from "./git/mainRef.js";
 import { syncMarketplaces, marketplaceSettings } from "./git/marketplaceSync.js";
 import { mirrorPendingVersions } from "./git/mirrorPending.js";
 import { s3ArtifactStore } from "./storage/objectStore.js";
@@ -111,6 +112,9 @@ async function leaderLoops(): Promise<void> {
       // Reflect yanks at the git layer: drop tags for yanked versions so they stop cloning.
       const w = await withdrawYankedVersions(pool, publishDeps.repoRoot);
       if (w > 0) console.log(JSON.stringify({ level: "info", msg: "withdrew yanked versions", count: w }));
+      // §45.4: reconcile every served skill's `main` with its deprecation state (hint commit on/off).
+      const d = await syncDeprecationMains(pool, publishDeps.repoRoot, (n) => M.skillsDeprecated.set(n));
+      if (d > 0) console.log(JSON.stringify({ level: "info", msg: "reconciled main for deprecation changes", count: d }));
     } catch (err) {
       console.error(JSON.stringify({ level: "error", msg: "publish sweep failed", err: String(err) }));
     }

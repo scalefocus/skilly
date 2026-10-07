@@ -2,6 +2,7 @@
 import { pool } from "./db";
 import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, sharedNamespaceIdsSql, seesViaGrantOnly, resolveSkillSearch, catalogOrderBy, collectionEligibleSql, type EffectiveAccess, type MatchMode } from "@skilly/shared";
 import { minQualityScore, qualityStars, type MinQuality, type QualityMode } from "@skilly/shared";
+import { deprecationLite, successorJsonSql, type DeprecationLite, type SuccessorJson } from "@skilly/shared";
 
 /** §41.11: the skill-level quality summary from the denormalized columns. */
 export function qualitySummary(score: number | null | undefined, mode: QualityMode | null | undefined): { score: number; stars: number; mode: QualityMode } | null {
@@ -48,6 +49,12 @@ export interface SkillRow {
   qualityMode: QualityMode | null;
   /** §42 grantee namespaces (empty for org skills / unshared skills). Feeds `isSkillVisible`. */
   sharedNamespaceIds: string[];
+  /** §45 deprecation: non-null ⇒ deprecated. */
+  deprecatedAt: string | null;
+  deprecatedBy: { id: string; displayName: string } | null;
+  deprecationNote: string | null;
+  /** The raw successor row (or null) — pass through `visibleSuccessor` before showing it to a viewer. */
+  successor: SuccessorJson | null;
 }
 
 export async function findSkill(namespaceSlug: string, skillSlug: string): Promise<SkillRow | null> {
@@ -70,13 +77,21 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
     quality_score: number | null;
     quality_mode: QualityMode | null;
     shared_namespace_ids: string[];
+    deprecated_at: string | null;
+    deprecated_by_id: string | null;
+    deprecated_by_name: string | null;
+    deprecation_note: string | null;
+    successor: SuccessorJson | null;
   }>(
     `select s.id, s.namespace_id, n.slug as namespace_slug, n.display_name as namespace_display_name, s.slug, s.visibility, s.status, s.tool_harness, s.created_at,
             s.official_at, ob.display_name as official_by_name, s.featured_at, s.icon_sha256, s.icon_emoji, s.quality_score, s.quality_mode,
             ${sharedNamespaceIdsSql("s")} as shared_namespace_ids,
+            s.deprecated_at, s.deprecated_by as deprecated_by_id, db.display_name as deprecated_by_name, s.deprecation_note,
+            ${successorJsonSql("s")} as successor,
             coalesce((select max(sv.created_at) from skill_versions sv where sv.skill_id = s.id), s.created_at) as updated_at
        from skills s join namespaces n on n.id = s.namespace_id
        left join users ob on ob.id = s.official_by
+       left join users db on db.id = s.deprecated_by
       where n.slug = $1 and s.slug = $2`,
     [namespaceSlug, skillSlug],
   );
@@ -102,6 +117,10 @@ export async function findSkill(namespaceSlug: string, skillSlug: string): Promi
         icon: iconView(r.icon_sha256, r.icon_emoji),
         qualityScore: r.quality_score,
         qualityMode: r.quality_mode,
+        deprecatedAt: r.deprecated_at,
+        deprecatedBy: r.deprecated_by_id ? { id: r.deprecated_by_id, displayName: r.deprecated_by_name ?? "" } : null,
+        deprecationNote: r.deprecation_note,
+        successor: r.successor,
       }
     : null;
 }
@@ -152,6 +171,8 @@ export interface CatalogEntry {
   /** §42: the owning namespace's display name when the CALLER sees this skill only through a
    *  grant — drives the "Shared with your namespace by <owner>" marker. Null otherwise. */
   sharedFrom?: string | null;
+  /** §45: null unless deprecated; the successor is named only when the caller can see it. */
+  deprecation?: DeprecationLite | null;
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
@@ -333,6 +354,7 @@ export async function searchCatalog(
     icon_sha256: string | null; icon_emoji: string | null;
     quality_score: number | null; quality_mode: QualityMode | null;
     namespace_id: string; namespace_display_name: string; shared_namespace_ids: string[];
+    deprecated_at: string | null; deprecation_note: string | null; successor: SuccessorJson | null;
   }>(
     `select s.id as skill_id, n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
             s.namespace_id, n.display_name as namespace_display_name, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids,
@@ -340,6 +362,7 @@ export async function searchCatalog(
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
             s.quality_score, s.quality_mode,
             (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji,
+            s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor,
             s.created_at as created_at,
             coalesce(max(sv.created_at), s.created_at) as updated_at,
             s.watcher_count::text as watcher_count,
@@ -387,6 +410,7 @@ export async function searchCatalog(
       sharedFrom: seesViaGrantOnly(access, { namespaceId: r.namespace_id, visibility: r.visibility, sharedNamespaceIds: r.shared_namespace_ids })
         ? r.namespace_display_name
         : null,
+      deprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
     };
   });
   return { skills, matchMode: engine?.matchMode ?? null };
@@ -424,7 +448,7 @@ export interface RelatedSkillsResult {
  */
 export async function relatedSkills(access: EffectiveAccess, skillId: string, viewerUserId: string | null, show = 3): Promise<RelatedSkillsResult> {
   const params: unknown[] = [skillId];
-  const where: string[] = ["rs.skill_id = $1", "s.status = 'active'"];
+  const where: string[] = ["rs.skill_id = $1", "s.status = 'active'", "s.deprecated_at is null"];
   {
     // Invariant #3 via the ONE shared predicate (@skilly/shared skillVisibilityWhere) — the same
     // implementation the worker's MCP tools use, so the two tiers can never disagree about who
@@ -518,10 +542,11 @@ export async function pendingMirrorStatus(skillId: string): Promise<PendingMirro
   return { semver: r.semver, attempts: r.attempts, failed: r.attempts >= max, lastError: r.last_error };
 }
 
-export interface SkillSuggestion { id: string; namespaceSlug: string; skillSlug: string; title: string; official: boolean; icon: SkillIconView | null }
+export interface SkillSuggestion { id: string; namespaceSlug: string; skillSlug: string; title: string; official: boolean; icon: SkillIconView | null; deprecation: DeprecationLite | null }
+type SuggestRow = { id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null; deprecated_at: string | null; deprecation_note: string | null; successor: SuccessorJson | null };
 
 /** The suggestions only — see suggestSkillsResult. */
-export async function suggestSkills(access: EffectiveAccess, q: string, limit = 5, opts: { orgOnly?: boolean; namespaceSlug?: string } = {}): Promise<SkillSuggestion[]> {
+export async function suggestSkills(access: EffectiveAccess, q: string, limit = 5, opts: { orgOnly?: boolean; namespaceSlug?: string; excludeDeprecated?: boolean } = {}): Promise<SkillSuggestion[]> {
   return (await suggestSkillsResult(access, q, limit, opts)).suggestions;
 }
 
@@ -538,12 +563,16 @@ export async function suggestSkillsResult(
   access: EffectiveAccess,
   q: string,
   limit = 5,
-  opts: { orgOnly?: boolean; namespaceSlug?: string } = {},
+  opts: { orgOnly?: boolean; namespaceSlug?: string; excludeDeprecated?: boolean } = {},
 ): Promise<{ suggestions: SkillSuggestion[]; matchMode: MatchMode | null }> {
   const params: unknown[] = [];
   const where: string[] = ["s.status = 'active'"];
-  const toSuggestion = (r: { id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null }): SkillSuggestion =>
-    ({ id: r.id, namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official, icon: iconView(r.icon_sha256, r.icon_emoji) });
+  // §45: the request-fulfilment picker never offers a deprecated skill; every other surface lists
+  // them (marked) — hiding them would break "find the thing I installed".
+  if (opts.excludeDeprecated) where.push("s.deprecated_at is null");
+  const toSuggestion = (r: SuggestRow): SkillSuggestion =>
+    ({ id: r.id, namespaceSlug: r.namespace_slug, skillSlug: r.skill_slug, title: r.title, official: r.official, icon: iconView(r.icon_sha256, r.icon_emoji),
+       deprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }) });
   if (!opts.namespaceSlug && !opts.orgOnly) {
     // Invariant #3 via the shared predicate (see the note in searchCatalog).
     const vis = skillVisibilityWhere(access, params);
@@ -551,8 +580,9 @@ export async function suggestSkillsResult(
     const engine = await resolveSkillSearch(pool, q, where, params);
     if (!engine) return { suggestions: [], matchMode: null };
     params.push(Math.min(10, Math.max(1, limit)));
-    const { rows } = await pool.query<{ id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null }>(
-      `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji
+    const { rows } = await pool.query<SuggestRow>(
+      `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji,
+              s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor
          from skills s join namespaces n on n.id = s.namespace_id
         where ${where.join(" and ")}
         order by ${catalogOrderBy("relevance", engine.relevance)}
@@ -575,8 +605,9 @@ export async function suggestSkillsResult(
   }
   const titleMatch = ilikeSearch(params, q, where);
   params.push(Math.min(10, Math.max(1, limit)));
-  const { rows } = await pool.query<{ id: string; namespace_slug: string; skill_slug: string; title: string; official: boolean; icon_sha256: string | null; icon_emoji: string | null }>(
-    `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji
+  const { rows } = await pool.query<SuggestRow>(
+    `select s.id, n.slug as namespace_slug, s.slug as skill_slug, s.title, (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji,
+            s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor
        from skills s join namespaces n on n.id = s.namespace_id
       where ${where.join(" and ")}
       order by case when ${titleMatch} then 0 else 1 end asc, s.install_count desc, s.title asc

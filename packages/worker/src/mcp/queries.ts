@@ -9,6 +9,7 @@
 // If you add a query here and hand-write `visibility = 'org' or namespace_id = ...`, you have
 // re-introduced exactly the divergence this file's header exists to prevent. Don't.
 import type { Pool } from "pg";
+import { deprecationLite, successorJsonSql, type DeprecationLite, type SuccessorJson } from "@skilly/shared";
 import {
   resolveLatest,
   skillVisibilityWhere,
@@ -47,6 +48,8 @@ export interface SkillHit {
   updatedAt: string;
   /** §41.11: the latest stable version's system quality (score 0–100, half-stars, mode), or null while unscored. */
   quality: { score: number; stars: number; mode: QualityMode } | null;
+  /** §45.7: null unless deprecated; the successor is named only when the caller can see it. */
+  deprecation: DeprecationLite | null;
   /** The MCP resource URI for this skill's latest stable SKILL.md — saves the agent a guess. */
   resourceUri: string;
   /** With a query (§34.11): the fields any query word matched. */
@@ -60,6 +63,7 @@ const HIT_COLUMNS = `s.id, n.slug as namespace_slug, s.slug as skill_slug, s.tit
         s.visibility, s.tool_harness, s.install_count::text as install_count,
         s.rating_sum::text as rating_sum, s.rating_count::text as rating_count,
         (s.official_at is not null) as official, s.quality_score, s.quality_mode,
+        s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor,
         coalesce(max(sv.created_at), s.created_at) as updated_at,
         coalesce((select array_agg(c.name order by c.name)
                     from skill_categories sc join categories c on c.id = sc.category_id
@@ -67,7 +71,8 @@ const HIT_COLUMNS = `s.id, n.slug as namespace_slug, s.slug as skill_slug, s.tit
         array_remove(array_agg(sv.semver) filter (where sv.status = 'active'), null) as versions`;
 
 const HIT_GROUP_BY = `group by n.slug, s.slug, s.title, s.description, s.type, s.visibility,
-        s.tool_harness, s.install_count, s.rating_sum, s.rating_count, s.official_at, s.quality_score, s.quality_mode, s.created_at, s.id`;
+        s.tool_harness, s.install_count, s.rating_sum, s.rating_count, s.official_at, s.quality_score, s.quality_mode, s.created_at, s.id,
+        s.deprecated_at, s.deprecation_note, s.successor_skill_id`;
 
 interface HitRow {
   id: string;
@@ -87,9 +92,12 @@ interface HitRow {
   quality_mode: QualityMode | null;
   updated_at: string;
   versions: string[] | null;
+  deprecated_at: string | null;
+  deprecation_note: string | null;
+  successor: SuccessorJson | null;
 }
 
-function toHit(r: HitRow): SkillHit {
+function toHit(r: HitRow, access: EffectiveAccess): SkillHit {
   const ratingCount = Number(r.rating_count);
   return {
     namespaceSlug: r.namespace_slug,
@@ -107,8 +115,19 @@ function toHit(r: HitRow): SkillHit {
     latest: resolveLatest(r.versions ?? []),
     updatedAt: r.updated_at,
     quality: r.quality_score == null || !r.quality_mode ? null : { score: Number(r.quality_score), stars: qualityStars(Number(r.quality_score)), mode: r.quality_mode },
+    deprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
     resourceUri: buildSkillResourceUri(r.namespace_slug, r.skill_slug),
   };
+}
+
+/** §45.7: one skill's `deprecation` as THIS caller may see it (the install_skill warning). */
+export async function skillDeprecation(pool: Pool, access: EffectiveAccess, skillId: string): Promise<DeprecationLite | null> {
+  const { rows } = await pool.query<{ deprecated_at: string | null; deprecation_note: string | null; successor: SuccessorJson | null }>(
+    `select s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor from skills s where s.id = $1`,
+    [skillId],
+  );
+  const r = rows[0];
+  return r ? deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }) : null;
 }
 
 export interface SearchOpts {
@@ -204,7 +223,7 @@ export async function searchSkills(
       countParams,
     ),
   ]);
-  const skills = hits.rows.map(toHit);
+  const skills = hits.rows.map((r) => toHit(r, access));
   if (engine && hits.rows.length) {
     // Why each hit matched (§34.11) — the returned page only, never the whole match set. Every row
     // here already passed the visibility filter above, so no snippet can quote an invisible skill.
@@ -358,14 +377,20 @@ export function resolveReadVersion(
 }
 
 export interface SkillDetail extends SkillHit {
+  /** §45.7: visible, active skills that name this one as their successor. */
+  replaces: Array<{ namespaceSlug: string; skillSlug: string; title: string }>;
   maintainers: Array<{ userId: string; name: string }>;
   versions: Array<{ semver: string; status: string; channel: string; createdAt: string; whatChanged: string | null; installable: boolean }>;
   external: { url: string; ref: string; subdir: string | null } | null;
   requiresReview: boolean;
 }
 
-export async function getSkillDetail(pool: Pool, skill: SkillRef): Promise<SkillDetail | null> {
-  const [hit, versions, maintainers, ns, ext] = await Promise.all([
+export async function getSkillDetail(pool: Pool, skill: SkillRef, access: EffectiveAccess): Promise<SkillDetail | null> {
+  const replParams: unknown[] = [skill.id];
+  const replWhere = ["s.successor_skill_id = $1", "s.status = 'active'", "s.deprecated_at is not null"];
+  const replVis = skillVisibilityWhere(access, replParams);
+  if (replVis) replWhere.push(replVis);
+  const [hit, versions, maintainers, ns, ext, repl] = await Promise.all([
     pool.query<HitRow>(
       `select ${HIT_COLUMNS}
          from skills s join namespaces n on n.id = s.namespace_id
@@ -385,12 +410,18 @@ export async function getSkillDetail(pool: Pool, skill: SkillRef): Promise<Skill
         where skill_id = $1 and external_origin_url is not null order by created_at desc limit 1`,
       [skill.id],
     ),
+    pool.query<{ namespace_slug: string; slug: string; title: string }>(
+      `select n.slug as namespace_slug, s.slug, s.title from skills s join namespaces n on n.id = s.namespace_id
+        where ${replWhere.join(" and ")} order by s.title asc`,
+      replParams,
+    ),
   ]);
   const base = hit.rows[0];
   if (!base) return null;
   const e = ext.rows[0];
   return {
-    ...toHit(base),
+    ...toHit(base, access),
+    replaces: repl.rows.map((r) => ({ namespaceSlug: r.namespace_slug, skillSlug: r.slug, title: r.title })),
     maintainers: maintainers.rows.map((m) => ({ userId: m.user_id, name: m.display_name })),
     versions: versions.map((v) => ({
       semver: v.semver,

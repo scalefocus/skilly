@@ -4,11 +4,12 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
 import { resolveUserAccess } from "../../../../lib/access";
-import { suggestSkills, suggestSkillsResult } from "../../../../lib/catalog";
+import { suggestSkills, suggestSkillsResult, findSkill } from "../../../../lib/catalog";
+import { suggestSuccessors } from "../../../../lib/deprecation";
 import { enforceRateLimit } from "../../../../lib/ratelimit";
 import { pool } from "../../../../lib/db";
 import { M } from "../../../../lib/metrics";
-import { SEARCH_MAX_CHARS } from "@skilly/shared";
+import { SEARCH_MAX_CHARS, isSkillVisible, canYankOrArchive } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -59,7 +60,17 @@ export async function GET(req: Request) {
     }
     return Response.json({ suggestions: await suggestSkills(access, q, 6, { orgOnly: true }) });
   }
-  if (orgOnly) return Response.json({ suggestions: await suggestSkills(access, q, 5, { orgOnly }) });
+  if (orgOnly) return Response.json({ suggestions: await suggestSkills(access, q, 5, { orgOnly, excludeDeprecated: true }) });
+  if (scope === "successor") {
+    // §45.3 the successor picker: eligible candidates only (active, not deprecated, audience ⊇ the
+    // skill's), for a skill the caller may manage. 404 for an invisible/unknown skill (no leak).
+    const forRef = url.searchParams.get("for") ?? "";
+    const [fns, fslug] = forRef.split("/");
+    const target = fns && fslug ? await findSkill(fns, fslug) : null;
+    if (!target || !isSkillVisible(access, target)) return Response.json({ error: "not found" }, { status: 404 });
+    if (!canYankOrArchive(access, target.namespaceId)) return Response.json({ error: "forbidden" }, { status: 403 });
+    return Response.json({ suggestions: await suggestSuccessors(access, target, q, 8) });
+  }
   // The header dropdown: the §34 engine. Counts only (§34.15).
   const { suggestions, matchMode } = await suggestSkillsResult(access, q, 5);
   M.searchRequests.inc({ surface: "suggest", mode: matchMode ?? "none" });

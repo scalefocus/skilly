@@ -326,3 +326,17 @@ test("renderNotification: skill.drift adds a sentence when the upstream change t
   const flagged = renderNotification({ type: "skill.drift", payload: { namespaceSlug: "team-a", skillSlug: "pdf", ref: "v1", contentRisk: true } });
   assert.match(flagged.text, /has drifted from its pinned upstream ref \(v1\)\. The upstream change also trips the content check\./);
 });
+
+test("renderNotification: skill.deprecated names the successor when the payload carries one, else the skill (§45.6)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const withSucc = renderNotification({
+    type: "skill.deprecated",
+    payload: { namespaceSlug: "team-a", skillSlug: "pdf", note: "Use the new one.", successorNamespaceSlug: "team-a", successorSlug: "pdf-next", successorTitle: "PDF Next" },
+  });
+  assert.equal(withSucc.subject, "Skilly - Skill deprecated");
+  assert.match(withSucc.text, /^team-a\/pdf is deprecated — use team-a\/pdf-next instead\. Use the new one\. \[Open the successor\]\(https:\/\/skilly\.test\/skills\/team-a\/pdf-next\)$/);
+  assert.equal(withSucc.webhook.successor, "team-a/pdf-next");
+  const plain = renderNotification({ type: "skill.deprecated", payload: { namespaceSlug: "team-a", skillSlug: "pdf", note: null } });
+  assert.match(plain.text, /^team-a\/pdf is deprecated\. \[View the skill\]\(https:\/\/skilly\.test\/skills\/team-a\/pdf\)$/);
+  assert.doesNotMatch(plain.text, /[{}]/);
+});

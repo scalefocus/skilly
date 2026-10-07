@@ -1375,10 +1375,10 @@ export async function promoteToGlobal(
   const skill = (
     await pool.query<{
       id: string; namespace_id: string; slug: string; title: string; description: string;
-      tool_harness: string; categories: string[];
+      tool_harness: string; categories: string[]; deprecated_at: string | null;
       icon_sha256: string | null; icon_emoji: string | null; icon_source: "frontmatter" | "bundle" | "upload" | null;
     }>(
-      `select s.id, s.namespace_id, s.slug, s.title, s.description, s.tool_harness,
+      `select s.id, s.namespace_id, s.slug, s.title, s.description, s.tool_harness, s.deprecated_at,
               s.icon_sha256, s.icon_emoji, s.icon_source,
               coalesce((select array_agg(c.name order by c.name)
                           from skill_categories sc join categories c on c.id = sc.category_id
@@ -1393,6 +1393,8 @@ export async function promoteToGlobal(
   if (!canInitiatePromotion(input.access, skill.namespace_id)) {
     return { ok: false, status: 403, error: "only a member of the owning namespace may promote it" };
   }
+  // §45.3: promoting a retired skill is a contradiction — refuse.
+  if (skill.deprecated_at) return { ok: false, status: 409, error: "a deprecated skill can't be promoted to global" };
 
   const vers = (
     await pool.query<{ id: string; semver: string; artifact_object_key: string | null; artifact_sha256: string | null; content_sha256: string | null; external_ref: string | null; external_origin_url: string | null; external_subdir: string | null; usage_examples: string | null }>(
