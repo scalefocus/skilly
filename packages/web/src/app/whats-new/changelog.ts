@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.23.1",
+    date: "2026-10-07",
+    summary:
+      "Message previews in the header Messages menu now show mentions as readable text (@Name, #Skill) instead of raw codes. A skill you can't access shows as \"a restricted skill\" and its name is never revealed.",
+  },
+  {
     version: "2.23.0",
     date: "2026-10-07",
     summary:

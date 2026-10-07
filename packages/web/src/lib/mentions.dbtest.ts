@@ -251,6 +251,22 @@ test("mentions: validate/persist/notify/resolve across contexts (§24)", { skip:
     await m.markConversationRead(access(watcher), dmCid);
     const dmUnread = await pool.query(`select 1 from notifications where user_id = $1 and type = 'message.mention' and read_at is null and payload->>'conversationId' = $2`, [watcher, dmCid]);
     assert.equal(dmUnread.rowCount, 0, "opening the thread reads the mention rows");
+
+    // ── Conversation-list preview (§24): plain text, flattened per reader ────
+    // The author (a namespace member) mentions the RESTRICTED skill to the watcher (outside the
+    // namespace). The list's lastBody must never carry the raw tokens, and the watcher must get
+    // "a restricted skill" — not the title, slug or uuid anywhere in their list payload.
+    const previewPost = await m.postToConversation(authorAccess, dmCid, `see ${tok("#", restrictedId)} with ${tok("@", pinged)}`);
+    assert.ok(previewPost.ok, `preview dm failed: ${JSON.stringify(previewPost)}`);
+    const watcherList = await m.listConversations(access(watcher));
+    const watcherRow = watcherList.conversations.find((c) => c.id === dmCid);
+    assert.equal(watcherRow?.lastBody, "see a restricted skill with @Pinged Person");
+    const watcherPayload = JSON.stringify(watcherList);
+    for (const leak of [restrictedId, `${K}-secret`, "Mention Test Secret"]) {
+      assert.equal(watcherPayload.includes(leak), false, `restricted skill leaked into a non-member's list via ${leak}`);
+    }
+    const authorList = await m.listConversations(authorAccess);
+    assert.equal(authorList.conversations.find((c) => c.id === dmCid)?.lastBody, `see #${K}-ns / Mention Test Secret with @Pinged Person`);
   } finally {
     for (const sid of created.skills) {
       const c = await pool.connect();

@@ -1617,7 +1617,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Messaging (§24)**
 - `GET /api/messages` (list + unread), `GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `POST /api/messages/direct {userId}`.
 - `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET paginated newest-first, 100/page; POST `{body, contextSemver}`) and `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator hard delete, audited `skill.discussion_message_deleted`) — the skill Discussion card, §24.
-- **Mentions (§24 *Mentions*):** `GET /api/users/suggest?q=&context=` — people typeahead for the composer `@` picker and the header-search people mode (§10); any signed-in user, rate-limited, 2-char floor, top 6 (5 in the header), name+email substring match, excludes erased/non-active users. The optional `context` (`proposal:<id>` | `skill:<ns>/<slug>`) narrows candidates to that thread's audience (server re-derives it; a caller who can't see the context 404s); no context = whole directory (request threads, direct chats, org-visible skill discussions, header search). Skill (`#`) suggestions reuse `GET /api/skills/suggest` with `scope=mention` — bare query matches **org-visible** skills only; a `<ns>/` prefix the author can see into unlocks that namespace's restricted skills. Every message GET returns a per-reader-resolved `mentions` map alongside the bodies; every message POST validates tokens (≤10 distinct, audience + visibility rules) and writes `message_mentions`.
+- **Mentions (§24 *Mentions*):** `GET /api/users/suggest?q=&context=` — people typeahead for the composer `@` picker and the header-search people mode (§10); any signed-in user, rate-limited, 2-char floor, top 6 (5 in the header), name+email substring match, excludes erased/non-active users. The optional `context` (`proposal:<id>` | `skill:<ns>/<slug>`) narrows candidates to that thread's audience (server re-derives it; a caller who can't see the context 404s); no context = whole directory (request threads, direct chats, org-visible skill discussions, header search). Skill (`#`) suggestions reuse `GET /api/skills/suggest` with `scope=mention` — bare query matches **org-visible** skills only; a `<ns>/` prefix the author can see into unlocks that namespace's restricted skills. Every message GET returns a per-reader-resolved `mentions` map alongside the bodies (the `GET /api/messages` conversation list instead returns each `lastBody` pre-flattened to plain text for the reader — §24 *Conversation-list previews*); every message POST validates tokens (≤10 distinct, audience + visibility rules) and writes `message_mentions`.
 
 **Presence**
 - `POST /api/presence/page {label}` — any authenticated user (401 if not); stamps `users.last_seen_page` (+ `last_seen`) via the throttled `touchLastSeen`, §4.
@@ -3011,6 +3011,34 @@ reader isn't entitled to is **never serialized to their browser** (invariant #3)
 - In the **plain-text contexts** (`ChatBox` surfaces) mention chips are the **only** markup —
   everything else stays escaped text. In the **skill discussion** they render inside the sanitized
   markdown (tokens are resolved outside/before the markdown inline pass).
+
+**Conversation-list previews — plain text, server-flattened.**
+The topbar messages dropdown's conversation list (desktop dropdown and the mobile sheet) shows each
+conversation's last message as a one-line preview (`<author>: <body>`, ellipsized). Chips don't
+belong in a one-line preview, and a raw `<@uuid>` token must never reach the reader, so
+`GET /api/messages` returns each summary's **`lastBody` already flattened to plain text, for the
+requesting reader**:
+- **Same resolution, same predicate.** The server resolves the last messages' mentions with the
+  **same per-reader resolution** that builds a thread's `mentions` map (one batched lookup for the
+  page of summaries — never per row), so visibility goes through the shared predicate exactly as
+  in a thread. The API shape is unchanged: `lastBody` stays a string; no `mentions` map is added
+  to the list response.
+- **Flattening rules** (each mirrors the thread's chip for that state):
+  - `@user` → **`@<live display name>`**; an **erased** user → the bare tombstone label
+    (`<email> - Deleted` / "Deleted User", §4), **no `@`** — as in a thread.
+  - `#skill` the reader can see → **`#<display title>`**, **prefixed with the namespace slug when
+    the skill is namespace-restricted** (`#finance / Payroll Audit`) — the chip's text with a `#`.
+  - `#skill` the reader **can't** see (restricted to a namespace they're not in, or archived and
+    they're not an owner) → the literal words **"a restricted skill"** — never the title, slug or
+    namespace (invariant #3/#7).
+  - `#skill` **hard-deleted** → its stored post-time `label` (`finance/payroll-audit`), or
+    "a deleted skill" if none.
+  - A token with **no `message_mentions` row** behind it stays **literal**, exactly as in a thread.
+- The dropdown lists only proposal / request / direct conversations (plain-text contexts — skill
+  discussions never appear there), so there is no markdown/code-span masking to apply.
+- **Scope.** Only this list preview changes. Notification emails, the bell inbox, and the
+  message GET/POST endpoints are untouched — threads still receive raw bodies + the `mentions` map
+  and render chips client-side.
 
 **Notifications (`message.mention`, §12).**
 - Mentioning a user notifies them — **un-coalesced** (one row per message per mentioned user) and
