@@ -9,14 +9,14 @@ import {
   canReviewNamespace, isSkillVisible, latestArtifactFindings, loadVersionQuality, bundleContentCap, diffLines,
   planDraft, buildQualityDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftReasonText, draftWhatChangedNote,
   parseFrontmatter, decodeScanText, resolveLatest,
-  DRAFT_AI_FEATURE, DRAFT_MAX_TOKENS, DRAFT_CONCURRENCY, DRAFT_RUN_CAP_MS, DRAFT_HEARTBEAT_MS, DRAFT_TOKEN_TTL_MS,
+  DRAFT_AI_FEATURE, DRAFT_MAX_TOKENS, DRAFT_CONCURRENCY, DRAFT_HEARTBEAT_MS, DRAFT_TOKEN_TTL_MS,
   type EffectiveAccess, type BundleEntry, type ScanFinding, type QualityVerdict, type DraftPlanFile, type DraftFileResult,
   type DraftUnavailableReason,
 } from "@skilly/shared";
 import { AiError, AI_BUDGET_EXHAUSTED_MESSAGE } from "@skilly/shared/ai";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
-import { aiAvailable, aiComplete } from "./ai";
+import { aiAvailable, aiComplete, aiDraftRunCapMs } from "./ai";
 import { isExplicitMaintainer } from "./grants";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { extractBundle } from "./bundle";
@@ -274,6 +274,8 @@ export async function runDraft(
 ): Promise<void> {
   const { files, plan } = await draftPlan(ctx, { store: opts.store });
   emit({ type: "plan", baseSemver: ctx.semver, files: plan });
+  // §40.15: the admin-tunable cap, read once as the run starts; a run in progress keeps it.
+  const capMs = opts.capMs ?? (await aiDraftRunCapMs());
   const heartbeat = setInterval(() => emit({ type: "heartbeat" }), opts.heartbeatMs ?? DRAFT_HEARTBEAT_MS);
 
   const stop = new AbortController();
@@ -281,7 +283,7 @@ export async function runDraft(
   const cap = setTimeout(() => {
     capped = true;
     stop.abort();
-  }, opts.capMs ?? DRAFT_RUN_CAP_MS);
+  }, capMs);
   const onClientAbort = () => stop.abort();
   if (opts.signal) {
     if (opts.signal.aborted) stop.abort();

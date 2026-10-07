@@ -9,7 +9,9 @@
 // the run cap (timed_out), assemble (the changes vouched for by the run token become a staged
 // bundle through the upload pipeline; a tampered change or another user's token is refused), the
 // proposal provenance (ai_draft_model only with a matching aiDraftToken), the My Skills flags and
-// the display-name setting (validation, audit, the served value, survives removing the config).
+// the display-name setting (validation, audit, the served value, survives removing the config) and
+// the timeouts setting (§40.15: validation, audit, no-op save, the helper's config read, the run cap,
+// survives removing the config, clearing restores the defaults).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
@@ -61,7 +63,7 @@ function startStub(slug: string): Promise<{ server: Server; url: string; state: 
 let poolRef: { end(): Promise<void> } | null = null;
 after(async () => { if (enabled && poolRef) await poolRef.end(); });
 
-test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My Skills, display name", { skip: !enabled }, async () => {
+test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My Skills, display name, timeouts", { skip: !enabled }, async () => {
   process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
   const { pool } = await import("./db");
   poolRef = pool;
@@ -76,6 +78,7 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
   const stub = await startStub(slug);
   const savedAi = (await pool.query(`select * from ai_integration where id = 1`)).rows[0] ?? null;
   const savedName = (await pool.query(`select value from platform_settings where key = 'ai_display_name'`)).rows[0]?.value ?? null;
+  const savedTimeouts = (await pool.query(`select value from platform_settings where key = 'ai_timeouts'`)).rows[0]?.value ?? null;
   const mem = new Map<string, Buffer>();
   const store = {
     get: async (k: string) => { const b = mem.get(k); if (!b) throw new Error("missing " + k); return b; },
@@ -262,6 +265,32 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     const off = await draft.loadDraftContext(asMaintainer, `${tag}-ns`, slug);
     assert.ok(!off.ok && off.reason === "ai_unavailable");
 
+    // ── Timeouts (§40.15) ──
+    const { loadAiConfig } = await import("@skilly/shared/ai");
+    await pool.query(`delete from platform_settings where key = 'ai_timeouts'`);
+    const defaults = (await ai.getAiAdminStatus()).timeouts;
+    assert.deepEqual(defaults.features.find((f) => f.key === "skill_quality_draft"), { key: "skill_quality_draft", label: "Draft quality improvements", defaultMs: 360_000, overrideMs: null, effectiveMs: 360_000 });
+    assert.deepEqual(defaults.draftRunCap, { defaultMs: 1_800_000, overrideMs: null, effectiveMs: 1_800_000 });
+    assert.equal(await ai.aiDraftRunCapMs(), 1_800_000);
+    const bad = await ai.saveAiTimeouts({ calls: { skill_quality_draft: 5_000 } }, maintainer);
+    assert.ok(ai.isAiApiError(bad) && bad.status === 422 && bad.error === "invalid_timeout" && /calls\.skill_quality_draft/.test(bad.detail ?? ""), JSON.stringify(bad));
+    const short = await ai.saveAiTimeouts({ draftRunCapMs: 5 * 60_000 }, maintainer);
+    assert.ok(ai.isAiApiError(short) && /draftRunCapMs/.test(short.detail ?? ""), "a run cap under the draft call timeout is refused");
+    const toSince = new Date(Date.now() - 1000);
+    const setTo = { calls: { skill_quality_draft: 600_000, skill_quality: null }, draftRunCapMs: 45 * 60_000 };
+    const view = await ai.saveAiTimeouts(setTo, maintainer);
+    assert.ok(!ai.isAiApiError(view), JSON.stringify(view));
+    assert.equal(view.features.find((f) => f.key === "skill_quality_draft")!.effectiveMs, 600_000);
+    assert.equal(view.features.find((f) => f.key === "skill_quality")!.overrideMs, null);
+    assert.deepEqual((await pool.query(`select value from platform_settings where key = 'ai_timeouts'`)).rows[0]!.value, { calls: { skill_quality_draft: 600_000 }, draftRunCapMs: 2_700_000 });
+    assert.deepEqual((await loadAiConfig(pool))!.timeoutOverrides, { calls: { skill_quality_draft: 600_000 }, draftRunCapMs: 2_700_000 }, "the helper's config read carries the override");
+    assert.equal(await ai.aiDraftRunCapMs(), 2_700_000, "a draft run starting now uses the new cap");
+    assert.ok(!ai.isAiApiError(await ai.saveAiTimeouts(setTo, maintainer)), "an unchanged save succeeds");
+    const toAudit = async () => (await pool.query<{ before: unknown; after: unknown }>(
+      `select before, after from audit_log where action = 'settings.updated' and target_id = 'ai_timeouts' and created_at >= $1 order by created_at`, [toSince],
+    )).rows;
+    assert.deepEqual((await toAudit()).map((x) => x.after), [{ aiTimeouts: { calls: { skill_quality_draft: 600_000 }, draftRunCapMs: 2_700_000 } }], "one audit row; the unchanged save wrote none");
+
     // ── The display name (§40.14) ──
     await pool.query(`delete from platform_settings where key = 'ai_display_name'`);
     assert.equal((await getPlatformSettings()).aiDisplayName, "AI");
@@ -272,6 +301,11 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     assert.equal((await ai.getAiAdminStatus()).displayName, "Aria");
     await ai.removeAiIntegration(maintainer);
     assert.equal((await getPlatformSettings()).aiDisplayName, "Aria", "the name survives removing the provider config");
+    assert.equal(await ai.aiDraftRunCapMs(), 2_700_000, "the timeouts survive removing the provider config");
+    const cleared = await ai.saveAiTimeouts({}, maintainer);
+    assert.ok(!ai.isAiApiError(cleared) && cleared.draftRunCap.effectiveMs === 1_800_000);
+    assert.equal((await pool.query(`select 1 from platform_settings where key = 'ai_timeouts'`)).rowCount, 0, "clearing every field deletes the row");
+    assert.equal((await toAudit()).length, 2);
     const nameAudit = await pool.query<{ before: unknown; after: unknown }>(
       `select before, after from audit_log where action = 'settings.updated' and target_id = 'ai_display_name' and created_at >= $1 order by created_at`, [nameSince],
     );
@@ -296,6 +330,11 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     if (savedAi) {
       const cols = Object.keys(savedAi);
       await pool.query(`insert into ai_integration (${cols.join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")}) on conflict (id) do nothing`, cols.map((k) => savedAi[k]));
+    }
+    if (savedTimeouts !== null) {
+      await pool.query(`insert into platform_settings (key, value) values ('ai_timeouts', $1::jsonb) on conflict (key) do update set value = excluded.value`, [JSON.stringify(savedTimeouts)]);
+    } else {
+      await pool.query(`delete from platform_settings where key = 'ai_timeouts'`);
     }
     if (savedName !== null) {
       await pool.query(`insert into platform_settings (key, value) values ('ai_display_name', $1::jsonb) on conflict (key) do update set value = excluded.value`, [JSON.stringify(savedName)]);

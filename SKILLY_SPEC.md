@@ -252,7 +252,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -8308,6 +8308,9 @@ pattern), with the **status pill** as its header accessory.
 - **Data egress notice:** "When enabled, the features below send data to **<provider>** at
   **<host>**." followed by the §40.7 registry — each feature's name, the data it sends and its spec
   §. With no feature registered (v1) it reads "No skilly features use the AI integration yet."
+- **Timeouts** (§40.15): a separate row above *Display name* — one per-call timeout per registered
+  feature plus the §44 draft run cap, with its **own Save** (no test, no token re-entry); it survives
+  *Remove integration*.
 - **Display name** (§40.14): a separate row at the bottom of the card — a text input (placeholder
   `AI`) with its **own Save**, independent of the provider form: no test, no token, usable with no
   config saved and with the key missing; it survives *Remove integration*.
@@ -8361,7 +8364,8 @@ pattern), with the **status pill** as its header accessory.
     use it to hide AI affordances.
 - **Config is read from the DB on every call** (one single-row read) — no cache, so enable/disable,
   rotation and removal take effect immediately in both processes.
-- **Timeouts & retry:** 60 s per attempt (or the feature's registered `timeoutMs`); **one retry** on
+- **Timeouts & retry:** each attempt uses the feature's **effective timeout** (§40.15) — the admin
+  override when set, else the feature's registered `timeoutMs`, else 60 s; **one retry** on
   network error, HTTP 429 or 5xx (honoring `Retry-After` up to 10 s); no retry on other 4xx. An
   optional **`retry: false`** makes a single attempt — for interactive callers that must fail fast
   (§43.9). An optional **`signal`** (`AbortSignal`) cancels the call and its retry; the attempt is
@@ -8371,7 +8375,7 @@ pattern), with the **status pill** as its header accessory.
   `ai_provider_error` (carries the provider HTTP status), `ai_invalid_json`. The calling feature
   decides what its user sees; the helper never surfaces provider error text to non-admins.
 - **Feature registry:** `AI_FEATURES` in `@skilly/shared/ai` — each entry `{ key, label, egress, spec, maxTokens?, timeoutMs? }` — the two optional fields raise
-  that feature's output-token ceiling (default 8192, max 32,768) and per-attempt timeout (default 60 s, max 360 s)
+  that feature's output-token ceiling (default 8192, max 32,768) and default per-attempt timeout (default 60 s, max 900 s; an admin may override it, §40.15)
   (e.g. `egress: "Skill name, description and SKILL.md body of org-visible skills"`,
   `spec: "§41"`). Calling with an **unregistered key throws `ai_unknown_feature`** before any
   network call. `test` is reserved. The registry shipped empty; its **first entry is
@@ -8417,6 +8421,11 @@ pattern), with the **status pill** as its header accessory.
 - `DELETE /api/admin/ai` → 204.
 - `PUT /api/admin/ai/display-name` `{ displayName }` → `{ displayName }` (§40.14); 422 on invalid input;
   **not** subject to `ai_key_missing`. `GET /api/admin/ai` also returns `displayName`.
+- `PUT /api/admin/ai/timeouts` `{ calls: { <featureKey>: ms | null }, draftRunCapMs: ms | null }` →
+  the `timeouts` object below (§40.15); **422 `invalid_timeout`** (with the offending field) on
+  invalid input; **not** subject to `ai_key_missing`. `GET /api/admin/ai` also returns
+  `timeouts: { features: [{ key, label, defaultMs, overrideMs, effectiveMs }], draftRunCap:
+  { defaultMs, overrideMs, effectiveMs } }` (`overrideMs` null when unset).
 - Every write (`models`, `test`, `PUT`, `PATCH`, `DELETE`) returns **409 `ai_key_missing`** without a
   valid `AI_TOKEN_ENC_KEY`. All routes are wrapped in `withSystemLog` (§25) as usual; bodies
   carrying a token are never logged.
@@ -8441,7 +8450,8 @@ pattern), with the **status pill** as its header accessory.
 
 ### 40.11 Audit (§11)
 `ai.config_updated` (`before`/`after`: provider, base URL, model; `after.token_rotated: bool` —
-**never the token or its last 4**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests,
+**never the token or its last 4**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. The display
+name (§40.14) and timeouts (§40.15) are audited as `settings.updated` (before/after). Tests,
 model-list calls and runtime calls are **not audited** (telemetry, in `ai_usage`).
 
 ### 40.12 Out of scope (deferred)
@@ -8505,6 +8515,59 @@ end users see in place of **"AI"**.
   `settings.updated`, survives `DELETE /api/admin/ai`; `/api/me` returns the default and the set
   value. e2e: set *Aria* → the Quality card reads *"Aria assessment"* and the §44 button *"Draft
   improvements with Aria"*, while the admin card still says *AI integration*.
+
+### 40.15 Timeouts
+Slow providers (a self-hosted Open WebUI, a reasoning model rewriting a large file) can need longer
+than the built-in waits. A platform admin may tune them.
+
+- **What is tunable.**
+  - **Per-call timeout, per registered feature** (§40.7) — one value for every `AI_FEATURES` entry
+    (today *Skill quality assessment*, *Propose-form drafting*, *Draft quality improvements*); a feature
+    registered later gets its own row automatically. **10–900 s, whole seconds.** It is the
+    per-*attempt* timeout: with the helper's single retry (§40.7) one call may take up to twice that
+    plus the capped `Retry-After` wait.
+  - **Draft run cap** (§44.5) — **5–120 min, whole minutes**, and never shorter than the effective
+    *Draft quality improvements* per-call timeout (else 422).
+  - **Not tunable:** the 20 s connectivity test and model-list call (§40.5), the 15 s draft
+    heartbeat, the 2 h `runToken` lifetime, the `Retry-After` cap.
+- **Defaults.** Unset ⇒ the code default: the feature's registered `timeoutMs` (60 s when it declares
+  none; `skill_quality_draft` 360 s) and **30 min** for the run cap. The ceiling a registry entry may
+  declare (`AI_FEATURE_TIMEOUT_CEILING_MS`) rises from 360 s to **900 s**, matching the admin range;
+  the registered defaults themselves do not change.
+- **Storage.** Platform setting **`ai_timeouts`** in `platform_settings` (no migration):
+  `{ calls?: { <featureKey>: <ms> }, draftRunCapMs?: <ms> }` — only overrides are stored; clearing a
+  field removes its key, and the row is deleted when nothing is left. On read, keys that are not
+  registered features are ignored (and dropped on the next save) and a stored value outside its
+  range is clamped into it.
+- **Editing.** The *Timeouts* row of the AI integration card (§40.4): one **seconds** field per
+  feature (labelled with its registry label; placeholder = its default, e.g. `360`), one **minutes**
+  field for the draft run cap (placeholder `30`), a **Reset to defaults** action that clears every
+  field (still needs Save), and its **own Save** — `PUT /api/admin/ai/timeouts` (§40.9; the API
+  speaks milliseconds, the card converts). Like the display name it is independent of the provider
+  config: no test, no token re-entry, works with no provider configured and without
+  `AI_TOKEN_ENC_KEY`, kept on *Remove integration*. Validation (→ **422 `invalid_timeout`** naming
+  the field): an unknown feature key, a value that is not a whole number of seconds (calls) /
+  minutes (run cap), a value out of range, or a run cap shorter than the draft call timeout.
+  Saving the effective values unchanged is a no-op (no write, no audit); otherwise audited
+  **`settings.updated`** (`key: 'ai_timeouts'`, before/after).
+- **Taking effect.** The helper reads the setting together with its per-call config read (§40.7 —
+  no cache), so a change applies to the **next attempt** in web and worker alike; an attempt already
+  in flight keeps the timeout it started with. The draft run cap is read once when a run starts
+  (`POST …/quality/draft`); a run already going keeps its cap.
+- **Accepted trade-off.** *Propose-form drafting* (§43) is one synchronous request: a long timeout
+  means the button can spin that long, and an intermediary between the browser and skilly (a
+  corporate proxy or load balancer) with a shorter idle timeout may cut the request first — the user
+  then sees that intermediary's error. The bundled Caddy proxy sets no response timeout. The §44
+  draft stream is not affected (15 s heartbeat).
+- **Tests.** Unit (`@skilly/shared`): effective-timeout resolution (override → registered default →
+  60 s; stored out-of-range values clamped; unknown keys ignored); validation (bounds, whole
+  seconds/minutes, unknown feature, run cap shorter than the draft call timeout). Integration: `PUT`
+  is platform-admin-only, works with no config and no key, audits `settings.updated`, an unchanged
+  save is a no-op, a cleared field restores the default, the setting survives `DELETE
+  /api/admin/ai`, `GET` returns default/override/effective values; the helper's config read returns
+  the override and the call uses it; a draft run started after an override uses the new cap. e2e:
+  set the *Draft quality improvements* timeout → Save → reload shows it; **Reset to defaults** → Save
+  → the placeholders show again.
 
 ---
 
@@ -8990,7 +9053,7 @@ All shown inline beneath the button; none block the rest of the form.
 
 ### 43.9 Change to the §40 helper
 `aiComplete` gains an optional **`retry?: boolean`** (default `true`). With `retry: false` the call
-makes **one attempt** (60 s timeout, no retry on network/429/5xx). The interactive draft uses it so
+makes **one attempt** (the feature's effective timeout, §40.15 — 60 s by default; no retry on network/429/5xx). The interactive draft uses it so
 the button never spins for two minutes; the worker's §41 sweep keeps the default.
 
 ### 43.10 Governance & invariants
@@ -9098,7 +9161,8 @@ Computed server-side from the base version's artifact and its latest scan report
   improvements', egress: 'On a maintainer\'s request, for one hosted skill: the full text of SKILL.md
   and of every text file carrying a quality finding (up to 25 files, 100,000 characters each; files
   with a flagged secret are never sent), the bundle\'s file paths (first 200), and that version\'s
-  quality findings and stored AI assessment', spec: '§44', maxTokens: 32768, timeoutMs: 360000 }`.
+  quality findings and stored AI assessment', spec: '§44', maxTokens: 32768, timeoutMs: 360000 }`
+  (360 s is the default; an admin may override it, §40.15).
   Shown on the §40.4 egress notice.
 - **One call per queued file**, `userId` = the requesting user, `json: true`, `maxTokens` 32,768.
 - **System prompt:** improve one file of an Agent Skill (`SKILL.md` format) so the listed findings
@@ -9145,7 +9209,8 @@ Computed server-side from the base version's artifact and its latest scan report
   - `{ type: 'heartbeat' }` every **15 s**, so proxies do not cut an idle connection;
   - `{ type: 'done', model, calls, runToken, outcome: 'complete' | 'capped' | 'cancelled' }` — last
     event.
-- **Concurrency 5** per run. At the **30-minute cap**, in-flight calls are aborted and every
+- **Concurrency 5** per run. At the **run cap** (30 min by default, admin-tunable 5–120 min, §40.15;
+  read when the run starts), in-flight calls are aborted and every
   unfinished file ends `failed` with `timed_out`; `done` still follows.
 - **Client disconnect** (Cancel, closed tab): queued files never start, in-flight calls are aborted
   (a provider may still bill an aborted call — accepted).

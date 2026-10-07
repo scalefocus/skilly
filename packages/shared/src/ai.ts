@@ -8,6 +8,13 @@
 // audit payload, a system_event or an error message; it is only ever sent to the stored base URL.
 // SKILLY_SPEC.md §40.
 import { decryptToken, encryptToken, parseEmailTokenKey } from "./email-crypto.js";
+import {
+  AI_CALL_TIMEOUT_DEFAULT_MS,
+  AI_CALL_TIMEOUT_MAX_MS,
+  aiFeatureDefaultTimeoutMs,
+  effectiveAiCallTimeoutMs,
+  parseAiTimeoutOverrides,
+} from "./ai-timeouts.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface AiDb {
@@ -46,13 +53,13 @@ export interface AiFeature {
   spec: string;
   /** Raises this feature's output-token ceiling above the default 8192 (max 32,768) — §40.7. */
   maxTokens?: number;
-  /** This feature's per-attempt timeout (default 60 s, max 360 s) — §40.7. */
+  /** This feature's default per-attempt timeout (default 60 s, max 900 s; admin-overridable, §40.15) — §40.7. */
   timeoutMs?: number;
 }
 
 /** The upper bounds a feature may declare (§40.7). */
 export const AI_FEATURE_MAX_TOKENS_CEILING = 32_768;
-export const AI_FEATURE_TIMEOUT_CEILING_MS = 360_000;
+export const AI_FEATURE_TIMEOUT_CEILING_MS = AI_CALL_TIMEOUT_MAX_MS;
 
 /**
  * The registered AI tasks (§40.7): the skill quality assessment (§41.5), propose-form drafting
@@ -77,7 +84,7 @@ export const AI_FEATURES: readonly AiFeature[] = [
     egress: "On a maintainer's request, for one hosted skill: the full text of SKILL.md and of every text file carrying a quality finding (up to 25 files, 100,000 characters each; files with a flagged secret are never sent), the bundle's file paths (first 200), and that version's quality findings and stored AI assessment",
     spec: "§44",
     maxTokens: AI_FEATURE_MAX_TOKENS_CEILING,
-    timeoutMs: AI_FEATURE_TIMEOUT_CEILING_MS,
+    timeoutMs: 360_000,
   },
 ];
 /** The reserved feature key the admin connectivity test records its usage under. */
@@ -318,7 +325,7 @@ export function parseAiJson(text: string): unknown {
 // ── Transport ────────────────────────────────────────────────────────────────────────────────
 
 export const AI_RESPONSE_MAX_BYTES = 1024 * 1024;
-export const AI_CALL_TIMEOUT_MS = 60_000;
+export const AI_CALL_TIMEOUT_MS = AI_CALL_TIMEOUT_DEFAULT_MS;
 export const AI_TEST_TIMEOUT_MS = 20_000;
 /** §40.5: room for a reasoning model to think and still answer "OK". */
 export const AI_TEST_MAX_TOKENS = 1024;
@@ -473,6 +480,8 @@ export interface AiConfigRow {
   lastCallError: string | null;
   updatedByUserId: string | null;
   updatedAt: string;
+  /** The raw §40.15 `ai_timeouts` platform setting, read in the same query (absent ⇒ defaults). */
+  timeoutOverrides?: unknown;
 }
 
 function iso(v: unknown): string | null {
@@ -484,7 +493,8 @@ function iso(v: unknown): string | null {
 export async function loadAiConfig(db: AiDb): Promise<AiConfigRow | null> {
   const { rows } = await db.query(
     `select enabled, provider, base_url, model, token_enc, token_last4, last_test_at, last_test_ok, last_test_error,
-            last_test_latency_ms, last_call_at, last_call_ok, last_call_error, updated_by_user_id, updated_at
+            last_test_latency_ms, last_call_at, last_call_ok, last_call_error, updated_by_user_id, updated_at,
+            (select value from platform_settings where key = 'ai_timeouts') as ai_timeouts
        from ai_integration where id = 1`,
   );
   const r = rows[0];
@@ -505,6 +515,7 @@ export async function loadAiConfig(db: AiDb): Promise<AiConfigRow | null> {
     lastCallError: r.last_call_error,
     updatedByUserId: r.updated_by_user_id,
     updatedAt: iso(r.updated_at)!,
+    timeoutOverrides: r.ai_timeouts ?? null,
   };
 }
 
@@ -655,9 +666,9 @@ export function aiFeatureMaxTokens(f: Pick<AiFeature, "maxTokens">): number {
   return Number.isInteger(f.maxTokens) && f.maxTokens! > 0 ? Math.min(f.maxTokens!, AI_FEATURE_MAX_TOKENS_CEILING) : AI_MAX_TOKENS_LIMIT;
 }
 
-/** A feature's per-attempt timeout: its declared `timeoutMs` (clamped to 360 s), else 60 s. */
+/** A feature's default per-attempt timeout: its declared `timeoutMs` (clamped to 900 s), else 60 s. */
 export function aiFeatureTimeoutMs(f: Pick<AiFeature, "timeoutMs">): number {
-  return Number.isInteger(f.timeoutMs) && f.timeoutMs! > 0 ? Math.min(f.timeoutMs!, AI_FEATURE_TIMEOUT_CEILING_MS) : AI_CALL_TIMEOUT_MS;
+  return aiFeatureDefaultTimeoutMs(f);
 }
 
 /** True when the integration is configured, enabled and its token decrypts — gate AI affordances on it. */
@@ -690,10 +701,10 @@ export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Pr
   if (!Number.isInteger(o.maxTokens) || o.maxTokens < 1 || o.maxTokens > ceiling) {
     throw new Error(`aiComplete: maxTokens must be an integer 1–${ceiling}`);
   }
-  const timeoutMs = env.timeoutMs ?? aiFeatureTimeoutMs(feature);
-
   const row = await loadAiConfig(db);
   if (!row) throw new AiError("ai_not_configured", "the AI integration is not configured");
+  // §40.15: the admin override (read with the config, no cache), else the feature's default.
+  const timeoutMs = env.timeoutMs ?? effectiveAiCallTimeoutMs(feature, parseAiTimeoutOverrides(row.timeoutOverrides, [feature.key]));
   if (!row.enabled) throw new AiError("ai_disabled", "the AI integration is disabled");
   if (!env.key) throw new AiError("ai_key_missing", `${AI_TOKEN_ENC_KEY_ENV} is not set`);
   const userId = o.userId ?? null;

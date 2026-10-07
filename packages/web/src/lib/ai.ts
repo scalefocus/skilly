@@ -34,6 +34,16 @@ import {
   type AiStatus,
   type AiTestResult,
 } from "@skilly/shared/ai";
+import {
+  AI_TIMEOUTS_SETTING,
+  aiTimeoutOverridesEmpty,
+  aiTimeoutsView,
+  effectiveAiDraftRunCapMs,
+  parseAiTimeoutOverrides,
+  validateAiTimeoutsInput,
+  type AiTimeoutOverrides,
+  type AiTimeoutsView,
+} from "@skilly/shared/ai-timeouts";
 
 /** Override point for tests (a local stub provider); production uses global fetch. */
 let fetchImpl: typeof fetch | undefined;
@@ -88,6 +98,8 @@ export interface AiAdminStatus {
   features: { key: string; label: string; egress: string; spec: string }[];
   /** §40.14 the end-user AI display name (independent of the provider config). */
   displayName: string;
+  /** §40.15 per-call timeouts and the draft run cap (independent of the provider config). */
+  timeouts: AiTimeoutsView;
 }
 
 function featureLabel(key: string): string {
@@ -148,7 +160,56 @@ export async function getAiAdminStatus(): Promise<AiAdminStatus> {
     usage30d: { calls: sum("calls"), failed: sum("failed"), inputTokens: sum("inputTokens"), outputTokens: sum("outputTokens"), byFeature },
     features: AI_FEATURES.map((f) => ({ key: f.key, label: f.label, egress: f.egress, spec: f.spec })),
     displayName: (await getPlatformSettings(pool)).aiDisplayName,
+    timeouts: aiTimeoutsView(AI_FEATURES, await loadAiTimeouts()),
   };
+}
+
+// ── Timeouts (§40.15) ────────────────────────────────────────────────────────────────────────
+
+const FEATURE_KEYS = AI_FEATURES.map((f) => f.key);
+
+/** The stored overrides as served (unknown features ignored, out-of-range values clamped). */
+export async function loadAiTimeouts(): Promise<AiTimeoutOverrides> {
+  const { rows } = await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [AI_TIMEOUTS_SETTING]);
+  return parseAiTimeoutOverrides(rows[0]?.value, FEATURE_KEYS);
+}
+
+/** The §44.5 run cap a draft run starting now uses. */
+export async function aiDraftRunCapMs(): Promise<number> {
+  return effectiveAiDraftRunCapMs(await loadAiTimeouts());
+}
+
+/**
+ * PUT /api/admin/ai/timeouts: the body is the complete set of overrides (absent / null = default).
+ * Independent of the provider config — no test, no token, no AI_TOKEN_ENC_KEY needed. Only
+ * overrides are stored; the row is deleted when none is left. An unchanged save writes and
+ * audits nothing; otherwise audited as settings.updated.
+ */
+export async function saveAiTimeouts(body: unknown, userId: string): Promise<AiTimeoutsView | AiApiError> {
+  const v = validateAiTimeoutsInput(body, AI_FEATURES);
+  if (!v.ok) return { error: "invalid_timeout", detail: `${v.field}: ${v.error}`, status: 422 };
+  const before = await loadAiTimeouts();
+  const beforeView = aiTimeoutsView(AI_FEATURES, before);
+  const afterView = aiTimeoutsView(AI_FEATURES, v.value);
+  if (JSON.stringify(beforeView) === JSON.stringify(afterView)) return afterView;
+  if (aiTimeoutOverridesEmpty(v.value)) {
+    await pool.query(`delete from platform_settings where key = $1`, [AI_TIMEOUTS_SETTING]);
+  } else {
+    await pool.query(
+      `insert into platform_settings (key, value, updated_by, updated_at) values ($1, $2::jsonb, $3, now())
+       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+      [AI_TIMEOUTS_SETTING, JSON.stringify(v.value), userId],
+    );
+  }
+  await appendAudit(pool, {
+    actorUserId: userId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: AI_TIMEOUTS_SETTING,
+    before: { aiTimeouts: before },
+    after: { aiTimeouts: v.value },
+  });
+  return afterView;
 }
 
 // ── Form input → a connection (shared by models / test / save) ───────────────────────────────
