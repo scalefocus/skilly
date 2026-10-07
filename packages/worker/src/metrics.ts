@@ -35,4 +35,6 @@ export const M = {
   qualitySweepRuns: metrics.counter("skilly_quality_sweep_runs_total", "Quality sweep passes, by phase (rules|ai)"),
   qualityAiAttempts: metrics.counter("skilly_quality_ai_attempts_total", "Quality AI assessment attempts, by outcome (ok|failed|invalid|refused)"),
   qualityVersions: metrics.gauge("skilly_quality_versions", "Active versions by quality status (scored|ai_done|ai_failed|unscored)"),
+  // §45.9 skill deprecation.
+  skillsDeprecated: metrics.gauge("skilly_skills_deprecated", "Active, served skills currently marked deprecated"),
 };

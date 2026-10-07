@@ -10,7 +10,8 @@ import { ExpiryPicker } from "../../../../components/ExpiryPicker";
 import { useDateFmt } from "../../../../components/DateFormat";
 import { Markdown } from "../../../../components/Markdown";
 import { UserBubble } from "../../../../components/UserBubble";
-import { OfficialBadge, SkillCard, type CatalogEntry } from "../../../../components/SkillCard";
+import { OfficialBadge, SkillCard, DeprecatedPill, type CatalogEntry } from "../../../../components/SkillCard";
+import { DeprecateDialog, type DeprecationView } from "./DeprecateDialog";
 import { SkillIcon } from "../../../../components/SkillIcon";
 import { FileChangeList } from "../../../../components/FileChanges";
 import { resolvePredecessor } from "@skilly/shared/semver";
@@ -183,6 +184,10 @@ interface Detail {
   /** §42: true when this viewer sees the skill only through a namespace grant ⇒ the marker. */
   sharedWithViewer?: boolean;
   ownerNamespaceName?: string;
+  /** §45: the deprecation marker (null = live), the skills this one replaces, and the right to manage it. */
+  deprecation: DeprecationView | null;
+  replaces: Array<{ namespaceSlug: string; skillSlug: string; title: string }>;
+  canDeprecate: boolean;
 }
 
 export default function SkillDetail() {
@@ -197,6 +202,18 @@ export default function SkillDetail() {
   const [install, setInstall] = useState<{ command: string; semver: string | null; expiresAt: string | null; system?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
+  // §45 deprecate / edit-deprecation dialog.
+  const [depOpen, setDepOpen] = useState(false);
+  const undeprecate = async () => {
+    if (!window.confirm("Un-deprecate this skill? The marker, the sort penalty and the SKILL.md hint are removed; nobody is notified.")) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/skills/${ns}/${slug}/deprecation`, { method: "DELETE" });
+      if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `Failed (${r.status})`);
+      setMsg({ kind: "ok", text: "Skill un-deprecated." });
+      reload();
+    } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusy(false); }
+  };
   // Split-button install: chosen version (null = latest) + chosen expiry (null = never).
   const [selVersion, setSelVersion] = useState<string | null>(null);
   const [verOpen, setVerOpen] = useState(false);
@@ -346,6 +363,7 @@ export default function SkillDetail() {
         {data.latest && <span className="chip chip-accent">v{data.latest}</span>}
         {data.visibility === "namespace" ? <Pill tone="warn">restricted</Pill> : <Pill tone="ok">org-wide</Pill>}
         {data.archived && <Pill tone="danger">archived</Pill>}
+        {data.deprecation && <DeprecatedPill d={{ note: data.deprecation.note, successor: data.deprecation.successor }} />}
         {data.contentRisk && <ContentRiskChip status={data.contentRisk.status} />}
         <span className="grow" style={{ flex: 1 }} />
         {data.watchers > 0 && (
@@ -452,6 +470,23 @@ export default function SkillDetail() {
             </button>
           )
         )}
+        {data.canDeprecate && (
+          // §45.3: deprecate / edit / un-deprecate — archive's authority (platform admin, owner-ns admin).
+          data.deprecation ? (
+            <>
+              <button className="btn btn-sm" disabled={busy} onClick={() => setDepOpen(true)} title="Change the successor or the note">
+                Edit deprecation…
+              </button>
+              <button className="btn btn-sm btn-primary" disabled={busy} onClick={undeprecate} title="Remove the deprecation marker">
+                Un-deprecate
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-sm" disabled={busy} onClick={() => setDepOpen(true)} title="Mark this skill deprecated — it keeps working, but users are pointed at a successor">
+              Deprecate…
+            </button>
+          )
+        )}
         {data.canManage && (
           data.archived ? (
             <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => act("archive", { archived: false }, "Skill restored.")}>
@@ -490,6 +525,35 @@ export default function SkillDetail() {
           <span>Endorsed by the platform{data.officialByName ? ` · marked by ${data.officialByName}` : ""} · {fmt.date(data.officialAt)}</span>
         </div>
       )}
+      {data.deprecation && (
+        // §45.5 the deprecation banner: sentence, note, and "Go to <successor>" when visible.
+        <div className="card card-pad" role="status" data-testid="deprecation-banner" style={{ marginTop: 16, borderColor: "var(--warn, #b45309)", display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <div style={{ fontWeight: 600, fontSize: 14.5 }}>
+              This skill is deprecated.
+              {data.deprecation.successor && <> Use <strong>{data.deprecation.successor.title}</strong> instead.</>}
+            </div>
+            {data.deprecation.note && <p className="muted" style={{ fontSize: 13.5, margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{data.deprecation.note}</p>}
+            <div className="muted mono" style={{ fontSize: 11, marginTop: 6 }}>
+              deprecated {fmt.date(data.deprecation.deprecatedAt)}{data.deprecation.deprecatedBy?.displayName ? ` · by ${data.deprecation.deprecatedBy.displayName}` : ""}
+              {data.canDeprecate && data.deprecation.successorState === "archived" && " · successor is archived — pick another"}
+              {data.canDeprecate && data.deprecation.successorState === "deprecated" && " · successor is itself deprecated"}
+            </div>
+          </div>
+          {data.deprecation.successor && (
+            <Link href={`/skills/${data.deprecation.successor.namespaceSlug}/${data.deprecation.successor.skillSlug}`} className="btn btn-sm btn-primary" data-testid="go-to-successor">
+              Go to {data.deprecation.successor.title} →
+            </Link>
+          )}
+        </div>
+      )}
+      {data.replaces.length > 0 && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }} data-testid="replaces-line">
+          Replaces {data.replaces.map((r, i) => (
+            <span key={`${r.namespaceSlug}/${r.skillSlug}`}>{i > 0 ? ", " : ""}<Link href={`/skills/${r.namespaceSlug}/${r.skillSlug}`} className="mono">{r.namespaceSlug}/{r.skillSlug}</Link></span>
+          ))}
+        </div>
+      )}
       {!data.archived && (
         <div className="card card-pad" style={{ marginTop: 16 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -524,6 +588,15 @@ export default function SkillDetail() {
         </div>
       )}
       {msg && <div style={{ marginTop: 12, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
+      {depOpen && ns && slug && (
+        <DeprecateDialog
+          ns={ns}
+          slug={slug}
+          current={data.deprecation}
+          onClose={() => setDepOpen(false)}
+          onSaved={(text) => { setDepOpen(false); setMsg({ kind: "ok", text }); reload(); }}
+        />
+      )}
 
       <div className="card card-pad" style={{ marginTop: 24 }}>
         <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, marginBottom: 4 }}>Install</h2>
@@ -535,6 +608,18 @@ export default function SkillDetail() {
               Pick a version and an expiry, then generate a personal install command. Every install
               carries a unique key you can revoke any time from <span className="mono">Installed skills</span>.
             </p>
+            {data.deprecation && (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12, fontSize: 13, color: "var(--warn, #b45309)" }} data-testid="install-deprecation-warning">
+                <span>
+                  This skill is deprecated{data.deprecation.successor ? <> — consider installing <strong>{data.deprecation.successor.title}</strong> instead.</> : "."}
+                </span>
+                {data.deprecation.successor && (
+                  <Link href={`/skills/${data.deprecation.successor.namespaceSlug}/${data.deprecation.successor.skillSlug}`} className="btn btn-sm">
+                    Go to {data.deprecation.successor.title} →
+                  </Link>
+                )}
+              </div>
+            )}
             {data.latestInstallable ? (
               <>
                 <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: install ? 14 : 0 }}>

@@ -28,6 +28,7 @@ import {
 import { getMaxBundleBytes } from "../settings.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { extractBundle } from "./bundle.js";
+import { applyDeprecationHint, hintStateFromRow } from "./mainRef.js";
 import { runGit, type SkillFile } from "./synth.js";
 import {
   marketplaceRepoDir,
@@ -66,6 +67,11 @@ interface SkillRow {
   /** Category slugs, sorted — plugin membership (§30.3) and part of the hash. */
   category_slugs: string[] | null;
   ns_slug: string;
+  /** §45.4 deprecation inputs — the embedded SKILL.md is rewritten with the hint, so they hash. */
+  deprecated_at?: string | null;
+  deprecation_note?: string | null;
+  succ_ns?: string | null;
+  succ_slug?: string | null;
 }
 
 interface CategoryRow {
@@ -109,7 +115,7 @@ export function contentHash(rows: readonly SkillRow[]): string {
     // Fields and rows are delimited by distinct separators: a single shared separator
     // would let ("a b", "c") and ("a", "b c") hash identically, so an edit that merely
     // moved a word between two fields could go unrebuilt.
-    h.update([r.ns_slug, r.slug, r.title, r.description ?? "", (r.category_slugs ?? []).join(","), r.semver, r.content_sha256 ?? r.artifact_object_key ?? ""].join("\u001f"));
+    h.update([r.ns_slug, r.slug, r.title, r.description ?? "", (r.category_slugs ?? []).join(","), r.semver, r.content_sha256 ?? r.artifact_object_key ?? "", deprecationKey(r)].join("\u001f"));
     h.update("\u001e");
   }
   return h.digest("hex").slice(0, 16);
@@ -120,13 +126,18 @@ export function contentHash(rows: readonly SkillRow[]): string {
  * their version and content digest, plus the merged component files. Unchanged ⇒ the plugin's
  * `1.0.<n>` stays; changed ⇒ it bumps. Title/description edits are deliberately NOT in here.
  */
+/** §45.4: the deprecation inputs as one hash field ("" for a live skill). */
+export function deprecationKey(r: Pick<SkillRow, "deprecated_at" | "deprecation_note" | "succ_ns" | "succ_slug">): string {
+  return r.deprecated_at ? `D|${r.succ_ns && r.succ_slug ? `${r.succ_ns}/${r.succ_slug}` : ""}|${r.deprecation_note ?? ""}` : "";
+}
+
 export function pluginFingerprint(
-  members: readonly { skillDir: string; skillId: string; semver: string; contentSha256: string | null }[],
+  members: readonly { skillDir: string; skillId: string; semver: string; contentSha256: string | null; deprecation?: string }[],
   componentFiles: readonly string[],
 ): string {
   const h = createHash("sha256");
   for (const m of [...members].sort((a, b) => a.skillDir.localeCompare(b.skillDir))) {
-    h.update([m.skillDir, m.skillId, m.semver, m.contentSha256 ?? ""].join("\u001f"));
+    h.update([m.skillDir, m.skillId, m.semver, m.contentSha256 ?? "", m.deprecation ?? ""].join("\u001f"));
     h.update("\u001e");
   }
   h.update([...componentFiles].sort().join("\u001f"));
@@ -169,6 +180,7 @@ export function diffChange(prev: readonly ServedSkill[] | null, next: readonly S
 async function qualifyingSkills(pool: Pool, scope: MarketplaceScope, namespaceId: string | null): Promise<SkillRow[]> {
   const { rows } = await pool.query<SkillRow & { semvers: string[] }>(
     `select s.id as skill_id, s.slug, s.title, s.description, n.slug as ns_slug,
+            s.deprecated_at, s.deprecation_note, xn.slug as succ_ns, x.slug as succ_slug,
             coalesce((select array_agg(c.slug order by c.slug) from skill_categories sc
                         join categories c on c.id = sc.category_id
                        where sc.skill_id = s.id), '{}') as category_slugs,
@@ -176,9 +188,11 @@ async function qualifyingSkills(pool: Pool, scope: MarketplaceScope, namespaceId
        from skills s
        join namespaces n on n.id = s.namespace_id
        join skill_versions sv on sv.skill_id = s.id and sv.status = 'active' and sv.git_published
+       left join skills x on x.id = s.successor_skill_id and x.status = 'active'
+       left join namespaces xn on xn.id = x.namespace_id
       where s.status = 'active'
         and ${scope.kind === "public" ? `s.visibility = 'org'` : namespaceMarketplaceSkillSql("$1::uuid", "s")}
-      group by s.id, n.slug`,
+      group by s.id, n.slug, xn.slug, x.slug`,
     scope.kind === "public" ? [] : [namespaceId],
   );
 
@@ -310,7 +324,8 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
       const bundles = new Map<string, SkillFile[]>();
       for (const s of skills) {
         const targz = await deps.store.get(s.artifact_object_key!);
-        bundles.set(s.skill_id, await extractBundle(targz, cap));
+        // §45.4: a deprecated member's embedded SKILL.md carries the same hint as its own repo's main.
+        bundles.set(s.skill_id, applyDeprecationHint(await extractBundle(targz, cap), hintStateFromRow({ deprecated_at: s.deprecated_at ?? null, deprecation_note: s.deprecation_note ?? null, succ_ns: s.succ_ns ?? null, succ_slug: s.succ_slug ?? null })));
       }
 
       const grouped = groupSkillsIntoPlugins(
@@ -333,7 +348,7 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
             for (const mv of planPluginLayout(m.skillDir, m.files.map((f) => f.path)).moves) if (isComponentPath(mv.to)) componentFiles.add(mv.to);
           }
           const fp = pluginFingerprint(
-            members.map((m) => ({ skillDir: m.skillDir, skillId: m.row.skill_id, semver: m.row.semver, contentSha256: m.row.content_sha256 })),
+            members.map((m) => ({ skillDir: m.skillDir, skillId: m.row.skill_id, semver: m.row.semver, contentSha256: m.row.content_sha256, deprecation: deprecationKey(m.row) })),
             [...componentFiles],
           );
           const counter = await pluginCounter(client, key, g.slug, fp);

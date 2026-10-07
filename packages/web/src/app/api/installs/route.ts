@@ -17,9 +17,9 @@ export async function GET(req: Request) {
   const scope = new URL(req.url).searchParams.get("scope");
   if (scope === "system") {
     if (!access.isPlatformAdmin) return Response.json({ error: "forbidden" }, { status: 403 });
-    return Response.json({ installs: await listSystemInstalls() });
+    return Response.json({ installs: await listSystemInstalls(access) });
   }
 
   if (!access.userId) return Response.json({ installs: [] });
-  return Response.json({ installs: await listInstalls(access.userId) });
+  return Response.json({ installs: await listInstalls(access.userId, access) });
 }

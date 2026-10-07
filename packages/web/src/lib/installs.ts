@@ -3,7 +3,7 @@
 // never). The raw token is shown once (baked into the install URL); only its hash is stored.
 import { pool } from "./db";
 import { tryAward } from "./achievements";
-import { generateToken, hashToken, deriveFreshness, type Freshness } from "@skilly/shared";
+import { generateToken, hashToken, deriveFreshness, deprecationLite, successorJsonSql, type DeprecationLite, type EffectiveAccess, type Freshness, type SuccessorJson } from "@skilly/shared";
 import { M } from "./metrics";
 
 /**
@@ -71,6 +71,8 @@ export interface InstallView {
   clientUserAgent: string | null;
   clientIp: string | null; // originating IP of the first clone; null if unknown
   skillArchived: boolean;
+  /** §45: the skill is deprecated — the successor is named only when the viewer can see it. */
+  skillDeprecation: DeprecationLite | null;
   /** Optional skill icon (§33) — image and/or emoji, or null. */
   icon: { url: string | null; emoji: string | null } | null;
   /** Freshness (§23 "Installed-version freshness"): what the gateway last served this install. */
@@ -91,6 +93,7 @@ interface InstallRow {
   last_served_semver: string | null; last_cloned_at: string | null;
   /** The skill's ACTIVE versions (yanked excluded), any channel — the input to deriveFreshness. */
   active_semvers: string[];
+  deprecated_at: string | null; deprecation_note: string | null; successor: SuccessorJson | null;
 }
 
 /** The SELECT list + joins shared by the personal and system install listings (§23). */
@@ -98,6 +101,7 @@ const INSTALL_SELECT = `
     select t.id, t.pinned_semver, t.used_at, t.expires_at, t.client_user_agent, t.client_ip,
            n.slug as ns_slug, s.slug as skill_slug, s.title, s.status as skill_status,
            s.icon_sha256, s.icon_emoji,
+           s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor,
            (t.expires_at is not null and t.expires_at <= now()) as inactive,
            t.last_served_semver, t.last_cloned_at,
            v.active_semvers
@@ -109,7 +113,7 @@ const INSTALL_SELECT = `
           from skill_versions sv where sv.skill_id = s.id and sv.status = 'active'
       ) v on true`;
 
-function toInstallView(r: InstallRow): InstallView {
+function toInstallView(r: InstallRow, access: EffectiveAccess): InstallView {
   const { freshness, latestSemver } = deriveFreshness({ lastServedSemver: r.last_served_semver, activeSemvers: r.active_semvers });
   return {
     id: r.id,
@@ -123,6 +127,7 @@ function toInstallView(r: InstallRow): InstallView {
     clientUserAgent: r.client_user_agent,
     clientIp: r.client_ip,
     skillArchived: r.skill_status === "archived",
+    skillDeprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
     icon: r.icon_sha256 || r.icon_emoji ? { url: r.icon_sha256 ? `/skill-icons/${r.icon_sha256}.png` : null, emoji: r.icon_emoji } : null,
     lastServedSemver: r.last_served_semver,
     lastClonedAt: r.last_cloned_at,
@@ -132,14 +137,14 @@ function toInstallView(r: InstallRow): InstallView {
 }
 
 /** A user's USED installs (generated-but-unused tokens are ephemeral and not listed). §23 */
-export async function listInstalls(userId: string): Promise<InstallView[]> {
+export async function listInstalls(userId: string, access: EffectiveAccess): Promise<InstallView[]> {
   const { rows } = await pool.query<InstallRow>(
     `${INSTALL_SELECT}
       where t.user_id = $1 and t.type = 'install' and t.used_at is not null
       order by lower(s.title) asc, t.used_at desc`,
     [userId],
   );
-  return rows.map(toInstallView);
+  return rows.map((r) => toInstallView(r, access));
 }
 
 export interface SystemInstallView extends InstallView {
@@ -148,14 +153,14 @@ export interface SystemInstallView extends InstallView {
 }
 
 /** All USED system installations, platform-wide (§23; the caller must be a platform admin). */
-export async function listSystemInstalls(): Promise<SystemInstallView[]> {
+export async function listSystemInstalls(access: EffectiveAccess): Promise<SystemInstallView[]> {
   const { rows } = await pool.query<InstallRow & { minted_by: string | null }>(
     `${INSTALL_SELECT.replace("v.active_semvers", "v.active_semvers, u.display_name as minted_by")}
       left join users u on u.id = t.created_by_user_id
       where t.type = 'install' and t.is_system and t.used_at is not null
       order by lower(s.title) asc, t.used_at desc`,
   );
-  return rows.map((r) => ({ ...toInstallView(r), mintedBy: r.minted_by }));
+  return rows.map((r) => ({ ...toInstallView(r, access), mintedBy: r.minted_by }));
 }
 
 /**

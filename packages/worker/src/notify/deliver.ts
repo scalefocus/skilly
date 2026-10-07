@@ -15,7 +15,7 @@
 // (in-app/webhook), never queuing up to burst-send later.
 import type { Pool } from "pg";
 import { GraphSendError } from "@skilly/shared/email";
-import { followNotificationContent, isFollowNotificationType, notificationTitle, contentRiskRuleLabel } from "@skilly/shared";
+import { followNotificationContent, isFollowNotificationType, notificationTitle, contentRiskRuleLabel, deprecationWarning } from "@skilly/shared";
 import { formatStars, qualityRuleHint } from "@skilly/shared/quality";
 
 const MAX_ATTEMPTS = Number(process.env.NOTIFY_MAX_ATTEMPTS ?? 5);
@@ -139,6 +139,21 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
       subject: s,
       text: `${fromName} commented on ${slug}. ${cta("View the discussion", path)}`,
       webhook: { event: n.type, title: s, skill: slug, from: fromName, url: abs(path) },
+    };
+  }
+
+  // §45.6: a skill the recipient watches, maintains or has installed was deprecated. The successor
+  // is in the payload only when THIS recipient could see it at insert time; the CTA follows it.
+  if (n.type === "skill.deprecated" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const succ = typeof p.successorNamespaceSlug === "string" && typeof p.successorSlug === "string" ? `${p.successorNamespaceSlug}/${p.successorSlug}` : null;
+    const path = succ ? `/skills/${succ}` : `/skills/${p.namespaceSlug}/${p.skillSlug}`;
+    const note = typeof p.note === "string" && p.note.trim() ? ` ${p.note.trim()}` : "";
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${deprecationWarning(slug, succ)}${note} ${cta(succ ? "Open the successor" : "View the skill", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, successor: succ, url: abs(path) },
     };
   }
 

@@ -481,11 +481,20 @@ export async function fulfilWithExistingSkill(
     if (r.state !== "open") { await client.query("rollback"); return { error: "This request was already fulfilled, withdrawn, or removed.", status: 409 }; }
     const { rows: skillRows } = await client.query<{ id: string; namespace_id: string; visibility: string }>(
       `select s.id, s.namespace_id, s.visibility from skills s join namespaces n on n.id = s.namespace_id
-        where n.slug = $1 and s.slug = $2 and s.status = 'active' and s.visibility = 'org'`,
+        where n.slug = $1 and s.slug = $2 and s.status = 'active' and s.visibility = 'org' and s.deprecated_at is null`,
       [namespaceSlug, skillSlug],
     );
     const sk = skillRows[0];
-    if (!sk) { await client.query("rollback"); return { error: "That skill isn't eligible (must be an active, org-visible skill).", status: 422 }; }
+    if (!sk) {
+      await client.query("rollback");
+      // §45: a deprecated skill is excluded (409) — a request is never "fulfilled" with something being retired.
+      const { rowCount: dep } = await client.query(
+        `select 1 from skills s join namespaces n on n.id = s.namespace_id where n.slug = $1 and s.slug = $2 and s.deprecated_at is not null`,
+        [namespaceSlug, skillSlug],
+      );
+      if (dep) return { error: "That skill is deprecated — point the request at its successor instead.", status: 409 };
+      return { error: "That skill isn't eligible (must be an active, org-visible skill).", status: 422 };
+    }
     await client.query(
       `update skill_requests set state = 'fulfilled', fulfilled_skill_id = $2, fulfilled_by_user_id = $3,
               fulfilled_at = now(), updated_at = now()

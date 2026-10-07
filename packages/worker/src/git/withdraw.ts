@@ -12,6 +12,7 @@ import type { Pool } from "pg";
 import { versionTag, resolveLatest } from "@skilly/shared";
 import { sweepBatchSize } from "./publish.js";
 import { repoPath } from "./repoStore.js";
+import { ensureMain, loadDeprecationState } from "./mainRef.js";
 
 function git(args: string[], gitDir: string): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
@@ -25,11 +26,6 @@ function git(args: string[], gitDir: string): Promise<{ code: number; out: strin
 }
 async function exists(p: string): Promise<boolean> {
   try { await access(p); return true; } catch { return false; }
-}
-async function revParse(ref: string, gitDir: string): Promise<string | null> {
-  const r = await git(["rev-parse", "--verify", "--quiet", ref], gitDir);
-  const sha = r.out.trim();
-  return r.code === 0 && sha ? sha : null;
 }
 
 export async function withdrawYankedVersions(pool: Pool, repoRoot: string): Promise<number> {
@@ -55,22 +51,22 @@ export async function withdrawYankedVersions(pool: Pool, repoRoot: string): Prom
       continue;
     }
     const tag = versionTag(r.semver);
-    const tagCommit = await revParse(`refs/tags/${tag}`, repo);
-    const mainCommit = await revParse("refs/heads/main", repo);
 
     // Drop the version tag → the clone-by-ref fails.
     await git(["update-ref", "-d", `refs/tags/${tag}`], repo);
 
-    // If `main` (the default branch a ref-less clone gets) pointed at the yanked version,
-    // repoint it to the next latest-stable active version, or remove it if none remain.
-    if (mainCommit && tagCommit && mainCommit === tagCommit) {
-      const actives = (await pool.query<{ semver: string }>(
-        `select semver from skill_versions where skill_id = $1 and status = 'active'`, [r.skill_id],
-      )).rows.map((x) => x.semver);
-      const latest = resolveLatest(actives);
-      const latestCommit = latest ? await revParse(`refs/tags/${versionTag(latest)}`, repo) : null;
-      if (latestCommit) await git(["update-ref", "refs/heads/main", latestCommit], repo);
-      else await git(["update-ref", "-d", "refs/heads/main"], repo);
+    // Reconcile `main` (the default branch a ref-less clone gets) with what remains: the next
+    // latest-stable tag's commit — or, for a deprecated skill, the deprecation-hint commit on top
+    // of it (§45.4) — or no `main` at all when nothing stable is left. Unconditional, so a `main`
+    // that sat on a hint commit whose parent was the yanked tag is repaired too.
+    const actives = (await pool.query<{ semver: string }>(
+      `select semver from skill_versions where skill_id = $1 and status = 'active'`, [r.skill_id],
+    )).rows.map((x) => x.semver);
+    const latest = resolveLatest(actives);
+    try {
+      await ensureMain(repo, latest ? versionTag(latest) : null, await loadDeprecationState(pool, r.skill_id));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "withdraw: could not reconcile main", skill: `${r.ns_slug}/${r.skill_slug}`, err: String(err) }));
     }
 
     await pool.query(`update skill_versions set git_published = false where id = $1`, [r.id]);

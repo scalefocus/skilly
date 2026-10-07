@@ -7,7 +7,7 @@
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
 // from a description — absent from the code.
 import type { Pool } from "pg";
-import { parseMinQuality } from "@skilly/shared";
+import { parseMinQuality, deprecationWarning } from "@skilly/shared";
 import {
   MCP_TOOL_NAMES,
   buildSkillResourceUri,
@@ -27,6 +27,7 @@ import {
   findNamespace,
   findVisibleSkill,
   getSkillDetail,
+  skillDeprecation,
   listVersions,
   registryMetadata,
   resolveReadVersion,
@@ -99,7 +100,7 @@ export function toolDefinitions(): ToolDefinition[] {
       title: "Search skills",
       readOnly: true,
       description:
-        "Search this skilly registry's catalog. THIS IS THE DISCOVERY PATH — the resource list deliberately advertises templates only and never enumerates the catalog, so start here. Results are filtered to what you are allowed to see. Each hit includes a `resourceUri` you can read directly, plus `matchedIn` (the fields your words matched) and a short `snippet` — use them to judge relevance WITHOUT reading SKILL.md, because reading a skill's SKILL.md counts as adopting it. When no skill matches every word, `matchMode` is \"any\" and the hits match only some of your words.",
+        "Search this skilly registry's catalog. THIS IS THE DISCOVERY PATH — the resource list deliberately advertises templates only and never enumerates the catalog, so start here. Results are filtered to what you are allowed to see. Each hit includes a `resourceUri` you can read directly, plus `matchedIn` (the fields your words matched) and a short `snippet` — use them to judge relevance WITHOUT reading SKILL.md, because reading a skill's SKILL.md counts as adopting it. When no skill matches every word, `matchMode` is \"any\" and the hits match only some of your words. Each hit also carries `deprecation`: null for a live skill, or { note, successor } when the skill is deprecated — prefer the named successor.",
       inputSchema: {
         type: "object",
         properties: {
@@ -192,7 +193,7 @@ export function toolDefinitions(): ToolDefinition[] {
       title: "Get an install command",
       readOnly: false,
       description:
-        "Mint a personal install command for a skill and return it as a shell command to run (`npx skills add …`). The command embeds a reusable, revocable token scoped to that one skill. Run it with your shell to actually install. This does NOT install anything by itself.",
+        "Mint a personal install command for a skill and return it as a shell command to run (`npx skills add …`). The command embeds a reusable, revocable token scoped to that one skill. Run it with your shell to actually install. This does NOT install anything by itself. A deprecated skill still installs; the result then carries a `warning` naming its successor.",
       inputSchema: {
         type: "object",
         properties: {
@@ -540,7 +541,7 @@ export async function callTool(
     case "get_skill": {
       const r = await resolveSkill(pool, caller, args);
       if (!r.ok) return toolError(r.error);
-      const detail = await getSkillDetail(pool, r.value);
+      const detail = await getSkillDetail(pool, r.value, caller.access);
       return detail ? toolJson(detail) : toolError(NOT_FOUND);
     }
 
@@ -646,16 +647,20 @@ export async function callTool(
       const exp = await resolveExpiry(pool, tri(args, "expiresAt"));
       if ("error" in exp) return toolError(exp.error);
       const minted = await mintInstall(pool, caller.userId, r.value, semver, exp.value);
+      // §45.7: a deprecated skill still installs, with a warning naming the successor the caller can see.
+      const dep = await skillDeprecation(pool, caller.access, r.value.id);
+      const skillRef = `${r.value.namespaceSlug}/${r.value.skillSlug}`;
       return toolJson({
         ...minted,
-        skill: `${r.value.namespaceSlug}/${r.value.skillSlug}`,
+        skill: skillRef,
+        ...(dep ? { warning: deprecationWarning(skillRef, dep.successor ? `${dep.successor.namespaceSlug}/${dep.successor.skillSlug}` : null), deprecation: dep } : {}),
         nextStep: "Run the `command` in a shell to install the skill. It is reusable — re-run it later to pick up updates.",
       });
     }
 
     case "list_installed_skills": {
       const onlyBehind = args.onlyBehind === true;
-      const installs = await listInstalls(pool, caller.userId, onlyBehind);
+      const installs = await listInstalls(pool, caller.userId, caller.access, onlyBehind);
       return toolJson({
         installs,
         behindCount: installs.filter((i) => i.refresh !== null).length,

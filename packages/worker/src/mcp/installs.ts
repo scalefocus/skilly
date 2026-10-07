@@ -19,6 +19,7 @@ import {
   type RefreshHint,
 } from "@skilly/shared";
 import { publicBaseUrl } from "./url.js";
+import { deprecationLite, successorJsonSql, type DeprecationLite, type EffectiveAccess, type SuccessorJson } from "@skilly/shared";
 import { getInstallMaxTtlMonths } from "./settings.js";
 import { M } from "../metrics.js";
 
@@ -106,6 +107,8 @@ export interface InstallView {
   expiresAt: string | null;
   inactive: boolean;
   skillArchived: boolean;
+  /** §45.7: the skill is deprecated (successor named only when the caller can see it). */
+  skillDeprecation: DeprecationLite | null;
   /**
    * Freshness (§23 "Installed-version freshness" / §29): `installedVersion` is what the gateway
    * last served this install (null = not recorded yet); `latestVersion` the skill's current latest
@@ -126,7 +129,7 @@ export interface InstallView {
  * equivalent. `onlyBehind` keeps just the behind/withdrawn rows (§29 `list_installed_skills`).
  * A listing is a read: no audit row, no access_log, no stamp.
  */
-export async function listInstalls(pool: Pool, userId: string, onlyBehind = false): Promise<InstallView[]> {
+export async function listInstalls(pool: Pool, userId: string, access: EffectiveAccess, onlyBehind = false): Promise<InstallView[]> {
   const { rows } = await pool.query<{
     id: string;
     pinned_semver: string | null;
@@ -140,9 +143,13 @@ export async function listInstalls(pool: Pool, userId: string, onlyBehind = fals
     last_served_semver: string | null;
     last_cloned_at: string | null;
     active_semvers: string[];
+    deprecated_at: string | null;
+    deprecation_note: string | null;
+    successor: SuccessorJson | null;
   }>(
     `select t.id, t.pinned_semver, t.used_at, t.expires_at,
             n.slug as ns_slug, s.slug as skill_slug, s.title, s.status as skill_status,
+            s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor,
             (t.expires_at is not null and t.expires_at <= now()) as inactive,
             t.last_served_semver, t.last_cloned_at, v.active_semvers
        from tokens t
@@ -170,6 +177,7 @@ export async function listInstalls(pool: Pool, userId: string, onlyBehind = fals
       expiresAt: r.expires_at,
       inactive: r.inactive,
       skillArchived: r.skill_status === "archived",
+      skillDeprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
       installedVersion: r.last_served_semver,
       lastClonedAt: r.last_cloned_at,
       latestVersion: latestSemver,

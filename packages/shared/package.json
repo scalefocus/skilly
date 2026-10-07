@@ -110,6 +110,10 @@
     "./ai-name": {
       "types": "./dist/ai-name.d.ts",
       "default": "./dist/ai-name.js"
+    },
+    "./deprecation": {
+      "types": "./dist/deprecation.d.ts",
+      "default": "./dist/deprecation.js"
     }
   },
   "scripts": {

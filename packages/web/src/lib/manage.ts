@@ -165,6 +165,8 @@ export async function setSkillFeatured(
     // (e.g. a double click) is idempotent and must not spuriously 409 at a full cap.
     if (!skill.featured) {
       if (skill.status === "archived") return { ok: false, status: 409, error: "archived skills can't be featured — restore it first" };
+      // §45: a deprecated skill is never spotlighted (deprecating also clears an existing spotlight).
+      if (skill.deprecatedAt) return { ok: false, status: 409, error: "a deprecated skill can't be featured — un-deprecate it first" };
       const { rowCount: installable } = await pool.query(
         `select 1 from skill_versions where skill_id = $1 and status = 'active' and git_published limit 1`,
         [skill.id],

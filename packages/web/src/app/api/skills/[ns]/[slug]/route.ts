@@ -14,6 +14,7 @@ import { skillQualityDetail, skillVersionQualities } from "../../../../../lib/qu
 import { qualitySummary } from "../../../../../lib/catalog";
 import { aiDraftAvailability } from "../../../../../lib/qualityDraft";
 import { listGrants, isExplicitMaintainer } from "../../../../../lib/grants";
+import { deprecationDetail, listReplaces } from "../../../../../lib/deprecation";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, canShareSkill, seesViaGrantOnly, resolveLatest } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   // Record the view only for live consumption — not an owner inspecting an archived skill. §21.
   if (!archived && access.userId) logView(skill.id, skill.namespaceId, access.userId);
 
-  const [versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality, grants, explicitMaintainer] = await Promise.all([
+  const [versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality, grants, explicitMaintainer, replaces] = await Promise.all([
     listVersions(skill.id),
     latestStableSemver(skill.id),
     access.userId ? isWatching(access.userId, skill.id) : Promise.resolve(false),
@@ -62,6 +63,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     // §42: the shared-with list (chips + the propose form's new-version pre-fill).
     skill.visibility === "namespace" ? listGrants(skill.id) : Promise.resolve([]),
     isExplicitMaintainer(skill.id, access.userId ?? null),
+    // §45.5: "Replaces <ns>/<slug>" — the visible, active skills that name THIS one as successor.
+    listReplaces(access, skill.id),
   ]);
   const versions = versions0.map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
   // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
@@ -80,6 +83,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     versions.filter((v) => v.status === "active" && v.gitPublished).map((v) => v.semver),
   );
   const publishing = latest != null && latestInstallable == null;
+  const deprecated = skill.deprecatedAt != null;
+  const canDeprecate = !archived && canYankOrArchive(access, skill.namespaceId);
   return Response.json({
     // §38.3 the Add-to-collection popup addresses the skill by id; `collectible` gates the button
     // (org-visible, active, installable — the shared eligibility rule).
@@ -124,14 +129,19 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     // Featured homepage spotlight (§7): current state + whether this caller can toggle it. The
     // Spotlight control is platform-admin only and only on an active, installable skill.
     featured: skill.featured,
-    canFeature: access.isPlatformAdmin && !archived && latestInstallable != null,
+    canFeature: access.isPlatformAdmin && !archived && !deprecated && latestInstallable != null,
+    // §45: the deprecation marker (successor only when THIS viewer can see it), the reverse
+    // "Replaces …" list, and the deprecate/edit/un-deprecate right (= archive's authority).
+    deprecation: deprecationDetail(access, skill, canDeprecate),
+    replaces,
+    canDeprecate,
     // capability flags for the UI
     canManage: canYankOrArchive(access, skill.namespaceId), // yank / archive / restore
     // Permanent deletion is platform-admin only and only for archived skills (§7).
     canDelete: access.isPlatformAdmin && archived,
     // "Retry mirroring" — platform admin only, shown only when this skill's mirror dead-lettered. §6.
     canRetryMirror: access.isPlatformAdmin && !!pendingMirror?.failed,
-    canPromote: !archived && !isGlobal && latest != null && canInitiatePromotion(access, skill.namespaceId),
+    canPromote: !archived && !deprecated && !isGlobal && latest != null && canInitiatePromotion(access, skill.namespaceId),
     isGlobal,
   });
 });

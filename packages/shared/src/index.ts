@@ -43,3 +43,4 @@ export * from "./freshness.js";
 export * from "./ai-draft.js";
 export * from "./ai-name.js";
 export * from "./quality-draft.js";
+export * from "./deprecation.js";
