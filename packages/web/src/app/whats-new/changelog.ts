@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.24.1",
+    date: "2026-10-07",
+    summary:
+      "In the Draft improvements dialog, the \"Not drafted\" list under the drafted files now lines up with the rows above it instead of sitting flush against the panel edge.",
+  },
+  {
     version: "2.24.0",
     date: "2026-10-07",
     summary:

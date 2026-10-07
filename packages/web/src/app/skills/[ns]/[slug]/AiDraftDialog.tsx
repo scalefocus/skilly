@@ -308,7 +308,7 @@ export function AiDraftDialog({
                 </div>
               );
             })}
-            {skipped.length > 0 && <PlanList title={`Not drafted (${skipped.length})`} files={skipped} testid="ai-draft-plan-skipped" />}
+            {skipped.length > 0 && <PlanList title={`Not drafted (${skipped.length})`} files={skipped} testid="ai-draft-plan-skipped" asRow />}
           </div>
         )}
       </div>
@@ -316,9 +316,10 @@ export function AiDraftDialog({
   );
 }
 
-function PlanList({ title, files, testid }: { title: string; files: PlanFile[]; testid: string }) {
+// `asRow` renders the list as the last row of a `.rows` panel, so it shares the file rows' padding.
+function PlanList({ title, files, testid, asRow }: { title: string; files: PlanFile[]; testid: string; asRow?: boolean }) {
   return (
-    <div style={{ marginTop: 12 }} data-testid={testid}>
+    <div className={asRow ? "row" : undefined} style={asRow ? { display: "block" } : { marginTop: 12 }} data-testid={testid}>
       <div className="nav-label" style={{ padding: "0 0 6px" }}>{title}</div>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
         {files.map((f) => (
