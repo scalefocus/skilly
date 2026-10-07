@@ -24,7 +24,8 @@ import {
   type MentionMap,
   type PreparedMention,
 } from "./mentions";
-import { canReviewNamespace, isSkillVisible, userCanSeeSkillSql, maxRawMentionLength, mentionCollapsedLength, type EffectiveAccess } from "@skilly/shared";
+import { flattenMentions } from "./mentionPlainText";
+import { canReviewNamespace, extractMentions, isSkillVisible, userCanSeeSkillSql, maxRawMentionLength, mentionCollapsedLength, type EffectiveAccess } from "@skilly/shared";
 
 export const MAX_MESSAGE_LEN = 4000;
 /** Skill-discussion comments are capped tighter than the general message body (§24). */
@@ -784,12 +785,12 @@ export async function listConversations(
     id: string; subject_type: string; subject_id: string | null;
     submitted_by: string | null; ns_slug: string | null; skill_slug: string | null; semver: string | null;
     req_requester: string | null; req_title: string | null;
-    last_body: string | null; last_from: string | null; last_at: string | null; other_name: string | null; other_avatar: string | null; other_user_id: string | null; unread: string;
+    last_id: string | null; last_body: string | null; last_from: string | null; last_at: string | null; other_name: string | null; other_avatar: string | null; other_user_id: string | null; unread: string;
   }>(
     `select c.id, c.subject_type, c.subject_id,
             pr.submitted_by, n.slug as ns_slug, coalesce(s.slug, rev.slug) as skill_slug, pr.proposed_semver as semver,
             req.requester_user_id as req_requester, req.title as req_title,
-            lm.body as last_body, lm.from_name as last_from, lm.created_at as last_at,
+            lm.id as last_id, lm.body as last_body, lm.from_name as last_from, lm.created_at as last_at,
             coalesce(op.display_name, ${nameSql("cu.display_name", "cu.email")}) as other_name, coalesce(op.avatar, cu.avatar) as other_avatar,
             coalesce(op.user_id, cu.id) as other_user_id,
             (select count(*) from messages m where m.conversation_id = c.id and m.author_id <> $1
@@ -801,7 +802,7 @@ export async function listConversations(
        left join namespaces n on n.id = pr.target_namespace_id
        left join skills s on s.id = pr.target_skill_id
        left join lateral (select payload->'metadata'->>'skillSlug' as slug from proposal_revisions where proposal_id = pr.id order by revision_no desc limit 1) rev on true
-       left join lateral (select m.body, m.created_at, ${nameSql("u.display_name", "u.email")} as from_name from messages m join users u on u.id = m.author_id where m.conversation_id = c.id order by m.created_at desc limit 1) lm on true
+       left join lateral (select m.id, m.body, m.created_at, ${nameSql("u.display_name", "u.email")} as from_name from messages m join users u on u.id = m.author_id where m.conversation_id = c.id order by m.created_at desc limit 1) lm on true
        left join lateral (select pp.user_id, ${nameSql("u2.display_name", "u2.email")} as display_name, u2.avatar from conversation_participants pp join users u2 on u2.id = pp.user_id
                            where pp.conversation_id = c.id and pp.user_id <> $1 order by pp.created_at asc limit 1) op on true
        left join users cu on cu.id = $1
@@ -812,6 +813,11 @@ export async function listConversations(
       limit $2 offset $3`,
     [access.userId, limit, offset],
   );
+  // §24 Conversation-list previews: flatten mention tokens to plain text FOR THIS READER, via the
+  // same per-reader resolution a thread gets (one batched lookup for the page — a restricted skill
+  // the reader can't see becomes "a restricted skill", never its name).
+  const mentionIds = rows.filter((r) => r.last_id && r.last_body && extractMentions(r.last_body).length).map((r) => r.last_id!);
+  const mentions = await resolveMentions(access, mentionIds);
   const conversations = rows.map((r) => ({
     id: r.id,
     title: r.subject_type === "proposal" ? `@${r.ns_slug}/${r.skill_slug ?? "?"} · v${r.semver}`
@@ -821,7 +827,7 @@ export async function listConversations(
       : r.subject_type === "request" && r.subject_id ? `/requests/${r.subject_id}`
       : null,
     unread: Number(r.unread),
-    lastBody: r.last_body,
+    lastBody: r.last_body == null ? null : flattenMentions(r.last_body, mentions),
     lastFromName: r.last_from,
     lastAt: r.last_at,
     peerName: r.subject_type === "direct" ? r.other_name : null,
