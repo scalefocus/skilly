@@ -40,3 +40,4 @@ export * from "./follows.js";
 export * from "./survey.js";
 export * from "./collections.js";
 export * from "./freshness.js";
+export * from "./ai-draft.js";

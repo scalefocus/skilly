@@ -17,4 +17,6 @@ export const M = {
   cspReports: metrics.counter("skilly_csp_reports_total", "CSP violation reports received (§22)"),
   // §37.13 content risk — findings recorded at hosted upload.
   contentRiskFindings: metrics.counter("skilly_content_risk_findings_total", "Content-risk findings recorded at scan time, by rule and severity"),
+  // §43.7 — Draft with AI on the propose form, by outcome (ok|failed|rate_limited|source_rejected).
+  aiDraftRequests: metrics.counter("skilly_ai_draft_requests_total", "Propose-form AI draft requests, by outcome"),
 };

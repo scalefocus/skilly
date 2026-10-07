@@ -8,7 +8,8 @@ import { parseInstallCommand } from "@skilly/shared/external-tool";
 import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
-import { Pill, ScrollToTop } from "../../components/ui";
+import { Modal, Pill, ScrollToTop } from "../../components/ui";
+import { useDateFmt } from "../../components/DateFormat";
 import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
 import { NamespaceMultiPicker, useShareTargets } from "../../components/NamespaceMultiPicker";
@@ -137,6 +138,19 @@ function ProposeForm() {
   });
   const [categories, setCategories] = useState<string[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<{ name: string; slug: string }[]>([]);
+  const fmt = useDateFmt();
+
+  // "Draft with AI" (§43): a proposer-clicked draft of the description, usage and categories from
+  // the source's SKILL.md. Rendered only when the AI integration is available. The confirm dialog
+  // runs BEFORE the call (Cancel sends nothing); Undo restores the pre-draft text and drops the
+  // categories the draft added, and goes away as soon as Description or Usage is edited again.
+  const [aiDraftAvailable, setAiDraftAvailable] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [draftMsg, setDraftMsg] = useState<string | null>(null);
+  const [draftConfirm, setDraftConfirm] = useState<string[] | null>(null);
+  const [draftUndo, setDraftUndo] = useState<{ description: string; usage: string; added: string[] } | null>(null);
+  const [aiNewCats, setAiNewCats] = useState<string[]>([]);
+  const draftAbort = useRef<AbortController | null>(null);
 
   // Skill icon (§33) — optional. `iconCrop` holds the proposer's image: checked, framed in the crop
   // dialog and rendered to the 256×256 PNG in the browser (§33.3–§33.4; re-normalized server-side
@@ -359,6 +373,10 @@ function ProposeForm() {
     fetch("/api/namespaces")
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => j?.namespaces?.length && setNamespaceOptions(j.namespaces))
+      .catch(() => {});
+    fetch("/api/propose/ai-draft")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setAiDraftAvailable(j?.available === true))
       .catch(() => {});
     fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
@@ -658,9 +676,100 @@ function ProposeForm() {
     };
   }
 
+  // §43.2: why the Draft with AI button is disabled, or null when there is a source to read.
+  const draftBlocked: string | null = (() => {
+    if (lock && reuseFiles) return null; // Keep current files: the reused artifact is the source
+    if (sourceType === "hosted") {
+      if (!file) return "Attach a bundle first.";
+      if (file.size > uploadChunkBytes) return "Bundle too large to draft from.";
+      return null;
+    }
+    if (!f.externalUrl.trim() || !f.externalRef.trim()) return hubSource ? "Enter the skills-hub skill and version first." : "Enter the repository URL and ref first.";
+    if (refProbeError) return "The source couldn’t be checked — fix the URL first.";
+    if (!refsForUrl) return "Checking the source…";
+    if (refMissingUpstream) return "Pick a ref that exists upstream first.";
+    return null;
+  })();
+
+  function startDraft() {
+    setDraftMsg(null);
+    const nonEmpty = [f.description.trim() ? "Description" : "", f.usageExamples.trim() ? "Usage" : ""].filter(Boolean);
+    if (nonEmpty.length) setDraftConfirm(nonEmpty);
+    else void runDraft("replace");
+  }
+
+  async function runDraft(fill: "replace" | "empty") {
+    setDraftConfirm(null);
+    setDraftMsg(null);
+    const ctl = new AbortController();
+    draftAbort.current = ctl;
+    setDrafting(true);
+    const before = { description: f.description, usage: f.usageExamples, categories };
+    try {
+      let init: RequestInit;
+      if (lock && reuseFiles) {
+        init = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "reuse", namespace: nvNs, skill: nvSlug }) };
+      } else if (sourceType === "hosted" && file) {
+        const fd = new FormData();
+        fd.append("file", file);
+        init = { method: "POST", body: fd };
+      } else {
+        const skillSlug = f.skillSlug.trim() || subdirLast || "skill";
+        init = {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ source: "pointer", externalUrl: f.externalUrl.trim(), externalRef: f.externalRef.trim(), externalSubdir: f.externalSubdir.trim() || null, skillSlug }),
+        };
+      }
+      const r = await fetch("/api/propose/ai-draft", { ...init, signal: ctl.signal });
+      const j = (await r.json().catch(() => ({}))) as {
+        description?: string; usage?: string; categories?: { name: string; isNew: boolean }[];
+        error?: string; message?: string; scope?: string; cap?: number; retryAt?: string;
+      };
+      if (!r.ok) {
+        if (j.error === "ai_unavailable") setAiDraftAvailable(false);
+        if (j.error === "draft_rate_limited" && j.scope === "day" && j.retryAt) {
+          setDraftMsg(`Daily AI draft limit reached (${j.cap ?? 50} in 24 hours) — you can draft again after ${fmt.dateTime(j.retryAt)}.`);
+        } else {
+          setDraftMsg(j.message ?? "Couldn’t draft right now — try again or write it yourself.");
+        }
+        return;
+      }
+      const description = fill === "replace" || !before.description.trim() ? j.description ?? "" : before.description;
+      const usage = fill === "replace" || !before.usage.trim() ? j.usage ?? "" : before.usage;
+      setF((prev) => ({ ...prev, description, usageExamples: usage }));
+      // Categories are only ever ADDED to the proposer's picks (§43.4), within the field's cap of 12.
+      const selected = new Set(before.categories.map((c) => c.trim().toLowerCase()));
+      const added: string[] = [];
+      for (const c of j.categories ?? []) {
+        if (selected.has(c.name) || before.categories.length + added.length >= 12) continue;
+        selected.add(c.name);
+        added.push(c.name);
+      }
+      setCategories([...before.categories, ...added]);
+      setAiNewCats((j.categories ?? []).filter((c) => c.isNew && added.includes(c.name)).map((c) => c.name));
+      setDraftUndo({ description: before.description, usage: before.usage, added });
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") setDraftMsg("Couldn’t draft right now — try again or write it yourself.");
+    } finally {
+      draftAbort.current = null;
+      setDrafting(false);
+    }
+  }
+
+  function undoDraft() {
+    if (!draftUndo) return;
+    const { description, usage, added } = draftUndo;
+    setF((prev) => ({ ...prev, description, usageExamples: usage }));
+    setCategories((prev) => prev.filter((c) => !added.includes(c)));
+    setAiNewCats([]);
+    setDraftUndo(null);
+  }
+
   async function submit(mode: "review" | "direct") {
     setErr(null);
     setScan(null);
+    setDraftUndo(null);
     if (categoryError) { setErr(categoryError); return; } // §10 — the server would 422 with the same text
     setBusy(true);
     try {
@@ -1333,7 +1442,50 @@ function ProposeForm() {
             square — or a single emoji. Skills without an icon show the skilly logo.
           </p>
         </div>
-        <div>
+        {mode === "have" && (aiDraftAvailable || draftMsg) && (
+          <div className="ai-draft-row" data-testid="ai-draft">
+            {aiDraftAvailable && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={drafting || !!draftBlocked}
+                  title={draftBlocked ?? undefined}
+                  onClick={startDraft}
+                >
+                  {drafting ? "Drafting…" : "Draft with AI"}
+                </button>
+                {drafting && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => draftAbort.current?.abort()}>Cancel</button>
+                )}
+                {!drafting && draftUndo && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={undoDraft}>Undo</button>
+                )}
+                <span className="muted ai-draft-help">{draftBlocked ?? "Drafts the description, usage and categories from the SKILL.md."}</span>
+              </>
+            )}
+            {draftMsg && <p role="alert" className="field-error" style={{ flexBasis: "100%", margin: 0 }}>{draftMsg}</p>}
+          </div>
+        )}
+        {draftConfirm && (
+          <Modal
+            title="Replace your text?"
+            onCancel={() => setDraftConfirm(null)}
+            footer={
+              <>
+                <button type="button" className="btn btn-ghost" onClick={() => setDraftConfirm(null)}>Cancel</button>
+                <button type="button" className="btn" onClick={() => void runDraft("empty")}>Fill empty fields only</button>
+                <button type="button" className="btn btn-primary" onClick={() => void runDraft("replace")}>Replace</button>
+              </>
+            }
+          >
+            <p style={{ margin: 0 }}>
+              {draftConfirm.join(" and ")} already {draftConfirm.length > 1 ? "have" : "has"} text. The AI draft can replace it, or fill only the
+              empty fields. Suggested categories are added to the ones you picked either way.
+            </p>
+          </Modal>
+        )}
+        <div inert={drafting} className={drafting ? "ai-draft-busy" : undefined}>
           <label style={label}>
             Categories
             {/* ⓘ bubble (§10): categories also decide the marketplace plugin(s) carrying the skill (§30.3). */}
@@ -1344,7 +1496,13 @@ function ProposeForm() {
             </InfoTip>
           </label>
           {/* Editable in new-version mode too — synced to the skill on accept (§8). */}
-          <TagInput value={categories} onChange={setCategories} suggestions={categoryOptions.map((c) => c.name)} placeholder="Search or create categories…" />
+          <TagInput
+            value={categories}
+            onChange={setCategories}
+            suggestions={categoryOptions.map((c) => c.name)}
+            placeholder="Search or create categories…"
+            badgeFor={(t) => (aiNewCats.includes(t) ? { label: "new", title: "Creates a new category (and its marketplace plugin) when the skill is published." } : null)}
+          />
           {categoryError && <p role="alert" style={{ fontSize: 12.5, marginTop: 7, color: "var(--danger, #c0392b)" }}>{categoryError}</p>}
           <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
             {lock
@@ -1352,16 +1510,16 @@ function ProposeForm() {
               : "Type to search existing categories, or enter a new one and press Enter. Add as many as fit."}
           </p>
         </div>
-        <div>
+        <div inert={drafting} className={drafting ? "ai-draft-busy" : undefined}>
           <label style={label}>Description <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· Markdown</span></label>
           {/* Description stays editable in new-version mode (like categories) — on accept the skill's
               description is updated to match. Other skill-level metadata stays locked. §8. */}
-          <MarkdownField value={f.description} onChange={(v) => setF((prev) => ({ ...prev, description: v }))} rows={3} placeholder="What does this skill do?" className="input input-lg" />
+          <MarkdownField value={f.description} onChange={(v) => { setDraftUndo(null); setF((prev) => ({ ...prev, description: v })); }} rows={3} placeholder="What does this skill do?" className="input input-lg" />
           {lock && <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>Editing the description updates the skill's description when this version is accepted.</p>}
         </div>
-        <div>
+        <div inert={drafting} className={drafting ? "ai-draft-busy" : undefined}>
           <label style={label}>Usage <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>· how it's triggered, options (Markdown)</span></label>
-          <MarkdownField value={f.usageExamples} onChange={(v) => setF((prev) => ({ ...prev, usageExamples: v }))} rows={4} mono className="input input-lg" placeholder={"Shown as a quick-start above SKILL.md. e.g.\n\nTrigger by asking to \"summarize a PDF\".\n\nOptions:\n- `pages`: page range"} />
+          <MarkdownField value={f.usageExamples} onChange={(v) => { setDraftUndo(null); setF((prev) => ({ ...prev, usageExamples: v })); }} rows={4} mono className="input input-lg" placeholder={"Shown as a quick-start above SKILL.md. e.g.\n\nTrigger by asking to \"summarize a PDF\".\n\nOptions:\n- `pages`: page range"} />
         </div>
         {/* "What changed" note (§8): per-version release note. New-version mode only — a skill's
             first version has no predecessor to describe. Plain text (no Markdown), required. */}

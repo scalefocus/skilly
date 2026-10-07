@@ -913,6 +913,12 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
 .taginput-chip { display: inline-flex; align-items: center; gap: 6px; }
 .taginput-chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; opacity: 0.7; }
 .taginput-chip button:hover { opacity: 1; }
+/* §43.4 — "new" marker on a category chip the AI draft added that isn't in the vocabulary yet. */
+.taginput-badge { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; padding: 1px 5px; border-radius: 999px; border: 1px solid currentColor; opacity: 0.8; cursor: help; }
+/* §43 — the Draft with AI row on the propose form. */
+.ai-draft-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.ai-draft-row .ai-draft-help { font-size: 12px; }
+.ai-draft-busy { opacity: 0.6; pointer-events: none; }
 /* z-index matches .search-ac (70) so result dropdowns (maintainer add, admin user delete/replace,
    propose tags) paint above sibling cards and sticky table headers (z-20) instead of behind them. */
 .taginput-menu { position: absolute; z-index: 70; left: 0; right: 0; margin-top: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 14px 40px -16px rgba(0,0,0,0.4); overflow: hidden; max-height: 240px; overflow-y: auto; }

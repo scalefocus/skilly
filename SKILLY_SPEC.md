@@ -863,6 +863,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Paste-to-fill for pointer proposals.** The propose form offers a paste box (the first field **inside the Pointer / external-git tab**, since it's pointer-specific; the Hosted/Pointer tab strip itself sits at the top of the form) that accepts a consumer-tool install command and fills the pointer fields from it — an **accelerator, not a third source type**: submission, validation, and review are unchanged, and every filled field stays editable. Parsing is a pure shared function (`parseInstallCommand`, beside the pinned wire-format adapter) covering the tool's source forms: full git URL (with optional `#ref`), GitHub `owner/repo` shorthand (normalized to `https://github.com/owner/repo.git`), GitHub `/tree/<ref>/<path>` URLs (split into URL + ref + folder), `--skill <name>` (→ the §6 skill folder; slug derived from its last segment), and the **skills-hub.ai install command** (`npx @skills-hub-ai/cli install <slug>` → the §6 API origin; the skilly slug is suggested from the registry slug and the ref must be a registry **version** — the command names none, so the form pins the registry's **latest version** via the ref pre-check, editable and quick-pickable from the published versions). Rules: for a **git** source, a command without a ref leaves the `main` default in charge (§8 below); `--all` is **rejected** with guidance (one skill per proposal, §6); URL schemes are never rewritten (the §6 SSRF validator remains the gate). **New-version mode:** the paste fills URL/ref/folder but **never changes the locked slug** (and cannot flip the locked source type); pasting a source counts as **explicitly supplying it**, so it switches the form off *Keep current files* (§8 below). A folder whose last segment differs from the slug shows a **soft warning** — submission is allowed, and the mirror-time `name == slug` validation stays the hard gate.
 - **Propose a new version from the skill detail page.** Any authenticated user can open the propose flow pre-filled from an existing skill (button on the detail page). In this mode only the **identity and access surface is LOCKED**: the **slug** (the install/repo identity — unique, read-only), the **visibility value** (`org`/`namespace`), and the **delivery type** (hosted vs pointer) — with **one deliberate exception**: on a `namespace`-visibility skill the **shared-namespaces list (§42) is editable**, pre-filled with the current grants, and lands at the same accept/publish gate as the version. **Everything else is editable**, pre-filled with the skill's current values: the skill-level metadata — **title, description, categories, and tool/harness** — and the version-level inputs — the semver (pre-filled with the next patch above the current latest stable), the usage examples, the **"What changed" note** (required in new-version mode — see the dedicated bullet below), and the **source**, which is now **optional** (default **Keep current files**, below; or a fresh hosted bundle / a new pinned ref+subdir for a pointer). Anyone who may propose may edit any of these — including retitling the skill — applied at the same accept/publish gate as the version (so in a `require_review = false` namespace, a member's direct publish retitles instantly; that is intended). It targets the existing skill and goes through the **normal review/approval** path (or direct publish where permitted). On accept, a new `skill_version` is created **and the skill's title, description, categories, and tool/harness are synced to the submitted values** (categories added/removed to match; all are skill-level metadata, not version content, so this is allowed — the sync re-fires the FTS trigger so search stays current, and it applies **on accept regardless of channel**: a prerelease re-version still updates the skill-level metadata immediately even though `latest` never moves). Only **visibility** stays frozen (a visibility change remains a skill-management action, never a re-version); the slug is immutable, period.
 - **Skill icon (§33) — an optional, skill-level field on every propose/publish path.** The propose form carries an **Icon · optional** field (after Title): an **emoji picker** (the existing `EmojiPicker`) and an **image upload framed in the icon crop dialog** (§33.4 — it opens by itself for a non-square image; *Adjust crop* re-opens it), plus a **preview tile** showing the *effective* icon and its **source label** — *from SKILL.md `icon:`*, *from icon.png in the bundle*, *uploaded*, *emoji*, or *default — skilly*. The effective icon is resolved by the **§33 precedence** — bundle frontmatter `icon:` → root `icon.png` → the uploaded image → the emoji → the default — against the bundle the materialized version will serve (*Keep current files* ⇒ the reused artifact; a pointer ⇒ its mirror), so **a bundle-borne icon beats an uploaded one**; when the bundle carries an icon the upload/emoji controls stay enabled but the preview says the bundle icon will be used (they persist as fallbacks). **New-version mode** pre-fills the current icon and offers three states — **keep**, **replace**, **remove** (the app's segmented pill, §33.4); *remove* clears the uploaded image and the emoji only — a bundle-borne icon can only be removed by shipping a bundle without it. **An icon change is a real change** for the metadata-only no-op guard (below). A **reviewer edit may remove the icon (image and/or emoji) but never upload a replacement** (the reviewer's *remove* is part of the ordinary reviewer-edit revision — no separate audit action). Revision payloads and audit rows carry the icon as **hash + filename + emoji, never bytes**. On accept (or direct publish) the resolved icon is **synced to the skill** exactly like title/categories/tool-harness — regardless of channel; **global promotion copies** the icon columns to the global copy; archive/yank leave it untouched. The **MCP `propose` / `update_proposal` tools silently ignore icon fields** (UI-only in this change, the same posture as the retired `tags` field).
+- **Draft with AI (§43).** When the §40 AI integration is available, the propose form (hosted and pointer; new-skill and new-version mode, including *Keep current files*) offers a proposer-clicked **Draft with AI** button that reads the source's `SKILL.md` and drafts the **Description**, the **Usage** and **categories** (added to the proposer's picks, never replacing them). It replaces typed Description/Usage text only after a confirm, is rate-limited (10/min, 50 per rolling 24 h), and leaves no marker — the proposer submits the text as their own. Not offered on the proposal page, in reviewer edits, in request mode or over MCP.
 - **The "What changed" note (per-version).** Every **new version** carries a short, proposer-authored **"What changed"** note — a plain-text summary of what this version changes — surfaced on the skill detail page (§10) and to reviewers. It is **distinct from `usage_examples`**: usage documents *how to use* the skill; this note is *what moved* since the last version. Rules:
   - **Required on new versions; hidden on first versions.** **Required** (non-empty) on every **new-version** publish — through review **and** the direct-publish path (`require_review = false` members, §8) — and **not shown or collected** for a skill's **first** version (a new-skill proposal) or a **global promotion** (which materializes an independent global skill's first version, §8). A first version has no predecessor to describe.
   - **Plain text, no Markdown.** Stored raw; rendered **HTML-escaped with newlines preserved** (pre-wrap) — **no Markdown parsing, no embedded HTML, no URL autolinking**. Capped at **4,000 characters** (client-counted, server-enforced).
@@ -1594,6 +1595,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `DELETE /api/proposals/:id` — permanently delete a proposal (reviewer of its namespace; any state except `accepted`). Housekeeping, silent, audited (`proposal.deleted`); cleans the review conversation + pointer scan + dangling notifications. §8.
 - `GET /api/proposals/:id/files` (bundle browser, §8), `.../artifact`, `.../duplicate-check`, `GET|POST /api/proposals/:id/messages` (review discussion, §24).
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
+- `GET /api/propose/ai-draft` → `{ available }`; `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`), 502 `draft_failed`. Nothing persisted.
 - `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon). The web form never sends the picked file itself — it uploads its own **256×256 PNG** crop (§33.3), so the 512 KB cap binds API callers only and is independent of the form's **10 MB** source limit.
 - `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6); an unparseable multipart body is a clear 400, not a 500 (§6). **Chunked variant** for bundles larger than the configured chunk size (§6): `POST /api/uploads/chunked` (start; sweeps ≥2h-old orphans, returns `{uploadId, chunkBytes}`), `PUT /api/uploads/chunked/:id/parts/:index` (raw octet-stream part), `POST /api/uploads/chunked/:id/complete` (assemble → identical validate/scan/store; same response shape as the single-shot upload), `DELETE /api/uploads/chunked/:id` (abort). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
 
@@ -1785,6 +1787,12 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     namespace marketplaces carrying shared skills, `skill.shared` / `skill.shared_new_version`
     notifications, maintainer pruning on unshare, and the audit pair. **Minor** release.
 
+35. **AI drafting on the propose form (§43):** the `skill_draft` AI feature, `GET|POST
+    /api/propose/ai-draft` (hosted bundle extracted and discarded, pointer `SKILL.md` fetched,
+    *Keep current files* artifact read), the **Draft with AI** button with confirm-before-replace,
+    additive categories with the *new* badge and one-step Undo, the 10/min + 50/24 h limits, and
+    `aiComplete({ retry: false })`. No migration. **Minor** release.
+
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
 - **SAML** — identity is anchored on Entra **OIDC** (+ SCIM). A second federation protocol is a large auth surface with no current requirement.
@@ -1871,7 +1879,7 @@ Per-skill **ownership + notification** layer. Designed to name accountable owner
 ## 20. Usage example
 
 - **Reuses the existing per-version `usage_examples`** field on `skill_versions` (already captured in proposal metadata; v1 only adds the missing UI). Per-version is intentional: triggering/options can change per release, so usage stays version-accurate and immutability (invariant #2) holds — a change is a new version.
-- **Authored in the proposal**, frozen with the version. The detail page renders the **latest stable version's** usage as a **Markdown "Usage" quick-start block above the rendered `SKILL.md`** (curated how-to-trigger first, full spec below), via the existing XSS-safe renderer.
+- **Authored in the proposal** (optionally drafted from the `SKILL.md` by **Draft with AI**, §43, then edited by the proposer), frozen with the version. The detail page renders the **latest stable version's** usage as a **Markdown "Usage" quick-start block above the rendered `SKILL.md`** (curated how-to-trigger first, full spec below), via the existing XSS-safe renderer.
 - **Indexed in FTS** at weight D (alongside the `SKILL.md` body, below title/description/categories), via the denormalized `skills.usage_search` column (migration 0020), taken from the **indexed version** — latest stable, else the highest active prerelease (§34.3; migration 0077 replaced the earlier newest-created-version rule). (Earlier drafts left usage out of FTS; it is now included.)
 
 ---
@@ -8296,7 +8304,8 @@ pattern), with the **status pill** as its header accessory.
 - **Config is read from the DB on every call** (one single-row read) — no cache, so enable/disable,
   rotation and removal take effect immediately in both processes.
 - **Timeouts & retry:** 60 s per attempt; **one retry** on network error, HTTP 429 or 5xx (honoring
-  `Retry-After` up to 10 s); no retry on other 4xx.
+  `Retry-After` up to 10 s); no retry on other 4xx. An optional **`retry: false`** makes a single
+  attempt — for interactive callers that must fail fast (§43.9).
 - **Errors** are thrown as `AiError` with a code: `ai_not_configured`, `ai_disabled`,
   `ai_key_missing`, `ai_token_undecryptable`, `ai_unknown_feature`, `ai_timeout`,
   `ai_provider_error` (carries the provider HTTP status), `ai_invalid_json`. The calling feature
@@ -8305,7 +8314,7 @@ pattern), with the **status pill** as its header accessory.
   (e.g. `egress: "Skill name, description and SKILL.md body of org-visible skills"`,
   `spec: "§41"`). Calling with an **unregistered key throws `ai_unknown_feature`** before any
   network call. `test` is reserved. The registry shipped empty; its **first entry is
-  `skill_quality`** (§41.5).
+  `skill_quality`** (§41.5) and its second **`skill_draft`** (§43.8).
 - **Recording:** every call that reaches the provider (success or failure) writes **one**
   `ai_usage` row with its final outcome — a retried call is still one row — and updates `last_call_*`. Calls
   refused before the network (`ai_not_configured`, `ai_disabled`, `ai_key_missing`,
@@ -8702,3 +8711,221 @@ events, differing only in `via`:
   member finds it in the catalog with the marker and opens it → the admin revokes → the member's
   catalog no longer lists it. Plus: propose a new version that only adds a grantee → accept →
   grants updated.
+
+---
+
+## 43. AI drafting on the propose form
+
+When the §40 AI integration is available, the propose form offers a **Draft with AI** button that
+reads the proposal's `SKILL.md` and drafts the **Description**, the **Usage** quick-start (§20) and
+**categories** for the proposer to edit. It is the **second registered AI task** (§40.7), after
+`skill_quality` (§41). It is a writing aid only: nothing it produces is stored, marked or treated
+differently from text the proposer typed — the proposer submits it as their own.
+
+### 43.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Proposer-clicked button**, never automatic (not on attach, not after submit). | Every send to the provider is a deliberate act; no cost from attach/re-attach churn; the proposer stays the author of what they submit. |
+| 2 | **Propose form only**, hosted **and** pointer, new-skill **and** new-version mode (including *Keep current files*). Not on the proposal page (`revise` / `resubmit`), not in reviewer edits, not in *I want a skill* request mode, not over MCP. | The propose form is where a fresh `SKILL.md` meets empty fields; the rest is deferred. |
+| 3 | **Egress = the `SKILL.md` (frontmatter + body) and the existing category names.** No other bundle file, no file list, nothing about the proposer. | The minimum the three outputs need. |
+| 4 | **One call fills all three fields.** | One click, one provider call, one coherent draft. |
+| 5 | Description and Usage **fill empty fields silently, confirm before replacing**; categories are **only ever added** to the proposer's picks. | Never silently destroy typed text; never drop a category the proposer chose. |
+| 6 | **No AI marker** — not in the proposal payload, the revision history, the review page or audit. | The proposer adopts the draft as their own text. |
+| 7 | **Rate-limited: 10 per minute and 50 per rolling 24 hours per user**, with an explicit message when either is hit. | The first AI surface any authenticated user can trigger; §40 has no cost caps of its own. |
+| 8 | **No retry, no persistence, no audit.** Each draft is one `ai_usage` row. | An interactive call must fail fast; a draft only becomes record when submitted (already audited). |
+
+### 43.2 When the button is shown and enabled
+- **Shown** only when `aiAvailable()` (§40.7) is true — configured, enabled, token decrypts. The form
+  asks once on load via `GET /api/propose/ai-draft` → `{ available }`. When AI is off, not
+  configured, or its token can't be decrypted, the button **does not render** (no disabled ghost).
+  An enabled-but-*Failing* integration still shows it; the call may then fail (§43.6).
+- **Placement:** a single **Draft with AI** button in the metadata section, directly above the
+  Categories field — the first of the three fields it fills (the form orders them Categories,
+  Description, Usage) — with the helper line *"Drafts the description, usage and categories from
+  the SKILL.md."* (replaced by the disabled reason while it is disabled).
+- **Enabled** only once a source is in hand; otherwise disabled with a tooltip naming what is missing:
+  - **Hosted:** a bundle is attached **and** its size is at or below the single-request upload size
+    (`upload_chunk_bytes`, §6). A larger bundle disables it with *"Bundle too large to draft from."*
+  - **Pointer (git or skills-hub):** URL and ref are filled and the live ref pre-check (§8) has
+    passed (no "isn't a branch or tag" warning showing).
+  - **New-version, *Keep current files*:** always enabled (the reused artifact is the source; §8
+    already requires a stable active version for reuse).
+- **Not offered** in *I want a skill* (request) mode — there is no `SKILL.md`.
+
+### 43.3 The flow
+1. **Confirm before replacing.** If Description or Usage already holds text (always true in
+   new-version mode, which pre-fills both), a dialog names the non-empty field(s) and offers
+   **Replace** · **Fill empty fields only** · **Cancel**. The choice is made **before** the call;
+   *Cancel* sends nothing. Categories are not in the dialog — they are always added (§43.4).
+2. **Drafting.** The button shows a spinner and *"Drafting…"* with a **Cancel** link; Description,
+   Usage and the category field are read-only until it settles. *Cancel* aborts the browser request
+   (a call already sent to the provider still completes and is still counted, §43.7).
+3. **Fill.** On success the chosen text fields are filled (§43.4) and the suggested categories are
+   added. The form scrolls nothing and submits nothing.
+4. **Undo.** A single-step **Undo** appears next to the button: it restores Description and Usage to
+   their pre-draft text and removes the categories the draft added that are still selected. It
+   disappears on the next draft, on submit, or **as soon as the proposer edits Description or
+   Usage** (so Undo can never overwrite their own later typing). Adding/removing categories does not
+   dismiss it.
+
+### 43.4 What the AI writes
+- **Description** — a plain-language summary for people browsing the catalog: what the skill does
+  and when someone would want it, **≤ 300 characters**, plain text (no Markdown), no "Use when…"
+  trigger phrasing (it is derived from, but rewritten from, the frontmatter `description`).
+- **Usage** — Markdown, **≤ 2,000 characters**, in the shape of the field's placeholder: a short
+  how-to-trigger line, **2–4 example prompts** a user would actually type, then any options or inputs
+  the `SKILL.md` documents. The prompt forbids describing capabilities the `SKILL.md` does not state.
+- **Categories** — **1 to 4** in total, preferring names from the existing vocabulary; at most **2
+  new** names, only when nothing existing fits. Server-side post-processing, in order:
+  1. trim + lowercase each suggestion (the §10 storage rule);
+  2. a suggestion whose `categorySlug` equals an existing category's slug **maps to that existing
+     category** (e.g. `AI & ML` → existing `ai ml`) — never a near-duplicate;
+  3. a remaining (new) name that fails `categoryNameError` is **dropped silently**;
+  4. de-duplicate; keep the first 2 new names and cap the total at 4, in the model's order.
+  The response marks each category `isNew`. Zero surviving categories is fine.
+- **Merging into the form:** suggested categories are **added** to whatever is already selected
+  (new-skill picks, or the skill's current categories in new-version mode); already-selected ones
+  are skipped, and nothing is added past the category field's existing cap of 12. An AI-added chip whose `isNew` is true carries a small **"new"** badge with the
+  tooltip *"Creates a new category (and its marketplace plugin, §30.3) when the skill is
+  published."* The badge is form-only and is not submitted.
+- **English only**, like §37 and §41.
+
+### 43.5 Endpoint — `POST /api/propose/ai-draft`
+Any authenticated user (the implicit *propose* right, §4). `GET` on the same route returns
+`{ available: aiAvailable() }`.
+
+- **Request** — one of three sources:
+  - **Hosted:** multipart with the bundle `file` (and the form's `skillSlug`, unused for hosted).
+  - **Pointer:** JSON `{ source: 'pointer', externalUrl, externalRef, externalSubdir?, skillSlug }`.
+  - **Reuse:** JSON `{ source: 'reuse', namespace, skill }` — the skill the new-version form targets.
+- **Getting the `SKILL.md`:**
+  - **Hosted:** the bundle is run through the **same safe extraction as `POST /api/uploads`** (§6:
+    accepted formats, path-traversal and expansion guards, wrapper-folder stripping) into a
+    temporary location, the root `SKILL.md` is read, and **everything is deleted** before the
+    response. Nothing is stored in the object store, no `scan_reports` row is written, ClamAV is not
+    run, and no duplicate check happens — that all still happens at submit. A file larger than
+    `upload_chunk_bytes` is refused **413 `draft_bundle_too_large`** before extraction (a request
+    whose `Content-Length` exceeds it by more than 1 MB of multipart framing is refused before the
+    body is even parsed).
+  - **Pointer:** the server checks out the pinned folder through the same bounded,
+    **SSRF-hardened** fetch as the §37.4 direct-publish content check (git: the shallow checkout of
+    the reviewer file-change view, §8, with the folder resolved as submit-time verification does —
+    the literal `<subdir>/SKILL.md`, else a folder named after the skill containing one; skills-hub:
+    the registry API, §6), reads **only** its `SKILL.md`, and discards the rest. A fetch that fails
+    is **422 `draft_source_failed`** with the fetch's message.
+  - **Reuse:** the skill must be visible to the caller (`isSkillVisible`, else **404**) and have a
+    stable active version whose artifact is stored (else **422 `draft_source_failed`**); the
+    `SKILL.md` is read from that version's stored artifact.
+- **The `SKILL.md` need not be valid.** Drafting runs on whatever root `SKILL.md` text exists (a
+  missing `name`, a slug mismatch, a bad frontmatter field are all fine) — ingest validation remains
+  the gate at submit. No root `SKILL.md` at all is **422 `draft_no_skill_md`**; an unreadable
+  archive is **422 `draft_bundle_unreadable`**; a pointer that doesn't resolve is **422** with the
+  same message submit-time verification gives.
+- **Order of checks:** auth (401) → `aiAvailable()` (**409 `ai_unavailable`** — the button was
+  hidden but the state changed) → per-minute limit → daily cap (§43.7, **429**) → size (413) → fetch
+  and extract (404/422) → provider call.
+- **Response 200:** `{ description, usage, categories: [{ name, isNew }] }`.
+- **Provider failure** (`ai_timeout`, `ai_provider_error` incl. budget-exhausted, `ai_invalid_json`):
+  **502 `draft_failed`** with no provider detail (§40.7 — provider error text never reaches
+  non-admins; admins see it on the AI card and in the System log).
+
+### 43.6 Messages in the form
+All shown inline beneath the button; none block the rest of the form.
+- Provider failure: *"Couldn't draft right now — try again or write it yourself."*
+- Per-minute limit: *"Too many drafts in a row — wait a minute and try again."*
+- Daily cap: *"Daily AI draft limit reached (50 in 24 hours) — you can draft again after
+  {time}."* The time is the response's `retryAt` (when the oldest counted call ages out),
+  rendered in the viewer's timezone and date style via `useDateFmt()`.
+- `draft_no_skill_md`: *"No SKILL.md at the bundle root."* · `draft_bundle_unreadable`: *"Couldn't
+  read this bundle."* · `draft_bundle_too_large`: *"Bundle too large to draft from."* · pointer
+  resolution: the server's message, as on submit.
+- `ai_unavailable`: the button disappears and the line reads *"AI drafting is no longer available."*
+
+### 43.7 Limits & recording
+- **Per minute:** `enforceRateLimit("ai-draft", userId, 10/min)` — counts every request, like the
+  other per-user web limits (per-instance, §16 #20). **429** `{ error: 'draft_rate_limited', scope:
+  'minute' }`.
+- **Daily cap: 50 per user per rolling 24 hours**, a hard-coded constant (`AI_DRAFT_DAILY_CAP`) in
+  v1. Counted from `ai_usage` rows with `feature = 'skill_draft'` and `user_id` = the caller in the
+  last 24 hours — so only calls that **reached the provider** count (a bundle refused for size or a
+  missing `SKILL.md` never does), and **no migration** is needed. **429** `{ error:
+  'draft_rate_limited', scope: 'day', retryAt }`. Two concurrent calls at 49 may both pass — an
+  accepted overshoot of a few calls.
+- **Recording:** the call goes through `aiComplete({ feature: 'skill_draft', userId, json: true,
+  maxTokens: 4096, retry: false })`, so the §40.7 bookkeeping applies unchanged: one `ai_usage` row
+  per call that reached the provider, `last_call_*` updated, runtime failures into the throttled
+  `system_event` path (§40.8). `maxTokens` **4096** leaves a reasoning model room to think and still
+  return ~2.3k characters of output.
+- **Not audited** (§40.11 — runtime AI calls are telemetry). **Nothing is persisted**: not the
+  `SKILL.md`, the prompt, the response, nor any marker on the proposal.
+- **Metric:** `skilly_ai_draft_requests_total{outcome}` (`ok` · `failed` · `rate_limited` ·
+  `source_rejected`).
+
+### 43.8 Prompt, egress & safety
+- **Registry entry** (`AI_FEATURES`): `{ key: 'skill_draft', label: 'Propose-form drafting
+  (description, usage, categories)', egress: 'The SKILL.md frontmatter and body (first 60,000
+  characters, secret-scanner lines redacted) of the skill being proposed, and the list of existing
+  category names (first 500)', spec: '§43' }`. Shown on the §40.4 egress notice and in the card's
+  30-day usage breakdown.
+- **Sent to the provider:** exactly that. The `SKILL.md` is truncated at **60,000 characters** (on a
+  code-point boundary) with a note to the model that it was; the proposer sees no warning. Every line
+  the **§6 secret scanner** flags is replaced by `[redacted]` before sending. The category list is
+  the full vocabulary (`/api/categories` already serves it to every user — category names are not
+  sensitive), alphabetical, first 500.
+- **Never sent:** any other bundle file or the file list, scripts/references/assets, the proposer's
+  identity, the title/slug/namespace typed in the form, credentials of any kind, audit rows, the
+  System log.
+- **Prompt injection.** The `SKILL.md` is untrusted: the prompt places it in a clearly delimited
+  block labelled as data to describe, never instructions to follow, and requests a single JSON
+  object `{ description, usage, categories }`.
+- **Output validation.** `description` and `usage` must be non-empty strings and `categories` an
+  array, else `ai_invalid_json` (**502 `draft_failed`**). Strings are trimmed to their caps
+  (300 / 2,000; the description's line breaks are folded to spaces); in `categories`, non-string
+  items are ignored and a new name over 64 characters is dropped, then §43.4 applies. The
+  draft lands **only in the caller's own form fields**; Usage and Description are later rendered by
+  the existing XSS-safe Markdown renderer like any typed text. The blast radius of a hostile
+  `SKILL.md` is the proposer's own form, which they read before submitting.
+- **Visibility (§40.10).** The inputs are the proposer's own source (or a skill they can see,
+  re-checked server-side) plus a non-sensitive vocabulary; the output is returned only to the
+  caller. No cross-skill content is sent or shown.
+- **Pointer fetch.** Any authenticated user may trigger the bounded SSRF-hardened fetch — the live
+  ref pre-check (§8) already lets them.
+
+### 43.9 Change to the §40 helper
+`aiComplete` gains an optional **`retry?: boolean`** (default `true`). With `retry: false` the call
+makes **one attempt** (60 s timeout, no retry on network/429/5xx). The interactive draft uses it so
+the button never spins for two minutes; the worker's §41 sweep keeps the default.
+
+### 43.10 Governance & invariants
+- **Invariant #3:** nothing about any skill other than the caller-visible reuse source is read or
+  returned; category names are already public to authenticated users.
+- **GDPR:** `ai_usage.user_id` is nulled by the existing erasure sweep (§40.3); nothing else is kept.
+- **Air-gap (§17):** with AI off the button never renders and nothing reaches the network.
+- **MCP (§29):** no drafting tool in v1.
+
+### 43.11 Out of scope (deferred)
+- Drafting on the proposal page (`revise` / `resubmit`) and in reviewer edits.
+- Drafting the title, the tool/harness or the "What changed" note.
+- Per-field buttons; an admin setting for the daily cap; non-English output.
+- Sending any bundle file other than `SKILL.md`.
+
+### 43.12 Tests (ship with the change)
+- **Unit** (`@skilly/shared`): the prompt builder's egress (only `SKILL.md` + category names;
+  secret-scanner lines → `[redacted]`; truncation at 60,000 code points with the note; categories
+  capped at 500); output validation (missing/empty `description` or `usage`, non-array
+  `categories`, fenced JSON, over-cap strings trimmed); category post-processing (case/trim, slug
+  match maps to existing, invalid new name dropped, ≤ 2 new, ≤ 4 total, de-dup, `isNew`);
+  `aiComplete` with `retry: false` makes exactly one attempt on a 5xx.
+- **Integration** (web API + DB, provider stubbed): `GET` reflects `aiAvailable()`; `409
+  ai_unavailable` when off; hosted happy path writes **no** object, scan row or proposal and
+  leaves no temp files; `413` above `upload_chunk_bytes`; `422 draft_no_skill_md` /
+  `draft_bundle_unreadable`; an invalid-but-present `SKILL.md` still drafts; pointer path via a
+  local git fixture; reuse path `404` for a skill the caller can't see (restricted, non-grantee) and
+  `422` with no stable active version; per-minute `429`; daily cap `429` with `retryAt` at 50
+  `ai_usage` rows and refused (413/422) calls not counted; one `ai_usage` row with `feature =
+  'skill_draft'` and the caller's `user_id`; provider failure → `502 draft_failed` without provider
+  text; no `audit_log` row written.
+- **e2e** (stub provider enabled): attach a bundle → **Draft with AI** → Description, Usage and
+  categories fill (an invented category shows the **new** badge) → **Undo** restores the previous
+  state; with text already typed the confirm dialog appears and *Fill empty fields only* leaves it
+  intact; with AI disabled the button is absent.

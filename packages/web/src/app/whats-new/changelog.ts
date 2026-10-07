@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.22.0",
+    date: "2026-10-06",
+    summary:
+      "When the AI integration is on, the propose form has a Draft with AI button: it reads the skill’s SKILL.md and drafts the description, the usage quick-start and categories for you to edit. Your typed text is only replaced after you confirm, categories are added to yours (new ones are marked), and Undo puts everything back.",
+  },
+  {
     version: "2.21.2",
     date: "2026-10-06",
     summary:
