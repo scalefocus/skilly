@@ -207,7 +207,9 @@ export interface DraftPromptInput {
 
 function findingLine(f: QualityFindingLike): string {
   const where = `${findingPath(f)}${f.line ? `:${f.line}` : ""}`;
-  return `- ${f.rule} [${levelOf(f)}] ${where} — ${f.message ?? ""}. ${qualityRuleHint(f.rule)}`.replace(/\s+$/, "");
+  // trimEnd, not /\s+$/: the message can carry bundle text, and that pattern backtracks
+  // quadratically on a long run of spaces that isn't at the end (js/polynomial-redos).
+  return `- ${f.rule} [${levelOf(f)}] ${where} — ${f.message ?? ""}. ${qualityRuleHint(f.rule)}`.trimEnd();
 }
 
 /** The ids a response may claim to address for this file. */

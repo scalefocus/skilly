@@ -194,3 +194,10 @@ test("draftWhatChangedNote: one line per kept change, removals marked", () => {
   assert.equal(long.length, 4000);
   assert.ok(long.endsWith("…"));
 });
+
+test("buildDraftPrompt: a finding message with a huge run of spaces stays linear (js/polynomial-redos)", () => {
+  const evil = `x${" ".repeat(100_000)}x`;
+  const started = Date.now();
+  buildDraftPrompt({ skillSlug: "s", skillTitle: "S", skillName: "s", skillDescription: "", filePaths: ["SKILL.md"], path: "SKILL.md", content: SKILL, findings: [marker, { ...q("DS-001"), message: evil }], verdict: null });
+  assert.ok(Date.now() - started < 1000);
+});
