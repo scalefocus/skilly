@@ -22,6 +22,9 @@ import {
   DEFAULT_MARKETPLACE_NAME_PREFIX,
   reservedNameConflicts,
   validateMarketplacePrefix,
+  AI_DISPLAY_NAME_DEFAULT,
+  coerceAiDisplayName,
+  validateAiDisplayName,
 } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
@@ -158,6 +161,8 @@ export interface PlatformSettings {
   /** §34.9 the stored search language (a PostgreSQL text-search configuration name). The database
    *  resolves what search actually uses (skilly_search_config(), falling back to english). */
   searchLanguage: string;
+  /** §40.14 the end-user name for the AI (default "AI"). */
+  aiDisplayName: string;
 }
 
 /** Coerce a stored flush set into a valid one, falling back to the default on anything malformed. */
@@ -179,7 +184,7 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, searchLanguage: "english" };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT };
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -211,7 +216,31 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     rumFlushIntervals: coerceRumFlushIntervals(map.get("rum_flush_intervals")),
     surveyEnabled: map.get("survey_enabled") !== false,
     searchLanguage: typeof map.get("search_language") === "string" ? (map.get("search_language") as string) : DEFAULTS.searchLanguage,
+    aiDisplayName: coerceAiDisplayName(map.get("ai_display_name")),
   };
+}
+
+/**
+ * §40.14 set the end-user AI display name. Empty restores the default ("AI"); audited as
+ * settings.updated (before/after). Returns the effective name.
+ */
+export async function setAiDisplayName(raw: unknown, actorUserId: string): Promise<{ ok: true; displayName: string } | { ok: false; error: string }> {
+  const v = validateAiDisplayName(raw);
+  if (!v.ok) return v;
+  const before = (await getPlatformSettings()).aiDisplayName;
+  const after = v.value || AI_DISPLAY_NAME_DEFAULT;
+  if (before === after) return { ok: true, displayName: after };
+  if (v.value) await writeSetting("ai_display_name", v.value, actorUserId);
+  else await pool.query(`delete from platform_settings where key = 'ai_display_name'`);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "ai_display_name",
+    before: { aiDisplayName: before },
+    after: { aiDisplayName: after },
+  });
+  return { ok: true, displayName: after };
 }
 
 /** §32.6 is real user monitoring collecting? Read by the ingest endpoint on every batch. */

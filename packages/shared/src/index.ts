@@ -41,3 +41,5 @@ export * from "./survey.js";
 export * from "./collections.js";
 export * from "./freshness.js";
 export * from "./ai-draft.js";
+export * from "./ai-name.js";
+export * from "./quality-draft.js";

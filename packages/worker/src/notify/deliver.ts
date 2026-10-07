@@ -209,7 +209,9 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#quality`;
     const stars = typeof p.stars === "number" ? formatStars(p.stars) : "?";
     const score = typeof p.score === "number" ? p.score : null;
-    const mode = p.mode === "rules+ai" ? "rules + AI assessment" : "rules only";
+    // §40.14: the AI display name captured when the notification was created.
+    const aiName = typeof p.aiName === "string" && p.aiName.trim() ? p.aiName : "AI";
+    const mode = p.mode === "rules+ai" ? `rules + ${aiName} assessment` : "rules only";
     const findings = Array.isArray(p.findings) ? (p.findings as Array<Record<string, unknown>>) : [];
     const order: Record<string, number> = { error: 0, warn: 1, info: 2 };
     const lines = [...findings]
@@ -223,9 +225,11 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     const body =
       `${slug} v${p.semver ?? ""} scored ${stars} ★${score !== null ? ` (${score}/100, ${mode})` : ""}.` +
       (lines.length ? `\n\nFindings:\n${lines.join("\n")}` : "\n\nNo rule findings.") +
-      (summary ? `\n\nAI assessment: ${summary}` : "") +
+      (summary ? `\n\n${aiName} assessment: ${summary}` : "") +
       (suggestions.length ? `\n\nRecommendations:\n${suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}` : "") +
-      `\n\nOpen the Quality card to re-check after you publish a fix. ${cta("Open the Quality card", path)}`;
+      `\n\nOpen the Quality card to re-check after you publish a fix. ${cta("Open the Quality card", path)}` +
+      // §44.9: the second CTA, when the skill was hosted and AI operational at creation.
+      (p.aiDraft === true ? ` ${cta(`Draft improvements with ${aiName}`, `/skills/${p.namespaceSlug}/${p.skillSlug}?draft=ai#quality`)}` : "");
     const s = subj(title);
     return {
       subject: s,

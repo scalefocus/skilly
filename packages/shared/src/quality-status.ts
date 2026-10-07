@@ -245,10 +245,11 @@ export function aiScoreOf(v: Pick<QualityVerdict, "dimensions">): number {
 }
 
 /** The mode line on the Quality card (§41.7). */
-export function qualityModeLine(mode: QualityMode, aiStatus: QualityAiStatus, aiModel: string | null): string {
-  if (mode === "rules+ai") return `Rules + AI assessment${aiModel ? ` (${aiModel})` : ""}`;
-  if (aiStatus === "pending") return "Rules only — AI assessment pending";
-  if (aiStatus === "failed") return "Rules only — AI assessment unavailable";
+/** The Quality card's mode line (§41.7); `aiName` is the §40.14 display name. */
+export function qualityModeLine(mode: QualityMode, aiStatus: QualityAiStatus, aiModel: string | null, aiName = "AI"): string {
+  if (mode === "rules+ai") return `Rules + ${aiName} assessment${aiModel ? ` (${aiModel})` : ""}`;
+  if (aiStatus === "pending") return `Rules only — ${aiName} assessment pending`;
+  if (aiStatus === "failed") return `Rules only — ${aiName} assessment unavailable`;
   return "Rules only";
 }
 

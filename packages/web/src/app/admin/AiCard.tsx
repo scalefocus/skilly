@@ -38,6 +38,8 @@ interface AiState {
   updatedByName: string | null;
   usage30d: { calls: number; failed: number; inputTokens: number; outputTokens: number; byFeature: { feature: string; label: string; calls: number; failed: number; inputTokens: number; outputTokens: number }[] };
   features: { key: string; label: string; egress: string; spec: string }[];
+  /** §40.14 the end-user name for the AI. */
+  displayName: string;
 }
 
 interface TestResult {
@@ -463,6 +465,63 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
           )}
         </>
       )}
+
+      {data && <DisplayNameRow saved={data.displayName} onSaved={reload} />}
     </CollapsibleCard>
+  );
+}
+
+/**
+ * §40.14 the end-user display name: its own Save, independent of the provider form — usable with
+ * no provider configured and without AI_TOKEN_ENC_KEY, kept on Remove integration.
+ */
+function DisplayNameRow({ saved, onSaved }: { saved: string; onSaved: () => void }) {
+  const [value, setValue] = useState(saved === "AI" ? "" : saved);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+  useEffect(() => setValue(saved === "AI" ? "" : saved), [saved]);
+  const dirty = value.trim() !== (saved === "AI" ? "" : saved);
+  const save = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch("/api/admin/ai/display-name", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ displayName: value }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      setMsg({ tone: "ok", text: `Saved — end users now see “${j.displayName}”.` });
+      onSaved();
+    } catch (e) {
+      setMsg({ tone: "danger", text: String((e as Error).message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }} data-testid="ai-display-name">
+      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Display name</h3>
+      <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 8px", lineHeight: 1.5 }}>
+        The word end users see in place of “AI” — e.g. <em>Draft improvements with Aria</em>. Leave empty for “AI”. Administration pages keep saying “AI”.
+      </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          className="input"
+          style={{ maxWidth: 260 }}
+          value={value}
+          maxLength={24}
+          placeholder="AI"
+          aria-label="AI display name"
+          disabled={busy}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button type="button" className="btn btn-sm" disabled={busy || !dirty} onClick={() => void save()} data-testid="ai-display-name-save">
+          {busy ? "saving…" : "Save name"}
+        </button>
+      </div>
+      {msg && (
+        <p role="status" style={{ fontSize: 13, margin: "8px 0 0", color: msg.tone === "ok" ? "var(--ok, var(--muted))" : "var(--danger, crimson)" }}>
+          {msg.text}
+        </p>
+      )}
+    </div>
   );
 }

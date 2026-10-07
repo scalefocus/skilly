@@ -10,6 +10,7 @@ import { enforceRateLimit } from "../../../lib/ratelimit";
 import { findDuplicateSkill } from "../../../lib/duplicate";
 import { verifyPointerSkill } from "../../../lib/pointerVerify";
 import { getDuplicateEnforcement } from "../../../lib/settings";
+import { aiDraftModelFromToken } from "../../../lib/qualityDraft";
 import { withSystemLog } from "../../../lib/apiLog";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,8 @@ interface Body {
   /** §37.4: an override holder confirming a publish over gate-tripping content findings. */
   override?: boolean;
   overrideReason?: string | null;
+  /** §44.8: proof the hosted bundle was drafted by the §44 AI task (ignored when it doesn't verify). */
+  aiDraftToken?: string | null;
 }
 
 export const POST = withSystemLog("/api/publish", async function POST(req: Request) {
@@ -132,6 +135,8 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
     access, actorUserId: access.userId, namespaceSlug: b.namespaceSlug, semver: b.semver, payload,
     originRequestId: b.originRequestId, contentCheck,
     override: b.override === true, overrideReason: typeof b.overrideReason === "string" ? b.overrideReason.slice(0, 2000) : null,
+    // §44.8: provenance only — an invalid / mismatched token is ignored silently.
+    aiDraftModel: aiDraftModelFromToken(b.aiDraftToken, { userId: access.userId, skillId: existing?.id ?? null, artifactKey: payload.artifactObjectKey }),
   });
   if (!r.ok) {
     return Response.json(

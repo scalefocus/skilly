@@ -601,6 +601,7 @@ export function Modal({
   children,
   dismissOnBackdrop = false,
   initialFocusRef,
+  wide = false,
 }: {
   title: string;
   onCancel: () => void;
@@ -608,6 +609,8 @@ export function Modal({
   children: React.ReactNode;
   dismissOnBackdrop?: boolean;
   initialFocusRef?: React.RefObject<HTMLElement | null>;
+  /** A wider panel (up to 980 px) for content like diffs. */
+  wide?: boolean;
 }) {
   const backdrop = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -680,7 +683,7 @@ export function Modal({
         if (dismissOnBackdrop && pressedBackdrop.current && e.target === e.currentTarget) cancel.current();
       }}
     >
-      <div ref={panel} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <div ref={panel} className={`modal${wide ? " modal-wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <div className="modal-head">
           <h2 id={titleId} className="modal-title">{title}</h2>
           <button type="button" className="modal-close" aria-label="Close" onClick={() => cancel.current()}>

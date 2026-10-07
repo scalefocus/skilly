@@ -1,11 +1,20 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   QUALITY_DIMENSIONS, QUALITY_DIMENSION_LABELS, formatStars, qualityModeLine,
   type QualityAiStatus, type QualityMode, type QualityVerdict,
 } from "@skilly/shared/quality";
 import { QualityStars } from "../../../../components/QualityBadge";
 import { QualityFindingsList, type QualityFindingItem } from "../../../../components/QualityFindingsList";
+import { useAiName } from "../../../../components/AiName";
+import { AiDraftDialog } from "./AiDraftDialog";
+
+/** §44.2 why the draft action is disabled; null reason with available:false = hidden. */
+const DRAFT_DISABLED_TEXT: Record<string, string> = {
+  quality_pending: "The quality check for this version is still running — try again shortly.",
+  nothing_to_draft: "Nothing to improve — the latest version has no quality findings or suggestions.",
+  secret_in_skill_md: "SKILL.md contains a flagged secret — fix it by hand first.",
+};
 
 export interface QualityDetailView {
   semver: string;
@@ -21,6 +30,8 @@ export interface QualityDetailView {
   findings: QualityFindingItem[];
   verdict: QualityVerdict | null;
   canReassess: boolean;
+  /** §44.2: whether the viewer may draft improvements with AI. */
+  aiDraft?: { available: boolean; reason: string | null };
 }
 
 /**
@@ -28,15 +39,31 @@ export interface QualityDetailView {
  * level, and — when present — the AI assessment (five dimensions, summary, suggestions). Everyone
  * who can see the skill sees all of it. The Re-assess button is for §4 override holders.
  */
-export function QualityCard({ detail, base, onChanged }: { detail: QualityDetailView | null; base: string; onChanged: () => void }) {
+export function QualityCard({ detail, base, ns, slug, onChanged }: { detail: QualityDetailView | null; base: string; ns: string; slug: string; onChanged: () => void }) {
+  const aiName = useAiName();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showFindings, setShowFindings] = useState(true);
+  const [drafting, setDrafting] = useState(false);
+  const draft = detail?.aiDraft;
+  const draftShown = !!draft && (draft.available || !!draft.reason);
+
+  // §44.6: `?draft=ai` (the notification / My Skills link) opens the dialog when the action is enabled.
+  useEffect(() => {
+    if (!detail || typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("draft") !== "ai") return;
+    if (draft?.available) setDrafting(true);
+    else setErr(draft?.reason ? DRAFT_DISABLED_TEXT[draft.reason] ?? draft.reason : `Drafting with ${aiName} isn’t available for this skill.`);
+    sp.delete("draft");
+    const q = sp.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${q ? `?${q}` : ""}${window.location.hash}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the detail first arrives
+  }, [!!detail]);
 
   const reassess = async () => {
     if (!detail) return;
-    const provider = "the configured AI provider";
-    if (!confirm(`This re-runs the rules and, if AI is on, sends the SKILL.md to ${provider} again.`)) return;
+    if (!confirm(`This re-runs the rules and, if ${aiName} is on, sends the SKILL.md to ${aiName} again.`)) return;
     setBusy(true);
     setErr(null);
     try {
@@ -58,8 +85,20 @@ export function QualityCard({ detail, base, onChanged }: { detail: QualityDetail
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
         <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20 }}>Quality</h2>
         {detail && <span className="muted mono" style={{ fontSize: 11 }}>v{detail.semver} · ruleset {detail.ruleset}</span>}
+        {draftShown && (
+          <button
+            className="btn btn-sm"
+            style={{ marginLeft: "auto" }}
+            disabled={!draft!.available}
+            title={draft!.available ? undefined : DRAFT_DISABLED_TEXT[draft!.reason ?? ""] ?? undefined}
+            onClick={() => setDrafting(true)}
+            data-testid="quality-ai-draft"
+          >
+            ✦ Draft improvements with {aiName}
+          </button>
+        )}
         {detail?.canReassess && (
-          <button className="btn btn-sm" style={{ marginLeft: "auto" }} disabled={busy} onClick={reassess} data-testid="quality-reassess">
+          <button className="btn btn-sm" style={{ marginLeft: draftShown ? undefined : "auto" }} disabled={busy} onClick={reassess} data-testid="quality-reassess">
             {busy ? "re-assessing…" : "re-assess"}
           </button>
         )}
@@ -68,14 +107,14 @@ export function QualityCard({ detail, base, onChanged }: { detail: QualityDetail
         <p className="muted" style={{ fontSize: 14, margin: 0 }} data-testid="quality-pending">Quality check pending — the system scores each published version shortly after it lands.</p>
       ) : (
         <>
-          <p className="muted" style={{ fontSize: 13.5, marginBottom: 14 }} data-testid="quality-mode">{qualityModeLine(detail.mode, detail.aiStatus, detail.aiModel)}</p>
+          <p className="muted" style={{ fontSize: 13.5, marginBottom: 14 }} data-testid="quality-mode">{qualityModeLine(detail.mode, detail.aiStatus, detail.aiModel, aiName)}</p>
           <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 44, lineHeight: 1 }} data-testid="quality-stars-value">{formatStars(detail.stars)}</div>
             <div>
               <QualityStars stars={detail.stars} size={22} />
               <div className="muted mono" style={{ fontSize: 11.5, marginTop: 4 }} data-testid="quality-score">
                 {detail.finalScore} / 100
-                {detail.mode === "rules+ai" && detail.aiScore !== null ? ` · rules ${detail.rulesScore} · AI ${detail.aiScore}` : ""}
+                {detail.mode === "rules+ai" && detail.aiScore !== null ? ` · rules ${detail.rulesScore} · ${aiName} ${detail.aiScore}` : ""}
               </div>
             </div>
           </div>
@@ -93,7 +132,7 @@ export function QualityCard({ detail, base, onChanged }: { detail: QualityDetail
 
           {detail.verdict && (
             <div style={{ marginTop: 18 }} data-testid="quality-ai">
-              <div className="nav-label" style={{ padding: "0 0 8px" }}>AI assessment</div>
+              <div className="nav-label" style={{ padding: "0 0 8px" }}>{aiName} assessment</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
                 {QUALITY_DIMENSIONS.map((d) => {
                   const dim = detail.verdict!.dimensions[d];
@@ -116,6 +155,9 @@ export function QualityCard({ detail, base, onChanged }: { detail: QualityDetail
             </div>
           )}
         </>
+      )}
+      {drafting && detail && (
+        <AiDraftDialog ns={ns} slug={slug} base={base} semver={detail.semver} aiName={aiName} onClose={() => setDrafting(false)} />
       )}
     </div>
   );

@@ -8,6 +8,7 @@ import {
   QUALITY_RULESET_VERSION, QUALITY_SCANNER, aiScoreOf, qualityFindings, qualityStars, scoreQuality,
   type QualityAiStatus, type QualityFindingLike, type QualityLevel, type QualityMode, type QualityVerdict,
 } from "./quality-status.js";
+import { coerceAiDisplayName } from "./ai-name.js";
 
 export interface QualityDb {
   query(text: string, params?: any[]): Promise<{ rows: any[]; rowCount: number | null }>;
@@ -160,16 +161,28 @@ export async function refreshSkillQuality(db: QualityDb, skillId: string): Promi
 
 export interface QualityLowPayloadFinding { rule: string; level: QualityLevel | null; path: string | null; line: number | null; message: string }
 
+/** The §40.14 AI display name as stored in `platform_settings` (default "AI"). */
+export async function loadAiDisplayName(db: QualityDb): Promise<string> {
+  const { rows } = await db.query(`select value from platform_settings where key = 'ai_display_name'`);
+  return coerceAiDisplayName(rows[0]?.value);
+}
+
 /**
  * §41.9: once a version's assessment has settled at 2 stars or below, notify the effective
  * maintainers (minus opt-outs) with the full findings and the AI recommendations. Once per
  * assessment: `low_notified_at` is set here and cleared only by a rewrite of the rules part.
- * Returns true when a notification was created.
+ * `aiOn` (AI operational at settle time) together with a hosted skill adds the §44.9 draft CTA;
+ * the §40.14 display name is captured into the payload. Returns true when a notification was created.
  */
-export async function settleQualityLow(db: QualityDb, versionId: string, findingsSource?: QualityFindingLike[]): Promise<boolean> {
+export async function settleQualityLow(
+  db: QualityDb,
+  versionId: string,
+  findingsSource?: QualityFindingLike[],
+  opts: { aiOn?: boolean } = {},
+): Promise<boolean> {
   const { rows } = await db.query(
     `select q.skill_id, q.final_score, q.mode, q.ai_status, q.ai_verdict, sv.semver, sv.artifact_object_key,
-            s.namespace_id, s.slug as skill_slug, n.slug as ns_slug
+            s.namespace_id, s.slug as skill_slug, s.type as skill_type, n.slug as ns_slug
        from skill_version_quality q
        join skill_versions sv on sv.id = q.skill_version_id
        join skills s on s.id = q.skill_id
@@ -199,6 +212,8 @@ export async function settleQualityLow(db: QualityDb, versionId: string, finding
     findings: list,
     summary: verdict?.summary ?? null,
     suggestions: verdict?.suggestions ?? [],
+    aiName: await loadAiDisplayName(db),
+    aiDraft: opts.aiOn === true && r.skill_type === "hosted",
   };
   // Claim first so two processes can never notify twice for one assessment.
   const claim = await db.query(

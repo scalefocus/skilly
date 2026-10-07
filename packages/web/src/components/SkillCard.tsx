@@ -29,6 +29,8 @@ export interface CatalogEntry {
   /** Server-computed: this skill is new TO THIS USER (appeared since their last catalog visit).
    *  Drives the "new" badge — it is NOT a global "updated in the last 30 days" window. §10. */
   isNew?: boolean;
+  /** §44.9 My Skills view only: the viewer may draft improvements with AI (the detail page re-checks). */
+  canAiDraft?: boolean;
   /** Platform-admin "Official" endorsement (§7) — drives the Official badge. */
   official?: boolean;
   /** The skill id (catalog listings) — the collection owner's remove control uses it (§38.5). */
