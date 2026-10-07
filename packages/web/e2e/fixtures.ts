@@ -5,8 +5,28 @@
 // `dev` credentials provider that signs in the seeded `dev-admin-oid` platform admin
 // (db/seed.dev.sql). It is NEVER present in production (auth.ts gates it on the env flag, and
 // instrumentation.ts hard-fails a production boot that sets it).
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type APIRequestContext, type BrowserContext, type Page } from "@playwright/test";
 import { APP_VERSION } from "@skilly/shared/version";
+
+const API_METHODS = ["fetch", "get", "head", "post", "put", "patch", "delete"] as const;
+
+/**
+ * Send every `context.request` (= `page.request`) call with `Connection: close`, so no API socket
+ * is ever reused. Playwright's request client pools keep-alive sockets with no idle limit, while
+ * `next dev` drops an idle socket after Node's 5 s `keepAliveTimeout` — and on a loaded agent that
+ * timer fires late, in the same event-loop turn the next request's bytes land, so the server
+ * destroys a socket holding an unread request and the kernel answers RST: `read ECONNRESET` on a
+ * `page.request` issued after a few seconds of UI work. A fresh loopback connection per call
+ * costs nothing next to that. Browser traffic is untouched.
+ */
+export function oneShotApiConnections(context: BrowserContext): void {
+  type Call = (url: unknown, options?: { headers?: Record<string, string> }) => ReturnType<APIRequestContext["fetch"]>;
+  const api = context.request as unknown as Record<(typeof API_METHODS)[number], Call>;
+  for (const method of API_METHODS) {
+    const send = api[method].bind(context.request);
+    api[method] = (url, options = {}) => send(url, { ...options, headers: { connection: "close", ...options.headers } });
+  }
+}
 
 /**
  * Dev sign-in via the next-auth `dev` credentials callback (no form fields): fetch the CSRF
@@ -39,13 +59,23 @@ export async function devSignIn(page: Page, opts: { stampWhatsNew?: boolean; sur
   }
 }
 
+/** The suite's `test`: the built-in one with every test's `context` on one-shot API connections
+ *  (see `oneShotApiConnections`). A spec that opens its own `browser.newContext()` and idles
+ *  between `request` calls on it must apply the helper itself. */
+// No type argument on either `extend`: both only OVERRIDE built-in fixtures and declare no new
+// ones. `extend<Record<string, never>>` typed every fixture value as `never`, which made the
+// override itself a type error (`Page` is not assignable to `never`).
+export const test = base.extend({
+  context: async ({ context }, use) => {
+    oneShotApiConnections(context);
+    await use(context);
+  },
+});
+
 /** `authedTest` — a `test` whose `page` is already signed in as the dev admin. Use it for specs
  *  that only ever act authenticated. Specs that also assert the signed-out state should import the
  *  plain `test` and call `devSignIn` explicitly at the point they want to be signed in. */
-// No type argument: this only OVERRIDES the built-in `page` fixture and declares no new ones.
-// `extend<Record<string, never>>` typed every fixture value as `never`, which made the `page`
-// override itself a type error (`Page` is not assignable to `never`).
-export const authedTest = base.extend({
+export const authedTest = test.extend({
   page: async ({ page }, use) => {
     await devSignIn(page);
     await use(page);
@@ -53,5 +83,4 @@ export const authedTest = base.extend({
 });
 
 // Plain re-exports so a spec needs only this one import.
-export const test = base;
 export { expect, type Page };
