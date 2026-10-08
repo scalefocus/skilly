@@ -13,6 +13,7 @@
 // the timeouts setting (§40.15: validation, audit, no-op save, the helper's config read, the run cap,
 // survives removing the config, clearing restores the defaults).
 import { test, after } from "node:test";
+import { withAiIntegrationLock } from "./aiTestLock";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -63,7 +64,7 @@ function startStub(slug: string): Promise<{ server: Server; url: string; state: 
 let poolRef: { end(): Promise<void> } | null = null;
 after(async () => { if (enabled && poolRef) await poolRef.end(); });
 
-test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My Skills, display name, timeouts", { skip: !enabled }, async () => {
+test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My Skills, display name, timeouts", { skip: !enabled }, () => withAiIntegrationLock(async () => {
   process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
   const { pool } = await import("./db");
   poolRef = pool;
@@ -342,4 +343,4 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
       await pool.query(`delete from platform_settings where key = 'ai_display_name'`);
     }
   }
-});
+}));

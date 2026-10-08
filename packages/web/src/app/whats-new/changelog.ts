@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.26.0",
+    date: "2026-10-08",
+    summary:
+      "Optional AI pre-review of proposals: when a platform admin turns it on (Administration → AI integration → Pre-review proposals, off by default), the AI reads each submission's SKILL.md, scripts and references and lists prompt injection, overreaching tool permissions, unsafe shell, exposed secrets and description mismatches on the review page, with a severity. Reviewers can agree with or dismiss each finding. It is advice only and never blocks accept or publish.",
+  },
+  {
     version: "2.25.0",
     date: "2026-10-07",
     summary:

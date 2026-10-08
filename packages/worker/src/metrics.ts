@@ -35,6 +35,10 @@ export const M = {
   qualitySweepRuns: metrics.counter("skilly_quality_sweep_runs_total", "Quality sweep passes, by phase (rules|ai)"),
   qualityAiAttempts: metrics.counter("skilly_quality_ai_attempts_total", "Quality AI assessment attempts, by outcome (ok|failed|invalid|refused)"),
   qualityVersions: metrics.gauge("skilly_quality_versions", "Active versions by quality status (scored|ai_done|ai_failed|unscored)"),
+  // §46.12 AI pre-review.
+  aiPrereviewRuns: metrics.counter("skilly_ai_prereview_runs_total", "AI pre-review runs finished, by outcome (done|failed|cached)"),
+  aiPrereviewFindings: metrics.counter("skilly_ai_prereview_findings_total", "AI pre-review findings, by category and severity"),
+  aiPrereviewPending: metrics.gauge("skilly_ai_prereview_pending", "AI pre-review runs waiting to run"),
   // §45.9 skill deprecation.
   skillsDeprecated: metrics.gauge("skilly_skills_deprecated", "Active, served skills currently marked deprecated"),
 };

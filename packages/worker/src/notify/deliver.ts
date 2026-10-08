@@ -217,6 +217,21 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
+  // §46.10: an AI pre-review flagged a version that went live without a reviewer seeing the result.
+  if (n.type === "skill.ai_prereview_flagged" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#ai-prereview`;
+    const aiName = typeof p.aiName === "string" && p.aiName.trim() ? p.aiName : "AI";
+    const count = typeof p.count === "number" ? p.count : 0;
+    const categories = Array.isArray(p.categories) ? (p.categories as unknown[]).filter((c): c is string => typeof c === "string") : [];
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${aiName} pre-review found ${count} high or critical issue${count === 1 ? "" : "s"} in ${slug} v${p.semver ?? ""}, which was published without a reviewer seeing ${count === 1 ? "it" : "them"}${categories.length ? `: ${categories.join(", ")}` : ""}. ${cta("Open the pre-review", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, count, categories, url: abs(path) },
+    };
+  }
+
   // §41.9: a version's quality assessment settled at 2 stars or below. The full findings list and
   // the AI recommendations ride along so the maintainer can act without opening the page.
   if (n.type === "skill.quality_low" && typeof p.skillSlug === "string") {

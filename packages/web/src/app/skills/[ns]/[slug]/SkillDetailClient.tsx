@@ -19,6 +19,7 @@ import { readPref, writePref, PREF_SKILL_RANGE } from "../../../../lib/prefs";
 import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
 import { ContentRiskCard } from "./ContentRiskCard";
+import { AiPrereviewCard } from "./AiPrereviewCard";
 import { QualityCard, type QualityDetailView } from "./QualityCard";
 import { QualityBadge, QualityStars, type QualitySummaryView } from "../../../../components/QualityBadge";
 import { ContentRiskChip } from "../../../../components/ContentRisk";
@@ -770,6 +771,9 @@ export default function SkillDetail() {
       {data.canSeeContentRisk && data.contentRisk && (
         <ContentRiskCard ns={ns} slug={slug} initialStatus={data.contentRisk.status} onChanged={reload} />
       )}
+
+      {/* §46.8 the owner-only AI pre-review card (same audience as Content risk). */}
+      {data.canSeeContentRisk && <AiPrereviewCard ns={ns} slug={slug} />}
 
       <SkillDiscussion ns={ns} slug={slug} versions={data.versions} latest={data.latest} initialCount={data.discussionCount} />
 

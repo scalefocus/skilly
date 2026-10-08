@@ -63,7 +63,7 @@ export const AI_FEATURE_TIMEOUT_CEILING_MS = AI_CALL_TIMEOUT_MAX_MS;
 
 /**
  * The registered AI tasks (§40.7): the skill quality assessment (§41.5), propose-form drafting
- * (§43) and the AI-drafted quality improvements (§44.4).
+ * (§43), the AI-drafted quality improvements (§44.4) and the AI pre-review of proposals (§46.6).
  */
 export const AI_FEATURES: readonly AiFeature[] = [
   {
@@ -85,6 +85,14 @@ export const AI_FEATURES: readonly AiFeature[] = [
     spec: "§44",
     maxTokens: AI_FEATURE_MAX_TOKENS_CEILING,
     timeoutMs: 360_000,
+  },
+  {
+    key: "proposal_prereview",
+    label: "AI pre-review of proposals",
+    egress: "For each submitted proposal, and each direct publish, while the pre-review switch is on: SKILL.md and the text files under scripts/ and references/ (up to 25 files, 100,000 characters each and 250,000 in total; secret-scanner lines redacted), the bundle's file paths (first 200), and the deterministic scan findings (rule, file, line, severity)",
+    spec: "§46",
+    maxTokens: 16_384,
+    timeoutMs: 180_000,
   },
 ];
 /** The reserved feature key the admin connectivity test records its usage under. */

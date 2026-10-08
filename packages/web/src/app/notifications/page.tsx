@@ -138,7 +138,7 @@ export default function NotificationsPage() {
             // skill.discussion — and a skill-context mention — deep-link straight to the
             // (auto-expanding) Discussion card. §24.
             // skill.content_risk opens the owner Content risk card (§37.9).
-            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : ""}` : null;
+            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : n.type === "skill.ai_prereview_flagged" ? "#ai-prereview" : ""}` : null;
             // A DIRECT-chat mention has no page of its own: deep-link to the topbar Messages
             // panel via ?conversation=<id> (§24 Mentions), like the email CTA.
             const conversationHref =

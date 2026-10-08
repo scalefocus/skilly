@@ -14,6 +14,7 @@
 // retry; invalid JSON → 502; the per-minute 429; the rolling daily cap's 429 with retryAt, with
 // refused (413/422) calls not counted.
 import { test, after } from "node:test";
+import { withAiIntegrationLock } from "./aiTestLock";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -78,7 +79,7 @@ after(async () => {
   }
 });
 
-test("§43 Draft with AI: availability, sources, egress, failures and limits", { skip: !enabled }, async () => {
+test("§43 Draft with AI: availability, sources, egress, failures and limits", { skip: !enabled }, () => withAiIntegrationLock(async () => {
   process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
   const { pool } = await import("./db");
   const { draftWithAi } = await import("./aiDraft");
@@ -261,4 +262,4 @@ test("§43 Draft with AI: availability, sources, egress, failures and limits", {
       await pool.query(`insert into ai_integration (${cols.join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")})`, cols.map((k) => savedAi[k]));
     }
   }
-});
+}));

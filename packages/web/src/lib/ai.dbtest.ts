@@ -12,6 +12,7 @@
 // ai_disabled; key missing → ai_key_missing; remove hard-deletes + audits and keeps ai_usage;
 // the usage prune; GDPR erasure nulls ai_usage.user_id.
 import { test } from "node:test";
+import { withAiIntegrationLock } from "./aiTestLock";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -61,7 +62,7 @@ function startStub(): Promise<{ server: Server; url: string; state: { mode: "ok"
   );
 }
 
-test("AI integration: save/test/enable/helper/remove against a live DB", { skip: !enabled }, async () => {
+test("AI integration: save/test/enable/helper/remove against a live DB", { skip: !enabled }, () => withAiIntegrationLock(async () => {
   process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
   const { pool } = await import("./db");
   const ai = await import("./ai");
@@ -251,4 +252,4 @@ test("AI integration: save/test/enable/helper/remove against a live DB", { skip:
     stub.server.close();
     await pool.end();
   }
-});
+}));

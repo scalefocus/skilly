@@ -27,6 +27,8 @@ import { reportFeatureUse } from "../../../lib/surveyClient";
 import { ContentRiskFindingsList } from "../../../components/ContentRisk";
 import { QualityFindingsList, type QualityFindingItem } from "../../../components/QualityFindingsList";
 import { QualityStars } from "../../../components/QualityBadge";
+import { AiPrereviewBody, AiPrereviewStatusPill, useLivePrereview } from "../../../components/AiPrereview";
+import type { PrereviewView } from "@skilly/shared/ai-prereview";
 import { formatStars } from "@skilly/shared/quality";
 import { useAiName } from "../../../components/AiName";
 
@@ -84,6 +86,8 @@ interface Detail {
   routedReason?: string | null;
   /** §44.8: the model that drafted the submitted files, or null. */
   aiDraftModel?: string | null;
+  /** §46.8 the AI pre-review of the latest revision (advisory; never gates accept). */
+  aiPrereview?: PrereviewView | null;
   submitterCard: SubmitterCard | null;
   conversationId: string | null;
   duplicate: { namespaceSlug: string; skillSlug: string; title: string } | null;
@@ -1110,6 +1114,10 @@ function ProposalDetailInner() {
         ) : null}
       </div>
 
+      {/* AI pre-review (§46.8): an advisory LLM read of SKILL.md, scripts and references. Never a
+          gate — accept never waits for it and never needs an override because of it. */}
+      {data.aiPrereview && <ProposalAiPrereview proposalId={data.id} initial={data.aiPrereview} aiName={aiName} />}
+
       {/* Discussion: who submitted + the review chat (submitter ∪ reviewers ∪ maintainers). */}
       <ReviewDiscussion proposalId={data.id} card={data.submitterCard} initialConversationId={data.conversationId} />
 
@@ -1300,5 +1308,38 @@ export default function ProposalDetailPage() {
     <RequireAuth>
       <ProposalDetailInner />
     </RequireAuth>
+  );
+}
+
+/** §46.8 the AI pre-review section: refreshes itself (never the whole page), polling while pending. */
+function ProposalAiPrereview({ proposalId, initial, aiName }: { proposalId: string; initial: PrereviewView; aiName: string }) {
+  const fetchView = useCallback(async () => {
+    const r = await fetch(`/api/proposals/${proposalId}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    return ((await r.json()) as { aiPrereview?: PrereviewView | null }).aiPrereview ?? null;
+  }, [proposalId]);
+  const { view, refresh } = useLivePrereview(initial, fetchView);
+  if (!view) return null;
+  // §46.8: a deployment that doesn't use the feature never sees the section.
+  if (view.status === "off" && !view.run && !view.previous) return null;
+  return (
+    <div className="card card-pad" style={{ marginTop: 26 }} id="ai-prereview" data-testid="ai-prereview-section">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <h2 style={{ fontFamily: "var(--font-display)", fontSize: 19 }}>{aiName} pre-review</h2>
+        <AiPrereviewStatusPill view={view} />
+        {view.run && view.status === "done" && (
+          <span className="muted mono" style={{ fontSize: 11, marginLeft: "auto" }}>
+            {view.run.findings.length} finding{view.run.findings.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      <AiPrereviewBody
+        view={view}
+        aiName={aiName}
+        rerunUrl={`/api/proposals/${proposalId}/ai-prereview/rerun`}
+        dispositionUrl={`/api/proposals/${proposalId}/ai-prereview/dispositions`}
+        onChanged={refresh}
+      />
+    </div>
   );
 }

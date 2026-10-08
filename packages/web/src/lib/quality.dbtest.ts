@@ -6,6 +6,7 @@
 // (403 for a non-admin, superseding report, audit), the catalog-wide rescore audit, and the
 // proposal-side rules-only computation.
 import { test, after } from "node:test";
+import { withAiIntegrationLock } from "./aiTestLock";
 import assert from "node:assert/strict";
 import AdmZip from "adm-zip";
 import { QUALITY_RULESET_VERSION, qualityScanner, scoreQuality, type EffectiveAccess, type ScanFinding } from "@skilly/shared";
@@ -64,7 +65,7 @@ async function deleteSkillRows(ids: string[]): Promise<void> {
   }
 }
 
-test("quality: publish write, latest tracking, detail, catalog sort/facet, re-assess, rescore", { skip: !enabled }, async () => {
+test("quality: publish write, latest tracking, detail, catalog sort/facet, re-assess, rescore", { skip: !enabled }, () => withAiIntegrationLock(async () => {
   const tag = `qweb${Date.now().toString(36)}`;
   const skillIds: string[] = [];
   const userIds: string[] = [];
@@ -234,4 +235,4 @@ test("quality: publish write, latest tracking, detail, catalog sort/facet, re-as
       await pool.query(`insert into ai_integration (${cols.join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")}) on conflict (id) do nothing`, cols.map((k) => savedAi[k]));
     }
   }
-});
+}));
