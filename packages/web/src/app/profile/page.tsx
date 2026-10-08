@@ -25,6 +25,7 @@ interface Me {
   discussionNotifications: boolean;
   contentRiskNotifications: boolean;
   qualityNotifications: boolean;
+  policyNotifications: boolean;
   aiPrereviewNotifications?: boolean;
   administersNamespace?: boolean;
   directoryHidden: boolean;
@@ -255,7 +256,7 @@ function MaintainerNotificationsPref() {
   const [busy, setBusy] = useState(false);
   if (!data) return <div className="skeleton" style={{ height: 120, borderRadius: "var(--radius)" }} />;
 
-  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "discussionNotifications" | "aiPrereviewNotifications", enabled: boolean) => {
+  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications", enabled: boolean) => {
     setBusy(true);
     try {
       await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: enabled }) });
@@ -263,11 +264,12 @@ function MaintainerNotificationsPref() {
     } finally { setBusy(false); }
   };
 
-  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "discussionNotifications" | "aiPrereviewNotifications"; label: string; offHint: string; value: boolean }[] = [
+  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications"; label: string; offHint: string; value: boolean }[] = [
     { field: "driftNotifications", label: "Upstream drift", offHint: "You won't be alerted when an external skill's pinned source changes.", value: data.driftNotifications },
     { field: "newVersionNotifications", label: "New versions", offHint: "You won't be alerted when a skill you maintain publishes a version. Skills you watch still notify you.", value: data.newVersionNotifications },
     { field: "contentRiskNotifications", label: "Content check flags", offHint: "You won't be alerted when the content check flags a published version of a skill you maintain.", value: data.contentRiskNotifications },
     { field: "qualityNotifications", label: "Low quality scores", offHint: "You won't be alerted when a published version of a skill you maintain scores 2 stars or below on the quality check.", value: data.qualityNotifications },
+    { field: "policyNotifications", label: "Policy flags", offHint: "You won't be alerted when the policy check flags a published version of a skill you maintain.", value: data.policyNotifications },
     { field: "discussionNotifications", label: "Discussion comments and @mentions", offHint: "You won't be alerted about new comments on skills you maintain or watch, or when someone @mentions you.", value: data.discussionNotifications },
     // §46.10 — only namespace admins receive it, so only they see the toggle.
     ...(data.administersNamespace

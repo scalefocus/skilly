@@ -218,6 +218,37 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
   }
 
   // §46.10: an AI pre-review flagged a version that went live without a reviewer seeing the result.
+  // §47.10: the policy check found a violation of an enforced rule in your proposal.
+  if (n.type === "proposal.policy_violation" && typeof p.proposalId === "string") {
+    const path = `/proposals/${p.proposalId}#policy`;
+    const slug = typeof p.skillSlug === "string" ? `${p.namespaceSlug ?? ""}/${p.skillSlug}` : "your skill";
+    const rules = Array.isArray(p.rules) ? (p.rules as Array<Record<string, unknown>>).filter((r) => typeof r?.title === "string") : [];
+    const titles = rules.map((r) => String(r.title));
+    const lines = rules.map((r) => `- ${String(r.title)}${typeof r.explanation === "string" && r.explanation ? ` — ${r.explanation}` : ""}`);
+    const s = subj(title);
+    return {
+      subject: s,
+      text:
+        `The policy check flagged your proposal for ${slug}${titles.length ? `: ${titles.join(", ")}` : ""}.` +
+        (lines.length ? `\n\n${lines.join("\n")}` : "") +
+        `\n\n${cta("See the policy check", path)}`,
+      webhook: { event: n.type, title: s, proposalId: p.proposalId, skill: slug, semver: p.semver ?? null, rules: titles, url: abs(path) },
+    };
+  }
+
+  // §47.10: a published version you maintain violates an enforced policy rule.
+  if (n.type === "skill.policy_flag" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#policy`;
+    const rules = Array.isArray(p.rules) ? (p.rules as unknown[]).filter((r): r is string => typeof r === "string") : [];
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${slug} v${p.semver ?? ""} violates: ${rules.join(", ") || "a policy rule"}. ${cta("Review the policy check", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, rules, url: abs(path) },
+    };
+  }
+
   if (n.type === "skill.ai_prereview_flagged" && typeof p.skillSlug === "string") {
     const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
     const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#ai-prereview`;

@@ -31,6 +31,7 @@ import { AiPrereviewBody, AiPrereviewStatusPill, useLivePrereview } from "../../
 import type { PrereviewView } from "@skilly/shared/ai-prereview";
 import { formatStars } from "@skilly/shared/quality";
 import { useAiName } from "../../../components/AiName";
+import { PolicySection, PolicyOverrideList, type ProposalPolicyBlock } from "./PolicySection";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string; line?: number; excerpt?: string; ruleset?: number }
 interface Meta {
@@ -84,6 +85,8 @@ interface Detail {
   viaMcpClient?: string | null;
   /** §37.4: 'content_risk' when a direct publish was routed here by the content check. */
   routedReason?: string | null;
+  /** §47.9: the policy check of the latest revision; null when no rule applies. */
+  policy?: ProposalPolicyBlock | null;
   /** §44.8: the model that drafted the submitted files, or null. */
   aiDraftModel?: string | null;
   /** §46.8 the AI pre-review of the latest revision (advisory; never gates accept). */
@@ -344,7 +347,11 @@ function ProposalDetailInner() {
 
   const findings = data?.scanReport?.findings ?? [];
   const sev = data?.scanReport?.severity ?? null;
-  const needsOverride = sev === "high" || sev === "critical";
+  const scanNeedsOverride = sev === "high" || sev === "critical";
+  // §47.7: enforced policy rules violated (or without a current verdict) need the same override.
+  const policyTrips = data?.policy?.trips ?? [];
+  const policyForbidden = policyTrips.some((t) => !t.canOverride);
+  const needsOverride = scanNeedsOverride || policyTrips.length > 0;
   // Real issues (the "N findings" count) vs. the anti-virus engine's per-file output. ClamAV
   // records every file — including clean ones (severity `info`) — so reviewers can expand and see
   // exactly what it returned; only genuine detections (`malware`, critical) count as findings.
@@ -565,6 +572,19 @@ function ProposalDetailInner() {
           <span aria-hidden style={{ fontSize: 18 }}>⚠</span>
           <span style={{ fontSize: 13.5, flex: 1, minWidth: 220 }}>
             This was submitted as a direct publish. The content check flagged it, so it needs a reviewer.
+          </span>
+        </div>
+      )}
+      {data.routedReason === "policy" && (
+        <div
+          className="card card-pad"
+          data-testid="routed-banner"
+          data-reason="policy"
+          style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "var(--warn-soft)", borderColor: "color-mix(in oklab, var(--warn) 35%, var(--line))" }}
+        >
+          <span aria-hidden style={{ fontSize: 18 }}>⚠</span>
+          <span style={{ fontSize: 13.5, flex: 1, minWidth: 220 }}>
+            This was submitted as a direct publish. This namespace has policy rules, so it needs a policy check and a reviewer.
           </span>
         </div>
       )}
@@ -1118,6 +1138,10 @@ function ProposalDetailInner() {
           gate — accept never waits for it and never needs an override because of it. */}
       {data.aiPrereview && <ProposalAiPrereview proposalId={data.id} initial={data.aiPrereview} aiName={aiName} />}
 
+      {/* Policy (§47.9): admin-written rules judged in the same pre-review run. Unlike §46's own
+          findings, a violated ENFORCED rule (or one without a verdict) needs the override. */}
+      {data.policy && <PolicySection proposalId={data.id} policy={data.policy} aiName={aiName} onReload={reload} />}
+
       {/* Discussion: who submitted + the review chat (submitter ∪ reviewers ∪ maintainers). */}
       <ReviewDiscussion proposalId={data.id} card={data.submitterCard} initialConversationId={data.conversationId} />
 
@@ -1153,10 +1177,18 @@ function ProposalDetailInner() {
             style={{ width: "100%", padding: 12, borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontFamily: "var(--font-body)", fontSize: 14, resize: "vertical" }}
           />
           {data.allowedActions.includes("accept") && needsOverride && (
-            <label style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 12, fontSize: 13.5, color: "var(--danger)" }}>
-              <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} style={{ marginTop: 2 }} />
-              Override the <strong style={{ margin: "0 4px" }}>{sev}</strong> scan finding and publish anyway (audit-logged).
-            </label>
+            <div data-testid="accept-override">
+              <label style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 12, fontSize: 13.5, color: "var(--danger)" }}>
+                <input type="checkbox" checked={override} disabled={policyForbidden} onChange={(e) => setOverride(e.target.checked)} style={{ marginTop: 2 }} />
+                <span>
+                  {scanNeedsOverride ? <>Override the <strong style={{ margin: "0 4px" }}>{sev}</strong> scan finding</> : null}
+                  {scanNeedsOverride && policyTrips.length > 0 ? " and " : null}
+                  {policyTrips.length > 0 ? `override the policy check (${policyTrips.length} rule${policyTrips.length === 1 ? "" : "s"})` : null}
+                  {" "}and publish anyway (audit-logged){policyTrips.length > 0 ? " — the note above is the required reason" : ""}.
+                </span>
+              </label>
+              {policyTrips.length > 0 && <PolicyOverrideList trips={policyTrips} />}
+            </div>
           )}
           <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
             {/* `revise` is the proposer's in-place edit (§8), not a decision — it lives in the
@@ -1165,7 +1197,7 @@ function ProposalDetailInner() {
               <button
                 key={a}
                 className={`btn ${a === "accept" ? "btn-primary" : a === "reject" ? "btn-danger" : ""}`}
-                disabled={busy !== null || (a === "accept" && needsOverride && !override)}
+                disabled={busy !== null || (a === "accept" && needsOverride && (!override || policyForbidden || (policyTrips.length > 0 && !note.trim())))}
                 onClick={() => act(a)}
               >
                 {busy === a ? "…" : ACTION_LABEL[a] ?? a}

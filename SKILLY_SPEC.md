@@ -29,7 +29,8 @@ Every decision below was explicitly confirmed.
 | Skill collections | **User-owned, shareable lists of org-visible skills** (§38): any user adds a skill from its detail page; a collection opens as the catalog filtered to it (`/catalog?collection=<id>`), is found through the header dropdown, and mints nothing (no bulk install). Restricted skills can never be members; a skill that narrows, archives or loses its last version is evicted |
 | Skills | **Hybrid**: Hosted (bundle in skilly) and Pointer (external, pinned ref). Both proxied through skilly |
 | Content risk | **Rule-based content-risk scanner** (§37): flags hidden Unicode, look-alike letters, override phrasing and credential theft in a skill's text; advisory with the audited override, and a flagged **direct publish goes to review** |
-| AI pre-review | **Advisory LLM review of every submission** (§46): when a platform switch is on, the AI integration reads `SKILL.md`, scripts and references and reports prompt injection, overreaching tool permissions, unsafe shell, exposed secrets and description mismatches, with a severity, in a review-page section reviewers can agree with or dismiss per finding. **Never a gate**, never in `scan_reports`; owners keep the result after publish, consumers never see it |
+| AI pre-review | **Advisory LLM review of every submission** (§46): when a platform switch is on, the AI integration reads `SKILL.md`, scripts and references and reports prompt injection, overreaching tool permissions, unsafe shell, exposed secrets and description mismatches, with a severity, in a review-page section reviewers can agree with or dismiss per finding. **Never a gate**, never in `scan_reports`; owners keep the result after publish, consumers never see it — **except** admin-written policy rules judged in the same run (§47) |
+| Policy rules | **Policy-as-prompt** (§47): namespace admins (platform admins, org-wide) write rules in plain language; the §46 pre-review judges every proposal, direct publish and published latest version against them **in the same call**, citing the rule and server-verified evidence. A violated **enforced** rule — or one with no verdict (fail-closed) — trips the accept gate and needs the audited override (platform rules: platform admins only); members' direct publishes route to review; published violators are flagged, never yanked, and carry a status chip everyone sees. Rules start in Shadow |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
 | Deployment | **docker compose** (6 core services + git-perms init + dev proxy); **Helm/K8s now shipped** (§16 #19) |
@@ -320,7 +321,14 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - One row = "members and admins of `namespace_id` may see, install and discuss this restricted skill exactly as the owning namespace's members do". Rows are meaningful only while `skills.visibility = 'namespace'`; a skill that becomes `org` has its rows **deleted in the same transaction** (§42.4). The owning namespace and `global` are never valid targets (enforced on every write path and by a trigger). Grants no authority (invariant #1): a grantee namespace's admins do **not** review, yank, archive or edit the skill.
 
 ### `ai_prereviews` / `ai_prereview_links` / `ai_prereview_dispositions` (migration 0090, detailed in §46)
-- **`ai_prereviews`** — one row per AI pre-review **run** over one set of bytes: `status` (`pending` | `done` | `failed`), `content_sha256` + `prompt_version` (the cache key), `source` (artifact object key or pointer url/ref/subdir — never credentials), `trigger`, `requested_by` (FK → `users`, SET NULL; nulled on erasure), attempt bookkeeping, `model`, `result` (validated findings + summary — derived skill content, visibility-gated like the subject), `coverage`, `max_severity`. **Deliberately not `scan_reports`** — nothing that gates reads it.
+- **`ai_prereviews`** — one row per AI pre-review **run** over one set of bytes: `status` (`pending` | `done` | `failed`), `content_sha256` + `prompt_version` (the cache key), `source` (artifact object key or pointer url/ref/subdir — never credentials), `trigger`, `requested_by` (FK → `users`, SET NULL; nulled on erasure), attempt bookkeeping, `model`, `result` (validated findings + summary — derived skill content, visibility-gated like the subject), `coverage`, `max_severity`. **Deliberately not `scan_reports`** — nothing that gates reads it. Gains **`rules_fingerprint`** (migration 0091, §47.2) — part of the cache key once policy rules apply.
+
+### `policy_rules` / `policy_rule_revisions` / `ai_prereview_policy_results` / `policy_flag_dismissals` (migration 0091, detailed in §47.2)
+- **`policy_rules`** — a plain-language governance rule, `scope` `platform` (no namespace) or `namespace`, `state` `shadow` | `enforced` | `disabled`; its current revision is the highest `revision_no`.
+- **`policy_rule_revisions`** — an immutable title / rule / context snapshot per edit; append-only for the app role. This row is what a result cites.
+- **`ai_prereview_policy_results`** — per-rule outcome, explanation and server-verified evidence of one §46 run. **The only AI-derived data the accept gate reads** (§47.13). `RESTRICT` FKs keep a cited rule undeletable.
+- **`policy_flag_dismissals`** — append-only per-(version, rule revision) dismissals (`false_positive` | `accepted_exception`, reason, `source` `override` | `manual`), keyed by skill + semver.
+- Also: `proposals.routed_reason` gains `policy`; `users.policy_notifications` (default true).
 - **`ai_prereview_links`** — binds a run to a subject: a proposal revision **or** a skill version (CASCADE); `cached` marks a link that reused an existing run; the latest link is the subject's current run.
 - **`ai_prereview_dispositions`** — append-only Agree/Dismiss per finding `fingerprint`, keyed to a proposal **or** a version; `decided_by` (FK → `users`, SET NULL), `reason` (≤ 500). The same migration adds `skill_versions.ai_prereview_notified_at` and `users.ai_prereview_notifications` (default true).
 ---
@@ -356,6 +364,11 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Re-assess skill quality (§41.8) | ✅ | ✅ (own ns) | ❌ | ❌ |
 | Acknowledge a flagged content-risk finding (§37.6) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Agree / dismiss an AI pre-review finding; re-run an AI pre-review (§46.7, §46.11) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
+| Write / edit / change state of **namespace** policy rules (§47.3) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
+| Write / edit / change state of **platform** policy rules (§47.3) | ✅ | ❌ | ❌ | ❌ |
+| Read enforced policy rules (§47.1 #5) | ✅ | ✅ | ✅ | ✅ |
+| Override a violated (or unverdicted) **namespace** policy rule at accept; dismiss its flag (§47.7–47.8) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
+| Override a violated (or unverdicted) **platform** policy rule at accept; dismiss its flag (§47.7–47.8) | ✅ | ❌ | ❌ | ❌ |
 | View audit log | ✅ (all) | ✅ (own ns) | own proposals | own proposals |
 | Consume (search/install visible) | ✅ | ✅ | ✅ | ✅ |
 | Mint / manage **system installs** (§23) | ✅ | ❌ | ❌ | ❌ |
@@ -769,7 +782,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   log.
 
 ### Security scanning — pluggable pipeline
-- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns). Plus **(d) content risk** (§37): hidden Unicode, look-alike letters, override phrasing and credential theft, read as instructions to an agent. Plus **(e) quality lint** (§41): the deterministic SKILL.md authoring rules — its findings are always `info` severity, never raise a report's severity and never trip the override gate; they feed the quality rating, not the security verdict. **Not a scanner:** the **AI pre-review** (§46) is an advisory LLM judgement stored outside `scan_reports`; it never raises a report's severity and never trips the override gate.
+- Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns). Plus **(d) content risk** (§37): hidden Unicode, look-alike letters, override phrasing and credential theft, read as instructions to an agent. Plus **(e) quality lint** (§41): the deterministic SKILL.md authoring rules — its findings are always `info` severity, never raise a report's severity and never trip the override gate; they feed the quality rating, not the security verdict. **Not a scanner:** the **AI pre-review** (§46) is an advisory LLM judgement stored outside `scan_reports`; it never raises a report's severity and never trips the override gate — **except** the per-rule results of admin-written **policy rules** it judges in the same run (§47.7).
 - **Pre-accept, for both types** (so reviewers never approve blind): **Hosted** is scanned at upload (artifact-keyed report); **Pointer** is scanned by a worker loop that clones the proposal's pinned ref while it sits in review (proposal-keyed report, deduped per ref). Until that loop runs a pointer proposal reads as **`scan pending`** (not "not scanned"); a ref that can't be fetched reads **`source unreachable`**. Pointer versions are scanned again at mirror time on accept (artifact-keyed) and periodically refreshed.
 - Report attached to proposal, surfaced in review dashboard.
 - **Validation blocks; security findings are advisory** — a reviewer may publish over a finding, **explicitly and audit-logged**.
@@ -900,6 +913,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Duplicate detection → redirect to a new version.** A NEW-skill submission that duplicates a skill the submitter can already see (including a restricted skill **shared with** one of the submitter's namespaces, §42) is steered to **propose a new version** of the existing one instead of creating a second copy. Two identities, both **active-only** and **visibility-scoped** (invariant #3 — a duplicate the submitter can't see never blocks them, but is surfaced to the reviewer who can): **pointer** = same slug + same **normalized origin URL** (`normalizeOriginUrl`) + same subdir, cross-namespace (a *different* slug for the same repo is allowed — a deliberate fork/rename); **hosted** = a byte-identical **content set** — `content_sha256`, a packaging-independent digest (`contentDigest`: sha256 over the sorted per-file sha256 of raw bytes, filenames/layout/junk disregarded), so a re-exported bundle still matches even though its whole-archive `artifact_sha256` differs. `content_sha256` is computed at upload (hosted) and mirror (pointer), stored on `skill_versions`, and **backfilled** from object storage by a leader-only worker sweep. The same-namespace+same-slug case is handled earlier by the slug-uniqueness 409; this catches the cross-namespace and identical-content cases it misses. New-**version** proposals are exempt (they intentionally target an existing skill). **Enforcement** is a platform setting `duplicate_proposal_enforcement` (Administration → Duplicate proposals), default **`block`**: the propose form disables submit and `POST /api/proposals`/`/api/publish` return **409** with the match; **`warn`** lets it through with an advisory notice. The slug-uniqueness 409 is always hard regardless. The redirect **carries over** the source the submitter already provided — the staged bundle / pointer fields transition in place into the (slug-locked) new-version flow as an **explicitly supplied source** (so *Keep current files* is off), no re-upload. Reviewers are alerted on the review page (with a link to the existing skill) in both modes, evaluated at the reviewer's own visibility.
 - **Pointer proposals are verified at submit time.** Before a pointer (external-git) proposal or direct publish is accepted by the API, skilly confirms the source actually resolves to a `SKILL.md` at the pinned ref + folder — the same resolution the mirror uses (the literal `<subdir>/SKILL.md`, else a folder named after the skill containing one). If it doesn't (wrong URL/ref/folder, or a repo with no `SKILL.md`), the submission is **rejected with 422** and a clear message *before* the proposal is created — rather than dead-lettering at mirror time (the worker's `cloneAndPack` only throws "no SKILL.md found …" on accept). The check is a lightweight, SSRF-hardened partial clone (`--depth 1 --no-checkout --filter=blob:none` + `ls-tree`, identical transport/DNS-rebind guards to the §6 mirror and the ref pre-check) in the web tier; skills-hub registry URLs (fetched via the registry API, not git) skip it. Deeper validation (frontmatter, `name == slug`, scan) still runs at mirror/accept.
 - **A flagged direct publish goes to review (§37.4).** When a direct publish's content-risk findings trip the override gate, a submitter without override authority is routed into an ordinary proposal (`routed_reason = 'content_risk'`, **202**), and a submitter with it must confirm an audited override (**409** first). A direct pointer publish fetches the pinned folder's contents for this check; a failed fetch routes to review.
+- **Policy rules gate accepts and route direct publishes (§47).** When an **enforced** policy rule applies (platform rules, plus the target namespace's), accept trips the gate on a violation and also when there is no current verdict. The override is the same confirm-with-reason dialog (reason required), and **platform rules can be overridden only by Platform Admins**. A direct publish by someone who couldn't override every applicable enforced rule is routed to review (`routed_reason = 'policy'`, **202**). The content-risk routing above runs first and wins when both apply.
 - **Pinned-ref default is source-aware.** For a **git** origin the pinned ref defaults to the **`main` branch** — the conventional default branch, and the common case for a repo that publishes no version tags — rather than the proposed version. For a **skills-hub origin** the `main` default never applies (the registry has no branches — §6): the form pins the registry's **latest version** as soon as the pre-check resolves it, and the field's label/placeholder switch to version language. The live ref pre-check (`GET /api/pointer/refs`) validates either way: for git it lists the repo's real branches/tags, for skills-hub the registry's **published versions**; if the typed ref doesn't exist upstream the form warns (`<ref> isn't a branch or tag in this repo — mirroring will fail. Pick one that exists` / the version-flavored equivalent) and offers quick-picks. A ref the proposer typed **deliberately** is never overridden; clearing the field restores the source's default. Server-side, a skills-hub pointer whose ref is not a version is rejected with **422** (§6 `validateSkillsHubRef`).
 - **Separate `proposals` and `skills`/`skill_versions` tables.** On accept, skilly **materializes** a new `skill_version` (and a `skill` if new) from the proposal's final revision. Proposal persists in terminal state, linked to the materialized version.
 - **Maintainer auto-add on acceptance (§19).** Accepting a version — new-skill or new-version, via review or direct publish — auto-adds the submitter as an explicit maintainer of the skill, eligibility-gated; full rule in §19.
@@ -1133,6 +1147,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
   - **Skill quality (§41.10):** `skill.quality_reassess_requested` (actor; skill, version) and `job.quality_rescore_requested` (actor; row count). The sweep's own writes, AI calls and notifications are telemetry, **not audited**.
+  - **Policy rules (§47.12):** `policy.rule_created`, `policy.rule_updated` (text before/after + revision numbers), `policy.rule_state_changed`, `policy.rule_deleted`, `proposal.policy_override`, `skill.policy_flagged` (system actor) and `skill.policy_flag_dismissed`; `proposal.routed_to_review` gains `reason: 'policy'`. Re-checks are `ai_prereview.rerun_requested`.
   - **AI pre-review (§46.12):** `ai_prereview.rerun_requested` (actor; proposal or skill+semver; run id) and `ai_prereview.finding_dispositioned` (actor; subject; fingerprint, category, severity, verdict, reason); the `ai_prereview_enabled` switch as `settings.updated`. Runs themselves are not audited.
   - **AI-drafted quality improvements (§44.8):** `skill.ai_draft_generated` (actor; skill, base semver, model, per-status file counts, call count — **never file contents or AI output**), written once per run however it ends; the proposal's creation audit (and a direct publish's) carries `aiDraftModel` when the §44 token was valid. The AI display name (§40.14) is audited as `settings.updated`.
   - **AI integration (§40.11):** `ai.config_updated` (provider / base URL / model before→after plus a `token_rotated` flag — **never the token or any part of it**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests, model-list calls and AI runtime calls are **not audited** (they are telemetry in `ai_usage`).
@@ -1185,6 +1200,8 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
   - To **effective maintainers**: `skill.content_risk` when the re-scan sweep first flags a published version (§37.5, **once per onset**), gated by `content_risk_notifications` (§37.9).
+  - To the **proposer**: `proposal.policy_violation` when a proposal's current §46 run lands with at least one violated **enforced** policy rule (§47.10, once per run; never for a cached link; proposal-lifecycle, no per-type opt-out).
+  - To **effective maintainers** (plus **platform admins** when a platform rule is violated): `skill.policy_flag` when a published version is first flagged against a policy rule revision (§47.8, **once per onset**), gated by `policy_notifications`.
   - To the **namespace admins** of the skill's namespace: `skill.ai_prereview_flagged` when an AI pre-review with a high or critical finding completes for a version **already published without a reviewer having seen it** — a direct publish, an accept while the run was pending, or a mirror-mismatch run (§46.10, **once per version**); minus the actor; gated by `ai_prereview_notifications`.
   - To **effective maintainers**: `skill.quality_low` when a version's quality assessment **settles at 2 stars or below** (§41.9, **once per assessment**), carrying the full list of findings and the AI recommendations; gated by `quality_notifications`.
   - To the **admins of each namespace a restricted skill is shared with** (§42): `skill.shared` when the grant is created (who shared it, from which namespace, CTA → the skill), and `skill.shared_new_version` when a new version of a skill shared with their namespace is published — they can see the skill but do not govern it, so this is awareness, not a review-queue item. Both are per-recipient, **deduped** against a `skill.new_version` row the same person already receives as watcher/maintainer, delivered over the same channels as `skill.new_version`, and **not** sent to platform admins who merely inherit access. No per-type opt-out in v1.
@@ -1236,6 +1253,8 @@ current or future type can ever leak JSON to a user.
   | `skill.discussion` | New discussion comment | {fromName} commented on {ns}/{slug}. | View the discussion → `/skills/{ns}/{slug}#discussion` |
   | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
   | `skill.quality_low` | Low quality score | {ns}/{slug} v{semver} scored {stars} ★ ({score}/100, {mode}). *(+ the full findings list, then the AI summary and suggestions when present — §41.9)* | Open the Quality card → `/skills/{ns}/{slug}#quality`; plus **Draft improvements with {aiName}** → `/skills/{ns}/{slug}?draft=ai#quality` when §44.9 applies |
+  | `proposal.policy_violation` | Policy check flagged your proposal | The policy check flagged your proposal for {ns}/{slug}: {rule titles}. *(+ each violated rule's explanation — §47.10)* | See the policy check → `/proposals/{proposalId}#policy` |
+  | `skill.policy_flag` | Policy check flagged a skill | {ns}/{slug} v{semver} violates: {rule titles}. | Review the policy check → `/skills/{ns}/{slug}#policy` |
   | `skill.ai_prereview_flagged` | AI pre-review flagged a skill | {aiName} pre-review found {n} high or critical issues in {ns}/{slug} v{semver}, which was published without a reviewer seeing them: {categories}. | Open the pre-review → `/skills/{ns}/{slug}#ai-prereview` |
   | `skill.marked_official` | Skill marked official | {ns}/{slug} was marked official. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.deprecated` | Skill deprecated | {ns}/{slug} is deprecated — use {succNs}/{succSlug} instead. {note} *(without a visible successor: "{ns}/{slug} is deprecated. {note}")* | **Open the successor** → `/skills/{succNs}/{succSlug}` when the recipient can see it, else View the skill → `/skills/{ns}/{slug}` |
@@ -1623,6 +1642,11 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `POST /api/proposals/:id/actions` — start-review / request-changes / accept / reject / resubmit / **revise** (proposer mid-review edit, no state change, §8) (the lifecycle verb; *not* `PATCH /api/proposals/:id`). **`accept` carries the inspected `revisionNo`** and returns **409** if a newer revision landed (revision-pinned accept, §8).
 - `DELETE /api/proposals/:id` — permanently delete a proposal (reviewer of its namespace; any state except `accepted`). Housekeeping, silent, audited (`proposal.deleted`); cleans the review conversation + pointer scan + dangling notifications. §8.
 - `GET /api/proposals/:id/files` (bundle browser, §8), `.../artifact`, `.../duplicate-check`, `GET|POST /api/proposals/:id/messages` (review discussion, §24).
+- **Policy rules (§47.11):**
+  - **Rules:** `GET /api/policy/rules?ns=<slug>[&all=1]`; `POST /api/policy/rules`; `PATCH /api/policy/rules/:id` (writes a new revision); `PUT /api/policy/rules/:id/state`; `DELETE /api/policy/rules/:id` (**409 `cited`**); `GET /api/policy/rules/:id/revisions`.
+  - **Skill flags:** `GET /api/skills/:ns/:slug/policy?semver=` (owner card); `POST /api/skills/:ns/:slug/policy/dismiss`.
+  - **Admin lists:** `GET /api/admin/policy`; `GET /api/namespaces/:id/policy/flags`.
+  - **Existing endpoints that gain fields:** `GET /api/proposals/:id` and `GET /api/skills/:ns/:slug` gain `policy`; the accept gate's 409 gains `policy.tripped`; a policy override without a reason → **422**, without authority → **403 `policy_override_forbidden`**; `POST /api/publish` may answer **202** with `routedReason: 'policy'`. Re-checks use the §46 re-run endpoints.
 - **AI pre-review (§46.11):** `POST /api/proposals/:id/ai-prereview/rerun`, `POST /api/proposals/:id/ai-prereview/dispositions` (reviewers); `GET /api/skills/:ns/:slug/ai-prereview?semver=` (owners), `POST .../ai-prereview/rerun` and `.../ai-prereview/dispositions` (override holders); `GET /api/proposals/:id` gains `aiPrereview`.
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
 - `GET /api/propose/ai-draft` → `{ available }`; `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`), 502 `draft_failed`. Nothing persisted.
@@ -1823,6 +1847,23 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     *Keep current files* artifact read), the **Draft with AI** button with confirm-before-replace,
     additive categories with the *new* badge and one-step Undo, the 10/min + 50/24 h limits, and
     `aiComplete({ retry: false })`. No migration. **Minor** release.
+
+36. **Policy rules — policy-as-prompt (§47):**
+    - **Data:** migration 0091 (`policy_rules`, `policy_rule_revisions`,
+      `ai_prereview_policy_results`, `policy_flag_dismissals`, `ai_prereviews.rules_fingerprint`,
+      `routed_reason` gains `policy`, `users.policy_notifications`).
+    - **Judgement:** inside the §46 run — rules block in the prompt, per-rule validation and
+      server-side evidence verification, the rules fingerprint in the cache key, rule-change
+      re-checks of open proposals and latest versions.
+    - **Gate:** the accept gate (violation or no verdict), with override authority by rule scope;
+      direct-publish routing. **Published skills:** flags with dismissal and a consumer chip.
+    - **Surfaces:** the rule editor (Namespace administration and Administration), the propose-form
+      rules panel, the Policy sections on the proposal and review pages, the skill-page chip and
+      owner card, admin flag lists with a Shadow preview.
+    - **Notifications and MCP:** the two notifications, and MCP `get_proposal`'s `policy` block.
+    - **Minor** release (v2.27.0).
+
+    **DONE.**
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -7788,7 +7829,8 @@ For a version, from its artifact's latest scan report:
   `acknowledged_by` (FK → `users`, `ON DELETE SET NULL`), `acknowledged_at` (`timestamptz`, default
   `now()`), `note` (TEXT NULL, at most 500 characters), `source` (`'override'` | `'manual'`), indexed
   on `(skill_id, semver)`. The app role gets SELECT and INSERT only.
-- **`proposals.routed_reason`** — TEXT NULL, CHECK `IN ('content_risk')`.
+- **`proposals.routed_reason`** — TEXT NULL, CHECK `IN ('content_risk')` (widened to
+  `IN ('content_risk', 'policy')` by migration 0091, §47.2).
 - **`users.content_risk_notifications`** — `BOOLEAN NOT NULL DEFAULT true`; existing users default
   on. Scrubbed with the row on erasure (§4).
 - **`scan_reports` has no schema change.** `findings` is JSONB, and the new finding fields are
@@ -8401,7 +8443,8 @@ pattern), with the **status pill** as its header accessory.
   network call. `test` is reserved. The registry shipped empty; its **first entry is
   `skill_quality`** (§41.5), its second **`skill_draft`** (§43.8), and its third
   **`skill_quality_draft`** (§44.4 — `maxTokens` 32,768, `timeoutMs` 360,000), and its fourth
-  **`proposal_prereview`** (§46.6 — `maxTokens` 16,384, `timeoutMs` 180,000).
+  **`proposal_prereview`** (§46.6 — `maxTokens` 16,384, `timeoutMs` 180,000), which also judges the
+  §47 policy rules (its egress statement names them; no separate feature key).
 - **Recording:** every call that reaches the provider (success or failure) writes **one**
   `ai_usage` row with its final outcome — a retried call is still one row — and updates `last_call_*`. Calls
   refused before the network (`ai_not_configured`, `ai_disabled`, `ai_key_missing`,
@@ -9639,7 +9682,7 @@ never changes a state. It is the fourth registered AI task (§40.7).
 ### 46.1 Decisions
 | # | Decision | Why |
 |---|---|---|
-| 1 | **Advisory only.** An AI finding never trips the accept override gate (§37.4 `requiresOverride`), never routes a direct publish, and never blocks or delays anything. The deterministic scanners stay the gate. | The judge reads hostile content. It can be talked out of a finding or into a false alarm, and its answers vary by model and by run. A gate must be deterministic. |
+| 1 | **Advisory only.** An AI finding never trips the accept override gate (§37.4 `requiresOverride`), never routes a direct publish, and never blocks or delays anything. The deterministic scanners stay the gate. **Exception (§47):** the per-rule results of admin-written, *enforced* policy rules judged in the same run do gate, through the audited override. | The judge reads hostile content. It can be talked out of a finding or into a false alarm, and its answers vary by model and by run. A gate must be deterministic. |
 | 2 | **Results never go in `scan_reports`.** They live in their own tables (§46.9). | Report severity and the override gate read `scan_reports`. Keeping AI out of that table makes #1 structural, not a convention. |
 | 3 | **The queue is never held.** A proposal enters review immediately, and the section reads *Pending* until the result lands. | A provider outage must never freeze reviews. |
 | 4 | **A dedicated section**, not a message in the review discussion. | Discussion messages are user-authored (§24). A structured result with per-finding decisions needs its own surface. |
@@ -9707,7 +9750,8 @@ submit paths:
   before.
 
 ### 46.4 Caching
-- **The cache key** is `(content_sha256, AI_PREREVIEW_PROMPT_VERSION)`.
+- **The cache key** is `(content_sha256, AI_PREREVIEW_PROMPT_VERSION)` — plus the `rules_fingerprint`
+  of the applicable policy rules once §47 applies (§47.5).
   - `content_sha256` is the packaging-independent digest of §8, computed at upload, at mirror, or by
     the worker from a pointer clone.
   - `AI_PREREVIEW_PROMPT_VERSION` is an integer in `@skilly/shared`. It is bumped whenever the prompt,
@@ -9757,7 +9801,8 @@ submit paths:
   proposals', egress: 'For each submitted proposal, and each direct publish, while the pre-review
   switch is on: SKILL.md and the text files under scripts/ and references/ (up to 25 files, 100,000
   characters each and 250,000 in total; secret-scanner lines redacted), the bundle\'s file paths
-  (first 200), and the deterministic scan findings (rule, file, line, severity)', spec: '§46',
+  (first 200), the deterministic scan findings (rule, file, line, severity), and the applicable
+  policy rules (title, rule and context; §47)', spec: '§46',
   maxTokens: 16384, timeoutMs: 180000 }`. It is shown on the §40.4 egress notice.
 - **Input selection.** A pure function, `selectPrereviewInput`, in `@skilly/shared`.
   - **Priority order:** `SKILL.md`; then every text file under `scripts/`, by path; then every text
@@ -9883,7 +9928,9 @@ submit paths:
     button (the same re-run endpoint) while the feature is effective. When there is nothing to show
     and nothing the viewer can do, the card is hidden.
   - Everyone else never sees the card.
-- **Consumers see nothing:** no chip, no badge, no catalog filter or sort, no search signal.
+- **Consumers see nothing:** no chip, no badge, no catalog filter or sort, no search signal. (§47's
+  policy status chip is the one exception — it reports compliance with admin-written rules, never
+  §46's findings.)
 - **MCP (§29).** `get_proposal` returns `aiPrereview` in the §46.11 shape (without `canRerun` and
   `canDisposition`) to whoever may read the proposal, so an agent can revise its own proposal.
   `get_skill` and `search_skills` carry nothing. There is no new tool.
@@ -9986,7 +10033,8 @@ submit paths:
 
 ### 46.12 Governance & invariants
 - **Advisory by structure.** The accept gate, direct-publish routing (§37.4), report severity and
-  the content-risk status (§37.7) never read `ai_prereviews`. A test asserts that an accept and a
+  the content-risk status (§37.7) never read §46's findings in `ai_prereviews`. (They do read §47's
+  per-rule policy results and the run's status — the one, narrow exception, §47.13.) A test asserts that an accept and a
   direct publish over critical AI findings succeed without an override.
 - **Invariant #3 and §40.10 visibility.** Results are served only through the proposal payload (to a
   reviewer or the submitter) and the owner card (to owners of a visible skill). MCP `get_proposal`
@@ -10052,7 +10100,8 @@ submit paths:
 
 ### 46.14 Out of scope & accepted trade-offs
 - **Out of scope:** an AI severity badge or filter on the review queue; any consumer-facing AI
-  signal; retroactive review of the catalog; per-namespace enablement; gating on AI results;
+  signal (§47's policy chip excepted); retroactive review of the catalog (§47's rule-change
+  re-checks of latest versions excepted); per-namespace enablement; gating on AI results;
   proposer-triggered re-runs (a proposer re-runs by revising); splitting a large bundle across
   several calls; non-English output; using dispositions to tune the prompt.
 - **The judge is an oracle.** A hostile author can keep revising until the model reports nothing.
@@ -10068,3 +10117,332 @@ submit paths:
   `ai_usage` shows it per feature (§40.4).
 - **Cross-subject caching** reuses one result for byte-identical bundles across namespaces.
   Dispositions never cross.
+
+---
+
+## 47. Policy rules (policy-as-prompt)
+
+Namespace and platform governance is fixed in code: the §6 scanners, the §37 content check, the §41
+quality rules and the §46 pre-review ask the same questions of every namespace. A namespace with its
+own engineering policy, such as *"no skills that call external APIs without an approved adapter"*,
+could only enforce it by hoping each reviewer remembered it. §47 lets admins **write rules in plain
+language**. The §46 pre-review judges every submission and published skill against them **in the
+same provider call**, and **cites the rule it tripped**, with evidence taken from the bundle. A
+violation of an **enforced** rule trips the accept gate; a human can always pass it with the existing
+audited override. The model informs the decision and never takes it.
+
+§47 is built on §46 and makes **three deliberate exceptions** to §46's decisions, each recorded where
+§46 states the rule:
+
+| §46 decision | §47 exception | Why |
+|---|---|---|
+| §46.1 #1 / §46.12 — **advisory only**, nothing gates on AI | A violated **enforced policy rule** — or one with no current verdict — **trips the accept gate** and routes members' direct publishes (§47.7). §46's own security findings stay advisory. | An admin wrote the rule and chose to enforce it; the gate is an audited override, never a block. Fail-closed keeps a provider outage from waiving policy. |
+| §46.8 / §46.1 #12 — **consumers see nothing** | A one-line **policy status chip** on the skill page for everyone who can see the skill (§47.9). Never the AI's findings or reasons. | It reports compliance with rules every user can read, not the AI's security opinion. |
+| §46.2 / §46.14 — **no retroactive review** of published versions | Adding, editing or enforcing a rule **re-checks the latest stable version** of every skill in its scope (§47.6). | Rules written today should reach skills published yesterday. Bounded to latest versions and batched. |
+
+### 47.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Two scopes.** **Namespace rules** are written by that namespace's admins (and platform admins). **Platform rules** are written by platform admins only and apply to **every** namespace, `global` included. A submission is judged against platform ∪ target-namespace rules. | Org-wide policy without copying it into every namespace. Namespace policy without a platform admin. |
+| 2 | A rule is a **title** (what findings cite), the **rule** in plain language, and optional **context for the pre-reviewer** (allowlists, definitions, compliant and non-compliant examples). All three are plain text. | "Approved adapter" means nothing to the model unless the admin says which adapters are approved. |
+| 3 | **Three states: Shadow, Enforced, Disabled.** Shadow results are shown only to admins and never gate anything. New rules start in **Shadow**. | LLM-judged policy is fuzzy. Admins can tune the wording before it blocks anyone. |
+| 4 | **Revisioned.** Each edit of the text is a new immutable revision. A result records the revision it judged, so a citation always shows the wording that was enforced. A rule that has been cited is never hard-deleted, only disabled. | An edited rule must not rewrite history. |
+| 5 | **Rules are readable by anyone who can propose to the namespace**, which is every authenticated user. They see enforced rules: on the propose form, on the proposal page and from the catalog's namespace view. Shadow and Disabled rules are admin-only. | Authors can comply up front, and a cited rule is never a surprise. |
+| 6 | **Judged inside the §46 pre-review run.** One provider call covers §46's security review **and** every applicable rule; the input is §46's selection (§46.6), the queue, attempts, caching and pointer handling are §46's. There is no second AI task. | One call per subject; one queue; no duplicate egress. |
+| 7 | **Judged only while §46 is effective** (the `ai_prereview_enabled` switch on **and** the integration operational, §46.2). While it is not, no verdict can be produced and enforced rules **fail closed**. Writing a rule never turns the pre-review on. | The platform admin alone decides what leaves skilly; a namespace admin can't widen egress by writing a rule. |
+| 8 | **Four outcomes per rule:** `complies`, `not_applicable`, `uncertain`, `violates`. **Only `violates` gates.** `uncertain` is highlighted for the reviewer. | Gating on "unsure" would make the override routine, and a routine override gets rubber-stamped. |
+| 9 | **A violation must prove itself.** Each `violates` result cites at least one location (path + excerpt). The server checks that the path was sent and the excerpt really occurs in that file. With no verifiable evidence, the result is **downgraded to `uncertain`**. | A cheap, strong guard against hallucinated violations (the §46.6 excerpt rule, applied per rule). |
+| 10 | **Gate with audited override.** At accept, a violated enforced rule — or an enforced rule with **no current verdict** (pending, off, unavailable, skipped, failed, stale) — trips the gate. Passing it takes the §37.4 confirm-with-reason override, extended to list the tripped rules; the reason is required. | A human always decides, but can't silently ignore the check, and an outage never waives policy. |
+| 11 | **The rule's scope decides who may override.** Namespace override holders (Namespace Admins, Platform Admins) override namespace rules. **Only Platform Admins override platform rules.** | A namespace admin can't waive org policy in their own namespace. |
+| 12 | **Direct publish:** goes straight through only when the publisher could override **every** applicable enforced rule. Otherwise it is **routed to review** (`routed_reason = 'policy'`, the §37.4 mechanism). A version that goes straight through gets a §46 run after publishing. | The verdict is async, so the only pre-publish gate available is review. |
+| 13 | **A published violator is flagged and its maintainers notified. Nothing else happens:** no yank, no hiding, no install block. An admin may **dismiss** a flag per rule as *false positive* or *accepted exception*, with a reason (audited). | Versions are immutable, and an LLM false positive must not make a skill disappear. |
+| 14 | **The proposer sees the results for enforced rules and is notified when violations land.** MCP `get_proposal` returns them too. | The citation must reach the person who has to fix it, and an agent can correct its own work. |
+| 15 | **Re-checks are §46 re-runs** (reviewers on a proposal, override holders on a version). Proposers revise instead. | One re-run path; no "retry until green". |
+| 16 | **Shared skills (§42) are judged by their owning namespace's rules only.** | Grants confer visibility, never governance. |
+
+### 47.2 Data model (migration 0091)
+- **`policy_rules`** — `id` (uuid PK), `scope` (`platform` | `namespace`), `namespace_id` (FK →
+  `namespaces`, `ON DELETE CASCADE`, nullable; `CHECK ((scope = 'platform') = (namespace_id IS
+  NULL))`), `state` (`shadow` | `enforced` | `disabled`, default `shadow`), `created_by` (FK →
+  `users`, `ON DELETE SET NULL`), `created_at`, `updated_at`, `state_changed_at`. Index
+  `(namespace_id, state)`. A rule's **current revision** is its revision with the highest
+  `revision_no`.
+- **`policy_rule_revisions`** — `id` (uuid PK), `rule_id` (FK → `policy_rules`, `ON DELETE
+  CASCADE`), `revision_no` (int, from 1, unique per rule), `title` (1–80 chars), `body` (1–1,000
+  chars), `context` (nullable, ≤ 4,000 chars), `author` (FK → `users`, `ON DELETE SET NULL`),
+  `created_at`. **Append-only for the app role** (SELECT and INSERT only). This row *is* the
+  snapshot a result cites.
+- **`ai_prereviews` gains `rules_fingerprint`** (text, nullable): the sha256 of the sorted
+  `rule_id:revision_id` pairs the run judged (shadow and enforced), null when no rule applied. It
+  joins the §46.4 cache key (§47.5).
+- **`ai_prereview_policy_results`** — one row per rule a run judged: `run_id` (FK →
+  `ai_prereviews`, `ON DELETE CASCADE`), `rule_id` (FK → `policy_rules`, `ON DELETE RESTRICT`),
+  `revision_id` (FK → `policy_rule_revisions`, `ON DELETE RESTRICT`), `rule_state` (`shadow` |
+  `enforced`, when judged), `outcome` (`complies` | `not_applicable` | `uncertain` | `violates`),
+  `explanation` (≤ 700 chars, room for the downgrade prefix), `evidence` (JSONB — at most 5
+  `{ path, line, excerpt }`, each server-verified), `evidence_rejected` (bool). PK `(run_id,
+  rule_id)`. The `RESTRICT` FKs keep a cited rule undeletable. Results are written **with** the
+  run's `done` flip, in one transaction (a run is never `done` with missing results).
+- A subject's **current verdict** is its current §46 run (its latest link, §46.9) and that run's
+  policy results.
+- **`policy_flag_dismissals`** — `id` (uuid PK), `skill_id` (FK → `skills`, `ON DELETE CASCADE`),
+  `semver`, `rule_id`, `revision_id` (FKs, `RESTRICT`), `kind` (`false_positive` |
+  `accepted_exception`), `reason` (1–500 chars), `source` (`override` | `manual`), `dismissed_by`
+  (FK → `users`, `ON DELETE SET NULL`), `dismissed_at`. Index `(skill_id, semver)` — keyed by skill
+  and semver so an accept can record an exception for a pointer version before it is mirrored.
+  **Append-only for the app role.**
+- **`proposals.routed_reason`** — the CHECK widens to `IN ('content_risk', 'policy')`.
+- **`users.policy_notifications`** — `BOOLEAN NOT NULL DEFAULT true` (§47.10).
+
+### 47.3 Writing rules
+- **Who:** namespace rules — that namespace's admins and platform admins; platform rules —
+  platform admins only. Explicit maintainers and grantee-namespace admins have no authority.
+- **Where:** a **"Policy rules"** section on each namespace's block on the Namespace administration
+  page (§30.6), and a collapsed-by-default **"Platform policy rules"** card on the Administration
+  page. One shared editor: the scope's rules (title, a Shadow / Enforced / Disabled switch-group,
+  revision count, last edited by/at, catalog violation counts) plus an **Add rule** form (**Title**,
+  **Rule**, **Context for the pre-reviewer (optional)**, starting state, default Shadow).
+- **Validation (shared, browser and server):** the §47.2 lengths; titles unique per scope,
+  case-insensitive, among non-disabled rules; at most **25 non-disabled rules per scope** (422
+  `too_many_rules`); plain text only, rendered escaped everywhere.
+- **Editing** title, rule or context writes a **new revision**, which becomes the current one; a
+  no-change save writes nothing. **State changes are not revisions**; they are audited separately.
+- **Deleting** is offered only for a rule no result or dismissal has cited (**409 `cited`**
+  otherwise — disable it instead).
+- **Effects of a change.** Creating a rule, editing its text, or moving it to Shadow or Enforced
+  queues re-checks (§47.6). **Disabling** queues nothing and takes effect at once everywhere.
+- **Editor notices:**
+  - *"Everyone who can propose to @‹ns› can read enforced rules, including their context."* (Platform:
+    *"Every signed-in user can read enforced platform rules, including their context."*)
+  - **When §46 is not effective and at least one rule in scope is enforced:** *"The ‹name› pre-review
+    is off (or unavailable), so no policy verdicts can be produced. While it is, accepting a proposal
+    here needs an override, and members' direct publishes go to review."* The platform card adds
+    that only platform admins can override platform rules.
+
+### 47.4 Which rules apply
+- **Applicable rules** for a subject: every non-disabled platform rule plus every non-disabled rule of
+  the **target namespace** (a proposal's `target_namespace_id` — `global` for a promotion; a
+  version's owning namespace; §42 grants ignored), each at its current revision.
+- **Gating rules** are the applicable rules whose state is **Enforced**. Shadow rules are judged in
+  the same call but never gate, route, flag or notify.
+- **Shown to whom:** proposers, consumers and MCP see enforced rules only; reviewers and
+  namespace / platform admins also see shadow results.
+
+### 47.5 The judgement inside the §46 run
+- **Prompt (§46.6, extended).** When any rule applies, `buildPrereviewPrompt` adds a **POLICY RULES**
+  block — each rule as `R1…Rn` (a per-call key mapped back to rule ids server-side) with title, rule
+  and context — and the system prompt adds the four outcomes (`not_applicable`: the rule is about
+  something the skill doesn't do; `uncertain`: the files sent don't show enough; `violates`:
+  **requires** quoting the offending text verbatim) and asks the model to judge each rule
+  independently. Bundle text stays §46's: its selection, caps, coverage, redaction and
+  untrusted-data instruction. Hardened for every run (rules or not): each file's fences now carry a
+  **per-call random nonce**, and **every path the prompt shows is JSON-quoted**, so neither file
+  content nor a path with a newline can forge a boundary or inject lines. `AI_PREREVIEW_PROMPT_VERSION`
+  is bumped (1 → 2).
+- **Response (§46.6, extended)** gains `policy: [{ rule: 'R1', outcome, explanation (≤ 600),
+  evidence: [{ path, excerpt (≤ 300) }] (≤ 5) }]`.
+- **Validation, per rule:** a missing, duplicated or malformed entry makes **that** rule `uncertain`
+  (*"The pre-reviewer returned no usable answer for this rule."*); unknown keys are ignored. A
+  response whose security part is valid but whose `policy` is not an array marks every rule
+  `uncertain`, never the run failed.
+- **Evidence check:** the path must be a `reviewed` or `truncated` file of the run; the excerpt,
+  normalized like the §37 phrase rules, must be ≥ 8 characters and occur in the text sent for that
+  file; the line is recomputed server-side. Evidence that fails is dropped; a `violates` left with
+  none becomes **`uncertain`** with `evidence_rejected = true` and the explanation prefixed
+  *"Downgraded: the cited evidence was not found in the bundle."*
+- **Coverage.** A rule about a file §46 did not send can't be judged; the model is told which files
+  were not reviewed, and §46's coverage line discloses them. Partial coverage never gates by
+  itself.
+- **Cache (§46.4, extended).** The cache key becomes `(content_sha256, AI_PREREVIEW_PROMPT_VERSION,
+  rules_fingerprint)`. A cached run is reused only by a subject to which **exactly** the same rule
+  revisions apply; a run with no rules is reused only where no rule applies.
+- **Egress (§46.6 registry entry, extended):** *"… and the applicable policy rules (title, rule and
+  context)"*. No new feature key.
+
+### 47.6 When it runs
+§46.3's triggers are unchanged; §47 adds these, all handled by the §46 sweep while §46 is effective:
+- **A rule change** (§47.3) re-checks every subject in its scope whose current run has **no result
+  for the rule's current revision**:
+  - **open proposals** (`proposed` / `under_review` / `changes_requested`, current revision) get a
+    new run (`trigger = 'policy'`) — **except for a Shadow rule**, which never gates and so must not
+    knock open proposals back to *pending*; they pick it up on their next revision or re-run;
+  - the **latest stable active version** of every **active** skill in scope gets a new run
+    (`trigger = 'policy'`). Older versions are never re-checked. Catalog runs come **after**
+    proposal runs, at most **10 per 10 minutes**.
+- **A run that lands stale** — a rule was edited or enabled while the call was in flight — is
+  re-checked by the reconcile on the sweep's next pass (about 30 s).
+- **Pointers:** §46.3's mirror rule (a new run when the mirror's digest differs from the reviewed
+  one) means a published pointer version is judged on its own bytes.
+- **The §46.3 per-proposal cap** applies to policy runs too; a *Skipped* proposal has no current
+  verdict and fails closed.
+- **Accept** links the accepted revision's run to the version (§46.3), so its policy results become
+  the version's; no new call.
+- **Superseded runs.** A result that lands after its subject got a newer run is ignored by the gate
+  and never notifies (only the latest link counts).
+
+### 47.7 The gate
+- **Accept trips the policy gate** when at least one enforced rule applies and, for the proposal's
+  current run, any of these holds:
+  1. **No verdict:** the run is `pending`, `failed`, or there is none (*off*, *unavailable*,
+     *skipped*);
+  2. **Stale:** an enforced rule has no result at its current revision (a re-check is queued);
+  3. **Violation:** an enforced rule's result is `violates`.
+
+  A rule since **disabled or moved to Shadow** never trips it. **§46's own findings never trip it**
+  (§46.12 unchanged for them).
+- **The override.** The existing §37.4 confirm-with-reason dialog gains a **"Policy"** list (each
+  tripped rule, its scope chip, *violates* or *no verdict* with the reason). One reason covers every
+  tripped item; **a policy override requires a non-empty reason** (422). The accept succeeds only
+  when the actor may override **every** tripped rule (platform → Platform Admin), else **403
+  `policy_override_forbidden`**. Audited `proposal.policy_override`. For each *violated* rule a
+  `policy_flag_dismissals` row is written for the new version (`source = 'override'`, `kind =
+  'accepted_exception'`, the reason). A rule overridden for *no verdict* gets none: if the version's
+  run later finds a violation, the version is flagged.
+- **Serialized.** Actions on one proposal take a row lock, so a revise can't land a new revision
+  between the accept's gates and the publish.
+- **Direct publish (`POST /api/publish`).** After the §37.4 content check (which wins if both
+  apply), when at least one **enforced** rule applies:
+  - **The publisher can override every applicable enforced rule** (a Platform Admin always; a
+    Namespace Admin when no enforced *platform* rule applies): it publishes as today, and §46 runs
+    the version after the fact — for policy **whatever the §46 `since` stamp says**.
+  - **Otherwise** it is **routed to review** exactly as §37.4 does: a proposal with `routed_reason =
+    'policy'`, **202** `{ routed: "review", proposalId }`, audited `proposal.routed_to_review`, a
+    linked skill request carried over, and the banner *"This was submitted as a direct publish. This
+    namespace has policy rules, so it needs a policy check and a reviewer."*
+- **`global`, MCP, promotions:** `global` always requires review; MCP has no direct publish; a
+  promotion proposal is gated against `global`'s rules.
+
+### 47.8 Published versions: flags
+- **Status (derived, never stored)** from the version's current run:
+
+  | Status | When | Label |
+  |---|---|---|
+  | `none` | No enforced rule applies | — (nothing shown) |
+  | `pending` | No done, current run (incl. off / unavailable / failed) | Policy check pending |
+  | `clear` | No enforced rule violated | Policy check passed |
+  | `noted` | Every violation dismissed at the judged revision | Policy check: exceptions noted |
+  | `flagged` | At least one undismissed violation | Policy check: flagged |
+
+  An undismissed violation wins over a stale result (flagged, not pending).
+- **Onset.** A version entering `flagged` with violations its previous run did not flag: audit
+  `skill.policy_flagged` (system actor) and a `skill.policy_flag` notification, once per onset.
+- **Dismissal** of one (version, rule) pair: namespace override holders for a namespace rule,
+  Platform Admins for a platform rule; a kind and a reason (1–500); covers that rule **at the judged
+  revision only**; append-only; audited `skill.policy_flag_dismissed`. Independent of §46's
+  per-finding dispositions.
+- **No automatic state change.** A flagged version stays visible, searchable and installable.
+- **Re-check** of a version is the §46 owner re-run (override holders).
+
+### 47.9 Surfaces
+- **Propose form.** Once a namespace is picked, a collapsible **"Policy rules (N)"** panel lists the
+  enforced platform and namespace rules (title, rule, context, scope chip). Hidden when N = 0.
+- **Proposal page (proposer) and review page.** A **"Policy"** section directly below the **"‹name›
+  pre-review"** section, shown whenever a rule applies (even while §46 is off — that is when it
+  explains the fail-closed gate):
+  - **Status line:** *Policy check pending* · *Policy check unavailable — the ‹name› pre-review is
+    off; accepting will need an override* · *… skipped (too many revisions today)* · *Policy check
+    failed* · *Checked against N rules · ‹model› · ‹time›*, with §46's caveat line.
+  - **One row per rule:** outcome pill, title with scope chip (and *Shadow* chip for admins), the
+    explanation, evidence as `path:line` plus an escaped excerpt, and a disclosure with the exact
+    rule text judged. Violations first, then uncertain (*"check this manually"*), then complies;
+    not-applicable collapsed.
+  - Re-check is §46's **Re-run** button. A routed submission shows the §47.7 banner.
+  - The accept area lists the tripped rules and the authority to override each.
+- **Skill page.**
+  - **Everyone who can see the skill:** a one-line status chip (§47.8 labels) whose hover lists the
+    violated enforced rule titles — the §46.8 exception.
+  - **Owners** (the §37.8 audience): a collapsible **"Policy"** card below the pre-review card with
+    the results for the displayed version, dismissals, a **Dismiss** action per violated rule for
+    those with authority, and *"Other active versions flagged"*. Shadow rows for admins only.
+- **Catalog namespace view (`?ns=`).** A *"Policy rules (N)"* link opens a read-only dialog.
+- **Administration.** The **"Platform policy rules"** card; a **"Policy"** card listing *flagged* /
+  *noted* versions across namespaces plus a **Shadow preview** of what each shadow rule would flag;
+  the namespace page lists its own. The Maintenance card shows §46's pending count, which includes
+  policy re-checks.
+
+### 47.10 Notifications
+- **`proposal.policy_violation` → the proposer**, once per run, when the proposal's current run
+  lands `done` with a violation of an enforced rule (a run linked from cache, or a superseded one,
+  does not fire). Subject *"Policy check flagged your proposal"*; body lists each violated rule with
+  its explanation; CTA → the proposal's Policy section. Proposal-lifecycle: no per-type opt-out; for
+  an MCP proposal, the user behind the grant.
+- **`skill.policy_flag` → the skill's effective maintainers** (explicit maintainers ∪ namespace
+  admins), plus platform admins when a **platform** rule is violated; gated by the Profile toggle
+  **"Policy flags on skills I maintain"** (`users.policy_notifications`); once per onset (§47.8).
+  Subject *"Policy check flagged a skill"*; body *"‹ns›/‹slug› v‹semver› violates: ‹rule titles›."*;
+  CTA → the skill page's Policy card. Independent of `skill.ai_prereview_flagged`.
+
+### 47.11 API surface
+- **Rules:** `GET /api/policy/rules?ns=<slug>[&all=1]` (any signed-in user: enforced rules; `all`
+  for that scope's admins adds shadow / disabled with state, history and counts); `POST
+  /api/policy/rules`; `PATCH /api/policy/rules/:id` (new revision); `PUT /api/policy/rules/:id/state`;
+  `DELETE /api/policy/rules/:id` (409 `cited`); `GET /api/policy/rules/:id/revisions`.
+- **Proposals:** `GET /api/proposals/:id` gains `policy: { status, partial, model, checkedAt,
+  rulesChecked, results[], trips[] }` (shadow results only for reviewers). The accept 409 gains
+  `policy: { tripped: [{ ruleId, title, scope, reason, canOverride }] }`; an override without a
+  reason → **422**; without authority → **403 `policy_override_forbidden`**.
+- **Publish:** `POST /api/publish` may answer **202** with `routedReason: 'policy'`.
+- **Skills:** `GET /api/skills/:ns/:slug` gains `policy: { semver, status, violatedTitles[] } | null`
+  and `canSeePolicy`; `GET /api/skills/:ns/:slug/policy?semver=` (owners); `POST
+  /api/skills/:ns/:slug/policy/dismiss { semver, ruleId, kind, reason }`.
+- **Admin:** `GET /api/admin/policy?status=&ns=&rule=&shadow=`; `GET
+  /api/namespaces/:id/policy/flags`.
+- **Me:** `policyNotifications` on `GET` / `PATCH /api/me`.
+- **MCP (§29):** `get_proposal` returns the `policy` block, enforced rules only. No new tool.
+
+### 47.12 Audit (§11)
+`policy.rule_created`, `policy.rule_updated` (text before / after, revision numbers),
+`policy.rule_state_changed`, `policy.rule_deleted`, `proposal.policy_override`,
+`skill.policy_flagged` (system actor), `skill.policy_flag_dismissed`; `proposal.routed_to_review`
+gains `reason: 'policy'`. Re-checks are §46's `ai_prereview.rerun_requested`. Runs and results are
+telemetry, not audit.
+
+### 47.13 Security, visibility & governance
+- **The exception to "advisory by structure" is narrow:** the accept gate and direct-publish routing
+  read **only** `ai_prereview_policy_results` (and the run's status), never §46's findings. The §46.12
+  test still holds: an accept and a direct publish over critical §46 findings need no override.
+- **Prompt injection.** §46's mitigations plus **server-verified evidence**: a fabricated violation
+  can't gate. A model talked into "complies" is still backed by the reviewer, §46's mismatch warning
+  and the §37 scanner. Enforced rules make review mandatory for members.
+- **Invariant #3.** Results are derived from one skill's bytes plus rules every signed-in user can
+  read, and served only through the proposal and skill payloads (visibility-gated). A cached run is
+  reused only for byte-identical content under identical rules. Rule contexts are readable by every
+  proposer; the editor says so.
+- **Invariant #5.** Rule revisions and dismissals are append-only for the app role.
+- **Air-gap / switch off.** Rules can be written and read; nothing is judged; enforced rules fail
+  closed. The editor warns.
+- **Metrics:** `skilly_policy_results_total{outcome,state}`, `skilly_policy_evidence_rejected_total`,
+  `skilly_policy_flagged_versions` (gauge); runs are counted by §46's metrics.
+
+### 47.14 Tests (ship with the change)
+- **Unit (`@skilly/shared`):** rule validation; the gate predicate (no enforced rules; pending /
+  off / failed / skipped / stale; violation of an enforced, a shadow and a disabled rule); override
+  authority and publish routing; the §47.8 status table incl. dismissal at an old revision; the
+  extended prompt (rules block, quoted paths, prompt-version pin); per-rule validation and the
+  evidence check incl. the downgrade; the rules fingerprint.
+- **Integration (web + DB):** rule CRUD authority, revisions, audit, delete vs cited; the accept gate
+  (no verdict, violation, override with and without reason, platform authority, dismissal written);
+  direct-publish routing; dismissal authority and 409; the shadow filter; **an accept over critical
+  §46 findings with no enforced violation needs no override**; migration 0091.
+- **Integration (worker):** a run with rules writes per-rule results atomically with `done`;
+  evidence verification and downgrade; the cache reused only under identical rules; a rule change
+  queues open proposals (not for Shadow) and latest versions; a stale landing re-queues; onset
+  notification + audit once; `proposal.policy_violation` once and never for a cached link.
+- **e2e:** write an enforced rule on the Namespace administration page → the propose form shows it →
+  a proposal in that namespace shows the Policy section → accepting needs the override, which lists
+  the rule → the published skill shows the policy chip. (With the stub provider and the switch on:
+  the run reports a violation with its excerpt.)
+
+### 47.15 Out of scope & accepted trade-offs
+- **Out of scope:** rule templates or a shared library; per-rule severity beyond Shadow / Enforced;
+  rules linking catalog skills; author-requested re-checks; re-checking non-latest versions; a
+  catalog filter for flags; automatic yank or deprecation; per-namespace enablement of §46.
+- **Coverage follows §46.** A rule about a file outside §46's selection (assets, root configs) can't
+  be judged — the result is `uncertain` or `not_applicable`, and the coverage line discloses it.
+- **Fail-closed has a cost.** With §46 off and an enforced **platform** rule, **every** accept in
+  every namespace needs a Platform Admin. Moving the rule to Shadow lifts it.
+- **An override for "no verdict" is not an exception for a violation.** A version accepted that way
+  can still be flagged when its run lands.
+- **Non-determinism and cost** follow §46: a re-run can differ, every result carries its model, and a
+  platform-rule edit re-runs the latest version of every skill (about 60 an hour).
+- **Rule contexts are readable by every signed-in user.**

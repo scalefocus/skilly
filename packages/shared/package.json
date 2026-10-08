@@ -122,6 +122,10 @@
     "./deprecation": {
       "types": "./dist/deprecation.d.ts",
       "default": "./dist/deprecation.js"
+    },
+    "./policy": {
+      "types": "./dist/policy.d.ts",
+      "default": "./dist/policy.js"
     }
   },
   "scripts": {

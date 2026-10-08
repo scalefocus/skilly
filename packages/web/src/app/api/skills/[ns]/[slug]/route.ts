@@ -10,6 +10,7 @@ import { skillDiscussionCount } from "../../../../../lib/messages";
 import { logView } from "../../../../../lib/usage";
 import { withSystemLog } from "../../../../../lib/apiLog";
 import { skillContentRiskSummary } from "../../../../../lib/contentRisk";
+import { skillPolicySummary } from "../../../../../lib/policy";
 import { skillQualityDetail, skillVersionQualities } from "../../../../../lib/quality";
 import { qualitySummary } from "../../../../../lib/catalog";
 import { aiDraftAvailability } from "../../../../../lib/qualityDraft";
@@ -42,7 +43,9 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   // Record the view only for live consumption — not an owner inspecting an archived skill. §21.
   if (!archived && access.userId) logView(skill.id, skill.namespaceId, access.userId);
 
-  const [versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality, grants, explicitMaintainer, replaces] = await Promise.all([
+  const [policy, versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality, grants, explicitMaintainer, replaces] = await Promise.all([
+    // §47.9: the displayed version's policy-check status for every viewer — never results.
+    skillPolicySummary({ id: skill.id, namespaceId: skill.namespaceId }),
     listVersions(skill.id),
     latestStableSemver(skill.id),
     access.userId ? isWatching(access.userId, skill.id) : Promise.resolve(false),
@@ -109,6 +112,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     discussionCount,
     contentRisk,
     canSeeContentRisk: isOwner,
+    policy,
+    canSeePolicy: isOwner,
     quality: qualitySummary(skill.qualityScore, skill.qualityMode),
     qualityDetail,
     createdAt: skill.createdAt,

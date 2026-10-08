@@ -9,6 +9,7 @@ import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
 import { Modal, Pill, ScrollToTop } from "../../components/ui";
+import { PolicyRulesPanel } from "../../components/PolicyRulesPanel";
 import { useDateFmt } from "../../components/DateFormat";
 import { RequireAuth } from "../../components/RequireAuth";
 import { TagInput } from "../../components/TagInput";
@@ -1372,6 +1373,8 @@ function ProposeForm() {
                 <>Restricted to <span className="mono">{f.namespaceSlug}</span> — visible only to its members{effectiveShared.length > 0 ? " and the namespaces it is shared with" : ""}.</>
               )}
             </p>
+            {/* §47.9: the enforced policy rules this submission will be checked against. */}
+            <PolicyRulesPanel ns={f.namespaceSlug} />
           </div>
           {shareVisibility === "namespace" && (
             <div data-testid="share-with-namespaces">

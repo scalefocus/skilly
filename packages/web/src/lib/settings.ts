@@ -534,6 +534,11 @@ export async function setUserQualityNotifications(userId: string, enabled: boole
   await pool.query(`update users set quality_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
+/** §47.10: the "Policy flags on skills I maintain" Profile toggle (gates skill.policy_flag). */
+export async function setUserPolicyNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set policy_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
 /** §46.10: the AI pre-review flag opt-out (namespace admins) — row-level like the quality toggle. */
 export async function setUserAiPrereviewNotifications(userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set ai_prereview_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);

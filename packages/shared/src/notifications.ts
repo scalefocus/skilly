@@ -32,6 +32,9 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "skill.quality_low": { title: "Low quality score", tone: "warn" },
   // §46.10 — an AI pre-review flagged a version published without a reviewer seeing the result.
   "skill.ai_prereview_flagged": { title: "AI pre-review flagged a skill", tone: "danger" },
+  // §47.10 — the policy check flagged your proposal / a skill you maintain.
+  "proposal.policy_violation": { title: "Policy check flagged your proposal", tone: "danger" },
+  "skill.policy_flag": { title: "Policy check flagged a skill", tone: "danger" },
   "skill.discussion": { title: "New discussion comment", tone: "warn" },
   // §42 — a restricted skill shared with a namespace you administer, and its new versions.
   "skill.shared": { title: "Skill shared with your namespace", tone: "ok" },

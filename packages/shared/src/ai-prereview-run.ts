@@ -8,6 +8,7 @@ import { parseFrontmatter } from "./validate.js";
 import { decodeScanText } from "./scan-text.js";
 import { isJunkEntry } from "./archive.js";
 import { revealHidden } from "./content-risk.js";
+import { POLICY_SYSTEM_ADDENDUM, policyRulesBlock, quotePath, type PolicyPromptRule } from "./policy-prompt.js";
 import {
   PREREVIEW_CATEGORIES, PREREVIEW_CATEGORY_INFO, PREREVIEW_SEVERITIES, isPrereviewCategory, isPrereviewSeverity, prereviewSeverityRank,
   type PrereviewCoverageEntry, type PrereviewFinding, type PrereviewResult,
@@ -35,7 +36,7 @@ export const PREREVIEW_EXCERPT_MAX = 200;
  * the cache key, so a bump stops old results from being reused. A unit test pins a hash of the
  * prompt and the constants above.
  */
-export const AI_PREREVIEW_PROMPT_VERSION = 1;
+export const AI_PREREVIEW_PROMPT_VERSION = 2;
 
 // ── Input selection ────────────────────────────────────────────────────────────────────────────
 
@@ -182,22 +183,36 @@ function isContextFinding(f: PrereviewContextFinding): boolean {
   return f.scanner !== "quality" && f.scanner !== "clamav";
 }
 
-export function buildPrereviewPrompt(input: { selection: PrereviewSelection; findings: readonly PrereviewContextFinding[] }): { system: string; user: string } {
+/**
+ * The §46.6 prompt, plus the §47.5 policy rules when any apply. Every path is JSON-quoted wherever
+ * the prompt shows it, and each file sits between fences carrying a per-call random `nonce` (the
+ * caller supplies it; never derived from the bundle), so neither a path nor file content can forge
+ * a boundary or inject lines into the trusted part of the message.
+ */
+export function buildPrereviewPrompt(input: {
+  selection: PrereviewSelection;
+  findings: readonly PrereviewContextFinding[];
+  rules?: readonly PolicyPromptRule[];
+  nonce: string;
+}): { system: string; user: string } {
   const s = input.selection;
   const paths = s.paths.slice(0, PREREVIEW_PATHS_MAX);
   const context = input.findings.filter(isContextFinding);
   const notSent = s.coverage.filter((c) => c.status === "skipped" || c.status === "out_of_scope").map((c) => c.path);
+  const rules = input.rules ?? [];
   let user =
     `## Bundled files (${s.paths.length}${s.paths.length > paths.length ? `, first ${paths.length} shown` : ""})\n` +
-    paths.map((p) => `- ${p}`).join("\n") +
-    `\n\n## Declared allowed-tools\n${s.allowedTools ?? "(not declared)"}` +
+    paths.map((p) => `- ${quotePath(p)}`).join("\n") +
+    `\n\n## Declared allowed-tools\n${s.allowedTools ? JSON.stringify(s.allowedTools) : "(not declared)"}` +
     `\n\n## Deterministic scanner findings already reported (${context.length}) — do not repeat\n` +
-    (context.length ? context.map((f) => `- ${f.scanner}/${f.rule} [${f.severity}] ${f.path ?? "(bundle)"}${f.line ? `:${f.line}` : ""}`).join("\n") : "- none");
-  if (notSent.length) user += `\n\n## Files not included in this review (${notSent.length})\n${notSent.map((p) => `- ${p}`).join("\n")}`;
+    (context.length ? context.map((f) => `- ${f.scanner}/${f.rule} [${f.severity}] ${f.path ? quotePath(f.path) : "(bundle)"}${f.line ? `:${f.line}` : ""}`).join("\n") : "- none");
+  if (notSent.length) user += `\n\n## Files not included in this review (${notSent.length})\n${notSent.map((p) => `- ${quotePath(p)}`).join("\n")}`;
+  if (rules.length) user += `\n\n${policyRulesBlock(rules)}`;
+  user += `\n\n## Files (each between ===== FILE ${input.nonce} "path" ===== and ===== END FILE ${input.nonce} =====)`;
   for (const f of s.files) {
-    user += `\n\n===== FILE: ${f.path}${f.truncated ? " (truncated — only the beginning is shown)" : ""} =====\n${f.text}\n===== END FILE: ${f.path} =====`;
+    user += `\n\n===== FILE ${input.nonce} ${quotePath(f.path)}${f.truncated ? " (truncated — only the beginning is shown)" : ""} =====\n${f.text}\n===== END FILE ${input.nonce} =====`;
   }
-  return { system: PREREVIEW_PROMPT_SYSTEM, user };
+  return { system: rules.length ? `${PREREVIEW_PROMPT_SYSTEM}\n\n${POLICY_SYSTEM_ADDENDUM}` : PREREVIEW_PROMPT_SYSTEM, user };
 }
 
 /** The hash a unit test pins: changing the prompt or a cap without bumping the version fails it. */
@@ -206,6 +221,8 @@ export function prereviewPromptHash(): string {
     .update(
       JSON.stringify({
         system: PREREVIEW_PROMPT_SYSTEM,
+        policy: POLICY_SYSTEM_ADDENDUM,
+        fences: "nonce+quoted-paths",
         caps: [PREREVIEW_MAX_FILES, PREREVIEW_FILE_MAX_CHARS, PREREVIEW_TOTAL_MAX_CHARS, PREREVIEW_PATHS_MAX, PREREVIEW_MAX_FINDINGS, PREREVIEW_SUMMARY_MAX, PREREVIEW_RATIONALE_MAX, PREREVIEW_SUGGESTION_MAX, PREREVIEW_EXCERPT_MAX],
         categories: PREREVIEW_CATEGORIES,
         labels: Object.keys(PREREVIEW_CATEGORY_INFO),
