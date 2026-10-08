@@ -4,6 +4,7 @@
 // critical AI finding needs no override. The worker's sweep is simulated by writing the run result
 // directly (the worker has its own integration test). Gated by SKILLY_DB_E2E=1.
 import { test, after } from "node:test";
+import { withAiIntegrationLock } from "./aiTestLock";
 import assert from "node:assert/strict";
 import {
   CONTENT_RULESET_VERSION, createPrereviewRun, linkPrereviewRun, recordPrereviewSuccess, currentPrereviewRun, requestPrereviewRerun,
@@ -32,7 +33,7 @@ const CRITICAL: PrereviewFinding = {
   suggestion: "Vendor the script.",
 };
 
-test("§46 web: switch, proposal payload, re-run, dispositions, accept without override, owner card, erasure", { skip: !enabled }, async () => {
+test("§46 web: switch, proposal payload, re-run, dispositions, accept without override, owner card, erasure", { skip: !enabled }, () => withAiIntegrationLock(async () => {
   process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
   const { pool } = await import("./db");
   const { createProposal, getProposalDetail, performProposalAction } = await import("./proposals");
@@ -211,4 +212,4 @@ test("§46 web: switch, proposal payload, re-run, dispositions, accept without o
     if (savedSetting === null) await pool.query(`delete from platform_settings where key = 'ai_prereview_enabled'`);
     else await pool.query(`update platform_settings set value = $1::jsonb where key = 'ai_prereview_enabled'`, [JSON.stringify(savedSetting)]);
   }
-});
+}));

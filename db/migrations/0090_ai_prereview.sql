@@ -79,10 +79,12 @@ CREATE INDEX IF NOT EXISTS idx_ai_prereview_disp_version ON ai_prereview_disposi
 ALTER TABLE skill_versions ADD COLUMN IF NOT EXISTS ai_prereview_notified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_prereview_notifications BOOLEAN NOT NULL DEFAULT true;
 
+-- The app role writes links (a BIGSERIAL), so it needs the sequence (cf. 0075, 0084).
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'skilly_app') THEN
     REVOKE UPDATE, DELETE ON ai_prereview_dispositions FROM skilly_app;
+    GRANT USAGE, SELECT ON SEQUENCE ai_prereview_links_id_seq TO skilly_app;
   END IF;
 END
 $$;
