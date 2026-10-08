@@ -240,6 +240,14 @@ pipeline {
           CI_E2E_S3_ENDPOINT="http://127.0.0.1:${E2E_MINIO_PORT}"
           echo "postgres on 127.0.0.1:${E2E_PG_PORT} | minio on 127.0.0.1:${E2E_MINIO_PORT}"
 
+          # The web dev server gets a free port too: a fixed :3000 collides with whatever else the
+          # agent runs there (another job, a stale dev server), and Playwright's webServer refuses an
+          # occupied URL under CI=1. Ask the OS for an ephemeral port; playwright.config.ts starts
+          # `next dev` on PLAYWRIGHT_BASE_URL's port.
+          E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
+          E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
+          echo "web dev server on ${E2E_WEB_URL}"
+
           # Wait for Postgres readiness. Probe over TCP and query the target database: on first boot the
           # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
           # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
@@ -298,9 +306,9 @@ pipeline {
           SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
           SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
           DATABASE_URL="${CI_E2E_DATABASE_URL}" \
-          NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL=http://localhost:3000 \
+          NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
           AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
-          SKILLY_REGISTRY_URL=http://localhost:3000 \
+          SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
           S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
           CI=1 \
             pnpm --filter @skilly/web e2e
