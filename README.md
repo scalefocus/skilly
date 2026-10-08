@@ -227,17 +227,77 @@ deployment is the `deploy/docker-compose.yml` stack behind **your org’s TLS-te
 reverse proxy**.
 
 ### 1. Configure `deploy/.env` (copy from `.env.example`)
-| Var | Purpose |
+```bash
+cp deploy/.env.example deploy/.env
+```
+Replace **every** placeholder (`change-me…`, `generate-…`, all-zero GUIDs) — none of them are
+safe defaults. Never commit `deploy/.env`.
+
+**Required** — the stack won't start (or nobody can sign in) without these. Variables marked
+⛔ are enforced by `docker-compose.yml` (`:?set in .env`), so `docker compose up` refuses to
+run while they're empty.
+
+| Var | Purpose / how to generate |
 |---|---|
-| `PUBLIC_BASE_URL` | External HTTPS URL (used for OIDC redirect + install-command generation) |
-| `POSTGRES_*`, `SKILLY_APP_PASSWORD` | DB creds; app connects as least-privilege `skilly_app` |
-| `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
-| `ENTRA_TENANT_ID`/`ENTRA_CLIENT_ID`/`ENTRA_CLIENT_SECRET` | Entra app for OIDC SSO (and Graph reconciliation) |
-| `SKILLY_BOOTSTRAP_ADMIN_GROUP` | Entra **group object id** whose members are Platform Admins from first boot |
-| `SCIM_BEARER_TOKEN` | Secret token Entra presents to the SCIM endpoint |
-| `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, `S3_BUCKET` | Object storage creds + bucket |
-| `ONE_TIME_TOKEN_TTL_SECONDS` | Legacy/no-op — install tokens don't use it (kept for compatibility) |
-| `SMTP_*` (optional) | Email notifications; falls back to in-app only if unset |
+| `PUBLIC_BASE_URL` | External HTTPS URL of skilly, no trailing slash (e.g. `https://skilly.example.com`). Used for OIDC redirects, install-command / clone URLs, links in notifications, and the MCP endpoint. Becomes `NEXTAUTH_URL` + `SKILLY_REGISTRY_URL` inside the web container. |
+| `POSTGRES_PASSWORD` ⛔ | Postgres superuser password (used by `postgres` + `migrate` only). |
+| `POSTGRES_USER`, `POSTGRES_DB` | Superuser name + database name. Default `skilly` / `skilly`. |
+| `SKILLY_APP_PASSWORD` ⛔ | Password for the least-privilege `skilly_app` role that web + worker connect as (created by the `migrate` service). |
+| `NEXTAUTH_SECRET` ⛔ | Session/JWT signing secret — `openssl rand -base64 32`. Rotating it signs everyone out. |
+| `ENTRA_TENANT_ID` | Directory (tenant) id of your Entra tenant. |
+| `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` | The Entra app registration used for OIDC sign-in **and** (worker) Graph group reconciliation. See step 2. |
+| `SKILLY_BOOTSTRAP_ADMIN_GROUP` | Entra **group object id** whose members are Platform Admins from first boot (before any role mapping exists). |
+| `SCIM_BEARER_TOKEN` ⛔ | Long random secret Entra presents to `/scim/v2` — e.g. `openssl rand -hex 32`. Paste the same value into the Enterprise App's provisioning *Secret Token*. |
+| `MINIO_ROOT_PASSWORD` ⛔ | Bundled MinIO root password (also the S3 secret key web + worker use). |
+| `MINIO_ROOT_USER` | Bundled MinIO root user (also the S3 access key). Default `skilly`. |
+
+**Optional** — leave unset to keep the default / disable the feature.
+
+| Var | Default | Purpose |
+|---|---|---|
+| `S3_BUCKET` | `skilly-artifacts` | Artifact bucket. Shared by web (writes) and worker (reads) — create it once in MinIO/S3 (step 3). |
+| `CSP_MODE` | `enforce` | Content-Security-Policy posture: `enforce` (strict nonce CSP, recommended) · `report-only` (blocks nothing, reports to `/api/csp-report`) · `off` (legacy escape hatch). |
+| `METRICS_TOKEN` | *(unset)* | If set, `GET /metrics` on web + worker requires `Authorization: Bearer <token>`. Unset = unauthenticated on the internal network. |
+| `POINTER_REFRESH_INTERVAL_MS` | `86400000` (24h) | How often the worker re-clones + re-scans mirrored pointer skills and checks for upstream drift. |
+| `AI_TOKEN_ENC_KEY` | *(unset)* | Encrypts the AI provider token (Open WebUI / Anthropic API) a Platform Admin saves on the Administration page. `openssl rand -base64 32` (must decode to exactly 32 bytes). Unset = the AI integration card is disabled. Shared by web + worker. |
+| `EMAIL_TOKEN_ENC_KEY` | *(unset)* | Encrypts the Microsoft 365 service-mailbox tokens for **Graph email** (the preferred email transport). `openssl rand -base64 32` (exactly 32 bytes). Shared by web + worker. |
+| `ENTRA_EMAIL_CLIENT_ID` / `ENTRA_EMAIL_CLIENT_SECRET` | *(unset)* | A **separate** Entra app registration for Graph email (not the OIDC app) — see step 2. All three `EMAIL`/`ENTRA_EMAIL` vars are needed for Graph email. |
+| `SMTP_HOST` | *(unset)* | Fallback (plain-text) email transport, used when no Graph mailbox is operational. Unset = SMTP disabled. |
+| `SMTP_PORT` | `587` | SMTP port (`465` implies implicit TLS). |
+| `SMTP_USER` / `SMTP_PASSWORD` | *(unset)* | SMTP auth; omit for an unauthenticated relay. |
+| `SMTP_FROM` | `skilly@example.com` | Sender address for SMTP mail. |
+| `NOTIFY_WEBHOOK_URL` | *(unset)* | POSTs one JSON body per notification (e.g. a Teams/Slack incoming webhook). |
+| `ONE_TIME_TOKEN_TTL_SECONDS` | `300` | Legacy/no-op — install tokens don't use it (kept for compatibility). |
+
+With no email or webhook configured, notifications still land in the in-app inbox.
+
+> **Not yet wired through `docker-compose.yml`:** `.env.example` also documents `TRUST_PROXY`
+> (worker — Express `trust proxy` value, e.g. `1`, so `/installed` records the real client IP
+> instead of the proxy's) and `SMTP_SECURE` (`1` for implicit TLS). The worker reads both, but
+> the compose file doesn't forward them yet — add them to the `worker.environment` block if you
+> need them.
+
+<details>
+<summary><b>Advanced: tuning knobs read by the apps (not in <code>.env.example</code>)</b></summary>
+
+These have sensible defaults and are rarely changed. To use one with docker compose, add it
+to the relevant service's `environment:` block.
+
+- **Database:** `PG_POOL_MAX` (10), `PG_STATEMENT_TIMEOUT_MS` (30000).
+- **Object storage:** `S3_REGION` (`us-east-1`), `S3_ENDPOINT` / `S3_ACCESS_KEY` /
+  `S3_SECRET_KEY` (compose derives these from MinIO — override to point at real S3).
+- **Worker:** `WORKER_PORT` (4000), `GIT_REPO_ROOT` (`/data/git` in compose),
+  `CLAMAV_HOST` / `CLAMAV_PORT` (`clamav` / 3310), `LEADER_POLL_MS`, `RECONCILE_INTERVAL_MS`,
+  and the sweep cadences `*_SWEEP_INTERVAL_MS` / `*_INTERVAL_MS`.
+- **Caches:** `RBAC_ROLE_CACHE_TTL_MS`, `RBAC_ACCESS_CACHE_TTL_MS`, `FACETS_CACHE_TTL_MS`,
+  and the other `*_CACHE_TTL_MS` values.
+- **Pointer skills:** `MIRROR_MAX_ATTEMPTS`, `MIRROR_CLONE_TIMEOUT_MS`, `POINTER_FETCH_TIMEOUT_MS`,
+  `POINTER_FETCH_MAX_BYTES`, `POINTER_REFS_TIMEOUT_MS`.
+
+Grep `process.env.` under `packages/*/src` for the full list and defaults.
+**Dev/test only — never set in production:** `SKILLY_DEV_AUTH`, `SKILLY_DEV_OID`,
+`SKILLY_MIRROR_ALLOW_INSECURE`, `SKILLY_DB_E2E`.
+</details>
 
 ### 2. Microsoft Entra ID setup
 - **OIDC SSO** — register an app; add redirect URI `https://<host>/api/auth/callback/azure-ad`;
@@ -250,6 +310,11 @@ reverse proxy**.
   periodically reconciles membership for role-mapped groups (`RECONCILE_INTERVAL_MS`).
 - **Bootstrap** — set `SKILLY_BOOTSTRAP_ADMIN_GROUP`; its members can sign in and create
   namespaces + role mappings (Administration screen) before any mapping exists.
+- **Graph email (optional)** — register a **second** app (not the OIDC one) with delegated
+  `Mail.Send` + `offline_access` (admin-consented), set *Assignment required* = Yes and assign
+  only the service mailbox user, and add redirect URI `https://<host>/api/admin/email/callback`.
+  Put its id/secret into `ENTRA_EMAIL_CLIENT_ID`/`ENTRA_EMAIL_CLIENT_SECRET`, set
+  `EMAIL_TOKEN_ENC_KEY`, then connect the mailbox from the Administration page.
 
 ### 3. Bring it up
 ```bash
