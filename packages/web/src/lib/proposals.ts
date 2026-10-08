@@ -6,6 +6,8 @@
 // key recorded in the proposal revision. Materialize simply references that key in the new
 // skill_version — no object-store copy — and the worker's publish sweep synthesizes the
 // git repo/tag from it.
+import { proposalPrereview } from "./aiPrereview";
+import type { PrereviewView } from "@skilly/shared";
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
@@ -1638,6 +1640,8 @@ export interface ProposalDetail {
   scanReport: { severity: string | null; status: string; findings: unknown; createdAt: string } | null;
   /** §41.3: the rules-only quality of the latest revision's report, computed on read; null until the quality scanner ran. */
   quality: { rulesScore: number; stars: number; findings: QualityFindingView[] } | null;
+  /** §46.8: the AI pre-review of the latest revision — advisory, never read by the accept gate. */
+  aiPrereview: PrereviewView | null;
   caps: { isReviewer: boolean; isSubmitter: boolean };
   allowedActions: ProposalAction[];
   /**
@@ -1841,6 +1845,11 @@ export async function getProposalDetail(
     revisions,
     scanReport,
     quality: scanReport && scanReport.status !== "pending" && scanReport.status !== "unreachable" ? proposalQuality(scanReport.findings) : null,
+    aiPrereview: await proposalPrereview(
+      pool,
+      { id: p.id, state: p.state, targetNamespaceId: p.target_namespace_id, revision: latest?.revisionNo ?? null, scanFindings: scanReport?.findings ?? [] },
+      access,
+    ),
     caps,
     allowedActions,
     duplicate,

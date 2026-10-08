@@ -4,6 +4,7 @@
 // (re-verified there). The provider token is handled only through @skilly/shared/ai: encrypted
 // at rest, never logged, never in audit payloads, never returned to the browser, and only ever
 // sent to the stored base URL. SKILLY_SPEC.md §40.
+import { loadPrereviewSetting, prereviewCounts } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { getPlatformSettings } from "./settings";
@@ -100,6 +101,8 @@ export interface AiAdminStatus {
   displayName: string;
   /** §40.15 per-call timeouts and the draft run cap (independent of the provider config). */
   timeouts: AiTimeoutsView;
+  /** §46.2 the AI pre-review switch and its queue (independent of the provider config). */
+  prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
 }
 
 function featureLabel(key: string): string {
@@ -161,6 +164,7 @@ export async function getAiAdminStatus(): Promise<AiAdminStatus> {
     features: AI_FEATURES.map((f) => ({ key: f.key, label: f.label, egress: f.egress, spec: f.spec })),
     displayName: (await getPlatformSettings(pool)).aiDisplayName,
     timeouts: aiTimeoutsView(AI_FEATURES, await loadAiTimeouts()),
+    prereview: await prereviewAdminState(row?.enabled === true && decryptable),
   };
 }
 
@@ -436,4 +440,10 @@ export async function removeAiIntegration(userId: string): Promise<{ ok: true } 
     client.release();
   }
   return { ok: true };
+}
+
+/** §46.2 the pre-review row's state. `aiOn` = the integration is operational right now. */
+async function prereviewAdminState(aiOn: boolean): Promise<AiAdminStatus["prereview"]> {
+  const [setting, counts] = await Promise.all([loadPrereviewSetting(pool), prereviewCounts(pool)]);
+  return { enabled: setting.enabled, effective: setting.enabled && aiOn, pending: counts.pending, failed24h: counts.failed24h };
 }

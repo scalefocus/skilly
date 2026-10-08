@@ -47,6 +47,10 @@
       "types": "./dist/content-risk-status.d.ts",
       "default": "./dist/content-risk-status.js"
     },
+    "./ai-prereview": {
+      "types": "./dist/ai-prereview.d.ts",
+      "default": "./dist/ai-prereview.js"
+    },
     "./quality": {
       "types": "./dist/quality-status.d.ts",
       "default": "./dist/quality-status.js"

@@ -297,6 +297,9 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     await client.query(`update rum_samples set user_id = null where user_id = $1`, [userId]);
     // AI usage (§40.3) likewise: the totals stay true, the person goes. Mirrored in web lib/eraseUser.ts.
     await client.query(`update ai_usage set user_id = null where user_id = $1`, [userId]);
+    // AI pre-review re-run requests (§46.9): the run stays, the requester goes. Dispositions keep
+    // their decider — the tombstoned row reads "Deleted User", like §37.6 acknowledgements. Mirrored in web lib/eraseUser.ts.
+    await client.query(`update ai_prereviews set requested_by = null where requested_by = $1`, [userId]);
     // Follows (§35.9) are personal data in BOTH directions: whom they followed, and who followed
     // them. Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_follows where follower_id = $1 or followee_id = $1`, [userId]);

@@ -7,7 +7,8 @@
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
 // from a description — absent from the code.
 import type { Pool } from "pg";
-import { parseMinQuality, deprecationWarning } from "@skilly/shared";
+import { parseMinQuality, deprecationWarning, loadPrereviewView, PREREVIEW_OPEN_STATES } from "@skilly/shared";
+import { aiAvailable, parseAiTokenKey } from "@skilly/shared/ai";
 import {
   MCP_TOOL_NAMES,
   buildSkillResourceUri,
@@ -850,6 +851,8 @@ export async function callTool(
         revisionNo: rev.rows[0]?.revision_no ?? null,
         payload: rev.rows[0]?.payload ?? null,
         scan: scan.rows[0] ? { severity: scan.rows[0].severity, findings: scan.rows[0].findings } : null,
+        // §46.8: the AI pre-review, for the proposer to act on (no re-run / disposition affordances).
+        aiPrereview: await mcpPrereview(pool, p, rev.rows[0]?.revision_no ?? null, scan.rows[0]?.findings),
         conversation: msgs.rows.map((m) => ({
           author: m.author,
           body: m.body,
@@ -1031,4 +1034,26 @@ export async function callTool(
     default:
       return toolError(`unknown tool: ${tool}`);
   }
+}
+
+/** §46.8 MCP `get_proposal`: the proposal's AI pre-review view, minus the reviewer affordances. */
+async function mcpPrereview(pool: Pool, p: { id: string; state: string }, revision: number | null, artifactFindings: unknown) {
+  if (revision === null) return null;
+  let findings = Array.isArray(artifactFindings) ? (artifactFindings as { scanner?: string; rule?: string; path?: string }[]) : null;
+  if (!findings) {
+    const { rows } = await pool.query<{ findings: unknown }>(
+      `select findings from scan_reports where subject_type = 'proposal' and subject_id = $1 order by created_at desc limit 1`,
+      [p.id],
+    );
+    findings = Array.isArray(rows[0]?.findings) ? (rows[0]!.findings as { scanner?: string; rule?: string; path?: string }[]) : [];
+  }
+  const view = await loadPrereviewView(pool, {
+    subject: { kind: "proposal", proposalId: p.id, revision },
+    scanFindings: findings,
+    aiOn: await aiAvailable(pool, { key: parseAiTokenKey(process.env.AI_TOKEN_ENC_KEY) }),
+    canAct: false,
+    open: (PREREVIEW_OPEN_STATES as readonly string[]).includes(p.state),
+  });
+  const { canRerun: _r, canDisposition: _d, ...rest } = view;
+  return rest;
 }

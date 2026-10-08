@@ -534,6 +534,11 @@ export async function setUserQualityNotifications(userId: string, enabled: boole
   await pool.query(`update users set quality_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
+/** §46.10: the AI pre-review flag opt-out (namespace admins) — row-level like the quality toggle. */
+export async function setUserAiPrereviewNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set ai_prereview_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
 export async function setUserDiscussionNotifications(userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set discussion_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }

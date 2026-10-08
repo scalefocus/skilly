@@ -49,6 +49,8 @@ interface AiState {
   displayName: string;
   /** §40.15 per-call timeouts and the draft run cap. */
   timeouts: AiTimeoutsView;
+  /** §46.2 the AI pre-review switch and its queue. */
+  prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
 }
 
 interface TestResult {
@@ -475,9 +477,52 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
         </>
       )}
 
+      {data && <PrereviewRow state={data.prereview} providerLabel={data.providerLabel} onSaved={reload} />}
       {data && <TimeoutsRow saved={data.timeouts} onSaved={reload} />}
       {data && <DisplayNameRow saved={data.displayName} onSaved={reload} />}
     </CollapsibleCard>
+  );
+}
+
+/**
+ * §46.2 the AI pre-review switch: saved on toggle, independent of the provider form — usable with
+ * no provider configured and without AI_TOKEN_ENC_KEY, kept on Remove integration. Off by default
+ * because it sends scripts and references, not just SKILL.md.
+ */
+function PrereviewRow({ state, providerLabel, onSaved }: { state: AiState["prereview"]; providerLabel: string | null; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/admin/ai/prereview", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: next }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      onSaved();
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }} data-testid="ai-prereview-row">
+      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Pre-review proposals</h3>
+      <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 8px", lineHeight: 1.5 }}>
+        Sends each submitted skill’s SKILL.md, scripts and references to {providerLabel ?? "the provider"} and shows reviewers
+        what it finds (prompt injection, tool permissions, unsafe shell, exposed secrets, description mismatches). Advisory —
+        it never blocks accept or publish.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <Switch label="AI pre-review" checked={state.enabled} disabled={busy} onChange={(next) => void toggle(next)} />
+        <span style={{ fontSize: 12.5, color: "var(--faint)" }} data-testid="ai-prereview-row-status">
+          {state.enabled && !state.effective ? "On — waiting for the AI integration · " : ""}
+          {formatCount(state.pending)} pending · {formatCount(state.failed24h)} failed in the last 24 h
+        </span>
+      </div>
+      {err && <p role="alert" style={{ fontSize: 13, margin: "8px 0 0", color: "var(--danger, crimson)" }}>{err}</p>}
+    </div>
   );
 }
 

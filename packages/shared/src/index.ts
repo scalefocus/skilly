@@ -44,3 +44,6 @@ export * from "./ai-draft.js";
 export * from "./ai-name.js";
 export * from "./quality-draft.js";
 export * from "./deprecation.js";
+export * from "./ai-prereview.js";
+export * from "./ai-prereview-run.js";
+export * from "./ai-prereview-db.js";

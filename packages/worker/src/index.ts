@@ -33,6 +33,7 @@ import { pruneAiUsage } from "@skilly/shared/ai";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
 import { sweepContentRisk } from "./scan/contentRisk.js";
 import { sweepQuality } from "./scan/quality.js";
+import { sweepAiPrereview, pruneAiPrereviews } from "./scan/aiPrereview.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
 import { sweepSearchIndex, reindexSearchLanguage } from "./searchIndex.js";
 import { mcpRouter } from "./mcp/server.js";
@@ -344,6 +345,25 @@ async function leaderLoops(): Promise<void> {
   void qualitySweep();
   setInterval(qualitySweep, Number(process.env.QUALITY_SWEEP_INTERVAL_MS ?? 600_000)); // 10 min
 
+  // AI pre-review (§46.5): while the switch is on and AI is operational, give every open proposal
+  // (and every version published since the switch went on) a run, then run up to 3 due ones.
+  // Advisory only. Never overlaps itself; not awaited.
+  let prereviewRunning = false;
+  const prereviewSweep = async () => {
+    if (!isLeader || prereviewRunning) return;
+    prereviewRunning = true;
+    try {
+      const r = await sweepAiPrereview(pool, store);
+      if (r.enqueued > 0 || r.ran > 0) console.log(JSON.stringify({ level: "info", msg: "ai pre-review sweep", enqueued: r.enqueued, ran: r.ran }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "ai pre-review sweep failed", err: String(err) }));
+    } finally {
+      prereviewRunning = false;
+    }
+  };
+  void prereviewSweep();
+  setInterval(prereviewSweep, Number(process.env.AI_PREREVIEW_SWEEP_INTERVAL_MS ?? 30_000)); // 30 s
+
   // Search index (§34.9/§34.10): first rebuild any vectors built with another search language (a
   // language switch), then extract SKILL.md text for pending versions — the post-migration backfill,
   // retries after a failure, anything the publish sweep didn't fill. Both go idle once drained.
@@ -464,6 +484,8 @@ async function leaderLoops(): Promise<void> {
     try {
       const rows = await pruneAiUsage(pool);
       if (rows > 0) console.log(JSON.stringify({ level: "info", msg: "pruned ai usage", rows }));
+      const runs = await pruneAiPrereviews(pool);
+      if (runs > 0) console.log(JSON.stringify({ level: "info", msg: "pruned orphan ai pre-review runs", runs }));
     } catch (err) {
       console.error(JSON.stringify({ level: "error", msg: "ai usage prune failed", err: String(err) }));
     }
