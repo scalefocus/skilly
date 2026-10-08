@@ -53,17 +53,14 @@ pipeline {
 
   environment {
     PNPM_VERSION    = '9.15.9'
+    // Ephemeral CI containers publish on a host port DOCKER picks (`-p 127.0.0.1::<port>`), read
+    // back with `docker port` — never a fixed one. A fixed port collides with anything else on the
+    // agent holding it (another job's stack, or a container a killed build never cleaned up) and
+    // fails the stage with "port is already allocated".
     CI_PG_CONTAINER = "skilly-ci-pg-${env.BUILD_TAG}"
-    CI_PG_PORT      = '55432'
-    // DATABASE_URL used by the gated db-tests (points at the ephemeral CI Postgres).
-    CI_DATABASE_URL = "postgres://skilly:test@127.0.0.1:55432/skilly"
-    // Gated e2e stack — its own ephemeral Postgres + MinIO on distinct ports so it never
-    // collides with the db-test Postgres above.
+    // Gated e2e stack — its own ephemeral Postgres + MinIO, independent of the db-test Postgres.
     CI_E2E_PG_CONTAINER    = "skilly-ci-e2e-pg-${env.BUILD_TAG}"
     CI_E2E_MINIO_CONTAINER = "skilly-ci-e2e-minio-${env.BUILD_TAG}"
-    CI_E2E_PG_PORT         = '55433'
-    CI_E2E_MINIO_PORT      = '59000'
-    CI_E2E_DATABASE_URL    = "postgres://skilly:test@127.0.0.1:55433/skilly"
     CI_E2E_MINIO_PASSWORD  = 'e2e-minio-not-a-secret'
     // Images for the ephemeral CI stacks, as a space-separated candidate list — the first one the
     // agent can actually get wins. A build parameter pins a single image (e.g. an internal mirror);
@@ -141,13 +138,23 @@ pipeline {
             return 1
           }
 
+          # The loopback host port Docker assigned to a container's published port.
+          host_port() {
+            _hp="$(docker port "$1" "$2/tcp" | head -n 1 | sed 's/.*://')"
+            if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
+            echo "$_hp"
+          }
+
           PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
           echo "postgres image: ${PG_IMAGE}"
 
-          # Ephemeral Postgres for the gated suites.
+          # Ephemeral Postgres for the gated suites, on a Docker-assigned loopback port.
           docker run -d --rm --name "${CI_PG_CONTAINER}" \
             -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
-            -p ${CI_PG_PORT}:5432 "${PG_IMAGE}"
+            -p 127.0.0.1::5432 "${PG_IMAGE}"
+          PG_PORT="$(host_port "${CI_PG_CONTAINER}" 5432)"
+          CI_DATABASE_URL="postgres://skilly:test@127.0.0.1:${PG_PORT}/skilly"
+          echo "postgres on 127.0.0.1:${PG_PORT}"
 
           # Wait for readiness. Probe over TCP and query the target database: on first boot the
           # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
@@ -209,17 +216,29 @@ pipeline {
             return 1
           }
 
+          # The loopback host port Docker assigned to a container's published port.
+          host_port() {
+            _hp="$(docker port "$1" "$2/tcp" | head -n 1 | sed 's/.*://')"
+            if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
+            echo "$_hp"
+          }
+
           PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
           MINIO_IMAGE="$(resolve_image "${CI_MINIO_IMAGES}")"
           echo "postgres image: ${PG_IMAGE} | minio image: ${MINIO_IMAGE}"
 
-          # Ephemeral Postgres + MinIO for the live e2e stack.
+          # Ephemeral Postgres + MinIO for the live e2e stack, on Docker-assigned loopback ports.
           docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
             -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
-            -p ${CI_E2E_PG_PORT}:5432 "${PG_IMAGE}"
+            -p 127.0.0.1::5432 "${PG_IMAGE}"
           docker run -d --rm --name "${CI_E2E_MINIO_CONTAINER}" \
             -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD="${CI_E2E_MINIO_PASSWORD}" \
-            -p ${CI_E2E_MINIO_PORT}:9000 "${MINIO_IMAGE}" server /data
+            -p 127.0.0.1::9000 "${MINIO_IMAGE}" server /data
+          E2E_PG_PORT="$(host_port "${CI_E2E_PG_CONTAINER}" 5432)"
+          E2E_MINIO_PORT="$(host_port "${CI_E2E_MINIO_CONTAINER}" 9000)"
+          CI_E2E_DATABASE_URL="postgres://skilly:test@127.0.0.1:${E2E_PG_PORT}/skilly"
+          CI_E2E_S3_ENDPOINT="http://127.0.0.1:${E2E_MINIO_PORT}"
+          echo "postgres on 127.0.0.1:${E2E_PG_PORT} | minio on 127.0.0.1:${E2E_MINIO_PORT}"
 
           # Wait for Postgres readiness. Probe over TCP and query the target database: on first boot the
           # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
@@ -265,7 +284,7 @@ pipeline {
           rm -rf "${GIT_REPO_ROOT}" && mkdir -p "${GIT_REPO_ROOT}"
           ( cd packages/worker
             export DATABASE_URL="${CI_E2E_DATABASE_URL}"
-            export S3_ENDPOINT="http://127.0.0.1:${CI_E2E_MINIO_PORT}"
+            export S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}"
             export S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts
             node scripts/seed-bundles.mjs
             node scripts/publish-once.mjs
@@ -282,7 +301,7 @@ pipeline {
           NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL=http://localhost:3000 \
           AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
           SKILLY_REGISTRY_URL=http://localhost:3000 \
-          S3_ENDPOINT="http://127.0.0.1:${CI_E2E_MINIO_PORT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
+          S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
           CI=1 \
             pnpm --filter @skilly/web e2e
         '''
