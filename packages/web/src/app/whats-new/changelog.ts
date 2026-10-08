@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.27.0",
+    date: "2026-10-08",
+    summary:
+      "Policy rules: admins can write plain-language rules for their namespace (platform admins for every namespace), and the AI pre-review now checks each submission and published skill against them, citing the rule and the offending lines. New rules start in Shadow; an enforced rule's violation needs a reviewer's override, and members' direct publishes go to review.",
+  },
+  {
     version: "2.26.0",
     date: "2026-10-08",
     summary:
