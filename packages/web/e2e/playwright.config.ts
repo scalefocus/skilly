@@ -17,6 +17,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+// The auto-started server listens on baseURL's port (the `dev` script hardcodes 3000), so CI can
+// run on a free port when something else on the agent already holds 3000.
+const port = new URL(baseURL).port || "3000";
 
 export default defineConfig({
   testDir: ".",
@@ -51,7 +54,7 @@ export default defineConfig({
   // the developer already has running. `next dev` must run — a production build refuses
   // SKILLY_DEV_AUTH=1 (instrumentation.ts), and dev auth is what the suite signs in with.
   webServer: {
-    command: "pnpm --filter @skilly/web dev",
+    command: `pnpm --filter @skilly/web exec next dev --webpack -p ${port}`,
     // Keep every route the warm-up compiles alive for the whole run (next.config.mjs).
     // LEADERBOARD_CACHE_TTL_MS=0: the shared per-(window,sort) board cache (lib/leaderboard.ts) is
     // primed by /api/leaders on EVERY page load, so a spec that creates a request and then reads
