@@ -41,4 +41,8 @@ export const M = {
   aiPrereviewPending: metrics.gauge("skilly_ai_prereview_pending", "AI pre-review runs waiting to run"),
   // §45.9 skill deprecation.
   skillsDeprecated: metrics.gauge("skilly_skills_deprecated", "Active, served skills currently marked deprecated"),
+  // §47.13 policy rules.
+  policyResults: metrics.counter("skilly_policy_results_total", "Per-rule policy results by outcome and rule state when judged"),
+  policyEvidenceRejected: metrics.counter("skilly_policy_evidence_rejected_total", "Policy violations downgraded because their evidence was not found in the files sent"),
+  policyFlaggedVersions: metrics.gauge("skilly_policy_flagged_versions", "Published versions currently flagged by an enforced policy rule"),
 };

@@ -20,6 +20,8 @@ import { usePageLabelOverride } from "../../../../components/PageLabelOverride";
 import { SkillDiscussion } from "./SkillDiscussion";
 import { ContentRiskCard } from "./ContentRiskCard";
 import { AiPrereviewCard } from "./AiPrereviewCard";
+import { PolicyCard } from "./PolicyCard";
+import { PolicyChip } from "../../../../components/Policy";
 import { QualityCard, type QualityDetailView } from "./QualityCard";
 import { QualityBadge, QualityStars, type QualitySummaryView } from "../../../../components/QualityBadge";
 import { ContentRiskChip } from "../../../../components/ContentRisk";
@@ -177,6 +179,9 @@ interface Detail {
   contentRisk: { semver: string; status: ContentRiskStatus; ruleset: number } | null;
   /** §37.8: maintainers / namespace admins / platform admins also get the full Content risk card. */
   canSeeContentRisk: boolean;
+  /** §47.9: the displayed version's policy-check status (null when no enforced rule applies). */
+  policy?: { semver: string; status: "pending" | "clear" | "noted" | "flagged"; violatedTitles: string[] } | null;
+  canSeePolicy?: boolean;
   /** Optional skill icon (§33) — image and/or emoji, or null. */
   icon: { url: string | null; emoji: string | null } | null;
   /** §41.11 the latest stable version's system quality summary, and its full card payload. */
@@ -366,6 +371,8 @@ export default function SkillDetail() {
         {data.archived && <Pill tone="danger">archived</Pill>}
         {data.deprecation && <DeprecatedPill d={{ note: data.deprecation.note, successor: data.deprecation.successor }} />}
         {data.contentRisk && <ContentRiskChip status={data.contentRisk.status} />}
+        {/* §47.9: the one consumer-facing signal derived from AI — compliance with admin-written rules. */}
+        {data.policy && <PolicyChip status={data.policy.status} violatedTitles={data.policy.violatedTitles} />}
         <span className="grow" style={{ flex: 1 }} />
         {data.watchers > 0 && (
           <span className="muted mono" style={{ fontSize: 12 }} title={`${data.watchers} ${data.watchers === 1 ? "person is" : "people are"} watching this skill`}>
@@ -774,6 +781,7 @@ export default function SkillDetail() {
 
       {/* §46.8 the owner-only AI pre-review card (same audience as Content risk). */}
       {data.canSeeContentRisk && <AiPrereviewCard ns={ns} slug={slug} />}
+      {data.canSeePolicy && data.policy && <PolicyCard ns={ns} slug={slug} initialStatus={data.policy.status} onChanged={reload} />}
 
       <SkillDiscussion ns={ns} slug={slug} versions={data.versions} latest={data.latest} initialCount={data.discussionCount} />
 

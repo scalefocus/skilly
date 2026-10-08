@@ -138,7 +138,9 @@ export default function NotificationsPage() {
             // skill.discussion — and a skill-context mention — deep-link straight to the
             // (auto-expanding) Discussion card. §24.
             // skill.content_risk opens the owner Content risk card (§37.9).
-            const skillHref = nsSlug && skSlug ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : n.type === "skill.ai_prereview_flagged" ? "#ai-prereview" : ""}` : null;
+            // §47.10: skill.policy_flag opens the owner Policy card; proposal.policy_violation links the
+            // proposal's Policy section instead (its skill may not exist yet).
+            const skillHref = nsSlug && skSlug && n.type !== "proposal.policy_violation" ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : n.type === "skill.policy_flag" ? "#policy" : n.type === "skill.ai_prereview_flagged" ? "#ai-prereview" : ""}` : null;
             // A DIRECT-chat mention has no page of its own: deep-link to the topbar Messages
             // panel via ?conversation=<id> (§24 Mentions), like the email CTA.
             const conversationHref =
@@ -196,7 +198,7 @@ export default function NotificationsPage() {
                     </>
                   )}
                   {!follow && proposalId && (
-                    <Link href={`/proposals/${proposalId}`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                    <Link href={`/proposals/${proposalId}${n.type === "proposal.policy_violation" ? "#policy" : ""}`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                       view proposal →
                     </Link>
                   )}

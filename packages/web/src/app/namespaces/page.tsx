@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useApi, Pill, EmptyState, ScrollToTop, Switch } from "../../components/ui";
+import { PolicyFlagsList, PolicyRulesEditor } from "../../components/PolicyRulesEditor";
 import { RequireAuth } from "../../components/RequireAuth";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
@@ -173,6 +174,17 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
           </div>
         )}
       </div>
+
+      {/* --- Policy rules (§47.3, §47.9) -------------------------------------
+          The shared editor (the same one the Administration card uses at platform scope), then
+          this namespace's flagged / noted versions and the Shadow preview. Collapsed by default. */}
+      <details style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }} data-testid="ns-policy-rules">
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>Policy rules</summary>
+        <div style={{ marginTop: 10, display: "grid", gap: 14 }}>
+          <PolicyRulesEditor nsSlug={ns.slug} />
+          <PolicyFlagsList endpoint={`/api/namespaces/${ns.id}/policy/flags`} />
+        </div>
+      </details>
     </div>
   );
 }

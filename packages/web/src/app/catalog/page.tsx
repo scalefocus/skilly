@@ -12,6 +12,7 @@ import { agentLabel } from "@skilly/shared/agents";
 import { collectionPath } from "@skilly/shared/collections";
 import { UserBubble } from "../../components/UserBubble";
 import { useAiName } from "../../components/AiName";
+import { PolicyRulesLink } from "../../components/PolicyRulesPanel";
 
 /** §38.5 the collection banner's data (GET /api/collections/:id). */
 interface CollectionInfo {
@@ -299,6 +300,8 @@ function Catalog() {
       {!maintainer && !collectionView && nsView && (
         <div className="reveal ns-view-banner" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 20, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
           <span>Skills in <strong>{nsViewName || nsView}</strong> — that you can see.</span>
+          {/* §47.9: the namespace's enforced policy rules, read-only. */}
+          <PolicyRulesLink ns={nsView} />
           <span style={{ flex: 1 }} />
           <Link href="/catalog" className="btn-ghost mono" style={{ fontSize: 12 }}>✕ clear</Link>
         </div>

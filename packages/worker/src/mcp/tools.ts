@@ -7,7 +7,7 @@
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
 // from a description — absent from the code.
 import type { Pool } from "pg";
-import { parseMinQuality, deprecationWarning, loadPrereviewView, PREREVIEW_OPEN_STATES } from "@skilly/shared";
+import { parseMinQuality, deprecationWarning, loadPrereviewView, proposalPolicyPayload, PREREVIEW_OPEN_STATES } from "@skilly/shared";
 import { aiAvailable, parseAiTokenKey } from "@skilly/shared/ai";
 import {
   MCP_TOOL_NAMES,
@@ -314,7 +314,7 @@ export function toolDefinitions(): ToolDefinition[] {
       name: "get_proposal",
       title: "Get a proposal",
       readOnly: true,
-      description: "One proposal you can see: its state, current revision payload, scan findings, and the review conversation.",
+      description: "One proposal you can see: its state, current revision payload, scan findings, the policy check (each enforced rule's outcome with cited evidence), and the review conversation.",
       inputSchema: { type: "object", properties: { proposalId: str("The proposal's id.") }, required: ["proposalId"] },
     },
     {
@@ -853,6 +853,8 @@ export async function callTool(
         scan: scan.rows[0] ? { severity: scan.rows[0].severity, findings: scan.rows[0].findings } : null,
         // §46.8: the AI pre-review, for the proposer to act on (no re-run / disposition affordances).
         aiPrereview: await mcpPrereview(pool, p, rev.rows[0]?.revision_no ?? null, scan.rows[0]?.findings),
+        // §47.11: the policy check — enforced rules only, so an agent can revise its own work.
+        policy: await proposalPolicyPayload(pool, { id: p.id, namespaceId: p.namespaceId }, { includeShadow: false, aiOn: await aiAvailable(pool, { key: parseAiTokenKey(process.env.AI_TOKEN_ENC_KEY) }) }),
         conversation: msgs.rows.map((m) => ({
           author: m.author,
           body: m.body,

@@ -144,6 +144,6 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
       { status: r.status },
     );
   }
-  if ("routed" in r) return Response.json({ routed: r.routed, proposalId: r.proposalId }, { status: 202 });
+  if ("routed" in r) return Response.json({ routed: r.routed, proposalId: r.proposalId, routedReason: r.routedReason }, { status: 202 });
   return Response.json({ skillId: r.skillId, versionId: r.versionId, pending: r.pending ?? false }, { status: 201 });
 });

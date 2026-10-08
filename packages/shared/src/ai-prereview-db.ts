@@ -15,7 +15,7 @@ export interface PrereviewDb {
 
 /** The prompt version runs are stamped with — duplicated here (not imported from the node-only
  *  run module) so this file stays importable anywhere. A unit test pins the two equal. */
-export const PREREVIEW_DB_PROMPT_VERSION = 1;
+export const PREREVIEW_DB_PROMPT_VERSION = 2;
 export const PREREVIEW_SETTING_KEY = "ai_prereview_enabled";
 /** Automatic (non-cached, non-re-run) runs per proposal per rolling 24 h (§46.3). */
 export const PREREVIEW_PROPOSAL_DAILY_CAP = 10;
@@ -31,7 +31,7 @@ export type PrereviewSource =
 
 export type PrereviewSubject = { kind: "proposal"; proposalId: string; revision: number } | { kind: "version"; versionId: string };
 
-export type PrereviewTrigger = "submit" | "revision" | "enable" | "direct_publish" | "mirror" | "rerun";
+export type PrereviewTrigger = "submit" | "revision" | "enable" | "direct_publish" | "mirror" | "rerun" | "policy";
 
 // ── The switch (§46.2) ─────────────────────────────────────────────────────────────────────────
 
@@ -76,6 +76,8 @@ export interface PrereviewRunRow {
   status: PrereviewRunStatus;
   contentSha256: string | null;
   promptVersion: number;
+  /** §47.2: the fingerprint of the policy-rule revisions judged (null: none applied). */
+  rulesFingerprint: string | null;
   source: PrereviewSource;
   trigger: PrereviewTrigger;
   requestedBy: string | null;
@@ -89,7 +91,7 @@ export interface PrereviewRunRow {
   completedAt: string | null;
 }
 
-const RUN_COLUMNS = `r.id, r.status, r.content_sha256, r.prompt_version, r.source, r.trigger, r.requested_by, r.attempts, r.last_error,
+const RUN_COLUMNS = `r.id, r.status, r.content_sha256, r.prompt_version, r.rules_fingerprint, r.source, r.trigger, r.requested_by, r.attempts, r.last_error,
   r.model, r.result, r.coverage, r.max_severity, r.created_at, r.completed_at`;
 
 function iso(v: unknown): string | null {
@@ -103,6 +105,7 @@ export function toRunRow(r: any): PrereviewRunRow {
     status: r.status,
     contentSha256: r.content_sha256 ?? null,
     promptVersion: Number(r.prompt_version),
+    rulesFingerprint: r.rules_fingerprint ?? null,
     source: r.source,
     trigger: r.trigger,
     requestedBy: r.requested_by ?? null,
@@ -119,12 +122,12 @@ export function toRunRow(r: any): PrereviewRunRow {
 
 export async function createPrereviewRun(
   db: PrereviewDb,
-  input: { source: PrereviewSource; contentSha256: string | null; trigger: PrereviewTrigger; requestedBy?: string | null },
+  input: { source: PrereviewSource; contentSha256: string | null; trigger: PrereviewTrigger; requestedBy?: string | null; rulesFingerprint?: string | null },
 ): Promise<string> {
   const { rows } = await db.query(
-    `insert into ai_prereviews (content_sha256, prompt_version, source, trigger, requested_by)
-     values ($1, $2, $3::jsonb, $4, $5) returning id`,
-    [input.contentSha256, PREREVIEW_DB_PROMPT_VERSION, JSON.stringify(input.source), input.trigger, input.requestedBy ?? null],
+    `insert into ai_prereviews (content_sha256, prompt_version, source, trigger, requested_by, rules_fingerprint)
+     values ($1, $2, $3::jsonb, $4, $5, $6) returning id`,
+    [input.contentSha256, PREREVIEW_DB_PROMPT_VERSION, JSON.stringify(input.source), input.trigger, input.requestedBy ?? null, input.rulesFingerprint ?? null],
   );
   return rows[0].id as string;
 }
@@ -137,15 +140,25 @@ export async function linkPrereviewRun(db: PrereviewDb, runId: string, subject: 
   }
 }
 
-/** A run that can be reused for these bytes: pending or done, at the current prompt version (§46.4). */
-export async function findReusableRun(db: PrereviewDb, contentSha256: string | null | undefined, excludeRunId?: string): Promise<PrereviewRunRow | null> {
+/**
+ * A run that can be reused for these bytes: pending or done, at the current prompt version (§46.4),
+ * judged against exactly the same policy-rule revisions (§47.5 — `rulesFingerprint` null means "no
+ * rule applies" and only matches runs that judged none).
+ */
+export async function findReusableRun(
+  db: PrereviewDb,
+  contentSha256: string | null | undefined,
+  rulesFingerprint: string | null,
+  excludeRunId?: string,
+): Promise<PrereviewRunRow | null> {
   if (!contentSha256) return null;
   const { rows } = await db.query(
     `select ${RUN_COLUMNS} from ai_prereviews r
       where r.content_sha256 = $1 and r.prompt_version = $2 and r.status in ('pending', 'done')
+        and r.rules_fingerprint is not distinct from $4
         and ($3::uuid is null or r.id <> $3::uuid)
       order by (r.status = 'done') desc, r.created_at desc limit 1`,
-    [contentSha256, PREREVIEW_DB_PROMPT_VERSION, excludeRunId ?? null],
+    [contentSha256, PREREVIEW_DB_PROMPT_VERSION, excludeRunId ?? null, rulesFingerprint],
   );
   return rows[0] ? toRunRow(rows[0]) : null;
 }
@@ -200,28 +213,68 @@ export function samePrereviewSource(a: PrereviewSource, b: PrereviewSource): boo
 
 // ── Worker bookkeeping ─────────────────────────────────────────────────────────────────────────
 
+/** One §47 per-rule result as stored with a run. */
+export interface PrereviewPolicyResultRow {
+  ruleId: string;
+  revisionId: string;
+  ruleState: "shadow" | "enforced";
+  outcome: string;
+  explanation: string;
+  evidence: unknown[];
+  evidenceRejected: boolean;
+}
+
+/**
+ * Store a finished run. The §47 policy results go in FIRST (any left by an earlier failed attempt
+ * are replaced) and the `done` flip is last, so a run is never `done` with missing results: a
+ * failure part-way leaves it `pending` for an ordinary retry.
+ */
 export async function recordPrereviewSuccess(
   db: PrereviewDb,
   runId: string,
-  input: { result: PrereviewResult; coverage: PrereviewCoverageEntry[]; model: string | null; contentSha256: string; maxSeverity: PrereviewSeverity | null },
+  input: {
+    result: PrereviewResult;
+    coverage: PrereviewCoverageEntry[];
+    model: string | null;
+    contentSha256: string;
+    maxSeverity: PrereviewSeverity | null;
+    policy?: { fingerprint: string | null; results: readonly PrereviewPolicyResultRow[] };
+  },
 ): Promise<void> {
+  await db.query(`delete from ai_prereview_policy_results where run_id = $1`, [runId]);
+  for (const r of input.policy?.results ?? []) {
+    await db.query(
+      `insert into ai_prereview_policy_results (run_id, rule_id, revision_id, rule_state, outcome, explanation, evidence, evidence_rejected)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+      [runId, r.ruleId, r.revisionId, r.ruleState, r.outcome, r.explanation.slice(0, 700), JSON.stringify(r.evidence), r.evidenceRejected],
+    );
+  }
   await db.query(
     `update ai_prereviews
         set status = 'done', result = $2::jsonb, coverage = $3::jsonb, model = $4, content_sha256 = coalesce(content_sha256, $5),
-            max_severity = $6, last_error = null, next_attempt_at = null, completed_at = now()
+            max_severity = $6, last_error = null, next_attempt_at = null, completed_at = now(),
+            rules_fingerprint = case when $7::boolean then $8 else rules_fingerprint end
       where id = $1`,
-    [runId, JSON.stringify(input.result), JSON.stringify(input.coverage), input.model, input.contentSha256, input.maxSeverity],
+    [runId, JSON.stringify(input.result), JSON.stringify(input.coverage), input.model, input.contentSha256, input.maxSeverity, input.policy !== undefined, input.policy?.fingerprint ?? null],
   );
 }
 
 /** Copy a finished run's result into this one (identical bytes found after a pointer clone, §46.4). */
 export async function copyPrereviewResult(db: PrereviewDb, runId: string, from: PrereviewRunRow, contentSha256: string): Promise<void> {
+  // The §47 per-rule results travel with the copy (the cache only matches identical rule sets).
+  await db.query(`delete from ai_prereview_policy_results where run_id = $1`, [runId]);
+  await db.query(
+    `insert into ai_prereview_policy_results (run_id, rule_id, revision_id, rule_state, outcome, explanation, evidence, evidence_rejected)
+     select $1, rule_id, revision_id, rule_state, outcome, explanation, evidence, evidence_rejected
+       from ai_prereview_policy_results where run_id = $2`,
+    [runId, from.id],
+  );
   await db.query(
     `update ai_prereviews
         set status = 'done', result = $2::jsonb, coverage = $3::jsonb, model = $4, content_sha256 = $5, max_severity = $6,
-            last_error = null, next_attempt_at = null, completed_at = now()
+            rules_fingerprint = $7, last_error = null, next_attempt_at = null, completed_at = now()
       where id = $1`,
-    [runId, JSON.stringify(from.result), JSON.stringify(from.coverage ?? []), from.model, contentSha256, from.maxSeverity],
+    [runId, JSON.stringify(from.result), JSON.stringify(from.coverage ?? []), from.model, contentSha256, from.maxSeverity, from.rulesFingerprint],
   );
 }
 

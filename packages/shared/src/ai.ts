@@ -89,7 +89,7 @@ export const AI_FEATURES: readonly AiFeature[] = [
   {
     key: "proposal_prereview",
     label: "AI pre-review of proposals",
-    egress: "For each submitted proposal, and each direct publish, while the pre-review switch is on: SKILL.md and the text files under scripts/ and references/ (up to 25 files, 100,000 characters each and 250,000 in total; secret-scanner lines redacted), the bundle's file paths (first 200), and the deterministic scan findings (rule, file, line, severity)",
+    egress: "For each submitted proposal, and each direct publish, while the pre-review switch is on: SKILL.md and the text files under scripts/ and references/ (up to 25 files, 100,000 characters each and 250,000 in total; secret-scanner lines redacted), the bundle's file paths (first 200), the deterministic scan findings (rule, file, line, severity), and the applicable policy rules (title, rule and context; §47)",
     spec: "§46",
     maxTokens: 16_384,
     timeoutMs: 180_000,

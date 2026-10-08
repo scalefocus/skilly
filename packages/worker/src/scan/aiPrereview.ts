@@ -8,7 +8,14 @@
 //    publish, or a pointer whose mirror differs from what was reviewed).
 // 2. Run — up to 3 due runs concurrently: fetch the bytes (artifact or pointer clone), reuse an
 //    identical finished result if one exists, else call the model, validate, store; then settle the
-//    skill.ai_prereview_flagged notification. Advisory only: nothing here gates anything.
+//    skill.ai_prereview_flagged notification. §46's findings are advisory: nothing gates on them.
+//
+// §47 policy rules ride in the same call: the run judges the rules applicable to its subject, the
+// per-rule results are stored with the run (the only AI output the accept gate reads), the rules
+// fingerprint joins the cache key, and a reconcile step re-checks subjects whose current run
+// predates a rule's current wording (open proposals: enforced rules; the latest published version
+// of each skill in scope: every non-disabled rule, rate-limited).
+import { randomBytes } from "node:crypto";
 import type { Pool } from "pg";
 import {
   PURE_SCANNERS, runScanners, contentDigest, isSecretLikeLine, bundleContentCap,
@@ -16,8 +23,10 @@ import {
   loadPrereviewSetting, duePrereviewRuns, recordPrereviewSuccess, recordPrereviewFailure, copyPrereviewResult, findReusableRun,
   settlePrereviewNotification, createPrereviewRun, linkPrereviewRun, currentPrereviewRun, prereviewSourceOfPayload, samePrereviewSource,
   sourceProposalOfVersion, pruneOrphanPrereviews,
+  applicablePolicyRules, policyRulesForRun, policyFingerprintInput, policyRulesFingerprint, keyPolicyRules, parsePolicyResponse, verifyPolicyResults,
+  notifyProposalPolicyViolations, settleVersionPolicyRun, policyReconcile, countPolicyFlaggedVersions,
   PREREVIEW_FEATURE, PREREVIEW_MAX_TOKENS, PREREVIEW_PROPOSAL_DAILY_CAP, PREREVIEW_OPEN_STATES,
-  type BundleEntry, type PrereviewRunRow, type PrereviewSetting, type PrereviewTrigger,
+  type BundleEntry, type PrereviewRunRow, type PrereviewSetting, type PrereviewTrigger, type PolicyRuleRow, type PolicySubject, type PrereviewSource,
 } from "@skilly/shared";
 import { aiAvailable, aiComplete, parseAiTokenKey, AiError, type AiEnv } from "@skilly/shared/ai";
 import type { ArtifactStore } from "../storage/objectStore.js";
@@ -37,12 +46,28 @@ function aiEnv(): AiEnv {
 
 const REFUSED = new Set(["ai_disabled", "ai_not_configured", "ai_key_missing", "ai_unknown_feature"]);
 
+/** §47.2: the fingerprint of the rules applicable in a namespace (null: none). */
+async function namespaceRulesFingerprint(pool: Pool, namespaceId: string): Promise<string | null> {
+  return policyRulesFingerprint(policyFingerprintInput(await applicablePolicyRules(pool, namespaceId)));
+}
+
+/** §47.8: audit each version that just entered `flagged` (the notification is already sent). */
+async function settleVersionPolicy(pool: Pool, runId: string): Promise<void> {
+  for (const o of await settleVersionPolicyRun(pool, runId)) {
+    await pool.query(
+      `insert into audit_log (actor_user_id, action, target_type, target_id, namespace_id, after, source)
+       values (null, 'skill.policy_flagged', 'skill_version', $1, $2, $3::jsonb, 'worker')`,
+      [`${o.skillId}@${o.semver}`, o.namespaceId, JSON.stringify({ skill: o.skillSlug, semver: o.semver, runId, rules: o.rules })],
+    );
+  }
+}
+
 // ── Enqueue ────────────────────────────────────────────────────────────────────────────────────
 
 /** Give every open proposal's current revision a run (§46.3). Returns how many were linked. */
 export async function enqueueProposalPrereviews(pool: Pool, setting: PrereviewSetting, limit = ENQUEUE_BATCH): Promise<number> {
-  const { rows } = await pool.query<{ id: string; revision_no: number; payload: unknown; rev_created_at: Date }>(
-    `select p.id, pr.revision_no, pr.payload, pr.created_at as rev_created_at
+  const { rows } = await pool.query<{ id: string; revision_no: number; payload: unknown; rev_created_at: Date; target_namespace_id: string }>(
+    `select p.id, pr.revision_no, pr.payload, pr.created_at as rev_created_at, p.target_namespace_id
        from proposals p
        join lateral (
          select revision_no, payload, created_at from proposal_revisions
@@ -62,18 +87,20 @@ export async function enqueueProposalPrereviews(pool: Pool, setting: PrereviewSe
       const src = prereviewSourceOfPayload(r.payload);
       if (!src) continue;
       const subject = { kind: "proposal" as const, proposalId: r.id, revision: r.revision_no };
+      // §47.5: a run is only reused under exactly the same policy-rule revisions.
+      const fp = await namespaceRulesFingerprint(pool, r.target_namespace_id);
       // Same bytes as an existing run (a metadata-only revision, or identical content elsewhere).
-      let reuse = await findReusableRun(pool, src.contentSha256);
+      let reuse = await findReusableRun(pool, src.contentSha256, fp);
       if (!reuse && r.revision_no > 1) {
         const prev = await currentPrereviewRun(pool, { kind: "proposal", proposalId: r.id, revision: r.revision_no - 1 });
-        if (prev && prev.status !== "failed" && samePrereviewSource(prev.source, src.source)) reuse = prev;
+        if (prev && prev.status !== "failed" && samePrereviewSource(prev.source, src.source) && prev.rulesFingerprint === fp) reuse = prev;
       }
       if (reuse) {
         await linkPrereviewRun(pool, reuse.id, subject, true);
       } else {
         const trigger: PrereviewTrigger =
           setting.since && new Date(r.rev_created_at).getTime() < Date.parse(setting.since) ? "enable" : r.revision_no === 1 ? "submit" : "revision";
-        const runId = await createPrereviewRun(pool, { source: src.source, contentSha256: src.contentSha256, trigger });
+        const runId = await createPrereviewRun(pool, { source: src.source, contentSha256: src.contentSha256, trigger, rulesFingerprint: fp });
         await linkPrereviewRun(pool, runId, subject, false);
       }
       linked++;
@@ -89,8 +116,8 @@ export async function enqueueProposalPrereviews(pool: Pool, setting: PrereviewSe
  * proposal's run when the bytes match, else its own. Returns how many were linked.
  */
 export async function enqueueVersionPrereviews(pool: Pool, since: string, limit = ENQUEUE_BATCH): Promise<number> {
-  const { rows } = await pool.query<{ id: string; artifact_object_key: string; content_sha256: string | null }>(
-    `select sv.id, sv.artifact_object_key, sv.content_sha256
+  const { rows } = await pool.query<{ id: string; artifact_object_key: string; content_sha256: string | null; namespace_id: string }>(
+    `select sv.id, sv.artifact_object_key, sv.content_sha256, s.namespace_id
        from skill_versions sv
        join skills s on s.id = sv.skill_id and s.status = 'active'
       where sv.created_at >= $1::timestamptz and sv.status = 'active' and sv.artifact_object_key is not null
@@ -119,22 +146,34 @@ export async function enqueueVersionPrereviews(pool: Pool, since: string, limit 
           // The reviewer's run covers these bytes. If it is still pending, the notification
           // settles when it finishes (the reviewer never saw it).
           await linkPrereviewRun(pool, proposalRun.id, subject, true);
+          // §47.8: a done run's policy results become the version's now (an override at accept
+          // already recorded its exceptions, so only a genuinely new violation is an onset).
+          if (proposalRun.status === "done") await settleVersionPolicy(pool, proposalRun.id);
           linked++;
           continue;
         }
         // The upstream ref moved between review and mirror: these bytes were never reviewed.
-        const runId = await createPrereviewRun(pool, { source: { kind: "artifact", objectKey: v.artifact_object_key }, contentSha256: v.content_sha256, trigger: "mirror" });
+        const runId = await createPrereviewRun(pool, {
+          source: { kind: "artifact", objectKey: v.artifact_object_key },
+          contentSha256: v.content_sha256,
+          trigger: "mirror",
+          rulesFingerprint: await namespaceRulesFingerprint(pool, v.namespace_id),
+        });
         await linkPrereviewRun(pool, runId, subject, false);
         linked++;
         continue;
       }
       // A direct publish (or an accept the pre-review never saw).
-      const reuse = await findReusableRun(pool, v.content_sha256);
+      const fp = await namespaceRulesFingerprint(pool, v.namespace_id);
+      const reuse = await findReusableRun(pool, v.content_sha256, fp);
       if (reuse) {
         await linkPrereviewRun(pool, reuse.id, subject, true);
-        if (reuse.status === "done") await settlePrereviewNotification(pool, reuse.id, v.id);
+        if (reuse.status === "done") {
+          await settlePrereviewNotification(pool, reuse.id, v.id);
+          await settleVersionPolicy(pool, reuse.id);
+        }
       } else {
-        const runId = await createPrereviewRun(pool, { source: { kind: "artifact", objectKey: v.artifact_object_key }, contentSha256: v.content_sha256, trigger: "direct_publish" });
+        const runId = await createPrereviewRun(pool, { source: { kind: "artifact", objectKey: v.artifact_object_key }, contentSha256: v.content_sha256, trigger: "direct_publish", rulesFingerprint: fp });
         await linkPrereviewRun(pool, runId, subject, false);
       }
       linked++;
@@ -174,20 +213,25 @@ export async function executePrereviewRun(pool: Pool, store: ArtifactStore, run:
     return "failed";
   }
   const digest = contentDigest(files);
-  // Identical bytes already reviewed (a pointer clone, or an artifact with no stored digest):
-  // copy that result instead of calling again. A re-run always calls.
+  // §47: the rules this run judges (those of its oldest link's subject) and their fingerprint.
+  const rules: PolicyRuleRow[] = await policyRulesForRun(pool, run.id);
+  const fingerprint = policyRulesFingerprint(policyFingerprintInput(rules));
+  // Identical bytes already reviewed under the same rules (a pointer clone, or an artifact with no
+  // stored digest): copy that result instead of calling again. A re-run always calls.
   if (run.trigger !== "rerun") {
-    const done = await findReusableRun(pool, digest, run.id);
+    const done = await findReusableRun(pool, digest, fingerprint, run.id);
     if (done?.status === "done" && done.result) {
       await copyPrereviewResult(pool, run.id, done, digest);
       await settlePrereviewNotification(pool, run.id);
+      await settleVersionPolicy(pool, run.id);
       return "cached";
     }
   }
   const selection = selectPrereviewInput(files, { isSecretLine: isSecretLikeLine });
   // Deterministic context: the pure scanners over the same files (§46.6) — never their excerpts.
   const context = await runScanners(files, PURE_SCANNERS);
-  const prompt = buildPrereviewPrompt({ selection, findings: context });
+  const promptRules = keyPolicyRules(rules.map((r) => ({ ruleId: r.id, revisionId: r.revisionId, title: r.title, body: r.body, context: r.context })));
+  const prompt = buildPrereviewPrompt({ selection, findings: context, rules: promptRules, nonce: randomBytes(9).toString("hex") });
   try {
     const res = await aiComplete(pool, env, {
       feature: PREREVIEW_FEATURE,
@@ -202,9 +246,39 @@ export async function executePrereviewRun(pool: Pool, store: ArtifactStore, run:
       await recordPrereviewFailure(pool, run.id, "ai_invalid_json: the answer did not have a findings list", { contentSha256: digest });
       return "failed";
     }
-    await recordPrereviewSuccess(pool, run.id, { result, coverage: selection.coverage, model: res.model, contentSha256: digest, maxSeverity: maxPrereviewSeverity(result.findings) });
+    // §47.5: per-rule validation and the server-side evidence check against the text actually sent.
+    const included = new Map(selection.files.map((f) => [f.path, f.text]));
+    const policyResults = promptRules.length
+      ? verifyPolicyResults(parsePolicyResponse((res.json as { policy?: unknown } | null)?.policy, promptRules), promptRules, included)
+      : [];
+    const stateOf = new Map(rules.map((r) => [r.id, r.state]));
+    await recordPrereviewSuccess(pool, run.id, {
+      result,
+      coverage: selection.coverage,
+      model: res.model,
+      contentSha256: digest,
+      maxSeverity: maxPrereviewSeverity(result.findings),
+      policy: {
+        fingerprint,
+        results: policyResults.map((r) => ({
+          ruleId: r.ruleId,
+          revisionId: r.revisionId,
+          ruleState: stateOf.get(r.ruleId) === "enforced" ? "enforced" : "shadow",
+          outcome: r.outcome,
+          explanation: r.explanation,
+          evidence: r.evidence,
+          evidenceRejected: r.evidenceRejected,
+        })),
+      },
+    });
     for (const f of result.findings) M.aiPrereviewFindings.inc({ category: f.category, severity: f.severity });
+    for (const r of policyResults) {
+      M.policyResults.inc({ outcome: r.outcome, state: stateOf.get(r.ruleId) ?? "shadow" });
+      if (r.evidenceRejected) M.policyEvidenceRejected.inc();
+    }
     await settlePrereviewNotification(pool, run.id);
+    await notifyProposalPolicyViolations(pool, run.id);
+    await settleVersionPolicy(pool, run.id);
     return "done";
   } catch (err) {
     if (err instanceof AiError && REFUSED.has(err.code)) return "refused";
@@ -222,6 +296,9 @@ export async function sweepAiPrereview(pool: Pool, store: ArtifactStore, deps: P
   if (!(await aiAvailable(pool, env))) return { enqueued: 0, ran: 0 };
   let enqueued = await enqueueProposalPrereviews(pool, setting);
   if (setting.since) enqueued += await enqueueVersionPrereviews(pool, setting.since);
+  // §47.6: re-check subjects whose current run predates a rule's current wording.
+  const rc = await policyReconcile(pool, (subject, src, rules) => makePolicyRun(pool, subject, src, rules));
+  enqueued += rc.proposals + rc.versions;
   const due = await duePrereviewRuns(pool, PREREVIEW_SWEEP_BATCH);
   const outcomes = await Promise.all(
     due.map((run) =>
@@ -234,7 +311,29 @@ export async function sweepAiPrereview(pool: Pool, store: ArtifactStore, deps: P
   for (const o of outcomes) if (o !== "refused") M.aiPrereviewRuns.inc({ outcome: o });
   const { rows } = await pool.query<{ n: number }>(`select count(*)::int as n from ai_prereviews where status = 'pending'`);
   M.aiPrereviewPending.set(Number(rows[0]?.n ?? 0));
+  M.policyFlaggedVersions.set(await countPolicyFlaggedVersions(pool));
   return { enqueued, ran: outcomes.filter((o) => o !== "refused").length };
+}
+
+/** §47.6: one reconcile pass on its own (the sweep runs it after enqueueing; tests call it directly). */
+export async function reconcilePolicyRuns(pool: Pool): Promise<{ proposals: number; versions: number }> {
+  return policyReconcile(pool, (subject, src, rules) => makePolicyRun(pool, subject, src, rules));
+}
+
+/**
+ * §47.6: give a subject a run for the current rules — linked to an identical run (same bytes, same
+ * rule revisions) when one exists, else a fresh `policy` run.
+ */
+async function makePolicyRun(pool: Pool, subject: PolicySubject, src: { source: PrereviewSource; contentSha256: string | null }, rules: PolicyRuleRow[]): Promise<void> {
+  const fp = policyRulesFingerprint(policyFingerprintInput(rules));
+  const reuse = await findReusableRun(pool, src.contentSha256, fp);
+  if (reuse) {
+    await linkPrereviewRun(pool, reuse.id, subject, true);
+    if (reuse.status === "done" && subject.kind === "version") await settleVersionPolicy(pool, reuse.id);
+    return;
+  }
+  const runId = await createPrereviewRun(pool, { source: src.source, contentSha256: src.contentSha256, trigger: "policy", rulesFingerprint: fp });
+  await linkPrereviewRun(pool, runId, subject, false);
 }
 
 /** Housekeeping: drop runs no subject links any more (§46.9). */

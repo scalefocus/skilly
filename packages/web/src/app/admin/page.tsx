@@ -14,6 +14,7 @@ import { AiCard } from "./AiCard";
 import { SearchCard } from "./SearchCard";
 import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
 import { QualityLine } from "./QualityLine";
+import { PlatformPolicyRulesCard, PolicyFlagsAdminCard } from "./PolicyCards";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
@@ -41,7 +42,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
   "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
-  "achievements", "search", "contentrisk",
+  "achievements", "search", "contentrisk", "policyrules", "policy",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -732,6 +733,8 @@ export default function AdminPage() {
 
       {/* Content risk (§37.8) — published versions the content check flagged. */}
       <ContentRiskAdminCard open={cards.open.contentrisk} onToggle={() => cards.toggle("contentrisk")} />
+      <PlatformPolicyRulesCard open={cards.open.policyrules} onToggle={() => cards.toggle("policyrules")} />
+      <PolicyFlagsAdminCard open={cards.open.policy} onToggle={() => cards.toggle("policy")} />
 
       {/* Maintenance / background jobs */}
       <MaintenanceCard open={cards.open.maintenance} onToggle={() => cards.toggle("maintenance")} />

@@ -35,6 +35,19 @@ import {
   type ProposalAction,
   type ProposalState,
   type ScanFinding,
+  applicablePolicyRules,
+  canOverridePolicyScope,
+  insertPolicyDismissal,
+  latestRevisionNo,
+  loadSubjectPolicyVerdict,
+  policyGateTrips,
+  policyPublishRoute,
+  proposalNoVerdictReason,
+  proposalPolicyPayload,
+  toGateRules,
+  toGateVerdict,
+  type PolicyTrip,
+  type ProposalPolicyPayload,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { latestArtifactReport, recordAcknowledgement } from "./contentRisk";
@@ -49,6 +62,7 @@ import { findDuplicateSkill, type DuplicateMatch } from "./duplicate";
 import { syncGrants, validateGrantTargets, GRANT_TARGET_MESSAGES, type GrantVia } from "./grants";
 import { fulfilOriginRequest } from "./requests";
 import { M } from "./metrics";
+import { aiAvailable } from "./ai";
 
 export interface ProposalMetadata {
   skillSlug: string;
@@ -152,9 +166,9 @@ export interface CreateProposalInput {
   payload: RevisionPayload;
   /** Skill request this proposal was started from (§26) — the explicit fulfilment link. */
   originRequestId?: string | null;
-  /** Set when a direct publish was routed to review by the content check (§37.4). */
-  routedReason?: "content_risk" | null;
-  /** The content-risk rules that caused the routing — audit context only. */
+  /** Set when a direct publish was routed to review by the content check (§37.4) or by enforced policy rules (§47.7). */
+  routedReason?: "content_risk" | "policy" | null;
+  /** The content-risk rules (or policy rule titles) that caused the routing — audit context only. */
   routedRules?: string[];
   /** §44.8: the model that drafted the submitted files (from a verified aiDraftToken), else null. */
   aiDraftModel?: string | null;
@@ -575,10 +589,10 @@ interface ProposalRow {
   origin_request_id: string | null;
 }
 
-async function loadProposal(db: Pool | PoolClient, id: string): Promise<ProposalRow | null> {
+async function loadProposal(db: Pool | PoolClient, id: string, opts: { forUpdate?: boolean } = {}): Promise<ProposalRow | null> {
   const { rows } = await db.query<ProposalRow>(
     `select id, target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id
-       from proposals where id = $1`,
+       from proposals where id = $1${opts.forUpdate ? " for update" : ""}`,
     [id],
   );
   return rows[0] ?? null;
@@ -617,7 +631,52 @@ export interface ActionInput {
 
 export type ActionResult =
   | { ok: true; state: ProposalState; materializedVersionId?: string }
-  | { ok: false; status: number; error: string; requiresOverride?: boolean; severity?: string };
+  | { ok: false; status: number; error: string; requiresOverride?: boolean; severity?: string; policy?: { tripped: PolicyGateTripView[] } };
+
+/** One tripped policy rule as the accept gate reports it (§47.11). */
+export interface PolicyGateTripView extends PolicyTrip {
+  canOverride: boolean;
+}
+
+/**
+ * The §47.7 policy gate for a proposal's latest revision: the trips (enforced rules violated, or
+ * without a current verdict from its §46 run) and the actor's override authority over each one.
+ */
+export async function evaluateProposalPolicyGate(
+  db: Pool | PoolClient,
+  proposal: { id: string; namespaceId: string },
+  access: EffectiveAccess,
+): Promise<{ trips: PolicyGateTripView[]; revisionOf: Map<string, string> }> {
+  const rules = await applicablePolicyRules(db, proposal.namespaceId);
+  if (!rules.some((r) => r.state === "enforced")) return { trips: [], revisionOf: new Map() };
+  const revision = await latestRevisionNo(db, proposal.id);
+  const verdict = revision === null ? null : await loadSubjectPolicyVerdict(db, { kind: "proposal", proposalId: proposal.id, revision });
+  const noVerdict = verdict ? "pending" : await proposalNoVerdictReason(db, proposal.id, await aiAvailable());
+  const actor = { platformAdmin: access.isPlatformAdmin, namespaceAdmin: access.namespaceRoles.get(proposal.namespaceId) === "namespace_admin" };
+  const trips = policyGateTrips(toGateRules(rules), toGateVerdict(verdict), { noVerdict }).map((t) => ({
+    ...t,
+    canOverride: canOverridePolicyScope(t.scope, actor),
+  }));
+  return { trips, revisionOf: new Map(rules.map((r) => [r.id, r.revisionId])) };
+}
+
+/** The §47.9 Policy block for one viewer (null when no rule applies at all). */
+async function proposalPolicyView(
+  pool: Pool,
+  proposal: { id: string; namespaceId: string },
+  access: EffectiveAccess,
+  isReviewer: boolean,
+): Promise<(ProposalPolicyPayload & { trips: PolicyGateTripView[]; canRecheck: boolean }) | null> {
+  const block = await proposalPolicyPayload(pool, proposal, { includeShadow: isReviewer, aiOn: await aiAvailable() });
+  if (block.status === "none" && block.trips.length === 0) return null;
+  const actor = { platformAdmin: access.isPlatformAdmin, namespaceAdmin: access.namespaceRoles.get(proposal.namespaceId) === "namespace_admin" };
+  return {
+    ...block,
+    trips: block.trips.map((t) => ({ ...t, canOverride: canOverridePolicyScope(t.scope, actor) })),
+    // Re-check is the §46 re-run (reviewers); the section offers it only when a re-run can start.
+    canRecheck: isReviewer && block.status !== "pending" && block.status !== "off" && block.status !== "unavailable",
+  };
+}
 
 /**
  * The latest revision's scan report, for the override gate. Hosted (and Keep-current-files reuse):
@@ -725,7 +784,9 @@ export async function performProposalAction(
   let supersededKey: string | null = null;
   try {
     await client.query("begin");
-    const p = await loadProposal(client, input.proposalId);
+    // Row lock (§47.7): actions on one proposal serialize, so a revise can't slip a new revision in
+    // between the accept's gates (scan, policy) and the materialize that publishes the latest bytes.
+    const p = await loadProposal(client, input.proposalId, { forUpdate: true });
     if (!p) {
       await client.query("rollback");
       return { ok: false, status: 404, error: "proposal not found" };
@@ -817,6 +878,47 @@ export async function performProposalAction(
           after: { severity: scan.severity, reason: input.overrideReason ?? null, findings: scan.findings },
         });
       }
+      // §47.7 policy gate: a violated enforced rule, or one without a current verdict, needs the
+      // override (with a reason) — and platform rules can only be overridden by Platform Admins.
+      // §46's own findings never reach this gate.
+      const policy = await evaluateProposalPolicyGate(client, { id: input.proposalId, namespaceId: p.target_namespace_id }, input.access);
+      if (policy.trips.length > 0) {
+        if (!input.override) {
+          await client.query("rollback");
+          return {
+            ok: false,
+            status: 409,
+            error: `the policy check flagged ${policy.trips.length} rule${policy.trips.length === 1 ? "" : "s"} — accepting requires an explicit override`,
+            requiresOverride: true,
+            policy: { tripped: policy.trips },
+          };
+        }
+        if (!(input.overrideReason ?? "").trim()) {
+          await client.query("rollback");
+          return { ok: false, status: 422, error: "overriding the policy check needs a reason — write it in the note", policy: { tripped: policy.trips } };
+        }
+        const forbidden = policy.trips.filter((t) => !t.canOverride);
+        if (forbidden.length > 0) {
+          await client.query("rollback");
+          return {
+            ok: false,
+            status: 403,
+            error: `policy_override_forbidden: only a platform admin can override ${forbidden.map((t) => `"${t.title}"`).join(", ")}`,
+            policy: { tripped: policy.trips },
+          };
+        }
+        await appendAudit(client, {
+          actorUserId: input.actorUserId,
+          action: "proposal.policy_override",
+          targetType: "proposal",
+          targetId: input.proposalId,
+          namespaceId: p.target_namespace_id,
+          after: {
+            reason: input.overrideReason ?? null,
+            rules: policy.trips.map((t) => ({ ruleId: t.ruleId, revisionId: policy.revisionOf.get(t.ruleId) ?? null, title: t.title, scope: t.scope, reason: t.reason })),
+          },
+        });
+      }
       const payload = await latestPayload(client, input.proposalId);
       const result = await materializeVersion(client, {
         targetNamespaceId: p.target_namespace_id,
@@ -838,6 +940,22 @@ export async function performProposalAction(
           byUserId: input.actorUserId,
           note: input.overrideReason ?? null,
           source: "override",
+        });
+      }
+      // §47.7: every VIOLATED rule the override covered becomes an accepted exception for the new
+      // version (keyed by skill + semver, so it exists before a pointer version is mirrored). The
+      // version gets the accepted revision's §46 run when the worker links it (§46.3).
+      for (const t of policy.trips) {
+        if (t.reason !== "violates") continue;
+        await insertPolicyDismissal(client, {
+          skillId: result.skillId,
+          semver: p.proposed_semver,
+          ruleId: t.ruleId,
+          revisionId: policy.revisionOf.get(t.ruleId)!,
+          kind: "accepted_exception",
+          reason: (input.overrideReason ?? "").trim(),
+          source: "override",
+          byUserId: input.actorUserId,
         });
       }
       // Skill-request fulfilment (§26): a proposal started from a request fulfils it on
@@ -1215,7 +1333,7 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
  */
 export type DirectPublishResult =
   | { ok: true; skillId: string; versionId?: string; pending?: boolean }
-  | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[] }
+  | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[]; routedReason: "content_risk" | "policy" }
   | { ok: false; status: number; error: string; requiresOverride?: boolean; findings?: ScanFinding[]; severity?: string };
 
 /**
@@ -1283,7 +1401,31 @@ export async function directPublish(
       routedRules,
       aiDraftModel: input.aiDraftModel ?? null,
     });
-    return { ok: true, routed: "review", proposalId: id, findings: content };
+    return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "content_risk" };
+  }
+  // §47.7: with enforced policy rules in force, a publisher who couldn't override EVERY one of them
+  // (a member, or a namespace admin while an enforced platform rule applies) is routed to review.
+  // Checked before the content-risk confirm, so nobody confirms an override and then gets routed.
+  const policyRules = await applicablePolicyRules(pool, ns.id);
+  const policyActor = { platformAdmin: input.access.isPlatformAdmin, namespaceAdmin: input.access.namespaceRoles.get(ns.id) === "namespace_admin" };
+  if (policyPublishRoute(policyRules, policyActor) === "route") {
+    let originRequestId: string | null = null;
+    if (input.originRequestId && /^[0-9a-f-]{36}$/i.test(input.originRequestId)) {
+      const open = (await pool.query(`select 1 from skill_requests where id = $1 and state = 'open'`, [input.originRequestId])).rowCount;
+      if (open) originRequestId = input.originRequestId;
+    }
+    const { id } = await createProposal(pool, {
+      submittedByUserId: input.actorUserId,
+      targetNamespaceId: ns.id,
+      targetSkillId: existing?.id ?? null,
+      proposedSemver: input.semver,
+      payload: input.payload,
+      originRequestId,
+      routedReason: "policy",
+      routedRules: policyRules.filter((r) => r.state === "enforced").map((r) => r.title),
+      aiDraftModel: input.aiDraftModel ?? null,
+    });
+    return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "policy" };
   }
   if (trips && !input.override) {
     return {
@@ -1642,6 +1784,12 @@ export interface ProposalDetail {
   quality: { rulesScore: number; stars: number; findings: QualityFindingView[] } | null;
   /** §46.8: the AI pre-review of the latest revision — advisory, never read by the accept gate. */
   aiPrereview: PrereviewView | null;
+  /**
+   * §47.9: the policy check of the latest revision — enforced rules for everyone, shadow rules too
+   * for reviewers — with `trips` (what accepting would need an override for, and the viewer's
+   * authority over each) and `canRecheck` (the §46 re-run).
+   */
+  policy: (ProposalPolicyPayload & { trips: PolicyGateTripView[]; canRecheck: boolean }) | null;
   caps: { isReviewer: boolean; isSubmitter: boolean };
   allowedActions: ProposalAction[];
   /**
@@ -1850,6 +1998,7 @@ export async function getProposalDetail(
       { id: p.id, state: p.state, targetNamespaceId: p.target_namespace_id, revision: latest?.revisionNo ?? null, scanFindings: scanReport?.findings ?? [] },
       access,
     ),
+    policy: await proposalPolicyView(pool, { id: p.id, namespaceId: p.target_namespace_id }, access, caps.isReviewer),
     caps,
     allowedActions,
     duplicate,
