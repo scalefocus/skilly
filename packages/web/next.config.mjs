@@ -21,6 +21,12 @@ const nextConfig = {
   experimental: {
     // keep server actions on; used for proposal/review flows
     serverActions: { bodySizeLimit: "12mb" }, // ~10MB bundle cap + overhead (§6)
+    // DEV-SERVER ONLY, same opt-in as onDemandEntries above. `next dev` exits and respawns once
+    // the heap passes 80% of its limit, and a respawn throws away every compiled route: in Jenkins
+    // build 286 it fired twice mid-suite, reset in-flight requests (ECONNRESET/ECONNREFUSED), and
+    // every later spec paid 10-38s cold compiles again. The e2e webServer raises the heap limit
+    // instead (playwright.config.ts), so the pinned routes survive the whole run.
+    ...(process.env.SKILLY_DEV_KEEP_ROUTES === "1" ? { devMemoryThresholdRestart: false } : {}),
   },
   // Static security headers (audit P1). The Content-Security-Policy is NOT set here — it carries a
   // per-request nonce, which a static header can't express, so it's emitted by src/middleware.ts

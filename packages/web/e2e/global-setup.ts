@@ -63,11 +63,16 @@ const PAGES = [
   "/oauth/register",
   "/oauth/authorize",
   "/oauth/consent",
+  // Content-addressed icon bytes (§33) — a non-hex name 404s without touching storage, but the
+  // route still compiles; icon.spec otherwise paid ~18s for it mid-run.
+  "/skill-icons/warm-up.png",
 ];
 
 // API subtrees a GET must never touch: sign-in/out and cookie clearing, the email OAuth hop,
-// heavy exports, and anything that erases or trims. Everything else is read-only on GET or 405.
-const SKIP_API = [/^\/api\/auth\b/, /\/admin\/email\/(connect|callback)$/, /\/export$/, /\/erase$/, /\/trim$/, /\/admin\/jobs\//];
+// heavy exports, and anything that erases or trims. Everything else is read-only on GET or 405 —
+// including /api/admin/jobs/*, whose GETs are the Maintenance card's status polls (triggers are
+// POST-only). Leaving those cold made /admin compile them mid-spec and Fast-Refresh-reload the page.
+const SKIP_API = [/^\/api\/auth\b/, /\/admin\/email\/(connect|callback)$/, /\/export$/, /\/erase$/, /\/trim$/];
 
 // Plausible values for dynamic segments — real seed rows where a real one is cheap to know,
 // a nil UUID otherwise (404s compile just as well as 200s).
