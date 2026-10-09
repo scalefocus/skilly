@@ -15,6 +15,18 @@
 // the launching shell's env (so DATABASE_URL / S3_* / SKILLY_DEV_AUTH must be set there). Point at
 // a different target with PLAYWRIGHT_BASE_URL.
 import { defineConfig, devices } from "@playwright/test";
+import { totalmem } from "node:os";
+
+// Heap ceiling for the auto-started dev server. `next dev` defaults to half the machine's RAM and
+// restarts itself at 80% of that, i.e. at 40% of RAM. With ~180 routes pinned (SKILLY_DEV_KEEP_ROUTES)
+// the webpack dev compiler crossed that line twice per CI run, and each restart discarded the
+// warm-up (next.config.mjs switches the restart off for the same opt-in). Raise the ceiling to
+// three quarters of RAM; Next honours an explicit --max-old-space-size and skips its own default.
+// A caller's own --max-old-space-size wins.
+const callerNodeOptions = process.env.NODE_OPTIONS ?? "";
+const devServerNodeOptions = /--max[-_]old[-_]space[-_]size/.test(callerNodeOptions)
+  ? callerNodeOptions
+  : `${callerNodeOptions} --max-old-space-size=${Math.floor((totalmem() / 1024 / 1024) * 0.75)}`.trim();
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 // The auto-started server listens on baseURL's port (the `dev` script hardcodes 3000), so CI can
@@ -59,7 +71,7 @@ export default defineConfig({
     // LEADERBOARD_CACHE_TTL_MS=0: the shared per-(window,sort) board cache (lib/leaderboard.ts) is
     // primed by /api/leaders on EVERY page load, so a spec that creates a request and then reads
     // the board through the UI would see a board computed before its own fixture for up to 60s.
-    env: { SKILLY_DEV_KEEP_ROUTES: "1", LEADERBOARD_CACHE_TTL_MS: "0" },
+    env: { SKILLY_DEV_KEEP_ROUTES: "1", LEADERBOARD_CACHE_TTL_MS: "0", NODE_OPTIONS: devServerNodeOptions },
     url: baseURL,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
