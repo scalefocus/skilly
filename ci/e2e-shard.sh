@@ -6,6 +6,7 @@
 #
 # Inputs (env):
 #   E2E_SHARD, E2E_SHARD_TOTAL   this shard (1-based) and the shard count
+#   E2E_HEAP_MB                   dev server heap ceiling (optional; ci/e2e-shard-plan.sh sizes it)
 #   BUILD_TAG, WORKSPACE          Jenkins build identity + checkout root
 #   CI_PG_IMAGES, CI_MINIO_IMAGES space-separated image candidate lists (first reachable wins)
 #   CI_E2E_PG_CONTAINER, CI_E2E_MINIO_CONTAINER, CI_E2E_MINIO_PASSWORD
@@ -71,17 +72,24 @@ E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{con
 E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
 echo "[${TAG}] web dev server on ${E2E_WEB_URL}"
 
-# Several dev servers share this agent's RAM. playwright.config.ts gives a lone dev server a heap
-# ceiling of 75% of RAM; split a fixed 80% budget across the shards instead (40% each for two), so
-# the shards together can't claim more heap than the machine has. A caller's own ceiling wins.
+# Several dev servers share this agent's RAM. ci/e2e-shard-plan.sh sizes each one's heap ceiling
+# from the agent's RAM and the shard count; the Jenkins stage runs it once (it also caps the shard
+# count at what fits) and passes the result as E2E_HEAP_MB. Run by hand without it, plan here — and
+# refuse a shard count this agent cannot hold rather than let the OOM killer pick a dev server
+# mid-run. A caller's own --max-old-space-size wins.
 case "${NODE_OPTIONS:-}" in
   *max-old-space-size*|*max_old_space_size*) ;;
   *)
-    if [ "${E2E_SHARD_TOTAL}" -gt 1 ]; then
-      HEAP_MB="$(awk -v n="${E2E_SHARD_TOTAL}" '/^MemTotal:/ { printf "%d", $2 / 1024 * 0.8 / n }' /proc/meminfo)"
-      export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=${HEAP_MB}"
-      echo "[${TAG}] dev server heap ceiling: ${HEAP_MB} MB"
+    if [ -z "${E2E_HEAP_MB:-}" ]; then
+      set -- $(sh ci/e2e-shard-plan.sh "${E2E_SHARD_TOTAL}")
+      if [ "$1" -lt "${E2E_SHARD_TOTAL}" ]; then
+        echo "[${TAG}] this agent's RAM fits $1 e2e shard(s), not ${E2E_SHARD_TOTAL} — lower E2E_SHARD_TOTAL" >&2
+        exit 1
+      fi
+      E2E_HEAP_MB="$2"
     fi
+    export NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=${E2E_HEAP_MB}"
+    echo "[${TAG}] dev server heap ceiling: ${E2E_HEAP_MB} MB"
     ;;
 esac
 
@@ -148,6 +156,15 @@ done
 # in a production build), inheriting the env below; CI=1 makes it start a fresh server. E2E_SHARD /
 # E2E_SHARD_TOTAL select the slice and this shard's own build/result folders (playwright.config.ts).
 rm -rf "packages/web/e2e/results/shard-${E2E_SHARD}" "packages/web/e2e/test-results/shard-${E2E_SHARD}"
+
+# The kernel's running count of OOM kills (/proc/vmstat, readable without root — dmesg often is
+# not). Sampled around the run so a dev server the OOM killer took is named as such in the log,
+# instead of surfacing only as a wall of ECONNREFUSED test failures. It counts the whole agent, so
+# another shard or job being killed shows up here too.
+oom_kills() { awk '/^oom_kill / { n = $2 } END { print n + 0 }' /proc/vmstat 2>/dev/null || echo 0; }
+OOM_BEFORE="$(oom_kills)"
+
+set +e
 SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
 SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
 DATABASE_URL="${CI_E2E_DATABASE_URL}" \
@@ -157,3 +174,13 @@ SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
 S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
 CI=1 \
   pnpm --filter @skilly/web e2e
+rc=$?
+set -e
+
+OOM_AFTER="$(oom_kills)"
+if [ "${OOM_AFTER}" -gt "${OOM_BEFORE}" ]; then
+  echo "[${TAG}] the kernel OOM-killed $((OOM_AFTER - OOM_BEFORE)) process(es) on this agent while this shard ran." \
+    "A killed dev server fails every later test with ECONNREFUSED. Lower E2E_SHARDS, or raise" \
+    "E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits fewer shards." >&2
+fi
+exit "${rc}"
