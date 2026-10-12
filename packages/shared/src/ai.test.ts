@@ -180,10 +180,13 @@ test("parseAiJson: plain, fenced, and invalid", () => {
 
 test("stripCodeFence: linear on adversarial input (CodeQL js/polynomial-redos)", () => {
   const evil = "```" + " ".repeat(200_000) + "\n".repeat(50_000) + "x";
-  const t0 = Date.now();
+  // Process CPU time, not wall clock, so a busy CI agent can't fail a linear parse.
+  const t0 = process.cpuUsage();
   assert.throws(() => parseAiJson(evil), (e: unknown) => (e as AiError).code === "ai_invalid_json");
   assert.throws(() => parseAiJson(evil + "```"), (e: unknown) => (e as AiError).code === "ai_invalid_json");
-  assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
+  const { user, system } = process.cpuUsage(t0);
+  const ms = Math.round((user + system) / 1000);
+  assert.ok(ms < 500, `took ${ms} ms of CPU`);
   assert.equal(stripCodeFence("no fence"), "no fence");
   assert.equal(stripCodeFence("``````"), "");
 });
