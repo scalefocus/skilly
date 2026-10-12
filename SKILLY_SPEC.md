@@ -8,6 +8,19 @@ This document is the authoritative build spec produced from a full design interv
 It is written to be handed to Claude Code (or any engineering team) as the source of truth.
 Every decision below was explicitly confirmed.
 
+> **Implementation gaps (spec-ahead work).** Normally a spec change merges in the same PR as the
+> code that implements it. A section may instead be **specified ahead** — reviewed, approved and
+> merged before it is built — provided it carries an inline marker. A marker is a block whose text
+> starts **`⚠ GAP-nn · new feature`** (a specified feature not yet built) or **`⚠ GAP-nn · code
+> fix`** (shipped code that does not yet do what the surrounding text says), followed by one or two
+> sentences on what is missing. The spec text is authoritative; the marker states what the code
+> must change to match it. Numbers run sequentially through this document and are **never
+> reused**; each id appears in exactly one marker. A marker is **deleted in the same commit that
+> closes it**, so `grep -n "GAP-" SKILLY_SPEC.md` always lists exactly the open work. Every open
+> `new feature` marker is also teased on the What's new page's *Coming soon* list (§23), kept in
+> step by a unit test; `code fix` markers are never teased. CLAUDE.md's change workflow repeats
+> this rule.
+
 ---
 
 ## 0. TL;DR decisions
@@ -2733,6 +2746,51 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   on mount it stamps the marker (`POST /api/me/whats-new-seen {version: APP_VERSION}`, below) and
   closes any open update notice, whichever route brought the user here (the notice's link, the
   account menu, the Quick start footer, or a typed URL).
+- **Coming soon — what's next, greyed out.** The page opens with a **"Coming soon"** section,
+  **above** the release list (and above any *"New since your last visit"* divider), teasing the
+  features this spec already defines but that have **not shipped yet** — the open
+  `⚠ GAP-nn · new feature` markers (see *Implementation gaps* at the top of this document).
+  - **Source of truth.** A hand-maintained, client-safe list in `app/whats-new/upcoming.ts`, beside
+    `changelog.ts`: `UPCOMING: { ids: string[]; title: string; teaser: string; audience:
+    "everyone" | "admins" | "platform_admin" }[]`, in display order. `ids` lists the open
+    new-feature markers the entry covers (one teaser may cover a feature's several markers, e.g.
+    `["GAP-3", "GAP-4"]`); it is internal only and **never rendered**. `title` is a short
+    user-facing name, `teaser` one or two plain sentences on what the feature will do for the user.
+    **The list ships empty** — the section is hidden until the first feature is specified ahead.
+  - **Kept in step with the spec, by test.** A web unit test reads `SKILLY_SPEC.md` (repo root) and
+    fails when: an `UPCOMING` id has no open `⚠ GAP-nn · new feature` marker (a `code fix` id
+    counts as no match); an open new-feature marker belongs to **no** `UPCOMING` entry or to
+    **more than one**; an entry has an empty `ids` list; the same GAP id appears in more than one
+    marker; or a `title`/`teaser` contains `§` or `GAP-`, or is empty. So specifying a feature ahead
+    **forces** a teaser in, and shipping it (which deletes the marker) **forces** the teaser out —
+    the changelog entry then announces it instead. With no markers and an empty list the test passes.
+    A marker is recognised only as the literal `⚠ GAP-<digits> · new feature` (or `· code fix`) —
+    placeholder text such as `GAP-nn` and bare ids quoted as examples are never markers.
+  - **Audience.** An entry is shown only to viewers whose roles match: `everyone` → every
+    authenticated user; `admins` → `isPlatformAdmin || administersNamespace` (from `/api/me`);
+    `platform_admin` → `isPlatformAdmin`. A pure function `upcomingFor(entries, viewer)` does the
+    filtering (unit-tested). Nothing renders until `/api/me` has resolved, so an admin never sees
+    the count change after first paint. The filter is presentational: `upcoming.ts` is in the client
+    bundle, so a teaser's text is **not confidential** — the copy rules below keep it harmless.
+  - **Collapsed by default, never remembered.** The section opens **collapsed on every visit**:
+    only its heading block shows — a compass glyph, **"Coming soon · N"** (N = the entries that
+    apply to this viewer), the sub-line *"Planned and specified, not available yet. Plans can
+    change."*, and a chevron. The whole heading block is one `<button>` (`aria-expanded`,
+    `aria-controls` the list) that expands and collapses the list in place; Enter and Space work as
+    on any button. The open state is **not stored** (no localStorage, no server state), so the
+    release history stays the first thing a visitor reads. While collapsed the list is **not
+    rendered** (neither visible nor read out). Expanding fades the list in; no motion under
+    `prefers-reduced-motion: reduce`.
+  - **Look — deliberately greyed out.** Each entry is a row shaped like a release row but muted:
+    text in `--muted`, a **dashed** `--line` border, no accent, a neutral **"Coming soon"** chip in
+    place of the version chip, and **no date, no version, no ETA** — nothing that reads as a
+    promise. Rows are not links and not focusable; the list is a plain `<ul aria-label="Coming
+    soon">`. The section is **hidden entirely** when no entry applies to the viewer.
+  - **Copy rules.** Titles and teasers are product copy written when the feature is specified: no
+    `§`, no GAP ids, no person, skill or namespace named, described in user terms.
+  - **Not in the notice.** The update notice (below) lists only shipped releases; teasers appear on
+    the page alone, and the section has no effect on the `whats_new_seen_version` marker or the
+    read receipt.
 - **Update notice — once per minor/major release, per user, after onboarding, until dismissed.**
   When a user's authenticated page load runs a **newer** app version than the one they last
   acknowledged, the app shell shows a single persistent floating card pointing at this page. It
@@ -2833,7 +2891,9 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     authenticated user gets the same behaviour.
   - **Tests.** Unit: the trigger rule (null / patch-only / minor / major / equal / rollback / invalid /
     not-onboarded) and the excerpt selector (null seen → current only; seen → newer entries, cap 3,
-    overflow count). Integration: the stamp endpoint (null → set, lower → set, higher → unchanged with
+    overflow count); the *Coming soon* spec-sync test (above — run against the real `SKILLY_SPEC.md`
+    and `UPCOMING`, plus fixture strings covering each failure case) and `upcomingFor` (each
+    audience × platform admin / namespace admin / plain user, order preserved). Integration: the stamp endpoint (null → set, lower → set, higher → unchanged with
     `previous == current`, invalid or future version → 400, unauthenticated → 401). e2e: with the dev
     user's marker seeded one minor below `APP_VERSION`, the notice appears with the expected heading
     and excerpt, **is still present after a reload** (not stamped on appearance), clicking the card
@@ -2845,7 +2905,11 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     lies entirely inside the viewport, the excerpt list is scrollable (`scrollHeight >
     clientHeight`) and carries `tabindex="0"`, and the ✕ and the "See what's new" link are both
     visible without scrolling; the same check at mobile width (≤ 560px). The e2e sign-in helper and `shots.mjs`
-    **pre-stamp the marker** so smoke runs and screenshots stay free of the notice.
+    **pre-stamp the marker** so smoke runs and screenshots stay free of the notice. **Coming soon
+    (e2e):** the spec derives the expectation from `upcomingFor(UPCOMING, <dev user>)` — when it is
+    empty (as at launch) the section is absent; otherwise the heading shows *"Coming soon · N"*
+    collapsed (`aria-expanded="false"`, no rows in the DOM), a click expands it to exactly N rows,
+    and a reload shows it collapsed again.
 
 ### Account menu (presentation)
 - The bottom-left account menu (name/avatar trigger in the sidebar) lists, top to bottom:

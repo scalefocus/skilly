@@ -1763,3 +1763,27 @@ a.mention-chip:hover { text-decoration: underline; }
 .crop-zoom-value { min-width: 42px; text-align: right; font-family: var(--font-mono); font-size: 12px; }
 .crop-preview { display: flex; flex-direction: column; align-items: center; gap: 6px; flex-shrink: 0; }
 .crop-preview .field-label { margin-bottom: 0; }
+
+/* What's new "Coming soon" (§23): a collapsed-by-default, deliberately muted teaser list above the
+   release timeline — dashed borders, no accent, nothing that reads as a promise. */
+.coming-soon { margin-bottom: 28px; }
+.coming-soon-head {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px;
+  border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: none;
+  color: var(--muted); text-align: left; font: inherit; cursor: pointer;
+}
+.coming-soon-head:hover { border-color: var(--muted); }
+.coming-soon-glyph { flex-shrink: 0; }
+.coming-soon-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.coming-soon-title { font-weight: 600; font-size: 14.5px; }
+.coming-soon-sub { font-size: 12.5px; }
+.coming-soon-list {
+  list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 10px;
+  animation: coming-soon-fade 0.2s ease;
+}
+.coming-soon-row { padding: 12px 14px; border: 1px dashed var(--line); border-radius: var(--radius-sm); color: var(--muted); }
+.coming-soon-row .chip { color: var(--muted); }
+.coming-soon-row-title { font-weight: 600; font-size: 14px; margin-top: 6px; }
+.coming-soon-row-teaser { margin: 2px 0 0; font-size: 13.5px; line-height: 1.5; }
+@keyframes coming-soon-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .coming-soon-list { animation: none; } }
