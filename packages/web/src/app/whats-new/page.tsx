@@ -7,6 +7,8 @@ import { ScrollToTop, cachedGet, invalidateApi } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { CHANGELOG } from "./changelog";
+import { UPCOMING, upcomingFor, type UpcomingViewer } from "./upcoming";
+import { ComingSoon } from "./ComingSoon";
 
 function WhatsNew() {
   const fmt = useDateFmt();
@@ -17,13 +19,19 @@ function WhatsNew() {
   // → the plain timeline.
   const sinceParam = useSearchParams().get("since");
   const [markerSince, setMarkerSince] = useState<string | null>(null);
+  // The viewer's roles for the "Coming soon" audience filter (§23) — null until /api/me resolves, so
+  // the section never renders with one count and then changes.
+  const [viewer, setViewer] = useState<UpcomingViewer | null>(null);
 
   // Opening this page is the read receipt (§23): read the marker for the divider fallback, then
   // stamp the running version and tell the shell so an open update notice closes without a second
   // stamp. Best-effort — the page renders regardless.
   useEffect(() => {
-    cachedGet<{ whatsNewSeenVersion?: string | null }>("/api/me")
-      .then((j) => j.whatsNewSeenVersion ?? null)
+    cachedGet<{ whatsNewSeenVersion?: string | null; isPlatformAdmin?: boolean; administersNamespace?: boolean }>("/api/me")
+      .then((j) => {
+        setViewer({ isPlatformAdmin: !!j.isPlatformAdmin, administersNamespace: !!j.administersNamespace });
+        return j.whatsNewSeenVersion ?? null;
+      })
       .catch(() => null)
       .then((prev) => {
         setMarkerSince(prev);
@@ -51,6 +59,8 @@ function WhatsNew() {
           Every change to skilly, newest first. You&rsquo;re on <span className="mono">v{APP_VERSION}</span>.
         </p>
       </div>
+
+      {viewer && <ComingSoon entries={upcomingFor(UPCOMING, viewer)} />}
 
       {/* A simple vertical timeline: version + date on the left rail, the change on the right. */}
       <ol style={{ listStyle: "none", margin: 0, padding: 0, position: "relative" }}>

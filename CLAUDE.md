@@ -49,6 +49,13 @@ Every change to app behavior goes through this gate. **Never skip straight to co
 Exempt from the gate: pure internal work with zero behavior change (refactors, CI,
 comments) and doc-only edits — but if in doubt, it's gated.
 
+**Spec-ahead (optional).** An approved spec section may merge *before* it is built if it
+carries an inline `⚠ GAP-nn · new feature` (or `· code fix`) marker — next free number,
+never reused (see "Implementation gaps" at the top of `SKILLY_SPEC.md`). Every open
+new-feature marker needs exactly one teaser in `packages/web/src/app/whats-new/upcoming.ts`
+(the What's new *Coming soon* list); `upcoming.test.ts` fails otherwise. The commit that
+ships the feature **deletes its marker and its teaser**, and its changelog entry announces it.
+
 ## Commands / dev workflow
 Node ≥ 20, pnpm 9.15.x (pinned via `packageManager`). Workspace packages:
 `@skilly/shared`, `@skilly/web`, `@skilly/worker`. Shell commands below are

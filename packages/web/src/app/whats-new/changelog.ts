@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.28.0",
+    date: "2026-10-12",
+    summary:
+      "The What's new page can now show a greyed-out Coming soon list of features that are planned and specified but not available yet. It opens collapsed, shows only what applies to your role, and gives no dates. It's empty for now and appears when the first upcoming feature is announced.",
+  },
+  {
     version: "2.27.0",
     date: "2026-10-08",
     summary:
