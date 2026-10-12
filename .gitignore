@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .next/
+.next-e2e-*/
 out/
 *.tsbuildinfo
 coverage/
