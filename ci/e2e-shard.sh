@@ -6,6 +6,8 @@
 #
 # Inputs (env):
 #   E2E_SHARD, E2E_SHARD_TOTAL   this shard (1-based) and the shard count
+#   E2E_TEST_LIST                 optional: absolute path of a Playwright --test-list file; only
+#                                 those tests run (the quick e2e sample, ci/e2e-quick-list.mjs)
 #   BUILD_TAG, WORKSPACE          Jenkins build identity + checkout root
 #   CI_PG_IMAGES, CI_MINIO_IMAGES space-separated image candidate lists (first reachable wins)
 #   CI_E2E_PG_CONTAINER, CI_E2E_MINIO_CONTAINER, CI_E2E_MINIO_PASSWORD
@@ -146,7 +148,8 @@ done
 
 # Run this shard's slice. Playwright's webServer starts `next dev` (SKILLY_DEV_AUTH=1 is forbidden
 # in a production build), inheriting the env below; CI=1 makes it start a fresh server. E2E_SHARD /
-# E2E_SHARD_TOTAL select the slice and this shard's own build/result folders (playwright.config.ts).
+# E2E_SHARD_TOTAL select the slice and this shard's own build/result folders (playwright.config.ts);
+# E2E_TEST_LIST, when set, narrows the run to the tests that file names.
 rm -rf "packages/web/e2e/results/shard-${E2E_SHARD}" "packages/web/e2e/test-results/shard-${E2E_SHARD}"
 SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
 SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
@@ -156,4 +159,4 @@ AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
 SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
 S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
 CI=1 \
-  pnpm --filter @skilly/web e2e
+  pnpm --filter @skilly/web e2e ${E2E_TEST_LIST:+--test-list "${E2E_TEST_LIST}"}
