@@ -47,7 +47,8 @@ pipeline {
   parameters {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
-    booleanParam(name: 'RUN_E2E_TESTS', defaultValue: false, description: 'Run the gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser)')
+    booleanParam(name: 'RUN_E2E_TESTS', defaultValue: false, description: 'Run the gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). Pick this OR RUN_E2E_QUICK, not both (or neither).')
+    booleanParam(name: 'RUN_E2E_QUICK', defaultValue: false, description: 'Run a QUICK e2e pass instead: a fresh random 20% of the e2e tests, in a single shard (E2E_SHARDS is ignored). Spec files with serial tests are sampled whole. Pick this OR RUN_E2E_TESTS, not both (or neither).')
     string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
     string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     string(name: 'CI_MINIO_IMAGE', defaultValue: '', description: 'Pin the MinIO image for the gated e2e stack (blank = quay.io/minio/minio:latest, falling back to minio/minio:latest — Docker Hub denies the pull). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
@@ -85,6 +86,12 @@ pipeline {
   stages {
     stage('Toolchain') {
       steps {
+        // Reject contradictory e2e choices before spending any time: full and quick are alternatives.
+        script {
+          if (params.RUN_E2E_TESTS && params.RUN_E2E_QUICK) {
+            error 'RUN_E2E_TESTS and RUN_E2E_QUICK are mutually exclusive: tick one of them, or neither.'
+          }
+        }
         sh '''
           set -eu
           # Activate asdf and install the Node version declared in .tool-versions (or latest 20).
@@ -227,11 +234,13 @@ pipeline {
 
         stage('E2E tests') {
           // Opt-in like the db-tests: a full live stack (headless browser + web dev server + Postgres +
-          // MinIO) is required, so this never runs by default. Toggle with RUN_E2E_TESTS.
-          when { expression { return params.RUN_E2E_TESTS } }
+          // MinIO) is required, so this never runs by default. Toggle with RUN_E2E_TESTS (the whole
+          // suite, sharded) or RUN_E2E_QUICK (a random 20% of it, one shard) — never both (Toolchain).
+          when { expression { return params.RUN_E2E_TESTS || params.RUN_E2E_QUICK } }
           steps {
             script {
-              def shards = (params.E2E_SHARDS ?: '1').trim()
+              boolean quick = params.RUN_E2E_QUICK
+              def shards = quick ? '1' : (params.E2E_SHARDS ?: '1').trim()
               if (!(shards ==~ /[1-9]/)) {
                 error "E2E_SHARDS must be a whole number from 1 to 9 (got '${params.E2E_SHARDS}')"
               }
@@ -246,6 +255,14 @@ pipeline {
               // markers, and old JUnit/evidence (an unsharded run's results/junit.xml would otherwise
               // be reported again by the junit glob below).
               sh 'rm -rf "${WORKSPACE}/.ci-e2e-prepare.done" "${WORKSPACE}/.ci-e2e-prepare.failed" packages/web/e2e/results packages/web/e2e/test-results'
+              // Quick run: draw this build's sample (ci/e2e-quick-list.mjs) up front, so a listing
+              // failure stops the stage before any stack is provisioned. The single shard runs only the
+              // tests in this Playwright --test-list file; it is archived with the evidence below.
+              def shardEnv = []
+              if (quick) {
+                sh '. "${HOME}/.asdf/asdf.sh" && node ci/e2e-quick-list.mjs packages/web/e2e/results/quick-test-list.txt'
+                shardEnv << "E2E_TEST_LIST=${env.WORKSPACE}/packages/web/e2e/results/quick-test-list.txt"
+              }
               // `prepare` does the once-per-build work (browser install, wait for Typecheck —
               // ci/e2e-prepare.sh) while every shard provisions its own Postgres + MinIO; each shard
               // then waits for prepare's marker before starting its dev server (ci/e2e-shard.sh).
@@ -259,7 +276,7 @@ pipeline {
               for (int i = 1; i <= total; i++) {
                 int shard = i
                 branches["e2e shard ${shard}/${total}".toString()] = {
-                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}", "E2E_HEAP_MB=${heapMb}"]) {
+                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}", "E2E_HEAP_MB=${heapMb}"] + shardEnv) {
                     sh 'sh ci/e2e-shard.sh'
                   }
                 }
@@ -275,8 +292,9 @@ pipeline {
               // diagnosable afterwards; without them the console log's "element(s) not found" is all
               // anyone gets, and the only way forward is to re-run the whole 25-minute stage. A sharded
               // run writes each shard's evidence under test-results/shard-<n>/ and its JUnit under
-              // results/shard-<n>/junit.xml; the globs here already cover both.
-              archiveArtifacts artifacts: 'packages/web/test-results/**, packages/web/e2e/test-results/**',
+              // results/shard-<n>/junit.xml; the globs here already cover both. A quick run also keeps
+              // the list of tests it sampled, so a red sample can be re-run locally with --test-list.
+              archiveArtifacts artifacts: 'packages/web/test-results/**, packages/web/e2e/test-results/**, packages/web/e2e/results/quick-test-list.txt',
                                allowEmptyArchive: true, onlyIfSuccessful: false
               sh 'docker ps -aq --filter "label=skilly-ci-e2e=${BUILD_TAG}" | xargs -r docker rm -f >/dev/null 2>&1 || true'
             }
