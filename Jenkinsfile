@@ -49,9 +49,9 @@ pipeline {
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
     booleanParam(name: 'RUN_E2E_TESTS', defaultValue: false, description: 'Run the gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). Pick this OR RUN_E2E_QUICK, not both (or neither).')
     booleanParam(name: 'RUN_E2E_QUICK', defaultValue: false, description: 'Run a QUICK e2e pass instead: a fresh random 20% of the e2e tests, in a single shard (E2E_SHARDS is ignored). Spec files with serial tests are sampled whole. Pick this OR RUN_E2E_TESTS, not both (or neither).')
-    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM.')
+    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
     string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
-    string(name: 'CI_MINIO_IMAGE', defaultValue: '', description: 'Pin the MinIO image for the gated e2e stack (blank = minio/minio:latest, falling back to quay.io/minio/minio:latest). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
+    string(name: 'CI_MINIO_IMAGE', defaultValue: '', description: 'Pin the MinIO image for the gated e2e stack (blank = quay.io/minio/minio:latest, falling back to minio/minio:latest — Docker Hub denies the pull). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'DEPLOY_HOST', defaultValue: '', description: 'SSH target, e.g. user@host. Blank = use the skilly-deploy-host credential; filled = override it for this build.')
     string(name: 'DEPLOY_PATH', defaultValue: '', description: 'Checkout path on the deploy host. Blank = use the skilly-deploy-path credential; filled = override it for this build.')
@@ -77,7 +77,7 @@ pipeline {
     // blank falls back to a second public registry, so a Docker Hub pull denial or anonymous-pull
     // rate limit doesn't take the build down with it.
     CI_PG_IMAGES    = "${params.CI_POSTGRES_IMAGE?.trim() ?: 'postgres:16-alpine public.ecr.aws/docker/library/postgres:16-alpine'}"
-    CI_MINIO_IMAGES = "${params.CI_MINIO_IMAGE?.trim() ?: 'minio/minio:latest quay.io/minio/minio:latest'}"
+    CI_MINIO_IMAGES = "${params.CI_MINIO_IMAGE?.trim() ?: 'quay.io/minio/minio:latest minio/minio:latest'}"
     // asdf — must set ASDF_DIR explicitly so asdf.sh can locate itself in a non-interactive shell.
     ASDF_DIR = "${env.HOME}/.asdf"
     PATH     = "${env.HOME}/.asdf/shims:${env.HOME}/.asdf/bin:${env.PATH}"
@@ -244,7 +244,13 @@ pipeline {
               if (!(shards ==~ /[1-9]/)) {
                 error "E2E_SHARDS must be a whole number from 1 to 9 (got '${params.E2E_SHARDS}')"
               }
-              int total = shards as int
+              // Cap the shard count at what this agent's RAM holds and size each dev server's heap
+              // (ci/e2e-shard-plan.sh): every shard warms and pins every route, so two shards on a
+              // 16 GB agent got the dev server OOM-killed mid-warm-up and the whole shard failed
+              // ECONNREFUSED. The plan's reasoning is in the log; stdout is "<shards> <heap MB>".
+              def plan = sh(script: "sh ci/e2e-shard-plan.sh ${shards}", returnStdout: true).trim().split(' ')
+              int total = plan[0] as int
+              String heapMb = plan[1]
               // Clear what a previous build may have left in the workspace: the prepare → shard handoff
               // markers, and old JUnit/evidence (an unsharded run's results/junit.xml would otherwise
               // be reported again by the junit glob below).
@@ -270,7 +276,7 @@ pipeline {
               for (int i = 1; i <= total; i++) {
                 int shard = i
                 branches["e2e shard ${shard}/${total}".toString()] = {
-                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}"] + shardEnv) {
+                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}", "E2E_HEAP_MB=${heapMb}"] + shardEnv) {
                     sh 'sh ci/e2e-shard.sh'
                   }
                 }
