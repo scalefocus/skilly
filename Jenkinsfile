@@ -2,6 +2,12 @@
 //
 // Mirrors .github/workflows/ci.yml and deploys via Docker remote context (no registry required).
 //
+// STAGE GRAPH — only real dependencies are sequential:
+//   Toolchain → Install → Build packages → Verify ⟨Typecheck ‖ Unit tests ‖ DB tests ‖ E2E tests⟩ → Deploy
+// The Verify branches share one agent workspace (node_modules + the built dist/), so none of them may
+// rewrite what another reads: unit tests run the prebuilt dist/ instead of re-compiling it, and the
+// E2E dev server (which rewrites packages/web/next-env.d.ts on start) waits for Typecheck to finish.
+//
 // AGENT PREREQUISITES (label: linux):
 //   - asdf with nodejs 20+ plugin, Docker Engine + the `docker compose` plugin, git, ssh.
 //   - Ability to pull the CI stack images (Postgres, MinIO). Agents behind a registry proxy that
@@ -98,232 +104,278 @@ pipeline {
     }
 
     stage('Build packages') {
-      // shared must build before web/worker can resolve @skilly/shared types.
+      // shared must build before web/worker can resolve @skilly/shared types. Every Verify branch
+      // reads this build's output, so it stays ahead of them. `next build` is kept here rather than
+      // in a branch: it rewrites next-env.d.ts and .next/types, which the web typecheck reads.
       steps {
+        // Clear the Typecheck → E2E handoff marker a previous build may have left in the workspace.
+        sh 'rm -f "${WORKSPACE}/.ci-typecheck.done"'
         sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r build'
       }
     }
 
-    stage('Typecheck') {
-      steps {
-        sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r typecheck'
-      }
-    }
-
-    stage('Unit tests') {
-      // Live-DB suites self-skip when SKILLY_DB_E2E is unset, so this stays hermetic.
-      steps {
-        sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r test'
-      }
-    }
-
-    stage('DB integration tests') {
-      when { expression { return params.RUN_DB_TESTS } }
-      steps {
-        sh '''
-          set -eu
-          . "${HOME}/.asdf/asdf.sh"
-
-          # Resolve a usable image from the candidate list (first hit wins): local copy, else pull.
-          resolve_image() {
-            for _img in $1; do
-              if docker image inspect "$_img" >/dev/null 2>&1 || docker pull "$_img" >/dev/null; then
-                echo "$_img"
-                return 0
-              fi
-              echo "could not obtain $_img — trying the next candidate" >&2
-            done
-            echo "none of these images are reachable from this agent: $1" >&2
-            echo "set the matching CI_*_IMAGE build parameter to an image this agent can pull." >&2
-            return 1
+    stage('Verify') {
+      // Independent checks, run side by side. failFast: the first red branch aborts the rest, as the
+      // old sequential order did (no burning 25 minutes of e2e on a build that is already red).
+      failFast true
+      parallel {
+        stage('Typecheck') {
+          steps {
+            sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r typecheck'
           }
-
-          # The loopback host port Docker assigned to a container's published port.
-          host_port() {
-            _hp="$(docker port "$1" "$2/tcp" | head -n 1 | sed 's/.*://')"
-            if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
-            echo "$_hp"
+          post {
+            // Releases the E2E branch, which holds its dev server until this marker exists — pass or fail.
+            always {
+              sh 'touch "${WORKSPACE}/.ci-typecheck.done"'
+            }
           }
-
-          PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
-          echo "postgres image: ${PG_IMAGE}"
-
-          # Ephemeral Postgres for the gated suites, on a Docker-assigned loopback port.
-          docker run -d --rm --name "${CI_PG_CONTAINER}" \
-            -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
-            -p 127.0.0.1::5432 "${PG_IMAGE}"
-          PG_PORT="$(host_port "${CI_PG_CONTAINER}" 5432)"
-          CI_DATABASE_URL="postgres://skilly:test@127.0.0.1:${PG_PORT}/skilly"
-          echo "postgres on 127.0.0.1:${PG_PORT}"
-
-          # Wait for readiness. Probe over TCP and query the target database: on first boot the
-          # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
-          # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
-          # 'database "skilly" does not exist'). The temp server never listens on TCP.
-          ready=0
-          for i in $(seq 1 60); do
-            if docker exec "${CI_PG_CONTAINER}" psql -h 127.0.0.1 -U skilly -d skilly -tAc 'select 1' >/dev/null 2>&1; then ready=1; break; fi
-            sleep 2
-          done
-          if [ "$ready" != 1 ]; then
-            echo "Postgres did not become ready in time" >&2
-            docker logs "${CI_PG_CONTAINER}" >&2 || true
-            exit 1
-          fi
-
-          # Create least-privilege app role and apply all migrations.
-          docker exec "${CI_PG_CONTAINER}" psql -U skilly -d skilly -c \
-            "DO \\$\\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='skilly_app') THEN CREATE ROLE skilly_app LOGIN PASSWORD 'test'; END IF; END \\$\\$;"
-          for f in db/migrations/*.sql; do
-            echo "applying $f"
-            docker exec -i "${CI_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < "$f"
-          done
-
-          # Worker integration flow (publish/mirror) + web DB tests.
-          SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
-            node --test "packages/worker/dist/integration/publishFlow.test.js" "packages/worker/dist/integration/searchIndex.test.js"
-          SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
-            pnpm --filter @skilly/web test:db
-        '''
-      }
-      post {
-        always {
-          sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
         }
-      }
-    }
 
-    stage('E2E tests') {
-      // Opt-in like the db-tests: a full live stack (headless browser + web dev server + Postgres +
-      // MinIO) is required, so this never runs by default. Toggle with RUN_E2E_TESTS.
-      when { expression { return params.RUN_E2E_TESTS } }
-      steps {
-        sh '''
-          set -eu
-          . "${HOME}/.asdf/asdf.sh"
+        stage('Unit tests') {
+          // Live-DB suites self-skip when SKILLY_DB_E2E is unset, so this stays hermetic.
+          // Equivalent to `pnpm -r test`, minus its `tsc` re-compile: shared's and worker's `test`
+          // scripts rebuild dist/ in place, and the DB/E2E branches load that dist/ concurrently. The
+          // build above already emitted the same files (same tsconfig), so run the compiled tests as-is.
+          steps {
+            sh '''
+              set -eu
+              . "${HOME}/.asdf/asdf.sh"
+              pnpm --filter @skilly/shared --filter @skilly/worker exec sh -c "find dist -name '*.test.js' | xargs node --test"
+              pnpm --filter @skilly/web test
+            '''
+          }
+        }
 
-          # Resolve usable images from the candidate lists (first hit wins): local copy, else pull.
-          resolve_image() {
-            for _img in $1; do
-              if docker image inspect "$_img" >/dev/null 2>&1 || docker pull "$_img" >/dev/null; then
-                echo "$_img"
-                return 0
+        stage('DB integration tests') {
+          when { expression { return params.RUN_DB_TESTS } }
+          steps {
+            sh '''
+              set -eu
+              . "${HOME}/.asdf/asdf.sh"
+
+              # Resolve a usable image from the candidate list (first hit wins): local copy, else pull.
+              resolve_image() {
+                for _img in $1; do
+                  if docker image inspect "$_img" >/dev/null 2>&1 || docker pull "$_img" >/dev/null; then
+                    echo "$_img"
+                    return 0
+                  fi
+                  echo "could not obtain $_img — trying the next candidate" >&2
+                done
+                echo "none of these images are reachable from this agent: $1" >&2
+                echo "set the matching CI_*_IMAGE build parameter to an image this agent can pull." >&2
+                return 1
+              }
+
+              # The loopback host port Docker assigned to a container's published port.
+              host_port() {
+                _hp="$(docker port "$1" "$2/tcp" | head -n 1 | sed 's/.*://')"
+                if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
+                echo "$_hp"
+              }
+
+              PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
+              echo "postgres image: ${PG_IMAGE}"
+
+              # Ephemeral Postgres for the gated suites, on a Docker-assigned loopback port.
+              docker run -d --rm --name "${CI_PG_CONTAINER}" \
+                -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
+                -p 127.0.0.1::5432 "${PG_IMAGE}"
+              PG_PORT="$(host_port "${CI_PG_CONTAINER}" 5432)"
+              CI_DATABASE_URL="postgres://skilly:test@127.0.0.1:${PG_PORT}/skilly"
+              echo "postgres on 127.0.0.1:${PG_PORT}"
+
+              # Wait for readiness. Probe over TCP and query the target database: on first boot the
+              # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
+              # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
+              # 'database "skilly" does not exist'). The temp server never listens on TCP.
+              ready=0
+              for i in $(seq 1 60); do
+                if docker exec "${CI_PG_CONTAINER}" psql -h 127.0.0.1 -U skilly -d skilly -tAc 'select 1' >/dev/null 2>&1; then ready=1; break; fi
+                sleep 2
+              done
+              if [ "$ready" != 1 ]; then
+                echo "Postgres did not become ready in time" >&2
+                docker logs "${CI_PG_CONTAINER}" >&2 || true
+                exit 1
               fi
-              echo "could not obtain $_img — trying the next candidate" >&2
-            done
-            echo "none of these images are reachable from this agent: $1" >&2
-            echo "set the matching CI_*_IMAGE build parameter to an image this agent can pull." >&2
-            return 1
+
+              # Create least-privilege app role and apply all migrations.
+              docker exec "${CI_PG_CONTAINER}" psql -U skilly -d skilly -c \
+                "DO \\$\\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='skilly_app') THEN CREATE ROLE skilly_app LOGIN PASSWORD 'test'; END IF; END \\$\\$;"
+              for f in db/migrations/*.sql; do
+                echo "applying $f"
+                docker exec -i "${CI_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < "$f"
+              done
+
+              # Worker integration flow (publish/mirror) + web DB tests.
+              SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
+                node --test "packages/worker/dist/integration/publishFlow.test.js" "packages/worker/dist/integration/searchIndex.test.js"
+              SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
+                pnpm --filter @skilly/web test:db
+            '''
           }
-
-          # The loopback host port Docker assigned to a container's published port.
-          host_port() {
-            _hp="$(docker port "$1" "$2/tcp" | head -n 1 | sed 's/.*://')"
-            if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
-            echo "$_hp"
+          post {
+            always {
+              sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
+            }
           }
+        }
 
-          PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
-          MINIO_IMAGE="$(resolve_image "${CI_MINIO_IMAGES}")"
-          echo "postgres image: ${PG_IMAGE} | minio image: ${MINIO_IMAGE}"
+        stage('E2E tests') {
+          // Opt-in like the db-tests: a full live stack (headless browser + web dev server + Postgres +
+          // MinIO) is required, so this never runs by default. Toggle with RUN_E2E_TESTS.
+          when { expression { return params.RUN_E2E_TESTS } }
+          steps {
+            sh '''
+              set -eu
+              . "${HOME}/.asdf/asdf.sh"
 
-          # Ephemeral Postgres + MinIO for the live e2e stack, on Docker-assigned loopback ports.
-          docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
-            -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
-            -p 127.0.0.1::5432 "${PG_IMAGE}"
-          docker run -d --rm --name "${CI_E2E_MINIO_CONTAINER}" \
-            -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD="${CI_E2E_MINIO_PASSWORD}" \
-            -p 127.0.0.1::9000 "${MINIO_IMAGE}" server /data
-          E2E_PG_PORT="$(host_port "${CI_E2E_PG_CONTAINER}" 5432)"
-          E2E_MINIO_PORT="$(host_port "${CI_E2E_MINIO_CONTAINER}" 9000)"
-          CI_E2E_DATABASE_URL="postgres://skilly:test@127.0.0.1:${E2E_PG_PORT}/skilly"
-          CI_E2E_S3_ENDPOINT="http://127.0.0.1:${E2E_MINIO_PORT}"
-          echo "postgres on 127.0.0.1:${E2E_PG_PORT} | minio on 127.0.0.1:${E2E_MINIO_PORT}"
+              # Resolve usable images from the candidate lists (first hit wins): local copy, else pull.
+              resolve_image() {
+                for _img in $1; do
+                  if docker image inspect "$_img" >/dev/null 2>&1 || docker pull "$_img" >/dev/null; then
+                    echo "$_img"
+                    return 0
+                  fi
+                  echo "could not obtain $_img — trying the next candidate" >&2
+                done
+                echo "none of these images are reachable from this agent: $1" >&2
+                echo "set the matching CI_*_IMAGE build parameter to an image this agent can pull." >&2
+                return 1
+              }
 
-          # The web dev server gets a free port too: a fixed :3000 collides with whatever else the
-          # agent runs there (another job, a stale dev server), and Playwright's webServer refuses an
-          # occupied URL under CI=1. Ask the OS for an ephemeral port; playwright.config.ts starts
-          # `next dev` on PLAYWRIGHT_BASE_URL's port.
-          E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
-          E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
-          echo "web dev server on ${E2E_WEB_URL}"
+              # The loopback host port Docker assigned to a container's published port.
+              host_port() {
+                _hp="$(docker port "$1" "$2/tcp" | head -n 1 | sed 's/.*://')"
+                if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
+                echo "$_hp"
+              }
 
-          # Wait for Postgres readiness. Probe over TCP and query the target database: on first boot the
-          # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
-          # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
-          # 'database "skilly" does not exist'). The temp server never listens on TCP.
-          ready=0
-          for i in $(seq 1 60); do
-            if docker exec "${CI_E2E_PG_CONTAINER}" psql -h 127.0.0.1 -U skilly -d skilly -tAc 'select 1' >/dev/null 2>&1; then ready=1; break; fi
-            sleep 2
-          done
-          if [ "$ready" != 1 ]; then
-            echo "Postgres did not become ready in time" >&2
-            docker logs "${CI_E2E_PG_CONTAINER}" >&2 || true
-            exit 1
-          fi
+              # Fetch the Chromium browser (+ its OS deps) in the background — it needs nothing from the
+              # stack below, which is provisioned meanwhile. Joined (and its log printed) before the suite.
+              PW_INSTALL_LOG="${WORKSPACE}/.ci-e2e-playwright-install.log"
+              pnpm --filter @skilly/web exec playwright install --with-deps chromium > "${PW_INSTALL_LOG}" 2>&1 &
+              PW_INSTALL_PID=$!
 
-          # Least-privilege app role, all migrations, then the DEV seed (dev-admin user + fixtures).
-          docker exec "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -c \
-            "DO \\$\\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='skilly_app') THEN CREATE ROLE skilly_app LOGIN PASSWORD 'test'; END IF; END \\$\\$;"
-          for f in db/migrations/*.sql; do
-            echo "applying $f"
-            docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < "$f"
-          done
-          docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < db/seed.dev.sql
+              PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
+              MINIO_IMAGE="$(resolve_image "${CI_MINIO_IMAGES}")"
+              echo "postgres image: ${PG_IMAGE} | minio image: ${MINIO_IMAGE}"
 
-          # Wait for MinIO, then create the artifact bucket the web upload path writes to.
-          for i in $(seq 1 30); do
-            if docker exec "${CI_E2E_MINIO_CONTAINER}" mc alias set local http://localhost:9000 skilly "${CI_E2E_MINIO_PASSWORD}" >/dev/null 2>&1 \
-               && docker exec "${CI_E2E_MINIO_CONTAINER}" mc ready local >/dev/null 2>&1; then break; fi
-            sleep 2
-          done
-          docker exec "${CI_E2E_MINIO_CONTAINER}" mc mb -p local/skilly-artifacts >/dev/null 2>&1 || true
+              # Ephemeral Postgres + MinIO for the live e2e stack, on Docker-assigned loopback ports.
+              docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
+                -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
+                -p 127.0.0.1::5432 "${PG_IMAGE}"
+              docker run -d --rm --name "${CI_E2E_MINIO_CONTAINER}" \
+                -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD="${CI_E2E_MINIO_PASSWORD}" \
+                -p 127.0.0.1::9000 "${MINIO_IMAGE}" server /data
+              E2E_PG_PORT="$(host_port "${CI_E2E_PG_CONTAINER}" 5432)"
+              E2E_MINIO_PORT="$(host_port "${CI_E2E_MINIO_CONTAINER}" 9000)"
+              CI_E2E_DATABASE_URL="postgres://skilly:test@127.0.0.1:${E2E_PG_PORT}/skilly"
+              CI_E2E_S3_ENDPOINT="http://127.0.0.1:${E2E_MINIO_PORT}"
+              echo "postgres on 127.0.0.1:${E2E_PG_PORT} | minio on 127.0.0.1:${E2E_MINIO_PORT}"
 
-          # Provision the seeded skills' serving git repos. The seed deliberately creates HOSTED
-          # versions with git_published=false whose artifact keys have NO bytes; seed-bundles
-          # uploads a minimal valid bundle for each, and the publish sweep (normally the worker
-          # daemon's job — it does not run in this stage) synthesizes the repo/tags and flips the
-          # flag. Skip this and every hosted skill sits on the detail page's "Publishing this
-          # skill…" placeholder: the Install panel never renders and every spec driving it fails.
-          # publish-once exits non-zero if anything is still unpublished, so the gap fails HERE
-          # rather than as a confusing suite-wide failure. SKILLY_SPEC.md §6/§9, roadmap item 18.
-          export GIT_REPO_ROOT="${WORKSPACE}/.ci-e2e-git"
-          rm -rf "${GIT_REPO_ROOT}" && mkdir -p "${GIT_REPO_ROOT}"
-          ( cd packages/worker
-            export DATABASE_URL="${CI_E2E_DATABASE_URL}"
-            export S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}"
-            export S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts
-            node scripts/seed-bundles.mjs
-            node scripts/publish-once.mjs
-          )
+              # The web dev server gets a free port too: a fixed :3000 collides with whatever else the
+              # agent runs there (another job, a stale dev server), and Playwright's webServer refuses an
+              # occupied URL under CI=1. Ask the OS for an ephemeral port; playwright.config.ts starts
+              # `next dev` on PLAYWRIGHT_BASE_URL's port.
+              E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
+              E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
+              echo "web dev server on ${E2E_WEB_URL}"
 
-          # Fetch the Chromium browser (+ its OS deps).
-          pnpm --filter @skilly/web exec playwright install --with-deps chromium
+              # Wait for Postgres readiness. Probe over TCP and query the target database: on first boot the
+              # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
+              # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
+              # 'database "skilly" does not exist'). The temp server never listens on TCP.
+              ready=0
+              for i in $(seq 1 60); do
+                if docker exec "${CI_E2E_PG_CONTAINER}" psql -h 127.0.0.1 -U skilly -d skilly -tAc 'select 1' >/dev/null 2>&1; then ready=1; break; fi
+                sleep 2
+              done
+              if [ "$ready" != 1 ]; then
+                echo "Postgres did not become ready in time" >&2
+                docker logs "${CI_E2E_PG_CONTAINER}" >&2 || true
+                exit 1
+              fi
 
-          # Run the suite. Playwright's webServer starts `next dev` (SKILLY_DEV_AUTH=1 is forbidden in
-          # a production build), inheriting the env below; CI=1 makes it start a fresh server.
-          SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
-          SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
-          DATABASE_URL="${CI_E2E_DATABASE_URL}" \
-          NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
-          AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
-          SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
-          S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
-          CI=1 \
-            pnpm --filter @skilly/web e2e
-        '''
-      }
-      post {
-        always {
-          junit testResults: 'packages/web/**/junit.xml', allowEmptyResults: true
-          // Keep Playwright's own failure evidence. `error-context.md` (a full a11y snapshot of
-          // the page at the moment of failure) and the first-retry trace are what make a red run
-          // diagnosable afterwards; without them the console log's "element(s) not found" is all
-          // anyone gets, and the only way forward is to re-run the whole 25-minute stage.
-          archiveArtifacts artifacts: 'packages/web/test-results/**, packages/web/e2e/test-results/**',
-                           allowEmptyArchive: true, onlyIfSuccessful: false
-          sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_MINIO_CONTAINER}" >/dev/null 2>&1 || true'
+              # Least-privilege app role, all migrations, then the DEV seed (dev-admin user + fixtures).
+              docker exec "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -c \
+                "DO \\$\\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='skilly_app') THEN CREATE ROLE skilly_app LOGIN PASSWORD 'test'; END IF; END \\$\\$;"
+              for f in db/migrations/*.sql; do
+                echo "applying $f"
+                docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < "$f"
+              done
+              docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < db/seed.dev.sql
+
+              # Wait for MinIO, then create the artifact bucket the web upload path writes to.
+              for i in $(seq 1 30); do
+                if docker exec "${CI_E2E_MINIO_CONTAINER}" mc alias set local http://localhost:9000 skilly "${CI_E2E_MINIO_PASSWORD}" >/dev/null 2>&1 \
+                   && docker exec "${CI_E2E_MINIO_CONTAINER}" mc ready local >/dev/null 2>&1; then break; fi
+                sleep 2
+              done
+              docker exec "${CI_E2E_MINIO_CONTAINER}" mc mb -p local/skilly-artifacts >/dev/null 2>&1 || true
+
+              # Provision the seeded skills' serving git repos. The seed deliberately creates HOSTED
+              # versions with git_published=false whose artifact keys have NO bytes; seed-bundles
+              # uploads a minimal valid bundle for each, and the publish sweep (normally the worker
+              # daemon's job — it does not run in this stage) synthesizes the repo/tags and flips the
+              # flag. Skip this and every hosted skill sits on the detail page's "Publishing this
+              # skill…" placeholder: the Install panel never renders and every spec driving it fails.
+              # publish-once exits non-zero if anything is still unpublished, so the gap fails HERE
+              # rather than as a confusing suite-wide failure. SKILLY_SPEC.md §6/§9, roadmap item 18.
+              export GIT_REPO_ROOT="${WORKSPACE}/.ci-e2e-git"
+              rm -rf "${GIT_REPO_ROOT}" && mkdir -p "${GIT_REPO_ROOT}"
+              ( cd packages/worker
+                export DATABASE_URL="${CI_E2E_DATABASE_URL}"
+                export S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}"
+                export S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts
+                node scripts/seed-bundles.mjs
+                node scripts/publish-once.mjs
+              )
+
+              # Join the background browser install started at the top of this step.
+              if wait "${PW_INSTALL_PID}"; then
+                cat "${PW_INSTALL_LOG}"
+              else
+                cat "${PW_INSTALL_LOG}" >&2
+                echo "playwright install failed" >&2
+                exit 1
+              fi
+
+              # Hold the dev server until the parallel Typecheck branch is done: `next dev` rewrites
+              # packages/web/next-env.d.ts (and generates the .next/dev/types it imports) on start, and
+              # the web `tsc --noEmit` reads both. Typecheck touches the marker when it finishes (a red
+              # Typecheck aborts this branch via failFast anyway).
+              until [ -f "${WORKSPACE}/.ci-typecheck.done" ]; do
+                echo "waiting for the Typecheck branch before starting the dev server…"
+                sleep 5
+              done
+
+              # Run the suite. Playwright's webServer starts `next dev` (SKILLY_DEV_AUTH=1 is forbidden in
+              # a production build), inheriting the env below; CI=1 makes it start a fresh server.
+              SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
+              SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
+              DATABASE_URL="${CI_E2E_DATABASE_URL}" \
+              NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
+              AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
+              SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
+              S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
+              CI=1 \
+                pnpm --filter @skilly/web e2e
+            '''
+          }
+          post {
+            always {
+              junit testResults: 'packages/web/**/junit.xml', allowEmptyResults: true
+              // Keep Playwright's own failure evidence. `error-context.md` (a full a11y snapshot of
+              // the page at the moment of failure) and the first-retry trace are what make a red run
+              // diagnosable afterwards; without them the console log's "element(s) not found" is all
+              // anyone gets, and the only way forward is to re-run the whole 25-minute stage.
+              archiveArtifacts artifacts: 'packages/web/test-results/**, packages/web/e2e/test-results/**',
+                               allowEmptyArchive: true, onlyIfSuccessful: false
+              sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_MINIO_CONTAINER}" >/dev/null 2>&1 || true'
+            }
+          }
         }
       }
     }
