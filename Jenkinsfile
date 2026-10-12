@@ -48,6 +48,7 @@ pipeline {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
     booleanParam(name: 'RUN_E2E_TESTS', defaultValue: false, description: 'Run the gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser)')
+    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM.')
     string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     string(name: 'CI_MINIO_IMAGE', defaultValue: '', description: 'Pin the MinIO image for the gated e2e stack (blank = minio/minio:latest, falling back to quay.io/minio/minio:latest). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
@@ -65,6 +66,8 @@ pipeline {
     // fails the stage with "port is already allocated".
     CI_PG_CONTAINER = "skilly-ci-pg-${env.BUILD_TAG}"
     // Gated e2e stack — its own ephemeral Postgres + MinIO, independent of the db-test Postgres.
+    // Name PREFIXES: each e2e shard appends `-s<n>` and labels its containers
+    // skilly-ci-e2e=<BUILD_TAG>; the cleanups remove by that label (ci/e2e-shard.sh).
     CI_E2E_PG_CONTAINER    = "skilly-ci-e2e-pg-${env.BUILD_TAG}"
     CI_E2E_MINIO_CONTAINER = "skilly-ci-e2e-minio-${env.BUILD_TAG}"
     CI_E2E_MINIO_PASSWORD  = 'e2e-minio-not-a-secret'
@@ -227,142 +230,36 @@ pipeline {
           // MinIO) is required, so this never runs by default. Toggle with RUN_E2E_TESTS.
           when { expression { return params.RUN_E2E_TESTS } }
           steps {
-            sh '''
-              set -eu
-              . "${HOME}/.asdf/asdf.sh"
-
-              # Resolve usable images from the candidate lists (first hit wins): local copy, else pull.
-              resolve_image() {
-                for _img in $1; do
-                  if docker image inspect "$_img" >/dev/null 2>&1 || docker pull "$_img" >/dev/null; then
-                    echo "$_img"
-                    return 0
-                  fi
-                  echo "could not obtain $_img — trying the next candidate" >&2
-                done
-                echo "none of these images are reachable from this agent: $1" >&2
-                echo "set the matching CI_*_IMAGE build parameter to an image this agent can pull." >&2
-                return 1
+            script {
+              def shards = (params.E2E_SHARDS ?: '1').trim()
+              if (!(shards ==~ /[1-9]/)) {
+                error "E2E_SHARDS must be a whole number from 1 to 9 (got '${params.E2E_SHARDS}')"
               }
-
-              # The loopback host port Docker assigned to a container's published port.
-              host_port() {
-                _hp="$(docker port "$1" "$2/tcp" | head -n 1 | sed 's/.*://')"
-                if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
-                echo "$_hp"
+              int total = shards as int
+              // Clear what a previous build may have left in the workspace: the prepare → shard handoff
+              // markers, and old JUnit/evidence (an unsharded run's results/junit.xml would otherwise
+              // be reported again by the junit glob below).
+              sh 'rm -rf "${WORKSPACE}/.ci-e2e-prepare.done" "${WORKSPACE}/.ci-e2e-prepare.failed" packages/web/e2e/results packages/web/e2e/test-results'
+              // `prepare` does the once-per-build work (browser install, wait for Typecheck —
+              // ci/e2e-prepare.sh) while every shard provisions its own Postgres + MinIO; each shard
+              // then waits for prepare's marker before starting its dev server (ci/e2e-shard.sh).
+              // No failFast here: every shard runs to the end, so a red build reports all of its
+              // failures, not just the first shard's. (A red Verify branch elsewhere still aborts all.)
+              def branches = [
+                'e2e prepare': {
+                  sh 'sh ci/e2e-prepare.sh'
+                }
+              ]
+              for (int i = 1; i <= total; i++) {
+                int shard = i
+                branches["e2e shard ${shard}/${total}".toString()] = {
+                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}"]) {
+                    sh 'sh ci/e2e-shard.sh'
+                  }
+                }
               }
-
-              # Fetch the Chromium browser (+ its OS deps) in the background — it needs nothing from the
-              # stack below, which is provisioned meanwhile. Joined (and its log printed) before the suite.
-              PW_INSTALL_LOG="${WORKSPACE}/.ci-e2e-playwright-install.log"
-              pnpm --filter @skilly/web exec playwright install --with-deps chromium > "${PW_INSTALL_LOG}" 2>&1 &
-              PW_INSTALL_PID=$!
-
-              PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
-              MINIO_IMAGE="$(resolve_image "${CI_MINIO_IMAGES}")"
-              echo "postgres image: ${PG_IMAGE} | minio image: ${MINIO_IMAGE}"
-
-              # Ephemeral Postgres + MinIO for the live e2e stack, on Docker-assigned loopback ports.
-              docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
-                -e POSTGRES_USER=skilly -e POSTGRES_PASSWORD=test -e POSTGRES_DB=skilly \
-                -p 127.0.0.1::5432 "${PG_IMAGE}"
-              docker run -d --rm --name "${CI_E2E_MINIO_CONTAINER}" \
-                -e MINIO_ROOT_USER=skilly -e MINIO_ROOT_PASSWORD="${CI_E2E_MINIO_PASSWORD}" \
-                -p 127.0.0.1::9000 "${MINIO_IMAGE}" server /data
-              E2E_PG_PORT="$(host_port "${CI_E2E_PG_CONTAINER}" 5432)"
-              E2E_MINIO_PORT="$(host_port "${CI_E2E_MINIO_CONTAINER}" 9000)"
-              CI_E2E_DATABASE_URL="postgres://skilly:test@127.0.0.1:${E2E_PG_PORT}/skilly"
-              CI_E2E_S3_ENDPOINT="http://127.0.0.1:${E2E_MINIO_PORT}"
-              echo "postgres on 127.0.0.1:${E2E_PG_PORT} | minio on 127.0.0.1:${E2E_MINIO_PORT}"
-
-              # The web dev server gets a free port too: a fixed :3000 collides with whatever else the
-              # agent runs there (another job, a stale dev server), and Playwright's webServer refuses an
-              # occupied URL under CI=1. Ask the OS for an ephemeral port; playwright.config.ts starts
-              # `next dev` on PLAYWRIGHT_BASE_URL's port.
-              E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
-              E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
-              echo "web dev server on ${E2E_WEB_URL}"
-
-              # Wait for Postgres readiness. Probe over TCP and query the target database: on first boot the
-              # official image runs a temporary, socket-only server while it creates POSTGRES_DB, so a
-              # bare in-container pg_isready can succeed before the `skilly` database exists (flaky
-              # 'database "skilly" does not exist'). The temp server never listens on TCP.
-              ready=0
-              for i in $(seq 1 60); do
-                if docker exec "${CI_E2E_PG_CONTAINER}" psql -h 127.0.0.1 -U skilly -d skilly -tAc 'select 1' >/dev/null 2>&1; then ready=1; break; fi
-                sleep 2
-              done
-              if [ "$ready" != 1 ]; then
-                echo "Postgres did not become ready in time" >&2
-                docker logs "${CI_E2E_PG_CONTAINER}" >&2 || true
-                exit 1
-              fi
-
-              # Least-privilege app role, all migrations, then the DEV seed (dev-admin user + fixtures).
-              docker exec "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -c \
-                "DO \\$\\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='skilly_app') THEN CREATE ROLE skilly_app LOGIN PASSWORD 'test'; END IF; END \\$\\$;"
-              for f in db/migrations/*.sql; do
-                echo "applying $f"
-                docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < "$f"
-              done
-              docker exec -i "${CI_E2E_PG_CONTAINER}" psql -U skilly -d skilly -v ON_ERROR_STOP=1 < db/seed.dev.sql
-
-              # Wait for MinIO, then create the artifact bucket the web upload path writes to.
-              for i in $(seq 1 30); do
-                if docker exec "${CI_E2E_MINIO_CONTAINER}" mc alias set local http://localhost:9000 skilly "${CI_E2E_MINIO_PASSWORD}" >/dev/null 2>&1 \
-                   && docker exec "${CI_E2E_MINIO_CONTAINER}" mc ready local >/dev/null 2>&1; then break; fi
-                sleep 2
-              done
-              docker exec "${CI_E2E_MINIO_CONTAINER}" mc mb -p local/skilly-artifacts >/dev/null 2>&1 || true
-
-              # Provision the seeded skills' serving git repos. The seed deliberately creates HOSTED
-              # versions with git_published=false whose artifact keys have NO bytes; seed-bundles
-              # uploads a minimal valid bundle for each, and the publish sweep (normally the worker
-              # daemon's job — it does not run in this stage) synthesizes the repo/tags and flips the
-              # flag. Skip this and every hosted skill sits on the detail page's "Publishing this
-              # skill…" placeholder: the Install panel never renders and every spec driving it fails.
-              # publish-once exits non-zero if anything is still unpublished, so the gap fails HERE
-              # rather than as a confusing suite-wide failure. SKILLY_SPEC.md §6/§9, roadmap item 18.
-              export GIT_REPO_ROOT="${WORKSPACE}/.ci-e2e-git"
-              rm -rf "${GIT_REPO_ROOT}" && mkdir -p "${GIT_REPO_ROOT}"
-              ( cd packages/worker
-                export DATABASE_URL="${CI_E2E_DATABASE_URL}"
-                export S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}"
-                export S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts
-                node scripts/seed-bundles.mjs
-                node scripts/publish-once.mjs
-              )
-
-              # Join the background browser install started at the top of this step.
-              if wait "${PW_INSTALL_PID}"; then
-                cat "${PW_INSTALL_LOG}"
-              else
-                cat "${PW_INSTALL_LOG}" >&2
-                echo "playwright install failed" >&2
-                exit 1
-              fi
-
-              # Hold the dev server until the parallel Typecheck branch is done: `next dev` rewrites
-              # packages/web/next-env.d.ts (and generates the .next/dev/types it imports) on start, and
-              # the web `tsc --noEmit` reads both. Typecheck touches the marker when it finishes (a red
-              # Typecheck aborts this branch via failFast anyway).
-              until [ -f "${WORKSPACE}/.ci-typecheck.done" ]; do
-                echo "waiting for the Typecheck branch before starting the dev server…"
-                sleep 5
-              done
-
-              # Run the suite. Playwright's webServer starts `next dev` (SKILLY_DEV_AUTH=1 is forbidden in
-              # a production build), inheriting the env below; CI=1 makes it start a fresh server.
-              SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
-              SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
-              DATABASE_URL="${CI_E2E_DATABASE_URL}" \
-              NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
-              AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
-              SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
-              S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
-              CI=1 \
-                pnpm --filter @skilly/web e2e
-            '''
+              parallel branches
+            }
           }
           post {
             always {
@@ -370,10 +267,12 @@ pipeline {
               // Keep Playwright's own failure evidence. `error-context.md` (a full a11y snapshot of
               // the page at the moment of failure) and the first-retry trace are what make a red run
               // diagnosable afterwards; without them the console log's "element(s) not found" is all
-              // anyone gets, and the only way forward is to re-run the whole 25-minute stage.
+              // anyone gets, and the only way forward is to re-run the whole 25-minute stage. A sharded
+              // run writes each shard's evidence under test-results/shard-<n>/ and its JUnit under
+              // results/shard-<n>/junit.xml; the globs here already cover both.
               archiveArtifacts artifacts: 'packages/web/test-results/**, packages/web/e2e/test-results/**',
                                allowEmptyArchive: true, onlyIfSuccessful: false
-              sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_MINIO_CONTAINER}" >/dev/null 2>&1 || true'
+              sh 'docker ps -aq --filter "label=skilly-ci-e2e=${BUILD_TAG}" | xargs -r docker rm -f >/dev/null 2>&1 || true'
             }
           }
         }
@@ -471,7 +370,8 @@ MINIO_SCRIPT
 
   post {
     always {
-      sh 'docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" "${CI_E2E_MINIO_CONTAINER}" >/dev/null 2>&1 || true'
+      sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
+      sh 'docker ps -aq --filter "label=skilly-ci-e2e=${BUILD_TAG}" | xargs -r docker rm -f >/dev/null 2>&1 || true'
     }
     success { echo "skilly pipeline OK — ${env.GIT_COMMIT}" }
     failure { echo "skilly pipeline FAILED — ${env.GIT_COMMIT}" }

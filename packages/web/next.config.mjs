@@ -3,6 +3,11 @@ const nextConfig = {
   // Self-hosted standalone Node server. NEVER Vercel. (SKILLY_SPEC.md §2)
   output: "standalone",
   reactStrictMode: true,
+  // E2E SHARDS ONLY. A sharded CI run starts one `next dev` per shard from this same directory, and
+  // two dev servers can't share `.next`: Next 16 holds a lock file in it, and their compiled output
+  // would collide anyway. Each shard's Playwright webServer sets its own build folder
+  // (playwright.config.ts); unset everywhere else, so `.next` stays the default.
+  ...(process.env.SKILLY_NEXT_DIST_DIR ? { distDir: process.env.SKILLY_NEXT_DIST_DIR } : {}),
   // DEV-SERVER ONLY (`next dev`; `next build` ignores it). The e2e suite pre-compiles every route
   // (packages/web/e2e/global-setup.ts), but the dev server keeps just 5 on-demand entries and
   // disposes the rest after 60s idle - so with ~115 routes the warm-up was undone within a
