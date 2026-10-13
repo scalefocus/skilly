@@ -16,6 +16,14 @@
 //      effect (auth, the email OAuth hop, exports, erase) are skipped.
 // Client bundles are NOT pre-hydrated here — see the note at the end for why that was removed.
 //
+// E2E_WARM=pages stops after layer 1. Every warmed route stays pinned in the one webpack compiler,
+// and each new compile re-seals the whole pinned graph, so the full warm-up is slow AND heavy:
+// measured locally, ~31 min and ~9.7 GB private memory with an 8 GB heap ceiling (the heap cap
+// does not bound it), against ~3 min and ~4.3 GB after the pages alone. A run that executes only a
+// slice of the suite (the quick e2e sample, a single spec) does not need every API route pinned;
+// the routes its specs hit compile on first use against that much smaller graph, in seconds.
+// ci/e2e-shard.sh sets it for the quick run, which a fully warmed server got OOM-killed during.
+//
 // This only holds if the dev server KEEPS what it compiled: by default `next dev` retains 5
 // on-demand entries and disposes the rest after 60s idle, which undid this warm-up within a
 // minute (routes were observed re-compiling mid-run). The server must run with
@@ -110,6 +118,10 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   const baseURL = (config.projects[0]?.use.baseURL as string | undefined) ?? "http://localhost:3000";
   const started = Date.now();
   const log = (msg: string) => console.log(`[e2e warm-up] ${msg}`);
+  const scope = process.env.E2E_WARM || "all";
+  if (scope !== "all" && scope !== "pages") {
+    throw new Error(`[e2e warm-up] E2E_WARM must be "all" or "pages" (got "${scope}")`);
+  }
   const ctx = await request.newContext({ baseURL });
   try {
     // Sign in as the dev admin (the same handshake fixtures.ts uses) so signed-in-only pages
@@ -146,9 +158,13 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     for (const route of PAGES) await hit(route);
 
     // 2. Every API route, discovered from the source tree (config lives in e2e/, next to src/).
-    const api = apiRoutes(join(config.rootDir, "..", "src", "app", "api"));
-    log(`${api.length} API routes discovered`);
-    for (const route of api) await hit(route);
+    if (scope === "pages") {
+      log("E2E_WARM=pages — API routes compile on first use");
+    } else {
+      const api = apiRoutes(join(config.rootDir, "..", "src", "app", "api"));
+      log(`${api.length} API routes discovered`);
+      for (const route of api) await hit(route);
+    }
 
     // Deliberately NO browser pass. Hydrating every page in a real browser here was measured at
     // ~10 minutes on the mirror stack and saturated the dev server (`/api/auth/session` at 22s)
