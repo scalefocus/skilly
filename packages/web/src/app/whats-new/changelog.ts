@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.28.1",
+    date: "2026-10-13",
+    summary:
+      "The Coming soon list on this page now shows its first upcoming feature: replies to comments. Soon you'll be able to reply directly to a comment in a skill's discussion, keep the conversation in one thread, and get notified when someone answers you.",
+  },
+  {
     version: "2.28.0",
     date: "2026-10-12",
     summary:
