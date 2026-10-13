@@ -5,7 +5,8 @@
 //      "Draft improvements with Aria" and reads "Aria assessment"-style copy.
 //   2. The dialog shows the plan → Generate → the stub's SKILL.md rewrite (with a diff) and the
 //      README removal → untick the removal → Open in propose form.
-//   3. The propose form carries the drafted bundle and the pre-filled note → Submit for review →
+//   3. The propose form carries the drafted bundle and the AI-written note with its "Written by
+//      Aria" hint (gone once the note is edited) → Submit for review →
 //      the proposal page shows "Drafted with Aria" and the improved rules score.
 //
 // Needs AI_TOKEN_ENC_KEY on the dev server (CI sets a fixed test key); skipped without it. Serial:
@@ -23,6 +24,8 @@ test.describe.configure({ mode: "serial" });
 const TOKEN = "owui-e2e-draft-token-4455";
 const BETTER = (slug: string) =>
   `---\nname: ${slug}\ndescription: Reviews PDF contracts. Use this when the user says "review this contract". Do not use for spreadsheets.\n---\n\n# ${slug}\n\n## Instructions\n\n1. Read the contract.\n2. List the risky clauses.\n\n## Examples\n\nUser says: "review this contract"\n\n## Troubleshooting\n\nIf the PDF has no text layer, ask for a text copy.\n`;
+
+const NOTE = "The skill now says when to use it and walks through reviewing a contract step by step.";
 
 let server: Server;
 let stubUrl = "";
@@ -45,8 +48,11 @@ test.beforeAll(async () => {
       }
       const parsed = JSON.parse(body || "{}") as { model?: string; messages?: { role: string; content: string }[] };
       const user = parsed.messages?.find((m) => m.role === "user")?.content ?? "";
+      const system = parsed.messages?.find((m) => m.role === "system")?.content ?? "";
       let content = "OK";
-      if (user.includes("## File: SKILL.md")) {
+      if (system.includes("release note")) {
+        content = JSON.stringify({ note: NOTE });
+      } else if (user.includes("## File: SKILL.md")) {
         content = JSON.stringify({ action: "modify", content: BETTER(slugForStub), summary: "Added triggers, steps, examples and troubleshooting", addressed: ["DS-001", "BD-004"] });
       } else if (user.includes("## File: README.md")) {
         content = JSON.stringify({ action: "delete", summary: "Documentation belongs in SKILL.md", addressed: ["FS-003"] });
@@ -154,7 +160,13 @@ test("draft improvements with a branded AI: plan → generate → review → pro
     await page.waitForURL(/\/propose\?newVersion=1/, { timeout: NAV_TIMEOUT });
     await expect(page.getByTestId("ai-draft-notice")).toContainText("Files drafted with Aria from v1.0.0", { timeout: NAV_TIMEOUT });
     await expect(page.getByTestId("ai-draft-attached")).toBeVisible();
-    await expect(page.locator("textarea").filter({ hasText: "SKILL.md: Added triggers" })).toBeVisible();
+    // §44.7: the note is the stub's prose, marked as AI-written until the proposer edits it.
+    const note = page.locator("textarea").filter({ hasText: NOTE });
+    await expect(note).toBeVisible();
+    await expect(page.getByTestId("what-changed-ai-hint")).toHaveText(/Written by Aria — edit as needed\./);
+    await note.press("End");
+    await note.pressSequentially(" Reviewed.");
+    await expect(page.getByTestId("what-changed-ai-hint")).toHaveCount(0);
     const created = await clickAndAwait(page, () => page.getByRole("button", { name: "Submit for review →" }).click(), "/api/proposals", { method: "POST" });
     const proposalId = ((await created.json()) as { id: string }).id;
     await page.waitForURL(new RegExp(`/proposals/${proposalId}`), { timeout: NAV_TIMEOUT });
@@ -165,7 +177,7 @@ test("draft improvements with a branded AI: plan → generate → review → pro
     expect(proposal.quality.rulesScore).toBeGreaterThan(before);
     // The README removal was unticked, so the bundle still carries it (FS-003 remains).
     expect(proposal.quality.findings.map((f: { rule: string }) => f.rule)).toContain("FS-003");
-    expect(proposal.revisions.at(-1).payload.metadata.whatChanged).toContain("SKILL.md: Added triggers");
+    expect(proposal.revisions.at(-1).payload.metadata.whatChanged).toBe(`${NOTE} Reviewed.`);
   } finally {
     await deleteSkillFully(page, "global", slug);
   }

@@ -548,6 +548,17 @@ test("AI_FEATURES registers skill_quality_draft (§44.4) with the 32,768-token /
   assert.equal(AI_FEATURES.find((x) => x.key === "skill_quality")!.maxTokens, undefined);
 });
 
+test("AI_FEATURES registers skill_quality_draft_note (§44.7) with the defaults and a no-file-content egress", () => {
+  const f = AI_FEATURES.find((x) => x.key === "skill_quality_draft_note");
+  assert.ok(f);
+  assert.equal(f!.spec, "§44");
+  assert.equal(f!.label, "Summarize drafted changes");
+  assert.equal(f!.maxTokens, undefined);
+  assert.equal(f!.timeoutMs, undefined);
+  assert.match(f!.egress, /No file contents/);
+  assert.equal(AI_FEATURES.at(-1)!.key, "skill_quality_draft_note", "registered fifth (§40.7)");
+});
+
 test("aiComplete: maxTokens above 8192 is allowed only for a feature that declares a higher ceiling", async () => {
   const big: AiFeature[] = [...FEATURES, { key: "big", label: "Big", egress: "x", spec: "§99", maxTokens: 32_768 }];
   const st = stateWith();
