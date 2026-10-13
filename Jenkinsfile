@@ -46,16 +46,16 @@ pipeline {
 
   parameters {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
-    booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
-    choice(name: 'E2E_TESTS', choices: ['NO_E2E_TESTS', 'QUICK_E2E_TESTS', 'FULL_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 20% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards.')
-    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one shard): split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
     string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     string(name: 'CI_MINIO_IMAGE', defaultValue: '', description: 'Pin the MinIO image for the gated e2e stack (blank = quay.io/minio/minio:latest, falling back to minio/minio:latest — Docker Hub denies the pull). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
-    booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'DEPLOY_HOST', defaultValue: '', description: 'SSH target, e.g. user@host. Blank = use the skilly-deploy-host credential; filled = override it for this build.')
     string(name: 'DEPLOY_PATH', defaultValue: '', description: 'Checkout path on the deploy host. Blank = use the skilly-deploy-path credential; filled = override it for this build.')
     string(name: 'DEPLOY_GIT_URL', defaultValue: '', description: 'Git URL the deploy host fetches this repo from. Blank = use the skilly-deploy-git-url credential; filled = override it for this build.')
     string(name: 'DEPLOY_GIT_CREDENTIALS_ID', defaultValue: '', description: 'Optional "Secret text" credential id: token for an authenticated fetch of DEPLOY_GIT_URL (blank = unauthenticated fetch, e.g. a public repo).')
+    booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
+    choice(name: 'E2E_TESTS', choices: ['NO_E2E_TESTS', 'QUICK_E2E_TESTS', 'FULL_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 20% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards.')
+    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one shard): split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
+    booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
   }
 
   environment {
