@@ -36,6 +36,8 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "proposal.policy_violation": { title: "Policy check flagged your proposal", tone: "danger" },
   "skill.policy_flag": { title: "Policy check flagged a skill", tone: "danger" },
   "skill.discussion": { title: "New discussion comment", tone: "warn" },
+  // §24 — someone answered in a discussion thread you are part of (coalesced per thread).
+  "skill.discussion_reply": { title: "New reply", tone: "warn" },
   // §42 — a restricted skill shared with a namespace you administer, and its new versions.
   "skill.shared": { title: "Skill shared with your namespace", tone: "ok" },
   "skill.shared_new_version": { title: "New version of a skill shared with your namespace", tone: "ok" },

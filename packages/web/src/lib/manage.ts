@@ -260,14 +260,14 @@ export async function deleteSkill(
       }
     }
     //  - the skill's OWN discussion conversation (subject_type='skill', §24 Skill discussion):
-    //    delete it (messages cascade) and its dangling skill.discussion alerts. Polymorphic, no FK.
+    //    delete it (messages cascade) and its dangling skill.discussion / reply alerts. Polymorphic, no FK.
     const { rows: skillConvs } = await client.query<{ id: string }>(
       `delete from conversations where subject_type = 'skill' and subject_id = $1 returning id`,
       [skill.id],
     );
     if (skillConvs.length) {
       await client.query(
-        `delete from notifications where type in ('skill.discussion', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
+        `delete from notifications where type in ('skill.discussion', 'skill.discussion_reply', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
         [skillConvs.map((c) => c.id)],
       );
     }

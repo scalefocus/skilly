@@ -1,8 +1,9 @@
 // The skill detail page's Discussion card (SKILLY_SPEC.md §24 "Skill discussion"). GET returns a
-// newest-first page of the thread (100/page; lazy — empty + null conversationId until someone
-// posts) and clears the caller's coalesced skill.discussion alert; POST get-or-creates the
-// conversation and posts a comment (≤500 chars) stamped with the chosen version. Read/post =
-// anyone who can see the skill (archived → owner-only, read-only).
+// newest-first page of top-level comments, each with all of its replies (100/page; lazy — empty
+// + null conversationId until someone posts); POST get-or-creates the conversation and posts a
+// comment (≤500 chars) stamped with the chosen version, or — with `parentId` — a reply into that
+// comment's thread (§24 Replies). Read/post = anyone who can see the skill (archived →
+// owner-only, read-only).
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../../lib/access";
@@ -12,6 +13,8 @@ import { getSkillDiscussion, postSkillDiscussionMessage, canReadSkill, type Skil
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 
 export const dynamic = "force-dynamic";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function authorize(ns: string, slug: string) {
   const session = await getServerSession(authOptions);
@@ -52,9 +55,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
   if ("error" in a) return a.error;
   const limited = enforceRateLimit("messages", a.userId, 60);
   if (limited) return limited;
-  const body = (await req.json().catch(() => ({}))) as { body?: string; contextSemver?: unknown };
+  const body = (await req.json().catch(() => ({}))) as { body?: string; contextSemver?: unknown; parentId?: unknown };
   const semver = typeof body.contextSemver === "string" && body.contextSemver ? body.contextSemver : null;
-  const r = await postSkillDiscussionMessage(a.access, a.skill, body.body ?? "", semver);
+  // §24 Replies: an optional parentId (normalised to its thread's root server-side).
+  let parentId: string | null = null;
+  if (body.parentId != null) {
+    if (typeof body.parentId !== "string" || !UUID.test(body.parentId)) return Response.json({ error: "parentId must be a comment id" }, { status: 422 });
+    parentId = body.parentId;
+  }
+  const r = await postSkillDiscussionMessage(a.access, a.skill, body.body ?? "", semver, parentId);
   if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
   return Response.json({ conversationId: r.conversationId, message: r.message }, { status: 201 });
 }

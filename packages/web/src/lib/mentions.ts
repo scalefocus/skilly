@@ -70,6 +70,23 @@ function audiencePredicate(aud: MentionAudience, params: unknown[]): string {
   return "true";
 }
 
+/**
+ * Which of `userIds` could be @mentioned in this thread right now — active, not erased, and inside
+ * the audience: the same rule validateMentions enforces. The skill discussion uses it to decide
+ * whether the reply composer pre-inserts a chip for the author being answered (§24 Replies).
+ */
+export async function mentionableUserIds(audience: MentionAudience, userIds: string[]): Promise<Set<string>> {
+  if (!userIds.length) return new Set();
+  const params: unknown[] = [userIds];
+  const ok = audiencePredicate(audience, params);
+  const { rows } = await pool.query<{ id: string }>(
+    `select u.id from users u
+      where u.id = any($1::uuid[]) and u.status = 'active' and u.erased_at is null and ${ok}`,
+    params,
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
 // ── Post-time validation ─────────────────────────────────────────────────────
 
 /**

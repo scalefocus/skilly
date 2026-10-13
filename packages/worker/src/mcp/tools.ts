@@ -383,10 +383,10 @@ export function toolDefinitions(): ToolDefinition[] {
       name: "get_skill_discussion",
       title: "Read a skill's discussion",
       readOnly: true,
-      description: "The comment thread on a skill's page — questions, tips and gotchas from the people using it. Newest first.",
+      description: "The comment thread on a skill's page — questions, tips and gotchas from the people using it. Top-level comments newest first, each with its replies oldest first; reply to one with post_skill_comment's parentId.",
       inputSchema: {
         type: "object",
-        properties: { ...SKILL_REF_PROPS, limit: num("Max comments, 1–100 (default 30)."), offset: num("Skip this many.") },
+        properties: { ...SKILL_REF_PROPS, limit: num("Max top-level comments, 1–100 (default 30)."), offset: num("Skip this many top-level comments.") },
         required: SKILL_REF_REQUIRED,
       },
     },
@@ -394,13 +394,14 @@ export function toolDefinitions(): ToolDefinition[] {
       name: "post_skill_comment",
       title: "Comment on a skill",
       readOnly: false,
-      description: "Post a comment on a skill's discussion (max 500 chars). Optionally stamp which version you are talking about. Notifies the skill's maintainers and watchers.",
+      description: "Post a comment on a skill's discussion (max 500 chars). Optionally stamp which version you are talking about, or reply to an existing comment with parentId. Notifies the skill's maintainers and watchers, and a reply also notifies the people in that thread.",
       inputSchema: {
         type: "object",
         properties: {
           ...SKILL_REF_PROPS,
           body: str("Comment text (max 500 chars)."),
-          contextSemver: str("The version your comment is about — must be an active version of the skill."),
+          contextSemver: str("The version your comment is about — must be an active version of the skill. Omit it when replying: a reply inherits its thread's version."),
+          parentId: str("Reply to this comment (an id from get_skill_discussion). Replying to a reply posts into the same thread."),
         },
         required: [...SKILL_REF_REQUIRED, "body"],
       },
@@ -928,26 +929,40 @@ export async function callTool(
       if (!r.ok) return toolError(r.error);
       const limit = Math.min(100, Math.max(1, n(args, "limit") ?? 30));
       const offset = Math.max(0, n(args, "offset") ?? 0);
-      const { rows } = await pool.query<{
-        body: string; created_at: string; author: string; context_semver: string | null; via: string | null;
-      }>(
-        `select m.body, m.created_at, u.display_name as author, m.context_semver, m.via_mcp_client as via
+      type Row = { id: string; parent_id: string | null; removed: boolean; body: string; created_at: string; author: string; context_semver: string | null; via: string | null };
+      const cols = `m.id, m.parent_id, m.removed_at is not null as removed, m.body, m.created_at, u.display_name as author, m.context_semver, m.via_mcp_client as via`;
+      // §24 Replies: page over top-level comments (newest first); each carries all its replies.
+      const { rows } = await pool.query<Row>(
+        `select ${cols}
            from messages m
            join conversations c on c.id = m.conversation_id
            join users u on u.id = m.author_id
-          where c.subject_type = 'skill' and c.subject_id = $1
+          where c.subject_type = 'skill' and c.subject_id = $1 and m.parent_id is null
           order by m.created_at desc, m.id desc limit $2 offset $3`,
         [r.value.id, limit, offset],
       );
+      const { rows: replyRows } = rows.length
+        ? await pool.query<Row>(
+            `select ${cols} from messages m join users u on u.id = m.author_id
+              where m.parent_id = any($1::uuid[]) order by m.created_at, m.id`,
+            [rows.map((m) => m.id)],
+          )
+        : { rows: [] as Row[] };
+      const comment = (m: Row) => ({
+        id: m.id,
+        author: m.author,
+        body: m.body,
+        createdAt: m.created_at,
+        ...(m.via ? { viaMcpClient: m.via } : {}),
+      });
       return toolJson({
         skill: `${r.value.namespaceSlug}/${r.value.skillSlug}`,
-        comments: rows.map((m) => ({
-          author: m.author,
-          body: m.body,
-          createdAt: m.created_at,
-          aboutVersion: m.context_semver,
-          ...(m.via ? { viaMcpClient: m.via } : {}),
-        })),
+        comments: rows.map((m) => {
+          const replies = replyRows.filter((x) => x.parent_id === m.id).map(comment);
+          // A tombstone (removed by a moderator while it had replies) carries no author or body.
+          const head = m.removed ? { id: m.id, removed: true } : { ...comment(m), aboutVersion: m.context_semver };
+          return { ...head, replyCount: replies.length, replies };
+        }),
       });
     }
 
@@ -970,8 +985,9 @@ export async function callTool(
         body,
         s(args, "contextSemver") ?? null,
         caller.clientName,
+        s(args, "parentId") ?? null,
       );
-      return res.ok ? toolJson({ ok: true, messageId: res.messageId }) : toolError(res.error);
+      return res.ok ? toolJson({ ok: true, messageId: res.messageId, ...(res.parentId ? { parentId: res.parentId } : {}) }) : toolError(res.error);
     }
 
     case "list_skill_requests": {

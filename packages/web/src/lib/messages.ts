@@ -18,6 +18,7 @@ import {
   clearMentionNotifications,
   fanOutMentions,
   insertMentionRows,
+  mentionableUserIds,
   resolveMentions,
   validateMentions,
   type MentionAudience,
@@ -25,7 +26,19 @@ import {
   type PreparedMention,
 } from "./mentions";
 import { flattenMentions } from "./mentionPlainText";
-import { canReviewNamespace, extractMentions, isSkillVisible, userCanSeeSkillSql, maxRawMentionLength, mentionCollapsedLength, type EffectiveAccess } from "@skilly/shared";
+import {
+  DISCUSSION_THREAD_PEOPLE_SQL,
+  canReviewNamespace,
+  discussionDeleteAction,
+  discussionFanOutPlan,
+  discussionReplyNotifySql,
+  extractMentions,
+  isSkillVisible,
+  userCanSeeSkillSql,
+  maxRawMentionLength,
+  mentionCollapsedLength,
+  type EffectiveAccess,
+} from "@skilly/shared";
 
 export const MAX_MESSAGE_LEN = 4000;
 /** Skill-discussion comments are capped tighter than the general message body (§24). */
@@ -340,7 +353,7 @@ async function insertMessage(
   conversationId: string,
   authorId: string,
   body: string,
-  opts: { contextSemver?: string | null; trackParticipant?: boolean; mentions?: PreparedMention[] } = {},
+  opts: { contextSemver?: string | null; trackParticipant?: boolean; mentions?: PreparedMention[]; parentId?: string | null } = {},
 ): Promise<MessageView & { contextSemver: string | null }> {
   const contextSemver = opts.contextSemver ?? null;
   const trackParticipant = opts.trackParticipant ?? true;
@@ -351,10 +364,10 @@ async function insertMessage(
   );
   const { rows } = await pool.query<{ id: string; created_at: string; display_name: string; avatar: string | null }>(
     `with m as (
-       insert into messages (conversation_id, author_id, body, context_semver) values ($1, $2, $3, $4) returning id, created_at, author_id
+       insert into messages (conversation_id, author_id, body, context_semver, parent_id) values ($1, $2, $3, $4, $5) returning id, created_at, author_id
      )
      select m.id, m.created_at, u.display_name, u.avatar from m join users u on u.id = m.author_id`,
-    [conversationId, authorId, body, contextSemver],
+    [conversationId, authorId, body, contextSemver, opts.parentId ?? null],
   );
   // One message_mentions row per distinct validated mention (§24) — cascades with the message.
   if (opts.mentions?.length) await insertMentionRows(rows[0]!.id, opts.mentions);
@@ -546,6 +559,11 @@ export async function getRequestThread(access: Access, requestId: string): Promi
 // version it's about (context_semver) at post time. Moderator hard-delete (effective
 // maintainers ∪ platform admins) is the only message delete in the system. New comments fan out
 // a coalesced `skill.discussion` notification to watchers ∪ effective maintainers.
+//
+// Replies (§24 "Replies to discussion comments"): ONE level — a reply's parent_id is a top-level
+// comment of the same thread (a reply to a reply is normalised to its root) and it inherits the
+// root's version. A reply notifies the thread's people (`skill.discussion_reply`, coalesced per
+// thread). Deleting a top-level comment that has replies tombstones it instead of removing it.
 export interface SkillDiscussionSkill {
   id: string;
   namespaceId: string;
@@ -557,17 +575,39 @@ export interface SkillDiscussionSkill {
   sharedNamespaceIds: string[];
 }
 export interface SkillDiscussionMessage extends MessageView {
-  /** The version the comment is about (§24). Null when the skill had no active version at post time. */
+  /** The version the comment is about (§24). Null when the skill had no active version at post
+   *  time. A reply stores its root's version but renders no pill. */
   contextSemver: string | null;
+  /** The thread root for a reply; null for a top-level comment. */
+  parentId: string | null;
+  /** The author can be @mentioned in this discussion right now (active, not erased, can see the
+   *  skill) — the reply composer pre-inserts a chip for them only then (§24). */
+  authorMentionable: boolean;
 }
+/** A top-level comment a moderator removed while it had replies: no author, date or body. */
+export interface SkillDiscussionTombstone {
+  id: string;
+  removed: true;
+  parentId: null;
+}
+/** A top-level entry of the thread with its replies (oldest-first). */
+export type SkillDiscussionTopLevel = (SkillDiscussionMessage | SkillDiscussionTombstone) & {
+  replyCount: number;
+  replies: SkillDiscussionMessage[];
+};
 export interface SkillDiscussionThread {
   conversationId: string | null;
+  /** Every live message, top-level and replies alike; tombstones excluded. */
   count: number;
   archived: boolean;
   canPost: boolean;
   canModerate: boolean;
-  messages: SkillDiscussionMessage[];
+  /** Top-level comments, newest-first (100 per page), each carrying all of its replies. */
+  messages: SkillDiscussionTopLevel[];
   hasMore: boolean;
+  /** Roots of the threads holding an unread `skill.discussion_reply` row for the viewer — the card
+   *  clears each one when that thread enters the viewport (§24 Read). */
+  unreadThreads: string[];
   /** Per-reader mention resolution for the page above, keyed by literal token (§24 Mentions). */
   mentions: MentionMap;
   /** The composer's `@` typeahead context; null = whole directory (an org-visible skill). */
@@ -590,15 +630,20 @@ export async function canModerateSkillDiscussion(access: Access, skill: SkillDis
   return (rowCount ?? 0) > 0;
 }
 
-/** Live comment count for the collapsed card header ("Discussion (N)") — 0 when no thread yet. */
+/** Live message count for the card header ("Discussion (N)") — top-level comments and replies
+ *  alike, tombstones excluded (§24); 0 when no thread yet. */
 export async function skillDiscussionCount(skillId: string): Promise<number> {
   const { rows } = await pool.query<{ n: string }>(
     `select count(*)::text as n from messages m
        join conversations c on c.id = m.conversation_id
-      where c.subject_type = 'skill' and c.subject_id = $1`,
+      where c.subject_type = 'skill' and c.subject_id = $1 and m.removed_at is null`,
     [skillId],
   );
   return Number(rows[0]?.n ?? 0);
+}
+
+function skillMentionAudience(skill: SkillDiscussionSkill): MentionAudience {
+  return { kind: "skill", skillId: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility };
 }
 
 /** The `@` typeahead context string for a skill's discussion: a restricted skill narrows the
@@ -621,19 +666,54 @@ export async function getSkillDiscussion(
   const conversationId = await findConversation("skill", skill.id);
   const canPost = !skill.archived;
   const mentionContext = skillMentionContext(skill);
-  if (!conversationId) return { conversationId: null, count: 0, archived: skill.archived, canPost, canModerate, messages: [], hasMore: false, mentions: {}, mentionContext };
+  if (!conversationId) return { conversationId: null, count: 0, archived: skill.archived, canPost, canModerate, messages: [], hasMore: false, unreadThreads: [], mentions: {}, mentionContext };
 
-  const [{ rows }, count] = await Promise.all([
-    pool.query<{ id: string; author_id: string; display_name: string; avatar: string | null; body: string; context_semver: string | null; created_at: string; via_mcp_client: string | null }>(
-      `select m.id, m.author_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar, m.body, m.context_semver, m.created_at, m.via_mcp_client
-         from messages m join users u on u.id = m.author_id
-        where m.conversation_id = $1 order by m.created_at desc, m.id desc limit $2 offset $3`,
+  type Row = { id: string; author_id: string; display_name: string; avatar: string | null; body: string; context_semver: string | null; created_at: string; via_mcp_client: string | null; parent_id: string | null; removed_at: string | null };
+  const cols = `m.id, m.author_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar, m.body, m.context_semver, m.created_at, m.via_mcp_client, m.parent_id, m.removed_at`;
+  // Paging is over TOP-LEVEL comments only (newest-first by their own created_at — a new reply
+  // never bumps its thread); each page's roots then arrive with ALL their replies, oldest-first.
+  const [{ rows }, count, unread] = await Promise.all([
+    pool.query<Row>(
+      `select ${cols} from messages m join users u on u.id = m.author_id
+        where m.conversation_id = $1 and m.parent_id is null
+        order by m.created_at desc, m.id desc limit $2 offset $3`,
       [conversationId, limit + 1, offset],
     ),
     skillDiscussionCount(skill.id),
+    access.userId
+      ? pool.query<{ root_id: string }>(
+          `select distinct payload->>'rootId' as root_id from notifications
+            where user_id = $1 and type = 'skill.discussion_reply' and read_at is null and payload->>'conversationId' = $2`,
+          [access.userId, conversationId],
+        )
+      : Promise.resolve({ rows: [] as { root_id: string }[] }),
   ]);
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
+  const { rows: replyRows } = page.length
+    ? await pool.query<Row>(
+        `select ${cols} from messages m join users u on u.id = m.author_id
+          where m.parent_id = any($1::uuid[]) order by m.created_at, m.id`,
+        [page.map((m) => m.id)],
+      )
+    : { rows: [] as Row[] };
+
+  const live = [...page.filter((m) => !m.removed_at), ...replyRows];
+  const [mentions, mentionable] = await Promise.all([
+    resolveMentions(access, live.map((m) => m.id)),
+    mentionableUserIds(skillMentionAudience(skill), [...new Set(live.map((m) => m.author_id))]),
+  ]);
+  const view = (m: Row): SkillDiscussionMessage => ({
+    id: m.id, authorId: m.author_id, authorName: m.display_name, authorAvatar: m.avatar,
+    mine: m.author_id === access.userId, body: m.body, createdAt: m.created_at, contextSemver: m.context_semver,
+    viaMcpClient: m.via_mcp_client, parentId: m.parent_id, authorMentionable: mentionable.has(m.author_id),
+  });
+  const repliesOf = new Map<string, SkillDiscussionMessage[]>();
+  for (const r of replyRows) {
+    const list = repliesOf.get(r.parent_id!) ?? [];
+    list.push(view(r));
+    repliesOf.set(r.parent_id!, list);
+  }
 
   return {
     conversationId,
@@ -642,19 +722,21 @@ export async function getSkillDiscussion(
     canPost,
     canModerate,
     hasMore,
-    mentions: await resolveMentions(access, page.map((m) => m.id)),
+    unreadThreads: unread.rows.map((r) => r.root_id),
+    mentions,
     mentionContext,
-    messages: page.map((m) => ({
-      id: m.id, authorId: m.author_id, authorName: m.display_name, authorAvatar: m.avatar,
-      mine: m.author_id === access.userId, body: m.body, createdAt: m.created_at, contextSemver: m.context_semver,
-      viaMcpClient: m.via_mcp_client,
-    })),
+    messages: page.map((m): SkillDiscussionTopLevel => {
+      const replies = repliesOf.get(m.id) ?? [];
+      const head: SkillDiscussionMessage | SkillDiscussionTombstone = m.removed_at ? { id: m.id, removed: true, parentId: null } : view(m);
+      return { ...head, replyCount: replies.length, replies };
+    }),
   };
 }
 
 /** The Discussion card's read action (§24): fired by the client when the EXPANDED card's thread
  *  actually enters the viewport — never on page load or poll. Clears the viewer's coalesced
- *  `skill.discussion` row AND their `message.mention` rows for this discussion. */
+ *  `skill.discussion` row AND their `message.mention` rows for this discussion. Reply rows are
+ *  per thread — see markSkillDiscussionThreadsRead. */
 export async function markSkillDiscussionRead(access: Access, skill: SkillDiscussionSkill): Promise<void> {
   if (!access.userId) return;
   const conversationId = await findConversation("skill", skill.id);
@@ -666,88 +748,194 @@ export async function markSkillDiscussionRead(access: Access, skill: SkillDiscus
   await clearMentionNotifications(access.userId, conversationId);
 }
 
+/** The per-thread read (§24): the viewer's `skill.discussion_reply` rows for exactly these
+ *  threads clear when each thread (root plus replies) enters the viewport of the expanded card.
+ *  Seeing one thread never clears another's. Scoped to this skill's conversation. */
+export async function markSkillDiscussionThreadsRead(access: Access, skill: SkillDiscussionSkill, rootIds: string[]): Promise<void> {
+  if (!access.userId || rootIds.length === 0) return;
+  const conversationId = await findConversation("skill", skill.id);
+  if (!conversationId) return;
+  await pool.query(
+    `update notifications set read_at = now()
+      where user_id = $1 and type = 'skill.discussion_reply' and read_at is null
+        and payload->>'conversationId' = $2 and payload->>'rootId' = any($3::text[])`,
+    [access.userId, conversationId, rootIds],
+  );
+}
+
+type Failure = { ok: false; status: number; error: string };
+
 /** Post a comment on a skill's discussion (get-or-creating the thread). Validates the body (≤500)
  *  and that `contextSemver`, when given, is an ACTIVE version of the skill; a skill with no active
  *  version accepts a comment with no version (null pill). Fans out a coalesced skill.discussion
- *  notification. Read-only when the skill is archived. §24. */
+ *  notification. Read-only when the skill is archived. §24.
+ *  With `parentId` it is a REPLY (§24 Replies): normalised to the thread's root, refused (409) on a
+ *  tombstoned root, inheriting the root's version (so `contextSemver` must be omitted — 422), and
+ *  notifying the thread's people with `skill.discussion_reply`. */
 export async function postSkillDiscussionMessage(
   access: Access,
   skill: SkillDiscussionSkill,
   rawBody: string,
   contextSemver: string | null,
-): Promise<{ ok: true; conversationId: string; message: SkillDiscussionMessage } | { ok: false; status: number; error: string }> {
+  parentId: string | null = null,
+): Promise<{ ok: true; conversationId: string; message: SkillDiscussionMessage } | Failure> {
   if (!access.userId) return { ok: false, status: 403, error: "unknown user" };
   if (skill.archived) return { ok: false, status: 409, error: "this skill is archived — the discussion is read-only" };
+  if (parentId != null && contextSemver != null) return { ok: false, status: 422, error: "a reply inherits its thread's version — omit contextSemver" };
   const body = rawBody.trim();
   if (!body) return { ok: false, status: 422, error: "message is empty" };
   if (bodyTooLong(body, MAX_SKILL_DISCUSSION_LEN)) return { ok: false, status: 422, error: `message too long (max ${MAX_SKILL_DISCUSSION_LEN})` };
   // Mentions (§24): the mentionable set follows the skill's visibility; tokens inside markdown
   // code fences/backticks stay literal (this is the one markdown-rendering context).
-  const mentions = await validateMentions(access, body, { kind: "skill", skillId: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, { markdown: true });
+  const mentions = await validateMentions(access, body, skillMentionAudience(skill), { markdown: true });
   if (!mentions.ok) return mentions;
 
-  // Resolve the version pill. A non-null semver must be an active (non-yanked) version of this
-  // skill; anything else is rejected (a stale/forged pick can't be stamped). Null is allowed
-  // only when the skill genuinely has no active version to reference.
   let semver: string | null = null;
-  const { rows: active } = await pool.query<{ semver: string }>(
-    `select semver from skill_versions where skill_id = $1 and status = 'active'`,
-    [skill.id],
-  );
-  if (contextSemver != null) {
-    if (!active.some((v) => v.semver === contextSemver)) return { ok: false, status: 422, error: "unknown or inactive version" };
-    semver = contextSemver;
+  let root: { id: string; authorId: string } | null = null;
+  if (parentId != null) {
+    const r = await resolveReplyRoot(skill, parentId);
+    if (!r.ok) return r;
+    root = r.root;
+    semver = r.root.contextSemver; // the version pill is inherited from the root
+  } else {
+    // Resolve the version pill. A non-null semver must be an active (non-yanked) version of this
+    // skill; anything else is rejected (a stale/forged pick can't be stamped). Null is allowed
+    // only when the skill genuinely has no active version to reference.
+    const { rows: active } = await pool.query<{ semver: string }>(
+      `select semver from skill_versions where skill_id = $1 and status = 'active'`,
+      [skill.id],
+    );
+    if (contextSemver != null) {
+      if (!active.some((v) => v.semver === contextSemver)) return { ok: false, status: 422, error: "unknown or inactive version" };
+      semver = contextSemver;
+    }
   }
 
   const conversationId = await getOrCreateConversation("skill", skill.id);
-  const message = await insertMessage(conversationId, access.userId, body, { contextSemver: semver, trackParticipant: false, mentions: mentions.mentions });
-  // Mention pings first (un-coalesced, §12); the coalesced fan-out then skips those users.
+  let message: MessageView & { contextSemver: string | null };
+  try {
+    message = await insertMessage(conversationId, access.userId, body, { contextSemver: semver, trackParticipant: false, mentions: mentions.mentions, parentId: root?.id ?? null });
+  } catch (e) {
+    // The root was hard-deleted between the check and the insert (FK violation).
+    if (root && (e as { code?: string }).code === "23503") return { ok: false, status: 409, error: "that comment was removed — it can't take replies" };
+    throw e;
+  }
+  // Mention pings first (un-coalesced, §12); the reply and coalesced fan-outs then skip those users.
   const mentionedUserIds = mentions.mentions.filter((m) => m.kind === "user").map((m) => m.id);
   const fromName = (await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [access.userId])).rows[0]?.display_name ?? "Someone";
   const mentioned = await fanOutMentions(mentionedUserIds, access.userId, {
     conversationId, messageId: message.id, fromName,
     namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug,
   });
-  await fanOutSkillDiscussion(conversationId, skill, access.userId, mentioned);
-  return { ok: true, conversationId, message };
+  let exclude = mentioned;
+  if (root) {
+    const people = (await pool.query<{ user_id: string }>(DISCUSSION_THREAD_PEOPLE_SQL, [root.id, message.id])).rows.map((r) => r.user_id);
+    const plan = discussionFanOutPlan(access.userId, mentioned, people);
+    if (plan.replyCandidates.length) {
+      const payload = JSON.stringify({ conversationId, rootId: root.id, messageId: message.id, namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug, fromName });
+      await pool.query(discussionReplyNotifySql(), [skill.id, plan.replyCandidates, payload, root.authorId]);
+    }
+    exclude = plan.discussionExclude;
+  }
+  await fanOutSkillDiscussion(conversationId, skill, access.userId, exclude);
+  return { ok: true, conversationId, message: { ...message, parentId: root?.id ?? null, authorMentionable: true } };
 }
 
-/** Moderator hard-delete of a single comment (§24) — the only message delete in the system.
+/** Resolve a reply's thread root inside THIS skill's discussion: the parent itself when it is
+ *  top-level, else its root (one level, §24). 404 when the parent isn't in this discussion; 409
+ *  when the root is a tombstone. */
+async function resolveReplyRoot(
+  skill: SkillDiscussionSkill,
+  parentId: string,
+): Promise<{ ok: true; root: { id: string; authorId: string; contextSemver: string | null } } | Failure> {
+  const { rows } = await pool.query<{ id: string; author_id: string; context_semver: string | null; removed_at: string | null }>(
+    `select r.id, r.author_id, r.context_semver, r.removed_at
+       from messages p
+       join conversations c on c.id = p.conversation_id and c.subject_type = 'skill' and c.subject_id = $2
+       join messages r on r.id = coalesce(p.parent_id, p.id) and r.conversation_id = p.conversation_id
+      where p.id = $1`,
+    [parentId, skill.id],
+  );
+  const r = rows[0];
+  if (!r) return { ok: false, status: 404, error: "comment not found" };
+  if (r.removed_at) return { ok: false, status: 409, error: "that comment was removed — it can't take replies" };
+  return { ok: true, root: { id: r.id, authorId: r.author_id, contextSemver: r.context_semver } };
+}
+
+/** Moderator delete of a single comment (§24) — the only message delete in the system.
  *  Authority (effective maintainer ∪ platform admin) is re-verified by the caller AND here.
- *  Audited (`skill.discussion_message_deleted`); the body is never recorded. */
+ *  A reply or a childless top-level comment is hard-deleted; a top-level comment with replies
+ *  becomes a tombstone (body + mentions gone, removed_at stamped — the one in-place mutation of
+ *  a message); deleting the last reply under a tombstone sweeps the tombstone too. One
+ *  transaction. Audited (`skill.discussion_message_deleted`); the body is never recorded. */
 export async function deleteSkillDiscussionMessage(
   access: Access,
   skill: SkillDiscussionSkill,
   messageId: string,
-): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; outcome: "deleted" | "tombstoned"; tombstoneRemoved: boolean } | Failure> {
   if (!access.userId) return { ok: false, status: 403, error: "unknown user" };
   if (!(await canModerateSkillDiscussion(access, skill))) return { ok: false, status: 403, error: "not allowed" };
-  // Delete only if the message really belongs to THIS skill's discussion thread.
-  const { rows } = await pool.query<{ author_id: string }>(
-    `delete from messages m
-       using conversations c
-      where m.id = $1 and m.conversation_id = c.id and c.subject_type = 'skill' and c.subject_id = $2
-      returning m.author_id`,
-    [messageId, skill.id],
-  );
-  if (rows.length === 0) return { ok: false, status: 404, error: "not found" };
-  await appendAudit(pool, {
-    actorUserId: access.userId,
-    action: "skill.discussion_message_deleted",
-    targetType: "skill",
-    targetId: skill.id,
-    namespaceId: skill.namespaceId,
-    after: { messageId, authorId: rows[0]!.author_id }, // body intentionally NOT recorded (§24)
-  });
-  return { ok: true };
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    // Only a live message that really belongs to THIS skill's discussion thread; lock it, and its
+    // root for a reply, so a concurrent delete or reply can't race the tombstone decision.
+    const { rows } = await client.query<{ author_id: string; parent_id: string | null }>(
+      `select m.author_id, m.parent_id
+         from messages m join conversations c on c.id = m.conversation_id
+        where m.id = $1 and c.subject_type = 'skill' and c.subject_id = $2 and m.removed_at is null
+        for update of m`,
+      [messageId, skill.id],
+    );
+    const target = rows[0];
+    if (!target) {
+      await client.query("rollback");
+      return { ok: false, status: 404, error: "not found" };
+    }
+    const rootId = target.parent_id ?? messageId;
+    const parentRemoved = target.parent_id
+      ? (await client.query<{ removed: boolean }>(`select removed_at is not null as removed from messages where id = $1 for update`, [target.parent_id])).rows[0]?.removed ?? false
+      : false;
+    const liveReplies = Number((await client.query<{ n: string }>(`select count(*)::text as n from messages where parent_id = $1`, [rootId])).rows[0]?.n ?? 0);
+    const action = discussionDeleteAction({ isReply: target.parent_id != null, liveReplies, parentRemoved });
+
+    let tombstoneRemoved = false;
+    if (action.kind === "tombstone") {
+      await client.query(`update messages set body = '', removed_at = now() where id = $1`, [messageId]);
+      await client.query(`delete from message_mentions where message_id = $1`, [messageId]);
+    } else {
+      await client.query(`delete from messages where id = $1`, [messageId]);
+      if (action.sweepParent) {
+        const swept = await client.query(`delete from messages where id = $1 and removed_at is not null`, [target.parent_id]);
+        tombstoneRemoved = (swept.rowCount ?? 0) > 0;
+      }
+    }
+    await appendAudit(client, {
+      actorUserId: access.userId,
+      action: "skill.discussion_message_deleted",
+      targetType: "skill",
+      targetId: skill.id,
+      namespaceId: skill.namespaceId,
+      // The body is intentionally NOT recorded (§24).
+      after: { messageId, authorId: target.author_id, parentId: target.parent_id, tombstoned: action.kind === "tombstone", tombstoneRemoved },
+    });
+    await client.query("commit");
+    return { ok: true, outcome: action.kind === "tombstone" ? "tombstoned" : "deleted", tombstoneRemoved };
+  } catch (e) {
+    await client.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /** Coalesced fan-out for a new skill-discussion comment: one unread `skill.discussion` row per
  *  recipient per skill (upsert against idx_notifications_skilldisc_unread, preserving delivery
  *  bookkeeping — §12). Recipients = watchers ∪ effective maintainers (explicit ∪ ns admins),
  *  minus the author, minus discussion_notifications=false users, visibility-filtered so a watcher
- *  who lost access to a now-restricted skill is skipped (invariant #3). */
-async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscussionSkill, authorId: string, mentionedUserIds: string[] = []): Promise<void> {
+ *  who lost access to a now-restricted skill is skipped (invariant #3). `excludeUserIds` = those
+ *  this message already reaches with a mention or reply row (§12 precedence). */
+async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscussionSkill, authorId: string, excludeUserIds: string[] = []): Promise<void> {
   const fromName = (await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [authorId])).rows[0]?.display_name ?? "Someone";
   const payload = JSON.stringify({ conversationId, namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug, fromName });
   await pool.query(
@@ -765,11 +953,11 @@ async function fanOutSkillDiscussion(conversationId: string, skill: SkillDiscuss
        ) r
        join users u on u.id = r.uid and u.status = 'active' and u.discussion_notifications
       where r.uid <> $4
-        and r.uid <> all($5::uuid[]) -- mentioned users get the un-coalesced mention ping instead (§12)
+        and r.uid <> all($5::uuid[]) -- mentioned / thread people get a more specific row instead (§12)
         and exists (select 1 from skills sk where sk.id = $1 and ${userCanSeeSkillSql("r.uid", "sk")}) -- owner ∪ §42 grants
      on conflict (user_id, (payload->>'conversationId')) where type = 'skill.discussion' and read_at is null
      do update set payload = excluded.payload, created_at = now()`,
-    [skill.id, payload, skill.namespaceId, authorId, mentionedUserIds],
+    [skill.id, payload, skill.namespaceId, authorId, excludeUserIds],
   );
 }
 

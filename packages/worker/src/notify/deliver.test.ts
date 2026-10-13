@@ -109,6 +109,18 @@ test("renderNotification: skill.discussion names the commenter + skill, links to
   assert.equal(r.webhook.skill, "team-a/pdf");
 });
 
+test("renderNotification: skill.discussion_reply speaks to the root's author vs an earlier replier, links the thread (§24)", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  const payload = { namespaceSlug: "team-a", skillSlug: "pdf", fromName: "Ada", conversationId: "c9", rootId: "r1", messageId: "m2" };
+  const mine = renderNotification({ type: "skill.discussion_reply", payload: { ...payload, yourComment: true } });
+  assert.equal(mine.subject, "Skilly - New reply");
+  assert.match(mine.text, /Ada replied to your comment on team-a\/pdf\./);
+  assert.match(mine.text, /\[View the reply\]\(https:\/\/skilly\.test\/skills\/team-a\/pdf#discussion-r1\)/);
+  assert.equal(mine.webhook.event, "skill.discussion_reply");
+  const theirs = renderNotification({ type: "skill.discussion_reply", payload: { ...payload, yourComment: false } });
+  assert.match(theirs.text, /Ada replied in a discussion thread you're part of on team-a\/pdf\./);
+});
+
 test("renderNotification: skill.marked_official is human", () => {
   process.env.PUBLIC_BASE_URL = BASE;
   const r = renderNotification({ type: "skill.marked_official", payload: { namespaceSlug: "team-a", skillSlug: "pdf" } });

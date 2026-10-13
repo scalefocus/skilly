@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.29.0",
+    date: "2026-10-13",
+    summary:
+      "You can now reply directly to a comment in a skill's Discussion, so a conversation stays in one thread, and you're notified when someone answers in a thread you're part of. Longer threads fold behind \"Show more replies\". When a moderator removes a comment that has replies, a placeholder keeps the replies in place.",
+  },
+  {
     version: "2.28.2",
     date: "2026-10-13",
     summary:

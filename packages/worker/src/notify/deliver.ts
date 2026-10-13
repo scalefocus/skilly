@@ -142,6 +142,25 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
     };
   }
 
+  // Someone answered in a discussion thread the recipient is part of (§24 Replies). Coalesced per
+  // thread; the root's author reads "replied to your comment", an earlier replier "replied in a
+  // thread you're part of". Deep-links to the thread itself (#discussion-<root>).
+  if (n.type === "skill.discussion_reply" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const rootId = typeof p.rootId === "string" ? p.rootId : null;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}${rootId ? `#discussion-${rootId}` : "#discussion"}`;
+    const fromName = typeof p.fromName === "string" && p.fromName ? p.fromName : "Someone";
+    const s = subj(title);
+    const sentence = p.yourComment === true
+      ? `${fromName} replied to your comment on ${slug}.`
+      : `${fromName} replied in a discussion thread you're part of on ${slug}.`;
+    return {
+      subject: s,
+      text: `${sentence} ${cta("View the reply", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, from: fromName, url: abs(path) },
+    };
+  }
+
   // §45.6: a skill the recipient watches, maintains or has installed was deprecated. The successor
   // is in the payload only when THIS recipient could see it at insert time; the CTA follows it.
   if (n.type === "skill.deprecated" && typeof p.skillSlug === "string") {

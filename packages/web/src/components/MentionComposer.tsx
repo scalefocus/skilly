@@ -35,6 +35,9 @@ interface PickerState {
 export interface MentionComposerHandle {
   /** Insert plain text at the caret (the emoji picker). */
   insertText(text: string): void;
+  /** Insert an atomic mention chip (+ a trailing space) at the caret — e.g. the skill discussion's
+   *  reply composer pre-inserting the author being answered (§24 Replies). Removable like any chip. */
+  insertMention(kind: "user" | "skill", id: string, label: string): void;
   clear(): void;
   focus(): void;
 }
@@ -92,6 +95,8 @@ export const MentionComposer = forwardRef<
   {
     onChange: (body: string) => void;
     onSubmit: () => void;
+    /** Escape with no picker open (the picker's own Escape dismisses it first). */
+    onEscape?: () => void;
     placeholder: string;
     /** `/api/users/suggest` context (`proposal:<id>` / `skill:<ns>/<slug>`); null/undefined = whole directory. */
     mentionContext?: string | null;
@@ -99,7 +104,7 @@ export const MentionComposer = forwardRef<
     minHeight?: number;
     ariaLabel?: string;
   }
->(function MentionComposer({ onChange, onSubmit, placeholder, mentionContext, disabled, minHeight = 38, ariaLabel }, ref) {
+>(function MentionComposer({ onChange, onSubmit, onEscape, placeholder, mentionContext, disabled, minHeight = 38, ariaLabel }, ref) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [picker, setPicker] = useState<PickerState | null>(null);
   const pickerRef = useRef<PickerState | null>(null);
@@ -241,6 +246,11 @@ export const MentionComposer = forwardRef<
         return;
       }
     }
+    if (e.key === "Escape" && onEscape) {
+      e.preventDefault();
+      onEscape();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       onSubmit();
@@ -279,6 +289,33 @@ export const MentionComposer = forwardRef<
       if (!root) return;
       root.focus();
       document.execCommand("insertText", false, text);
+      report();
+    },
+    insertMention(kind: "user" | "skill", id: string, label: string) {
+      const root = rootRef.current;
+      if (!root) return;
+      root.focus();
+      // Place the caret at the end when it isn't already inside the editable.
+      const sel = window.getSelection();
+      if (!sel) return;
+      if (sel.rangeCount === 0 || !root.contains(sel.getRangeAt(0).startContainer)) {
+        const end = document.createRange();
+        end.selectNodeContents(root);
+        end.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(end);
+      }
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const chip = chipEl(kind, id, label);
+      const space = document.createTextNode(" ");
+      range.insertNode(space);
+      range.insertNode(chip);
+      const after = document.createRange();
+      after.setStart(space, 1);
+      after.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(after);
       report();
     },
     clear() {
