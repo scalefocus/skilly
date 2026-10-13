@@ -58,7 +58,9 @@ import { normalizeCategoryNames } from "@skilly/shared";
 import { isSingleEmoji } from "@skilly/shared/icon";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
-import { findDuplicateSkill, type DuplicateMatch } from "./duplicate";
+import { findDuplicateSkill, findSlugMatches, publicMatch, type DuplicateMatch } from "./duplicate";
+import { resolveUserAccessById } from "./access";
+import { slugExistsMessage, SLUG_EXISTS_CODE, type SlugMatch } from "@skilly/shared";
 import { syncGrants, validateGrantTargets, GRANT_TARGET_MESSAGES, type GrantVia } from "./grants";
 import { fulfilOriginRequest } from "./requests";
 import { M } from "./metrics";
@@ -631,7 +633,11 @@ export interface ActionInput {
 
 export type ActionResult =
   | { ok: true; state: ProposalState; materializedVersionId?: string }
-  | { ok: false; status: number; error: string; requiresOverride?: boolean; severity?: string; policy?: { tripped: PolicyGateTripView[] } };
+  | {
+      ok: false; status: number; error: string; requiresOverride?: boolean; severity?: string; policy?: { tripped: PolicyGateTripView[] };
+      /** §8 slug match: accept found a same-slug skill the PROPOSER can now see. */
+      code?: typeof SLUG_EXISTS_CODE; matches?: Omit<SlugMatch, "skillId">[];
+    };
 
 /** One tripped policy rule as the accept gate reports it (§47.11). */
 export interface PolicyGateTripView extends PolicyTrip {
@@ -818,6 +824,22 @@ export async function performProposalAction(
       if (input.expectedRevisionNo !== currentRev) {
         await client.query("rollback");
         return { ok: false, status: 409, error: "the proposal changed since you reviewed it — a newer revision exists; review the current revision and accept again" };
+      }
+      // §8 slug match, re-checked at accept: a NEW-skill proposal (never a promotion) whose slug a
+      // same-slug active skill now uses — visible to the PROPOSER, as of now (a racing proposal
+      // accepted first, a target-namespace edit, a new grant). The slug is locked on revise/resubmit,
+      // so the reviewer rejects it and the proposer re-versions the existing skill instead. A skill
+      // hidden from the proposer never blocks (the reviewer was alerted on the review page).
+      if (!p.target_skill_id) {
+        const lp = await latestPayload(client, input.proposalId);
+        if (!lp.promotedFromSkillVersionId) {
+          const proposerAccess = await resolveUserAccessById(p.submitted_by);
+          const matches = await findSlugMatches(proposerAccess, lp.metadata?.skillSlug, client);
+          if (matches.length > 0) {
+            await client.query("rollback");
+            return { ok: false, status: 409, error: slugExistsMessage(matches), code: SLUG_EXISTS_CODE, matches: matches.map(publicMatch) };
+          }
+        }
       }
     }
 
@@ -1799,6 +1821,12 @@ export interface ProposalDetail {
    */
   duplicate: DuplicateMatch | null;
   /**
+   * §8 slug match, review side: the active skills with this NEW-skill proposal's slug that the
+   * VIEWER can see (open proposals only; never for a promotion). The submitter could not see them
+   * when submitting (else it would have been a new version), so the reviewer is alerted and decides.
+   */
+  slugMatches: Omit<SlugMatch, "skillId">[];
+  /**
    * NEW-VERSION proposals only: the target skill's CURRENT state (skill-level metadata + the
    * latest stable version's usage), so the review page can show an explicit old → new diff of
    * what accepting would change (§8). Null for new-skill proposals.
@@ -1937,6 +1965,17 @@ export async function getProposalDetail(
     }
   }
 
+  // Slug-match alert (§8): open NEW-skill proposals only (once accepted, the skill matches itself),
+  // promotions exempt; at the VIEWER's visibility, like the duplicate alert above.
+  let slugMatches: Omit<SlugMatch, "skillId">[] = [];
+  {
+    const lp = latest?.payload;
+    const open = p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested";
+    if (lp && open && !p.target_skill_id && !lp.promotedFromSkillVersionId) {
+      slugMatches = (await findSlugMatches(access, lp.metadata?.skillSlug, pool)).map(publicMatch);
+    }
+  }
+
   // New-version proposals: the target skill's current state, for the review page's
   // old → new diff of what accepting would change (§8).
   let targetSkillCurrent: TargetSkillCurrent | null = null;
@@ -2002,6 +2041,7 @@ export async function getProposalDetail(
     caps,
     allowedActions,
     duplicate,
+    slugMatches,
     targetSkillCurrent,
   };
 }

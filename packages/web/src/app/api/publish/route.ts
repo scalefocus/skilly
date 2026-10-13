@@ -7,7 +7,7 @@ import { fetchPointerContentForCheck } from "../../../lib/pointerFetch";
 import { getMaxBundleBytes } from "../../../lib/settings";
 import { runScanners, PURE_SCANNERS, bundleContentCap } from "@skilly/shared";
 import { enforceRateLimit } from "../../../lib/ratelimit";
-import { findDuplicateSkill } from "../../../lib/duplicate";
+import { findDuplicateSkill, newSkillSlugClash } from "../../../lib/duplicate";
 import { verifyPointerSkill } from "../../../lib/pointerVerify";
 import { getDuplicateEnforcement } from "../../../lib/settings";
 import { aiDraftModelFromToken } from "../../../lib/qualityDraft";
@@ -52,6 +52,15 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   const existing = (
     await pool.query<{ id: string }>(`select s.id from skills s join namespaces n on n.id = s.namespace_id where n.slug = $1 and s.slug = $2`, [b.namespaceSlug, b.metadata?.skillSlug])
   ).rows[0];
+  // Slug match (§8): a NEW skill whose slug a visible active skill already uses — in any namespace —
+  // must be a new version of it instead. Always hard (independent of the duplicate setting).
+  if (!existing && b.metadata?.skillSlug) {
+    const ns = (await pool.query<{ id: string }>(`select id from namespaces where slug = $1`, [b.namespaceSlug])).rows[0];
+    if (ns) {
+      const clash = await newSkillSlugClash(access, ns.id, b.metadata.skillSlug);
+      if (clash) return clash;
+    }
+  }
   const reuse = !!b.reuseCurrentFiles && !!existing;
   if (b.reuseCurrentFiles && !existing) {
     return Response.json({ error: "keep-current-files applies only when publishing a new version of an existing skill" }, { status: 422 });

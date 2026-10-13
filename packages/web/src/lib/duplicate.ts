@@ -9,11 +9,55 @@
 //   - HOSTED: a byte-identical content set — any active version whose content_sha256 matches.
 //     Filenames/packaging are disregarded (see contentDigest), so a re-exported bundle still
 //     matches. Slug-independent.
-// The SAME-namespace+same-slug case is handled earlier by the slug-uniqueness 409; this catches
-// the cross-namespace and identical-content cases that slug-uniqueness misses.
-import type { Pool } from "pg";
-import { normalizeOriginUrl, normalizeSubdir, skillVisibilityWhere, type EffectiveAccess } from "@skilly/shared";
+// Both run AFTER the slug match (findSlugMatches below), which already redirects every same-slug
+// case the submitter can see — so the pointer identity mainly adds the reviewer-side alert for a
+// same-slug pointer hidden from the submitter, and the hosted identity catches identical content
+// under a DIFFERENT slug.
+import type { Pool, PoolClient } from "pg";
+import { normalizeOriginUrl, normalizeSubdir, skillVisibilityWhere, findSlugMatches as findSlugMatchesShared, slugExistsMessage, SLUG_EXISTS_CODE, type EffectiveAccess, type SlugMatch, type SlugMatchView } from "@skilly/shared";
 import { pool } from "./db";
+
+/**
+ * Slug match (§8): every ACTIVE skill (deprecated included) with this slug, in any namespace, that
+ * `access` can see. A non-empty result means a NEW-skill submission must become a new version of
+ * one of them. Promotions are exempt — callers skip this for a payload with promotedFromSkillVersionId.
+ */
+export function findSlugMatches(
+  access: EffectiveAccess,
+  slug: string | null | undefined,
+  db: Pool | PoolClient = pool,
+): Promise<SlugMatch[]> {
+  return findSlugMatchesShared(db, access, slug);
+}
+
+/**
+ * The submit-time gate for a NEW-skill payload (propose + direct publish), or null when it may
+ * proceed. Visible slug matches → 409 `slug_exists` with the matches (the form redirects into the
+ * new-version flow). A same-namespace skill the submitter can't see still 409s — creating it would
+ * hit the (namespace, slug) unique key anyway, and disclosing slug-taken on a write conflict is
+ * standard creation semantics (nothing else about it leaks).
+ */
+export async function newSkillSlugClash(
+  access: EffectiveAccess,
+  namespaceId: string,
+  slug: string,
+  db: Pool = pool,
+): Promise<Response | null> {
+  const matches = await findSlugMatches(access, slug, db);
+  if (matches.length > 0) {
+    return Response.json({ error: slugExistsMessage(matches), code: SLUG_EXISTS_CODE, matches: matches.map(publicMatch) }, { status: 409 });
+  }
+  const sameNs = (await db.query(`select 1 from skills where namespace_id = $1 and lower(slug) = lower($2)`, [namespaceId, slug])).rowCount;
+  if (sameNs) {
+    return Response.json({ error: `a skill named '${slug}' already exists in this namespace — propose a new version of it instead` }, { status: 409 });
+  }
+  return null;
+}
+
+/** A slug match as the API exposes it (no internal skill id). */
+export function publicMatch(m: SlugMatch): SlugMatchView {
+  return { namespaceSlug: m.namespaceSlug, slug: m.slug, title: m.title, type: m.type, deprecated: m.deprecated };
+}
 
 export interface DuplicateMatch {
   namespaceSlug: string;

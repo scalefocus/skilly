@@ -6,7 +6,7 @@ import { pool } from "../../../lib/db";
 import { createProposal, listReviewQueue, listMySubmissions, hasReviewScope, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, type RevisionPayload } from "../../../lib/proposals";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { getProposalsOpen, getDuplicateEnforcement } from "../../../lib/settings";
-import { findDuplicateSkill } from "../../../lib/duplicate";
+import { findDuplicateSkill, newSkillSlugClash } from "../../../lib/duplicate";
 import { verifyPointerSkill } from "../../../lib/pointerVerify";
 import { withSystemLog } from "../../../lib/apiLog";
 import { aiDraftModelFromToken } from "../../../lib/qualityDraft";
@@ -74,16 +74,8 @@ export const POST = withSystemLog("/api/proposals", async function POST(req: Req
     if (!s) return Response.json({ error: "target skill not found" }, { status: 404 });
     targetSkillId = s.id;
   } else if (body.metadata?.skillSlug) {
-    // NEW-skill proposal: fail fast on a slug collision instead of surfacing a unique-key
-    // violation at accept time. Disclosing slug-taken on a write conflict is standard
-    // creation semantics (the DB error would reveal it anyway); no other metadata leaks.
-    const clash = (await pool.query(`select 1 from skills where namespace_id = $1 and slug = $2`, [ns.id, body.metadata.skillSlug])).rowCount;
-    if (clash) {
-      return Response.json(
-        { error: `a skill named '${body.metadata.skillSlug}' already exists in this namespace — propose a new version of it instead` },
-        { status: 409 },
-      );
-    }
+    const clash = await newSkillSlugClash(access, ns.id, body.metadata.skillSlug);
+    if (clash) return clash;
   }
 
   // Keep current files (§8) is only meaningful when re-versioning an existing skill; the server
