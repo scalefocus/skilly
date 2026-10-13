@@ -74,6 +74,18 @@ spec:
               value: {{ .Values.publicBaseUrl | quote }}
             - name: GIT_REPO_ROOT
               value: /data/git
+            {{- with .Values.worker.trustProxy }}
+            - name: TRUST_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            # §22 per-surface rate limits — rendered only when set (unset = the worker's defaults).
+            {{- $rl := .Values.worker.rateLimits | default dict }}
+            {{- range $env, $val := dict "GIT_IP_RATE_MAX" $rl.gitIpMax "GIT_IP_RATE_WINDOW_MS" $rl.gitIpWindowMs "GIT_TOKEN_RATE_MAX" $rl.gitTokenMax "GIT_TOKEN_RATE_WINDOW_MS" $rl.gitTokenWindowMs "SCIM_RATE_MAX" $rl.scimMax "SCIM_RATE_WINDOW_MS" $rl.scimWindowMs }}
+            {{- if $val }}
+            - name: {{ $env }}
+              value: {{ $val | int64 | quote }}
+            {{- end }}
+            {{- end }}
             - name: SCIM_BEARER_TOKEN
               valueFrom:
                 secretKeyRef:
