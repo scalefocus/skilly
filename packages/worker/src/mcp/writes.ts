@@ -19,9 +19,12 @@ import {
   discussionFanOutPlan,
   discussionReplyNotifySql,
   fanOutToFollowers,
+  findSlugMatches,
   isSkillVisible,
   normalizeCategoryNames,
   sharedNamespaceIdsSql,
+  slugExistsMessage,
+  SLUG_EXISTS_CODE,
   userCanSeeSkillSql,
   type KnownCategory,
 } from "@skilly/shared";
@@ -793,6 +796,7 @@ export interface ProposeResult {
 export async function createMcpProposal(
   pool: Pool,
   userId: string,
+  access: EffectiveAccess,
   namespace: { id: string; slug: string },
   proposedSemver: string,
   payload: BuiltPayload,
@@ -801,6 +805,15 @@ export async function createMcpProposal(
 ): Promise<ProposeResult | WriteFailure> {
   const target = await resolveTarget(pool, namespace.id, payload.metadata.skillSlug, proposedSemver);
   if (!target.ok) return target;
+  // §8 slug match: a NEW skill can't take a slug a visible active skill already uses in ANOTHER
+  // namespace — the agent must propose to that skill's namespace, which makes it a new version.
+  if (!target.isNewVersion) {
+    const matches = await findSlugMatches(pool, access, payload.metadata.skillSlug);
+    if (matches.length > 0) {
+      const where = matches.map((m) => `namespace "${m.namespaceSlug}"`).join(" or ");
+      return fail(`${SLUG_EXISTS_CODE}: ${slugExistsMessage(matches)}. Call this tool again with ${where} — the proposal then becomes a new version of that skill.`);
+    }
+  }
   const metaErr = validateMetadata(payload.metadata, namespace.slug, target.isNewVersion) ?? (await categoriesFailure(pool, payload.metadata.categories));
   if (metaErr) return metaErr;
 

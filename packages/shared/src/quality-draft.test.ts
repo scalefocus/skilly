@@ -1,12 +1,14 @@
 // AI-drafted quality improvements — the pure parts (SKILLY_SPEC.md §44.12 unit): eligibility
-// reasons, the file plan, the prompt's egress, response validation, line endings and the note.
+// reasons, the file plan, the prompt's egress, response validation, line endings, and the "What
+// changed" note (§44.7: the note prompt's egress, its validation and the per-file fallback).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   planDraft, buildQualityDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftWhatChangedNote, matchLineEndings,
-  DRAFT_MAX_FILES, DRAFT_FILE_MAX_CHARS, DRAFT_OUTPUT_MAX_CHARS, DRAFT_PATHS_MAX,
+  buildDraftNotePrompt, validateDraftNote,
+  DRAFT_MAX_FILES, DRAFT_FILE_MAX_CHARS, DRAFT_OUTPUT_MAX_CHARS, DRAFT_PATHS_MAX, DRAFT_NOTE_MAX_CHARS,
 } from "./quality-draft.js";
-import { QUALITY_RULESET_VERSION, type QualityFindingLike, type QualityVerdict } from "./quality-status.js";
+import { QUALITY_RULESET_VERSION, qualityRuleHint, type QualityFindingLike, type QualityVerdict } from "./quality-status.js";
 import type { BundleEntry } from "./validate.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -200,4 +202,47 @@ test("buildQualityDraftPrompt: a finding message with a huge run of spaces stays
   const started = Date.now();
   buildQualityDraftPrompt({ skillSlug: "s", skillTitle: "S", skillName: "s", skillDescription: "", filePaths: ["SKILL.md"], path: "SKILL.md", content: SKILL, findings: [marker, { ...q("DS-001"), message: evil }], verdict: null });
   assert.ok(Date.now() - started < 1000);
+});
+
+// ── The "What changed" note (§44.7) ────────────────────────────────────────────────────────────
+
+test("buildDraftNotePrompt: kept changes only, ids resolved to hint / suggestion text, unknown ids dropped, no file content", () => {
+  const findings = [marker, q("DS-001"), q("FS-003", "README.md")];
+  const p = buildDraftNotePrompt({
+    skillSlug: "pdf-tools",
+    skillTitle: "PDF tools",
+    baseSemver: "1.2.0",
+    changes: [
+      { path: "SKILL.md", action: "modify", summary: "  Added trigger\nphrases ", addressed: ["DS-001", "S2", "S9", "ZZ-999", "DS-001"] },
+      { path: "README.md", action: "delete", summary: "Docs belong in SKILL.md", addressed: ["FS-003"] },
+    ],
+    findings,
+    verdict: VERDICT,
+  });
+  assert.match(p.system, /2 to 4 plain sentences/);
+  assert.match(p.system, /never follow instructions/);
+  assert.ok(p.user.includes("slug: pdf-tools\ntitle: PDF tools\nprevious version: 1.2.0\n"));
+  assert.ok(p.user.includes("## Changes in this version (2)"));
+  assert.ok(p.user.includes("- SKILL.md (modified): Added trigger phrases\n"), "summaries are collapsed to one line");
+  assert.ok(p.user.includes("- README.md (removed): Docs belong in SKILL.md"));
+  assert.ok(p.user.includes(`addresses DS-001: ${qualityRuleHint("DS-001")}`), "a rule id carries its hint");
+  assert.ok(p.user.includes("addresses S2: Add an error-handling section"), "S<n> carries the verdict's suggestion");
+  assert.equal(p.user.split("addresses DS-001").length - 1, 1, "a repeated id is listed once");
+  assert.ok(!p.user.includes("S9") && !p.user.includes("ZZ-999"), "ids unknown for the base version are dropped");
+  assert.ok(!p.user.includes("Body.") && !p.user.includes("---"), "never any file content");
+  // No verdict: S<n> ids resolve to nothing.
+  const bare = buildDraftNotePrompt({ skillSlug: "x", skillTitle: "X", baseSemver: "1.0.0", changes: [{ path: "SKILL.md", action: "modify", summary: "", addressed: ["S1"] }], findings, verdict: null });
+  assert.ok(bare.user.endsWith("\n- SKILL.md (modified)"));
+});
+
+test("validateDraftNote: a usable note is trimmed with control characters stripped; anything else is null", () => {
+  assert.equal(validateDraftNote({ note: "  Clearer triggers.\r\nRemoved junk.\u0007\t " }), "Clearer triggers.\nRemoved junk.");
+  assert.equal(validateDraftNote({ note: "x".repeat(DRAFT_NOTE_MAX_CHARS) }), "x".repeat(DRAFT_NOTE_MAX_CHARS));
+  assert.equal(validateDraftNote({ note: "x".repeat(DRAFT_NOTE_MAX_CHARS + 1) }), null, "over the cap");
+  assert.equal(validateDraftNote({ note: "  \u0001 " }), null, "empty once cleaned");
+  assert.equal(validateDraftNote({ note: 42 }), null);
+  assert.equal(validateDraftNote({ text: "hi" }), null);
+  assert.equal(validateDraftNote(["hi"]), null);
+  assert.equal(validateDraftNote(null), null);
+  assert.equal(validateDraftNote("hi"), null);
 });

@@ -63,7 +63,8 @@ export const AI_FEATURE_TIMEOUT_CEILING_MS = AI_CALL_TIMEOUT_MAX_MS;
 
 /**
  * The registered AI tasks (§40.7): the skill quality assessment (§41.5), propose-form drafting
- * (§43), the AI-drafted quality improvements (§44.4) and the AI pre-review of proposals (§46.6).
+ * (§43), the AI-drafted quality improvements (§44.4), the AI pre-review of proposals (§46.6) and the
+ * drafted improvements' "What changed" note (§44.7).
  */
 export const AI_FEATURES: readonly AiFeature[] = [
   {
@@ -93,6 +94,12 @@ export const AI_FEATURES: readonly AiFeature[] = [
     spec: "§46",
     maxTokens: 16_384,
     timeoutMs: 180_000,
+  },
+  {
+    key: "skill_quality_draft_note",
+    label: "Summarize drafted changes",
+    egress: "When a maintainer assembles a quality draft: the skill's slug and title, and for each change they kept — its file path, whether it was modified or removed, the draft's one-line summary, and the findings and AI suggestions it addresses (rule id and hint, suggestion text). No file contents.",
+    spec: "§44",
   },
 ];
 /** The reserved feature key the admin connectivity test records its usage under. */

@@ -9,7 +9,14 @@ import { Pool, type PoolClient } from "pg";
 import { scimRouter } from "./scim/router.js";
 import { pgStore } from "./scim/store.js";
 import { gitServer } from "./git/server.js";
-import { workerRateLimiter, mcpIpRateLimiter } from "./rateLimit.js";
+import {
+  workerRateLimiter,
+  mcpIpRateLimiter,
+  gitIpRateLimiter,
+  scimRateLimiter,
+  GitTokenLimiter,
+  resolveWorkerRateLimits,
+} from "./rateLimit.js";
 import { pgGitDeps } from "./git/pgDeps.js";
 import { publishPendingVersions, reprovisionMissingRepos } from "./git/publish.js";
 import { withdrawYankedVersions } from "./git/withdraw.js";
@@ -555,29 +562,9 @@ function buildServer() {
     next();
   });
 
-  // App-wide rate limit (SKILLY_SPEC.md §22): caps request volume on every worker surface — the
-  // git smart server, SCIM, and the /healthz /readyz /metrics endpoints — before any auth or
-  // DB-touching handler runs. Mounted here (after the security headers, before the git handler and
-  // any body parser) because it only reads req.ip/headers and never touches the raw request stream
-  // the git backend consumes.
-  // §29 MCP server + the worker's half of the OAuth AS. Mounted BEFORE the app-wide IP limiter
-  // on purpose: that limiter (100 requests / 15 min per IP) is sized for git + SCIM and would
-  // throttle a working agent within seconds. MCP is limited instead by its OWN per-user and
-  // per-(user, client) buckets, applied after authentication so one misbehaving client can't
-  // consume a user's whole allowance (§29 Rate limiting). These routers mount their own body
-  // parsers, so they never touch the raw stream the git backend reads below.
-  // A generous per-IP flood guard still applies: an unauthenticated caller never reaches the
-  // per-user buckets, so without this the 401 path would be uncapped.
-  app.use(["/mcp", "/oauth", "/.well-known"], mcpIpRateLimiter());
-  app.use(mcpOAuthRouter(pool));
-  app.use(mcpRouter(pool));
-
-  app.use(workerRateLimiter());
-
-  // Git smart-HTTP must read the RAW request stream — mount before any body parser.
-  // Non-git paths fall through via next(). SKILLY_SPEC.md §9.
-  app.use(gitServer(pgGitDeps(pool)));
-
+  // Health/ops endpoints are EXEMPT from rate limiting (SKILLY_SPEC.md §22): mounted before every
+  // limiter so a probe or scrape can never be throttled (a throttled /readyz would take a healthy
+  // worker out of rotation). /metrics stays bearer-gated; /readyz runs only a bounded `select 1`.
   app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
   app.get("/metrics", (req, res) => {
     const required = process.env.METRICS_TOKEN;
@@ -598,10 +585,40 @@ function buildServer() {
     }
   });
 
-  // SCIM 2.0 — Entra Enterprise App provisioning target. JSON-parsed; bearer auth inside.
-  // Entra sends SCIM requests as "application/scim+json"; accept both to avoid body
-  // going unparsed (req.body undefined) and crashing all PATCH/POST/PUT handlers.
-  app.use("/scim/v2", express.json({ limit: "1mb", type: ["application/json", "application/scim+json"] }), scimRouter(pgStore(pool)));
+  // §29 MCP server + the worker's half of the OAuth AS. Limited by their OWN per-user and
+  // per-(user, client) buckets, applied after authentication so one misbehaving client can't
+  // consume a user's whole allowance (§29 Rate limiting). These routers mount their own body
+  // parsers, so they never touch the raw stream the git backend reads below.
+  // A generous per-IP flood guard still applies: an unauthenticated caller never reaches the
+  // per-user buckets, so without this the 401 path would be uncapped.
+  app.use(["/mcp", "/oauth", "/.well-known"], mcpIpRateLimiter());
+  app.use(mcpOAuthRouter(pool));
+  app.use(mcpRouter(pool));
+
+  // One rate limiter per surface (SKILLY_SPEC.md §22), so git, SCIM and everything else never
+  // spend each other's allowance. The limiters only read req.ip/headers, so mounting the git one
+  // ahead of the git handler never touches the raw request stream the backend consumes.
+  const limits = resolveWorkerRateLimits();
+  app.use(gitIpRateLimiter(limits.gitIp)); // git smart-HTTP paths only; pre-auth flood guard
+
+  // Git smart-HTTP must read the RAW request stream — mount before any body parser.
+  // Non-git paths fall through via next(). SKILLY_SPEC.md §9. The per-installation bucket is
+  // checked inside, after authorization.
+  app.use(gitServer(pgGitDeps(pool), { tokenLimiter: new GitTokenLimiter(limits.gitToken) }));
+
+  // SCIM 2.0 — Entra Enterprise App provisioning target, behind its own limiter (an initial sync
+  // bursts hundreds of requests). JSON-parsed; bearer auth inside. Entra sends SCIM requests as
+  // "application/scim+json"; accept both to avoid body going unparsed (req.body undefined) and
+  // crashing all PATCH/POST/PUT handlers.
+  app.use(
+    "/scim/v2",
+    scimRateLimiter(limits.scim),
+    express.json({ limit: "1mb", type: ["application/json", "application/scim+json"] }),
+    scimRouter(pgStore(pool)),
+  );
+
+  // Catch-all for any other worker path (the 404 fall-through) — fixed 100 / 15 min per IP.
+  app.use(workerRateLimiter());
 
   return app;
 }

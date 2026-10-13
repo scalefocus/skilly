@@ -191,7 +191,7 @@ export function AiDraftDialog({
         body: JSON.stringify({
           runToken: done.runToken,
           baseSemver,
-          changes: kept.map((f) => (f.status === "modified" ? { path: f.path, action: "modify", content: f.content, summary: f.summary } : { path: f.path, action: "delete", summary: f.summary })),
+          changes: kept.map((f) => (f.status === "modified" ? { path: f.path, action: "modify", content: f.content, summary: f.summary, addressed: f.addressed } : { path: f.path, action: "delete", summary: f.summary, addressed: f.addressed })),
         }),
       });
       const j = await r.json().catch(() => ({}));
@@ -199,11 +199,11 @@ export function AiDraftDialog({
         const details = Array.isArray(j.details) ? `: ${j.details.join("; ")}` : "";
         throw new Error(`${j.error ?? `HTTP ${r.status}`}${details}`);
       }
-      const { aiDraftToken, whatChanged, model, ...upload } = j;
+      const { aiDraftToken, whatChanged, whatChangedSource, model, ...upload } = j;
       try {
         sessionStorage.setItem(
           AI_DRAFT_HANDOFF_KEY,
-          JSON.stringify({ ns, slug, baseSemver, aiDraftToken, whatChanged, model, upload }),
+          JSON.stringify({ ns, slug, baseSemver, aiDraftToken, whatChanged, whatChangedSource, model, upload }),
         );
       } catch {
         throw new Error("Your browser blocked session storage, so the draft can't be handed to the propose form.");
@@ -247,7 +247,7 @@ export function AiDraftDialog({
         </span>
         <button type="button" className="btn btn-ghost" onClick={close}>Discard</button>
         <button type="button" className="btn btn-primary" disabled={kept.length === 0 || phase === "assembling" || !done?.runToken} onClick={() => void openInPropose()} data-testid="ai-draft-open-propose">
-          {phase === "assembling" ? "preparing…" : "Open in propose form"}
+          {phase === "assembling" ? "Preparing…" : "Open in propose form"}
         </button>
       </>
     ) : null;

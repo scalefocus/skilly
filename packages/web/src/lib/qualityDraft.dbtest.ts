@@ -7,7 +7,8 @@
 // → skipped), the streamed run (plan → file events → done; one failing file leaves the others; a
 // file with a secret is never sent; one ai_usage row per call under the requester; the audit row),
 // the run cap (timed_out), assemble (the changes vouched for by the run token become a staged
-// bundle through the upload pipeline; a tampered change or another user's token is refused), the
+// bundle through the upload pipeline; a tampered change or another user's token is refused; the
+// AI-written "What changed" note and its per-file fallback, §44.7), the
 // proposal provenance (ai_draft_model only with a matching aiDraftToken), the My Skills flags and
 // the display-name setting (validation, audit, the served value, survives removing the config) and
 // the timeouts setting (§40.15: validation, audit, no-op save, the helper's config read, the run cap,
@@ -29,8 +30,10 @@ const BETTER_MD = (slug: string) =>
   `---\nname: ${slug}\ndescription: Reviews contracts. Use when the user says "review this contract". Do not use for spreadsheets.\n---\n# Draft me\n\n## Instructions\n\n1. Read the contract.\n`;
 
 type StubMode = "ok" | "slow";
-function startStub(slug: string): Promise<{ server: Server; url: string; state: { mode: StubMode; bodies: string[] } }> {
-  const state = { mode: "ok" as StubMode, bodies: [] as string[] };
+type NoteMode = "ok" | "bad" | "error";
+const NOTE = "Clearer triggers and steps make the skill easier to invoke. Stray documentation and tooling junk are gone.";
+function startStub(slug: string): Promise<{ server: Server; url: string; state: { mode: StubMode; noteMode: NoteMode; bodies: string[]; noteBodies: string[] } }> {
+  const state = { mode: "ok" as StubMode, noteMode: "ok" as NoteMode, bodies: [] as string[], noteBodies: [] as string[] };
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -45,9 +48,19 @@ function startStub(slug: string): Promise<{ server: Server; url: string; state: 
         res.end(JSON.stringify({ data: [{ id: "stub-model" }] }));
         return;
       }
-      state.bodies.push(body);
-      const user = String((JSON.parse(body) as { messages: { content: string }[] }).messages[0]?.content ?? "");
+      const parsed = JSON.parse(body) as { system?: string; messages: { content: string }[] };
+      const user = String(parsed.messages[0]?.content ?? "");
       const answer = (text: string) => res.end(JSON.stringify({ model: "stub-model", content: [{ type: "text", text }], usage: { input_tokens: 10, output_tokens: 5 } }));
+      // The §44.7 note call: recognised by its system prompt.
+      if (String(parsed.system ?? "").includes("release note")) {
+        state.noteBodies.push(body);
+        if (state.noteMode === "error") {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: { message: "bad request" } }));
+        } else answer(JSON.stringify({ note: state.noteMode === "bad" ? "" : NOTE }));
+        return;
+      }
+      state.bodies.push(body);
       const reply = () => {
         if (user.includes("## File: SKILL.md")) answer(JSON.stringify({ action: "modify", content: BETTER_MD(slug), summary: "Added triggers and steps", addressed: ["DS-001", "BD-004"] }));
         else if (user.includes("## File: README.md")) answer(JSON.stringify({ action: "delete", summary: "Docs belong in SKILL.md", addressed: ["FS-003"] }));
@@ -213,9 +226,9 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     // ── Assemble ──
     const runToken = String(done.runToken);
     const keep = [
-      { path: "SKILL.md", action: "modify" as const, content: BETTER_MD(slug), summary: "Added triggers and steps" },
-      { path: "README.md", action: "delete" as const, summary: "Docs belong in SKILL.md" },
-      { path: "node_modules/x/index.js", action: "delete" as const, summary: "Removed OS / tooling junk" },
+      { path: "SKILL.md", action: "modify" as const, content: BETTER_MD(slug), summary: "Added triggers and steps", addressed: ["DS-001", "BD-004", "NOPE-1"] },
+      { path: "README.md", action: "delete" as const, summary: "Docs belong in SKILL.md", addressed: ["FS-003"] },
+      { path: "node_modules/x/index.js", action: "delete" as const, summary: "Removed OS / tooling junk", addressed: ["FS-004"] },
     ];
     const tampered = await draft.assembleDraft({ ...(asMaintainer as object), userId: maintainer } as never, ctx, { runToken, baseSemver: "1.0.0", changes: [{ ...keep[0]!, content: BETTER_MD(slug) + "\nrm -rf /\n" }] }, { store });
     assert.equal(tampered.status, 422, "a change the run did not produce is refused");
@@ -223,11 +236,34 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     assert.equal(stolen.status, 422, "another user's run token is refused");
     const stale = await draft.assembleDraft({ ...(asMaintainer as object), userId: maintainer } as never, ctx, { runToken, baseSemver: "0.9.0", changes: keep }, { store });
     assert.equal(stale.status, 409);
+    assert.equal(stub.state.noteBodies.length, 0, "a refused assemble makes no note call");
+    const noteSince = new Date(Date.now() - 1000);
     const res = await draft.assembleDraft({ ...(asMaintainer as object), userId: maintainer } as never, ctx, { runToken, baseSemver: "1.0.0", changes: keep }, { store });
     const j = (await res.json()) as Record<string, unknown>;
     assert.equal(res.status, 201, JSON.stringify(j));
     assert.ok(typeof j.aiDraftToken === "string");
-    assert.match(String(j.whatChanged), /- SKILL\.md: Added triggers and steps\n- Removed README\.md: Docs belong in SKILL\.md/);
+    // §44.7: the AI-written note, from the kept changes' summaries and what they address — no file content.
+    assert.equal(j.whatChanged, NOTE);
+    assert.equal(j.whatChangedSource, "ai");
+    assert.equal(stub.state.noteBodies.length, 1);
+    const noteBody = stub.state.noteBodies[0]!;
+    assert.ok(noteBody.includes("Added triggers and steps") && noteBody.includes("Removed OS / tooling junk"));
+    assert.ok(noteBody.includes("addresses DS-001") && !noteBody.includes("NOPE-1"), "addressed ids resolved; unknown ones dropped");
+    assert.ok(!noteBody.includes("Reviews contracts") && !noteBody.includes(SECRET), "the note call carries no file content");
+    const noteUsage = await pool.query<{ user_id: string }>(`select user_id from ai_usage where feature = 'skill_quality_draft_note' and created_at >= $1`, [noteSince]);
+    assert.deepEqual(noteUsage.rows.map((u) => u.user_id), [maintainer], "one usage row under the requester");
+    // Fallbacks: an unusable answer and a provider error give the per-file list; the bundle and token still come back.
+    const bullets = "- SKILL.md: Added triggers and steps\n- Removed README.md: Docs belong in SKILL.md\n- Removed node_modules/x/index.js: Removed OS / tooling junk";
+    for (const mode of ["bad", "error"] as const) {
+      stub.state.noteMode = mode;
+      const fb = await draft.assembleDraft({ ...(asMaintainer as object), userId: maintainer } as never, ctx, { runToken, baseSemver: "1.0.0", changes: keep }, { store });
+      const fj = (await fb.json()) as Record<string, unknown>;
+      assert.equal(fb.status, 201, JSON.stringify(fj));
+      assert.equal(fj.whatChangedSource, "summaries", mode);
+      assert.equal(fj.whatChanged, bullets, mode);
+      assert.ok(typeof fj.aiDraftToken === "string");
+    }
+    stub.state.noteMode = "ok";
     const staged = new AdmZip(mem.get(String(j.artifactObjectKey))!);
     const names = staged.getEntries().map((e) => e.entryName).sort();
     assert.deepEqual(names, ["SKILL.md", "references/notes.md", "scripts/leak.py"]);
@@ -262,6 +298,10 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     // ── My Skills flags ──
     assert.deepEqual(await draft.canAiDraftFlags([{ type: "hosted", status: "active", quality: { score: 50 } }, { type: "pointer", quality: { score: 50 } }, { type: "hosted", quality: null }]), [true, false, false]);
     await ai.setAiEnabled(false, maintainer);
+    const notesBefore = stub.state.noteBodies.length;
+    const offNote = await draft.draftNote({ userId: maintainer }, ctx, keep);
+    assert.equal(offNote.whatChangedSource, "summaries", "AI off: the per-file list");
+    assert.equal(stub.state.noteBodies.length, notesBefore, "AI off: no note call");
     assert.deepEqual(await draft.canAiDraftFlags([{ type: "hosted", status: "active", quality: { score: 50 } }]), [false]);
     const off = await draft.loadDraftContext(asMaintainer, `${tag}-ns`, slug);
     assert.ok(!off.ok && off.reason === "ai_unavailable");
