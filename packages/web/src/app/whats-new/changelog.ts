@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.31.0",
+    date: "2026-10-13",
+    summary:
+      "When you draft a new version's quality improvements with AI, the \"What changed\" note is now a short plain-language summary written by the AI, not a list of files. A hint marks it as AI-written until you edit it. If the AI can't write one, you get the per-file list as before.",
+  },
+  {
     version: "2.30.0",
     date: "2026-10-13",
     summary:

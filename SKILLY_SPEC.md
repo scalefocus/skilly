@@ -8857,8 +8857,8 @@ than the built-in waits. A platform admin may tune them.
 
 - **What is tunable.**
   - **Per-call timeout, per registered feature** (§40.7) — one value for every `AI_FEATURES` entry
-    (today *Skill quality assessment*, *Propose-form drafting*, *Draft quality improvements*,
-    *Summarize drafted changes*, *AI pre-review of proposals*); a feature
+    (today *Skill quality assessment*, *Propose-form drafting*, *Draft quality improvements*, *AI
+    pre-review of proposals*, *Summarize drafted changes*); a feature
     registered later gets its own row automatically. **10–900 s, whole seconds.** It is the
     per-*attempt* timeout: with the helper's single retry (§40.7) one call may take up to twice that
     plus the capped `Retry-After` wait.
