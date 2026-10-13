@@ -67,6 +67,10 @@
       "types": "./dist/notifications.d.ts",
       "default": "./dist/notifications.js"
     },
+    "./email-digest": {
+      "types": "./dist/email-digest.d.ts",
+      "default": "./dist/email-digest.js"
+    },
     "./contact": {
       "types": "./dist/contact.d.ts",
       "default": "./dist/contact.js"

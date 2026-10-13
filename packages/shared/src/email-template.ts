@@ -268,8 +268,13 @@ export function manageEmailFooterText(baseUrl: string): string {
  * and the manage-preferences footer is appended even when the template omits it.
  */
 export function renderWrappedEmailHtml(wrapperHtml: string, messageText: string, baseUrl: string): string {
-  const fragment = textToHtmlFragment(messageText);
-  return wrapperHtml.replace(EMAIL_WRAPPER_PLACEHOLDER, () => fragment) + manageEmailFooterHtml(baseUrl);
+  return renderWrappedHtmlFragment(wrapperHtml, textToHtmlFragment(messageText), baseUrl);
+}
+
+/** As {@link renderWrappedEmailHtml}, for a message that is already a (trusted, escaped) HTML
+ *  fragment — the email digest's lists and section titles (§48.9). */
+export function renderWrappedHtmlFragment(wrapperHtml: string, fragmentHtml: string, baseUrl: string): string {
+  return wrapperHtml.replace(EMAIL_WRAPPER_PLACEHOLDER, () => fragmentHtml) + manageEmailFooterHtml(baseUrl);
 }
 
 /** Render the plain-text alternative part: the message (markdown links flattened) + the manage line. */

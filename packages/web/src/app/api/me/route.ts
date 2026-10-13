@@ -26,6 +26,7 @@ import { invalidateLevels } from "../../../lib/levels";
 import { setUserTimeZone } from "../../../lib/achievements";
 import { validateTimeZone } from "@skilly/shared/achievements";
 import { getOpenSurvey, selfSurveyStatus, setUserSurveysEnabled } from "../../../lib/survey";
+import { setUserEmailDigest } from "../../../lib/emailDigest";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,7 @@ export async function GET() {
             date_format: string | null;
             leaderboard_hidden: boolean;
             email_notifications: boolean;
+            email_digest: string | null;
             drift_notifications: boolean;
             new_version_notifications: boolean;
             discussion_notifications: boolean;
@@ -71,7 +73,7 @@ export async function GET() {
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, email_digest, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -107,6 +109,15 @@ export async function GET() {
     leaderboardHidden,
     // §12 email-channel opt-out: on = notification email over whichever transport is active.
     emailNotifications: prefs?.email_notifications ?? true,
+    // §48.10 the "Email frequency" choice (null = organization default) and what the select needs
+    // for its labels and helper text: the kill switch, the org default, the send hour and weekday.
+    emailDigest: prefs?.email_digest ?? null,
+    emailDigestOptions: {
+      enabled: settings.emailDigestsEnabled,
+      defaultMode: settings.emailDigestDefaultMode,
+      hour: settings.emailDigestHour,
+      weekday: settings.emailDigestWeekday,
+    },
     // §12 per-type maintainer opt-outs (row-level — the worker skips the user at insert time):
     // upstream drift on skills they maintain, and new versions of skills they maintain
     // (an explicit watch always outranks the latter).
@@ -180,6 +191,7 @@ export async function PATCH(req: Request) {
     dateFormat?: string | null;
     leaderboardHidden?: boolean;
     emailNotifications?: boolean;
+    emailDigest?: unknown;
     driftNotifications?: boolean;
     newVersionNotifications?: boolean;
     discussionNotifications?: boolean;
@@ -208,6 +220,11 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.emailNotifications === "boolean") {
     await setUserEmailNotifications(access.userId, body.emailNotifications);
+  }
+  // §48.10 email frequency: null (organization default) or a mode — 400 otherwise.
+  if ("emailDigest" in body) {
+    const r = await setUserEmailDigest(access.userId, body.emailDigest);
+    if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
   }
   if (typeof body.driftNotifications === "boolean") {
     await setUserDriftNotifications(access.userId, body.driftNotifications);

@@ -13,9 +13,23 @@
 // Per-recipient email gating (§12): users with email_notifications=false — and users without
 // an email address — get no email over EITHER transport; their rows still deliver on schedule
 // (in-app/webhook), never queuing up to burst-send later.
+//
+// Email digests (§48.5): a row whose type is digestible for a recipient in daily/weekly mode has
+// its EMAIL deferred — in-app and webhook go out as usual, the row is marked delivered and
+// `digest_state = 'pending'` for the digest sweep (digest.ts). Classification is fixed here, once.
 import type { Pool } from "pg";
 import { GraphSendError } from "@skilly/shared/email";
-import { followNotificationContent, isFollowNotificationType, notificationTitle, contentRiskRuleLabel, deprecationWarning } from "@skilly/shared";
+import {
+  followNotificationContent,
+  isFollowNotificationType,
+  notificationTitle,
+  contentRiskRuleLabel,
+  deprecationWarning,
+  DEFAULT_DIGEST_SETTINGS,
+  effectiveDigestMode,
+  isDigestDeferred,
+  type DigestSettings,
+} from "@skilly/shared";
 import { formatStars, qualityRuleHint } from "@skilly/shared/quality";
 
 const MAX_ATTEMPTS = Number(process.env.NOTIFY_MAX_ATTEMPTS ?? 5);
@@ -28,6 +42,10 @@ export interface NotificationRow {
   email: string;
   displayName: string;
   emailNotifications: boolean;
+  /** `users.email_digest` (§48); null = the organization default. */
+  emailDigest?: string | null;
+  /** `users.status` — a non-active recipient gets no email, so nothing is deferred. */
+  status?: string;
 }
 
 export interface RenderedNotification {
@@ -40,6 +58,9 @@ export interface RenderedNotification {
    *  free). The HTML transport renders it as a small image; the plain-text transport ignores it. */
   iconUrl?: string | null;
   iconEmoji?: string | null;
+  /** §48.9: a ready HTML fragment for the wrapper's [SYSTEM MESSAGE] (the digest's lists and bold
+   *  section titles). Absent → the HTML transport derives the fragment from `text`. */
+  htmlBody?: string;
 }
 
 /** The body sentence for each proposal state-change notification (§12 Notification content). */
@@ -58,13 +79,15 @@ const PROPOSAL_BODY: Record<string, string> = {
  * subject title is shared with the in-app center's pill label (`@skilly/shared`). Unit-tested
  * without a DB. SKILLY_SPEC.md §12 (Notification content).
  */
-export function renderNotification(n: Pick<NotificationRow, "type" | "payload">): RenderedNotification {
+export function renderNotification(n: Pick<NotificationRow, "type" | "payload">, opts: { ctas?: boolean } = {}): RenderedNotification {
   const p = n.payload ?? {};
   const BASE_URL = process.env.PUBLIC_BASE_URL ?? process.env.SKILLY_REGISTRY_URL ?? "";
   const abs = (path: string): string | null => (BASE_URL ? `${BASE_URL}${path}` : null);
   // A call-to-action: a `[label](url)` link when we have an absolute URL, else the bare label
-  // (the sentence still stands on its own when PUBLIC_BASE_URL is unset — §12).
+  // (the sentence still stands on its own when PUBLIC_BASE_URL is unset — §12). `ctas: false`
+  // drops them — the digest reuses the bare body sentence (§48.9).
   const cta = (label: string, path: string): string => {
+    if (opts.ctas === false) return "";
     const u = abs(path);
     return u ? `[${label}](${u})` : label;
   };
@@ -413,6 +436,12 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">)
   };
 }
 
+/** The §12 body sentence of a row without its call-to-action — the digest's wording for types
+ *  that have no digest phrase of their own (§48.9). */
+export function notificationBodySentence(n: Pick<NotificationRow, "type" | "payload">): string {
+  return renderNotification(n, { ctas: false }).text.trim();
+}
+
 /** One of the two §12 email transports — exactly one is active per sweep. */
 export interface EmailTransport {
   kind: "graph" | "smtp";
@@ -439,10 +468,14 @@ export interface DeliveryResult {
  * Drain a batch of undelivered notifications across the configured channels. Idempotent and
  * safe to run on a timer; only the leader runs it (advisory lock in index.ts).
  */
-export async function deliverPendingNotifications(pool: Pool, channels: DeliveryChannels): Promise<DeliveryResult> {
+export async function deliverPendingNotifications(
+  pool: Pool,
+  channels: DeliveryChannels,
+  digest: Pick<DigestSettings, "enabled" | "defaultMode" | "types"> = DEFAULT_DIGEST_SETTINGS,
+): Promise<DeliveryResult> {
   const { rows } = await pool.query<NotificationRow>(
     `select n.id, n.type, n.payload, u.email, u.display_name as "displayName",
-            u.email_notifications as "emailNotifications"
+            u.email_notifications as "emailNotifications", u.email_digest as "emailDigest", u.status
        from notifications n
        join users u on u.id = n.user_id
       where n.delivered_at is null and n.delivery_attempts < $1
@@ -456,11 +489,16 @@ export async function deliverPendingNotifications(pool: Pool, channels: Delivery
   let failed = 0;
 
   for (const row of rows) {
+    // §48.5: decided now, per row, and never revisited — the email goes to the digest instead.
+    const deferred = isDigestDeferred(row.type, effectiveDigestMode(row, digest), digest);
+    const markDelivered = deferred
+      ? `update notifications set delivered_at = now(), digest_state = 'pending' where id = $1`
+      : `update notifications set delivered_at = now() where id = $1`;
     // §31.4 / §35.6: achievements and follower notifications never ride the email/webhook
-    // channels — in-app is the delivery.
+    // channels — in-app is the delivery (a deferred follow.* row reaches email only by digest).
     if (!hasExternal || row.type === "achievement.earned" || isFollowNotificationType(row.type)) {
       // In-app only: nothing to send, just record that the queue handled it.
-      await pool.query(`update notifications set delivered_at = now() where id = $1`, [row.id]);
+      await pool.query(markDelivered, [row.id]);
       delivered++;
       continue;
     }
@@ -483,9 +521,9 @@ export async function deliverPendingNotifications(pool: Pool, channels: Delivery
         }
       }
       // Per-user email opt-out + missing-address skip (§12): the row still delivers on schedule.
-      if (channels.email && row.email && row.emailNotifications) await channels.email.send(row.email, msg);
+      if (!deferred && channels.email && row.email && row.emailNotifications) await channels.email.send(row.email, msg);
       if (channels.webhook) await channels.webhook(msg.webhook);
-      await pool.query(`update notifications set delivered_at = now() where id = $1`, [row.id]);
+      await pool.query(markDelivered, [row.id]);
       delivered++;
     } catch (err) {
       const errText = String((err as Error).message ?? err).slice(0, 500);

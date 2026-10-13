@@ -10668,10 +10668,6 @@ telemetry, not audit.
 
 ## 48. Email digests
 
-> ⚠ GAP-2 · new feature — none of §48 is built yet: no digest columns or platform keys (migration
-> 0093), no deferral in the delivery sweep, no digest sweep or renderer, and no Profile or
-> Administration controls. Every user still gets one email per update.
-
 A user who prefers fewer emails can switch from **one email per update** to a **daily or weekly
 digest**: one email summarising the awareness notifications (watched skills, discussions, people
 they follow and the like) that they have not yet read. Only **email** is batched. The in-app inbox,
@@ -10795,9 +10791,12 @@ processes it**:
   `Retry-After` elapses (§12). The digest job never blocks per-update delivery.
 
 ### 48.8 Re-checks at send
-- **Skill-bearing rows** (payload `skillId`) are kept only if the user can **still see** the skill
-  — through the shared visibility predicate (`isSkillVisible` / `skillVisibilityWhere`, invariant
-  #7, never inlined) — and the skill still exists and is not archived.
+- **Skill-bearing rows** (payload `skillId`, else `namespaceSlug` + `skillSlug` — most payloads
+  carry only the slugs) are kept only if the user can **still see** the skill — through the shared
+  visibility predicate (`isSkillVisible` / `skillVisibilityWhere`, or its per-user twin
+  `userCanSeeSkillSql`; invariant #7, never inlined) — and the skill still exists and is not
+  archived. Proposal rows are exempt: the proposal page governs them, and a proposed skill may not
+  be published yet.
 - **Request-bearing rows** are dropped when the request no longer exists.
 - **Actors.** An actor erased since the row was created (§4) renders as **"Deleted User"**.
   Unfollowing or a paused follow after insert does **not** drop a `follow.*` row; that matches the

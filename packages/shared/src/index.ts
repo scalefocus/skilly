@@ -22,6 +22,7 @@ export * from "./download.js";
 export * from "./metrics.js";
 export * from "./email-template.js";
 export * from "./notifications.js";
+export * from "./email-digest.js";
 export * from "./featured.js";
 export * from "./mentions.js";
 export * from "./visibility.js";

@@ -25,6 +25,8 @@ import {
   AI_DISPLAY_NAME_DEFAULT,
   coerceAiDisplayName,
   validateAiDisplayName,
+  coerceDigestSettings,
+  type DigestMode,
 } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
@@ -163,6 +165,16 @@ export interface PlatformSettings {
   searchLanguage: string;
   /** §40.14 the end-user name for the AI (default "AI"). */
   aiDisplayName: string;
+  /** §48 email digests: the kill switch (dormant, not destructive). */
+  emailDigestsEnabled: boolean;
+  /** §48 the organization-default frequency for users who haven't chosen. */
+  emailDigestDefaultMode: DigestMode;
+  /** §48 the send hour (0-23), local to each person's zone. */
+  emailDigestHour: number;
+  /** §48 the weekly digest's ISO weekday (1 = Monday). */
+  emailDigestWeekday: number;
+  /** §48 the enabled digestible types (the two changeable tiers only). */
+  emailDigestTypes: string[];
 }
 
 /** Coerce a stored flush set into a valid one, falling back to the default on anything malformed. */
@@ -184,7 +196,13 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, ...digestFields(() => undefined) };
+
+/** §48.2 the five digest keys, flattened into the settings shape (defaults applied). */
+function digestFields(get: (key: string) => unknown): Pick<PlatformSettings, "emailDigestsEnabled" | "emailDigestDefaultMode" | "emailDigestHour" | "emailDigestWeekday" | "emailDigestTypes"> {
+  const d = coerceDigestSettings(get);
+  return { emailDigestsEnabled: d.enabled, emailDigestDefaultMode: d.defaultMode, emailDigestHour: d.hour, emailDigestWeekday: d.weekday, emailDigestTypes: d.types };
+}
 
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
@@ -217,6 +235,7 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     surveyEnabled: map.get("survey_enabled") !== false,
     searchLanguage: typeof map.get("search_language") === "string" ? (map.get("search_language") as string) : DEFAULTS.searchLanguage,
     aiDisplayName: coerceAiDisplayName(map.get("ai_display_name")),
+    ...digestFields((k) => map.get(k)),
   };
 }
 

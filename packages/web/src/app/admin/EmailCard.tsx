@@ -9,6 +9,7 @@ import nextDynamic from "next/dynamic";
 import { Pill, useApi } from "../../components/ui";
 import { useDateFmt } from "../../components/DateFormat";
 import { CollapsibleCard } from "./CollapsibleCard";
+import { EmailDigestSettings } from "./EmailDigestSettings";
 import { countWrapperPlaceholders, EMAIL_WRAPPER_PLACEHOLDER } from "@skilly/shared/email-template";
 
 // TipTap is heavy — code-split it out of the admin route's initial bundle.
@@ -201,6 +202,8 @@ export function EmailCard({ open, onToggle }: { open: boolean; onToggle: () => v
           ) : (
             <div className="skeleton" style={{ height: 160, borderRadius: "var(--radius-sm)" }} />
           )}
+          {/* §48.11 — shown whatever the transport status. */}
+          <EmailDigestSettings />
     </CollapsibleCard>
   );
 }
