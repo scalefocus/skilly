@@ -290,7 +290,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### Messaging tables (migration 0031, detailed in §24)
 - **`conversations`** — `id`, `subject_type`, `subject_id` (polymorphic; partial unique on `(subject_type, subject_id)`), `created_at`, `updated_at`.
 - **`conversation_participants`** — `conversation_id`, `user_id`, `last_read_at`, `created_at` (PK first two).
-- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `context_semver` (nullable TEXT, migration 0059 — **skill-discussion context only**: the skill version the comment is about, §24), `created_at`. Immutable — no edits for anyone; the **only** delete is the skill-discussion **moderator delete** (§24). The body may embed **mention tokens** (`<@uuid>` / `<#uuid>`, §24 *Mentions*).
+- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `context_semver` (nullable TEXT, migration 0059 — **skill-discussion context only**: the skill version the comment is about, §24), `created_at`; specified ahead (GAP-1, §24 *Replies to discussion comments*): `parent_id` (nullable self-FK — a one-level reply, skill discussion only) and `removed_at` (nullable — a moderator tombstone). Immutable — no edits for anyone; the **only** delete is the skill-discussion **moderator delete** (§24), and its tombstone variant is the only in-place change. The body may embed **mention tokens** (`<@uuid>` / `<#uuid>`, §24 *Mentions*).
 - **`message_mentions`** (migration 0062, detailed in §24 *Mentions*) — `message_id` (FK → `messages`, ON DELETE CASCADE), `kind` (`'user'` | `'skill'`), `target_id` (UUID — `users.id` or `skills.id`; **no FK**, polymorphic like `conversations.subject_id`), `label` (TEXT NULL — **skill mentions only**: the `ns/slug` handle captured at post time, used solely as the plain-text fallback after the skill is hard-deleted; user mentions store **no** label — they resolve live, and users are never hard-deleted). PK `(message_id, kind, target_id)`.
 
 ### `system_event` (migration 0032, detailed in §25)
@@ -1153,7 +1153,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Scan overrides** (`proposal.scan_override`).
   - **Content risk (§37.12):** `proposal.routed_to_review`, `skill.publish_scan_override`, `skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
-  - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*). Posting a comment is not audited (the immutable message row is its own provenance).
+  - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*; specified ahead, GAP-1: plus `parentId`, `tombstoned`, `tombstoneRemoved` — §24 *Replies to discussion comments*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15).
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
@@ -1220,6 +1220,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To the **admins of each namespace a restricted skill is shared with** (§42): `skill.shared` when the grant is created (who shared it, from which namespace, CTA → the skill), and `skill.shared_new_version` when a new version of a skill shared with their namespace is published — they can see the skill but do not govern it, so this is awareness, not a review-queue item. Both are per-recipient, **deduped** against a `skill.new_version` row the same person already receives as watcher/maintainer, delivered over the same channels as `skill.new_version`, and **not** sent to platform admins who merely inherit access. No per-type opt-out in v1.
   - To **watchers ∪ effective maintainers ∪ current installers** of a skill (§45.6): `skill.deprecated` when an admin deprecates it, or later **changes its successor** (a note-only edit does not re-fire; un-deprecating notifies nobody). *Current installer* = a user holding a **used, non-expired** personal `install` token on the skill (**inactive** installs are excluded — an expired credential is not a running installation), plus the **minting admin** of each active **system** install (`created_by_user_id`, when still present). Minus the actor; **one row per recipient** however many ways they qualify; visibility-filtered at insert, and the body names the successor **only for recipients who can see it**. Delivered over the same channels as `skill.new_version` (in-app + email/webhook), gated by the channel-level `email_notifications` toggle **only** — **no per-type opt-out** (it is actionable: something the recipient runs is being retired). Fired synchronously by the deprecation endpoint (web tier), like `skill.shared`.
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
+  - To the **people in a discussion thread** (specified ahead, GAP-1 — §24 *Replies to discussion comments*): `skill.discussion_reply` when someone replies in a skill-discussion thread. Recipients are the root comment's author ∪ earlier repliers in that thread, minus the author, minus opt-outs, visibility-filtered at insert. It is **coalesced per thread per recipient until read** and gated by the same `discussion_notifications` toggle. For one message a person gets one row: `message.mention` beats `skill.discussion_reply`, which beats `skill.discussion`.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
   - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only**, have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
@@ -1264,6 +1265,7 @@ current or future type can ever leak JSON to a user.
   | `message.mention` | You were mentioned | {fromName} mentioned you in "{title}". *(skill discussion: … mentioned you in the discussion on {ns}/{slug}.; direct: … mentioned you in a direct message.)* | View the message → `/proposals/{id}` / `/requests/{id}` / `/skills/{ns}/{slug}#discussion` / `/?conversation={conversationId}` |
   | `skill.new_version` | New version published | {ns}/{slug} published version {semver}. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.discussion` | New discussion comment | {fromName} commented on {ns}/{slug}. | View the discussion → `/skills/{ns}/{slug}#discussion` |
+  | `skill.discussion_reply` *(GAP-1)* | New reply | {fromName} replied to your comment on {ns}/{slug}. *(earlier replier, not the root's author: … replied in a discussion thread you're part of on {ns}/{slug}.)* | View the reply → `/skills/{ns}/{slug}#discussion-{rootId}` |
   | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
   | `skill.quality_low` | Low quality score | {ns}/{slug} v{semver} scored {stars} ★ ({score}/100, {mode}). *(+ the full findings list, then the AI summary and suggestions when present — §41.9)* | Open the Quality card → `/skills/{ns}/{slug}#quality`; plus **Draft improvements with {aiName}** → `/skills/{ns}/{slug}?draft=ai#quality` when §44.9 applies |
   | `proposal.policy_violation` | Policy check flagged your proposal | The policy check flagged your proposal for {ns}/{slug}: {rule titles}. *(+ each violated rule's explanation — §47.10)* | See the policy check → `/proposals/{proposalId}#policy` |
@@ -1334,7 +1336,10 @@ current or future type can ever leak JSON to a user.
     (watchers ∪ effective maintainers) minus the author, minus opted-out users, visibility-filtered
     at insert time (§24 *Skill discussion*). The **same toggle also gates `message.mention`** in
     all four messaging contexts (§24 *Mentions*) — a deliberate single switch, no separate
-    mention toggle: opting out of discussion chatter opts out of being pinged by name too.
+    mention toggle: opting out of discussion chatter opts out of being pinged by name too. It
+    likewise gates `skill.discussion_reply` (specified ahead, GAP-1). When replies ship, the
+    toggle is relabeled **"Discussion comments, replies and @mentions"** (same column, no
+    migration).
   - `content_risk_notifications` gates `skill.content_risk` entirely, like the drift toggle: it
     only ever targets effective maintainers (§37.9).
   - `quality_notifications` gates `skill.quality_low` entirely, the same way (§41.9).
@@ -1680,7 +1685,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Messaging (§24)**
 - `GET /api/messages` (list + unread), `GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `POST /api/messages/direct {userId}`.
-- `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET paginated newest-first, 100/page; POST `{body, contextSemver}`) and `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator hard delete, audited `skill.discussion_message_deleted`) — the skill Discussion card, §24.
+- `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET paginated newest-first, 100/page; POST `{body, contextSemver}`) and `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator hard delete, audited `skill.discussion_message_deleted`) — the skill Discussion card, §24. Specified ahead (GAP-1, §24 *Replies to discussion comments*): POST gains an optional `parentId`; GET nests `replies[]` + `replyCount` under each top-level message; DELETE may tombstone a top-level comment that has replies.
 - **Mentions (§24 *Mentions*):** `GET /api/users/suggest?q=&context=` — people typeahead for the composer `@` picker and the header-search people mode (§10); any signed-in user, rate-limited, 2-char floor, top 6 (5 in the header), name+email substring match, excludes erased/non-active users. The optional `context` (`proposal:<id>` | `skill:<ns>/<slug>`) narrows candidates to that thread's audience (server re-derives it; a caller who can't see the context 404s); no context = whole directory (request threads, direct chats, org-visible skill discussions, header search). Skill (`#`) suggestions reuse `GET /api/skills/suggest` with `scope=mention` — bare query matches **org-visible** skills only; a `<ns>/` prefix the author can see into unlocks that namespace's restricted skills. Every message GET returns a per-reader-resolved `mentions` map alongside the bodies (the `GET /api/messages` conversation list instead returns each `lastBody` pre-flattened to plain text for the reader — §24 *Conversation-list previews*); every message POST validates tokens (≤10 distinct, audience + visibility rules) and writes `message_mentions`.
 
 **Presence**
@@ -2960,7 +2965,9 @@ A **general** conversation/message layer. Its first use is **review discussion**
 proposal's submitter and its reviewers; the model is deliberately context-polymorphic, and a second
 context — a **skill request's discussion** — was added in §26 without changing the review-discussion
 context's own access rules or lifecycle. A third context — the **skill discussion** (the skill
-detail page's Discussion card, below) — follows the same pattern.
+detail page's Discussion card, below) — follows the same pattern. Specified ahead (GAP-1), the skill
+discussion alone also gains **one-level replies** (*Replies to discussion comments*, below); every
+other context stays flat.
 
 ### Data model
 - **`conversations`** — `subject_type` + `subject_id` (polymorphic context: `'proposal'`→`proposals.id`; `'request'`→`skill_requests.id` (§26); `'skill'`→`skills.id` (the **skill discussion**, below); `'direct'` with `subject_id` NULL = a **1:1 direct conversation**, e.g. "Reach out" to a maintainer), `created_at`, `updated_at` (bumped per message, for list ordering). One conversation per concrete subject (partial unique index); direct conversations are deduped by their exact two-participant set.
@@ -3288,6 +3295,122 @@ card and the skill-specific message semantics.
 
 **Schema (migration 0059).** `messages.context_semver TEXT NULL` +
 `users.discussion_notifications BOOLEAN NOT NULL DEFAULT true`. No new tables.
+
+### Replies to discussion comments (one level)
+
+> **⚠ GAP-1 · new feature** — none of this subsection is built yet: `messages` has no
+> `parent_id`/`removed_at`, the skill Discussion card is a flat list with no Reply action, the
+> moderator delete never tombstones, and there is no `skill.discussion_reply` notification. Closing it
+> also updates the §12, §15 API, §29 MCP and data-model text that points here.
+
+People can **reply directly to a comment** in a skill's Discussion card, so a back-and-forth stays in
+one thread instead of scattering through the newest-first list. Whoever is in that thread is
+notified when someone answers. **Scope: the skill discussion only.** Proposal review threads,
+request Discussion cards and direct chats stay flat.
+
+**Shape: one level.**
+- A message is either a **top-level comment** (`parent_id` NULL) or a **reply** (`parent_id` = a
+  top-level comment in the **same conversation**). A reply **never** has replies of its own.
+- **Replying to a reply** is offered in the UI and posts into the **same thread**: the server
+  normalises `parentId` to that reply's root. The composer pre-inserts an **@mention chip** for the
+  author of the reply being answered, so it stays clear who is being answered. The chip is ordinary
+  and removable, and it counts towards the 10-mention cap. It is not inserted when you answer your
+  own reply, or when that author is not mentionable (erased, not `active`, or no longer able to see
+  the skill — §24 *Mentions*).
+- Replying is allowed only while the skill is `active` (the discussion's own lifecycle) and only
+  when the parent is **not a tombstone** (below). Otherwise the post fails with **409** and the Reply
+  action is hidden.
+
+**Data model (new migration, numbered when built).**
+- `messages.parent_id UUID NULL REFERENCES messages(id) ON DELETE CASCADE`, plus a partial index on
+  `(parent_id) WHERE parent_id IS NOT NULL`. The server enforces two rules on insert: the parent is
+  in the same conversation, and the parent's own `parent_id` is NULL. Only `subject_type='skill'`
+  conversations accept a non-NULL `parent_id`.
+- `messages.removed_at TIMESTAMPTZ NULL` marks a **tombstone** (below).
+- The **version pill is inherited.** A reply stores its root's `context_semver` (NULL when the root
+  has none). The reply composer has **no version picker**, and a POST that carries both `parentId`
+  and `contextSemver` is rejected (422). Replies **render no pill**: the root's pill covers the
+  thread, and it keeps its yanked styling as before.
+
+**Layout.**
+- **Top-level comments** stay **newest-first**, ordered by their **own** `created_at`. A new reply
+  does **not** bump its thread up the list; the reply notification's deep link is how people find
+  it.
+- **Replies** render **oldest-first** under their root, like a conversation. They get a **single
+  indent**: a small left inset plus a thin guide line. The indent never widens the card on narrow
+  viewports (§14 *Narrow-viewport containment*). Each reply renders like a comment: `UserBubble`,
+  name, date + time, sanitized markdown and mention chips, but no pill.
+- The **first 3 replies** show. Beyond that, a **"Show N more replies"** control expands the rest
+  of that thread. The expansion is per thread and per view, and is not persisted.
+- **Paging** stays at **100 top-level comments** per page ("Show more"). Each top-level comment
+  arrives with **all** of its replies and a `replyCount`.
+- **"Discussion (N)"** counts **every live message**, top-level and replies alike. Tombstones are
+  excluded.
+- Every comment and reply has a **Reply** action. It opens an inline composer at the foot of that
+  thread: the same composer as the card's, with markdown, emoji, `#`/`@` pickers and the
+  **500-character** cap, but no version picker. Only **one** reply composer is open at a time.
+  Escape or Cancel closes it.
+
+**Moderation — tombstones.** The moderator delete (above; same authority, same confirm dialog) now
+depends on the target:
+- **A reply:** hard delete, as today.
+- **A top-level comment with no live replies:** hard delete, as today.
+- **A top-level comment with live replies:** it becomes a **tombstone** so other people's replies
+  aren't lost. Its `body` is cleared, its `message_mentions` rows are deleted, and `removed_at` is
+  stamped. It renders as a muted **"Comment removed by a moderator"** row, with no author, date,
+  pill or actions, and its replies stay underneath. This is the **only in-place mutation of a
+  message** (the immutability rule's single moderator exception). The body is gone, not hidden: the
+  moderation intent is that its text no longer exists.
+- **Deleting the last live reply under a tombstone** also hard-deletes the tombstone in the same
+  transaction. An empty placeholder serves no one, so it falls back to "no placeholder remains".
+- **Audit:** every delete still writes one `skill.discussion_message_deleted` row (never the body).
+  Its payload gains `parentId` (NULL for a top-level comment), `tombstoned` (true when the target
+  became a tombstone rather than being removed) and `tombstoneRemoved` (true when the delete also
+  swept away an emptied tombstone). The swept tombstone gets no separate row of its own.
+
+**Notifications — "someone answered you" (`skill.discussion_reply`, §12).**
+- **Recipients of a reply** are the **thread's people**: the root's author ∪ the distinct authors of
+  earlier replies in that thread. The reply's author is removed, as are erased and non-`active`
+  users, users who opted out via `discussion_notifications`, and anyone who can no longer see the
+  skill (visibility-filtered at insert, invariant #3).
+- **Coalesced per thread per recipient:** one row per (recipient, root comment), refreshed until
+  read with the same atomic update-in-place upsert as `skill.discussion`. Email therefore fires
+  **at most once per thread until read**.
+- **Precedence: one row per person per message.** An `@mention` (`message.mention`) outranks
+  `skill.discussion_reply`, which outranks `skill.discussion`. The skill's watchers and maintainers
+  still get the coalesced `skill.discussion` for a reply, unless that same message already gives
+  them a mention or reply row.
+- **Deep link:** the CTA opens **`/skills/{ns}/{slug}#discussion-{rootId}`**. The card expands for
+  that view, without touching the stored collapse preference. That thread's replies expand fully,
+  the thread scrolls into view, and the **newest reply is briefly highlighted**. A thread that no
+  longer exists falls back to plain `#discussion`.
+- **Read:** the viewer's `skill.discussion_reply` row for a thread clears when **that thread** (its
+  root plus replies) enters the viewport of the expanded card. This is the card's existing viewport
+  rule, applied per thread. The standard inbox-open read (§12) clears it too. Seeing one thread does
+  **not** clear the reply rows of other threads.
+- **Skill deletion** purges dangling `skill.discussion_reply` rows along with `skill.discussion`
+  (§24 *Lifecycle*).
+
+**API & MCP.**
+- `POST /api/skills/:ns/:slug/discussion` accepts an optional **`parentId`**. `contextSemver` must be
+  omitted when `parentId` is present.
+- `GET` returns each top-level message with `replyCount` and a `replies[]` array (oldest-first, same
+  message shape, sharing the page's per-reader `mentions` map). A tombstone carries
+  `removed: true` and no author or body.
+- `DELETE` is unchanged in shape. The response says whether the target was deleted or tombstoned.
+- MCP (§29): `post_skill_comment` gains an optional `parentId`, normalised to the root as in the UI.
+  `get_skill_discussion` nests replies the same way.
+
+**Tests (ship with the change).**
+- **Unit:** parent normalisation, the precedence of the notification types, and the tombstone
+  decision (reply / childless root / root with replies / last reply under a tombstone).
+- **Integration (DB):** the parent constraints (same conversation, one level, skill context only);
+  409 on a tombstoned parent or an archived skill; 422 on `parentId` + `contextSemver`; inherited
+  `context_semver`; reply recipients and opt-out and visibility filtering; coalescing per thread;
+  the tombstone sweep inside one transaction; the audit payload fields; the count excluding
+  tombstones; and the MCP `parentId` round-trip.
+- **e2e:** reply to a comment, collapse beyond 3 and "Show N more replies", the notification deep
+  link landing on the thread, and a moderator tombstoning a comment that has replies.
 
 ## 25. System log
 
@@ -4095,8 +4218,8 @@ authors; a human decides. The tool descriptions say so, so the boundary isn't a 
 | Tool | Behavior |
 |---|---|
 | `rate_skill` | Set (1–5) or clear (`null`) the caller's own rating (§18). |
-| `get_skill_discussion` | Paginated skill discussion (§24). |
-| `post_skill_comment` | Post to a skill discussion, optionally with `contextSemver` (§24). |
+| `get_skill_discussion` | Paginated skill discussion (§24). Specified ahead (GAP-1): replies nested under their top-level comment. |
+| `post_skill_comment` | Post to a skill discussion, optionally with `contextSemver` (§24). Specified ahead (GAP-1): optional `parentId` to reply, normalised to the thread's root. |
 | `list_skill_requests` | The §26 Requested-skills list, with its own filters. |
 | `request_skill` | File a skill request (§26). |
 
