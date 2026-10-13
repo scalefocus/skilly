@@ -21,13 +21,16 @@ import { totalmem } from "node:os";
 // Heap ceiling for the auto-started dev server. `next dev` defaults to half the machine's RAM and
 // restarts itself at 80% of that, i.e. at 40% of RAM. With ~180 routes pinned (SKILLY_DEV_KEEP_ROUTES)
 // the webpack dev compiler crossed that line twice per CI run, and each restart discarded the
-// warm-up (next.config.mjs switches the restart off for the same opt-in). Raise the ceiling to
-// three quarters of RAM; Next honours an explicit --max-old-space-size and skips its own default.
-// A caller's own --max-old-space-size wins.
+// warm-up, so next.config.mjs switches the restart off for the same opt-in. Do NOT answer that by
+// raising the ceiling: V8 defers full collections while far below it, so a ceiling near RAM fills
+// with garbage until the kernel OOM-kills the server (a 10.8 GB ceiling on a 16 GB CI agent did,
+// mid-warm-up). Half of RAM, capped at 8 GB — the same cap ci/e2e-shard-plan.sh applies in Jenkins.
+// Next honours an explicit --max-old-space-size and skips its own default; a caller's own wins.
 const callerNodeOptions = process.env.NODE_OPTIONS ?? "";
+const devServerHeapMb = Math.min(Math.floor((totalmem() / 1024 / 1024) * 0.5), 8192);
 const devServerNodeOptions = /--max[-_]old[-_]space[-_]size/.test(callerNodeOptions)
   ? callerNodeOptions
-  : `${callerNodeOptions} --max-old-space-size=${Math.floor((totalmem() / 1024 / 1024) * 0.75)}`.trim();
+  : `${callerNodeOptions} --max-old-space-size=${devServerHeapMb}`.trim();
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 // The auto-started server listens on baseURL's port (the `dev` script hardcodes 3000), so CI can

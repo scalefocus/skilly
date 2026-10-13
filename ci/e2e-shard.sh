@@ -183,7 +183,9 @@ set -e
 OOM_AFTER="$(oom_kills)"
 if [ "${OOM_AFTER}" -gt "${OOM_BEFORE}" ]; then
   echo "[${TAG}] the kernel OOM-killed $((OOM_AFTER - OOM_BEFORE)) process(es) on this agent while this shard ran." \
-    "A killed dev server fails every later test with ECONNREFUSED. Lower E2E_SHARDS, or raise" \
-    "E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits fewer shards." >&2
+    "A killed dev server fails every later test with ECONNREFUSED. With several shards: lower" \
+    "E2E_SHARDS, or raise E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits fewer." \
+    "With one shard: lower E2E_MAX_HEAP_MB (the heap ceiling, ${E2E_HEAP_MB:-unset} MB here) so V8" \
+    "collects before RSS outgrows RAM, or raise E2E_MEM_RESERVE_MB if another Verify branch is the hog." >&2
 fi
 exit "${rc}"
