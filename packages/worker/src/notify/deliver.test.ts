@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Pool } from "pg";
 import { GraphSendError } from "@skilly/shared/email";
-import { renderNotification, deliverPendingNotifications, type NotificationRow, type EmailTransport } from "./deliver.js";
+import { DEFAULT_DIGEST_SETTINGS } from "@skilly/shared";
+import { renderNotification, deliverPendingNotifications, notificationBodySentence, type NotificationRow, type EmailTransport } from "./deliver.js";
 
 const BASE = "https://skilly.test";
 
@@ -174,12 +175,14 @@ function fakePool(rows: NotificationRow[]) {
   const delivered: string[] = [];
   const failed: { id: string; error: string }[] = [];
   const throttled: { id: string; error: string }[] = [];
+  const pending: string[] = [];
   const pool = {
     query: async (text: string, params: unknown[] = []) => {
       const t = text.trim().toLowerCase();
       if (t.startsWith("select")) return { rows, rowCount: rows.length };
       if (t.includes("set delivered_at")) {
         delivered.push(params[0] as string);
+        if (t.includes("digest_state = 'pending'")) pending.push(params[0] as string);
         return { rows: [], rowCount: 1 };
       }
       if (t.includes("delivery_attempts + 1")) {
@@ -194,7 +197,7 @@ function fakePool(rows: NotificationRow[]) {
       throw new Error(`unexpected query: ${text}`);
     },
   } as unknown as Pool;
-  return { pool, delivered, failed, throttled };
+  return { pool, delivered, failed, throttled, pending };
 }
 
 function captureEmail(kind: "graph" | "smtp" = "graph"): EmailTransport & { sent: string[] } {
@@ -315,6 +318,64 @@ test("sweep: follow.* rows are in-app only — delivered without any email (§35
   await deliverPendingNotifications(pool, { email });
   assert.deepEqual(delivered.sort(), ["f1", "n2"]);
   assert.equal(email.sent.length, 1); // only the non-follow row emailed
+});
+
+// ── §48.5 digest deferral ─────────────────────────────────────────────────────
+
+const DIGEST_ON = { enabled: true, defaultMode: "immediate" as const, types: [...DEFAULT_DIGEST_SETTINGS.types] };
+
+test("sweep (§48.5): a digestible row for a digest-mode user skips email, keeps the webhook, and is marked pending", async () => {
+  const { pool, delivered, pending } = fakePool([
+    row({ id: "v1", type: "skill.new_version", payload: { namespaceSlug: "a", skillSlug: "b", semver: "1.0.0" }, emailDigest: "daily", status: "active" }),
+  ]);
+  const email = captureEmail();
+  const hooks: unknown[] = [];
+  await deliverPendingNotifications(pool, { email, webhook: async (b) => { hooks.push(b); } }, DIGEST_ON);
+  assert.deepEqual(email.sent, [], "no per-update email");
+  assert.equal(hooks.length, 1, "the webhook is unchanged");
+  assert.deepEqual(delivered, ["v1"]);
+  assert.deepEqual(pending, ["v1"]);
+});
+
+test("sweep (§48.5): floor types, per-update users, the org default and type list all decide deferral", async () => {
+  const rows = [
+    row({ id: "m1", type: "message.new", payload: { conversationId: "c" }, emailDigest: "weekly" }), // the floor
+    row({ id: "v1", type: "skill.new_version", payload: { namespaceSlug: "a", skillSlug: "b" }, emailDigest: "immediate" }), // chose per update
+    row({ id: "v2", type: "skill.new_version", payload: { namespaceSlug: "a", skillSlug: "b" }, emailDigest: null, email: "two@corp.com" }), // org default (daily)
+    row({ id: "d1", type: "skill.drift", payload: { namespaceSlug: "a", skillSlug: "b" }, emailDigest: "daily", email: "three@corp.com" }), // not enabled
+    row({ id: "o1", type: "skill.new_version", payload: { namespaceSlug: "a", skillSlug: "b" }, emailDigest: "daily", emailNotifications: false }), // email off
+  ];
+  const { pool, pending } = fakePool(rows);
+  const email = captureEmail();
+  await deliverPendingNotifications(pool, { email }, { ...DIGEST_ON, defaultMode: "daily" });
+  assert.deepEqual(pending, ["v2"]);
+  assert.deepEqual(email.sent.sort(), ["three@corp.com", "user@corp.com", "user@corp.com"]);
+});
+
+test("sweep (§48.5): the kill switch defers nothing; follow.* reach email only through a digest", async () => {
+  const off = fakePool([row({ id: "v1", type: "skill.new_version", payload: {}, emailDigest: "daily" })]);
+  const e1 = captureEmail();
+  await deliverPendingNotifications(off.pool, { email: e1 }, { ...DIGEST_ON, enabled: false });
+  assert.deepEqual(off.pending, []);
+  assert.equal(e1.sent.length, 1);
+
+  const follow = fakePool([
+    row({ id: "f1", type: "follow.new_skill", payload: {}, emailDigest: "weekly" }),
+    row({ id: "f2", type: "follow.new_skill", payload: {}, emailDigest: "immediate" }),
+  ]);
+  const e2 = captureEmail();
+  await deliverPendingNotifications(follow.pool, { email: e2 }, DIGEST_ON);
+  assert.deepEqual(follow.pending, ["f1"], "a digest user's follow.* row waits for the digest");
+  assert.equal(e2.sent.length, 0, "never a per-update follow.* email");
+});
+
+test("notificationBodySentence: the §12 sentence without its call-to-action", () => {
+  process.env.PUBLIC_BASE_URL = BASE;
+  assert.equal(notificationBodySentence({ type: "proposal.accept", payload: { proposalId: "p1" } }), "Your skill proposal was accepted.");
+  assert.equal(
+    notificationBodySentence({ type: "skill.drift", payload: { namespaceSlug: "a", skillSlug: "b", ref: "main" } }),
+    "a/b has drifted from its pinned upstream ref (main).",
+  );
 });
 
 test("renderNotification: skill.content_risk names the skill, version and rules, links to the card (§37.9)", () => {

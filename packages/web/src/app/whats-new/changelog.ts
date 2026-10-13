@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.30.0",
+    date: "2026-10-13",
+    summary:
+      "Prefer fewer emails? On your Profile, set Email frequency to a daily or weekly digest: one summary of the unread updates about skills and people you follow, instead of an email per update. Direct messages, @mentions and review requests still arrive right away. Platform admins set the default, the send time and what goes into digests under Administration, Email notifications.",
+  },
+  {
     version: "2.29.0",
     date: "2026-10-13",
     summary:

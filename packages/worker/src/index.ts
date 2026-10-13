@@ -24,6 +24,8 @@ import { graphClient } from "./reconcile/graph.js";
 import { deliverPendingNotifications } from "./notify/deliver.js";
 import { channelsFromEnv } from "./notify/channels.js";
 import { resolveGraphTransport } from "./notify/graphChannel.js";
+import { runDigestSweep } from "./notify/digest.js";
+import { getDigestSettings } from "./settings.js";
 import { notifyNewSystemEvents } from "./notify/systemLog.js";
 import { refreshPointerVersions } from "./git/pointerRefresh.js";
 import { recomputeRelatedSkills } from "./related.js";
@@ -211,7 +213,7 @@ async function leaderLoops(): Promise<void> {
         console.log(JSON.stringify({ level: "info", msg: "email transport", kind }));
         lastEmailKind = kind;
       }
-      const r = await deliverPendingNotifications(pool, channels);
+      const r = await deliverPendingNotifications(pool, channels, await getDigestSettings(pool));
       if (r.retryAfterSeconds) {
         notifyPausedUntil = Date.now() + r.retryAfterSeconds * 1000;
         console.log(JSON.stringify({ level: "warn", msg: "graph throttled; pausing notification delivery", seconds: r.retryAfterSeconds }));
@@ -225,6 +227,35 @@ async function leaderLoops(): Promise<void> {
   };
   await deliver();
   setInterval(deliver, Number(process.env.NOTIFY_SWEEP_INTERVAL_MS ?? 30000));
+
+  // Email digests (§48.6): send each digest user's daily/weekly summary once their slot passes.
+  // Same transport selection as the delivery sweep, and it honours the same Graph 429 pause; it
+  // runs on its own timer so a slow digest pass never holds up per-update delivery.
+  let digestRunning = false;
+  const digestSweep = async () => {
+    if (!isLeader || digestRunning || Date.now() < notifyPausedUntil) return;
+    digestRunning = true;
+    try {
+      let graph;
+      try {
+        graph = await resolveGraphTransport(pool);
+      } catch (err) {
+        console.error(JSON.stringify({ level: "warn", msg: "graph transport resolution failed", err: String(err) }));
+        graph = undefined;
+      }
+      const r = await runDigestSweep(pool, { email: graph ?? envChannels.email, settings: await getDigestSettings(pool) });
+      if (r.retryAfterSeconds) {
+        notifyPausedUntil = Date.now() + r.retryAfterSeconds * 1000;
+        console.log(JSON.stringify({ level: "warn", msg: "graph throttled; pausing notification delivery", seconds: r.retryAfterSeconds }));
+      }
+      if (r.sent || r.failed || r.dropped) console.log(JSON.stringify({ level: "info", msg: "email digests", ...r }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "email digest sweep failed", err: String(err) }));
+    } finally {
+      digestRunning = false;
+    }
+  };
+  setInterval(digestSweep, Number(process.env.DIGEST_SWEEP_INTERVAL_MS ?? 300_000)); // 5 min
 
   // System-log alerts: coalesced bell notification to platform admins when new error events
   // appear in the System log (§25). In-app only; watermark-tracked so events aren't double-counted.

@@ -13,7 +13,7 @@ import {
   sendGraphMail,
   type GraphMailEnv,
 } from "@skilly/shared/email";
-import { renderEmailText, renderWrappedEmailHtml } from "@skilly/shared";
+import { renderEmailText, renderWrappedEmailHtml, renderWrappedHtmlFragment } from "@skilly/shared";
 import type { EmailTransport } from "./deliver.js";
 
 const BASE_URL = process.env.PUBLIC_BASE_URL ?? process.env.SKILLY_REGISTRY_URL ?? "";
@@ -56,7 +56,7 @@ export async function resolveGraphTransport(pool: Pool, env: GraphMailEnv | null
         to,
         subject: msg.subject,
         text: renderEmailText(msg.text, BASE_URL),
-        html: iconHtml + renderWrappedEmailHtml(wrapper, msg.text, BASE_URL),
+        html: iconHtml + (msg.htmlBody !== undefined ? renderWrappedHtmlFragment(wrapper, msg.htmlBody, BASE_URL) : renderWrappedEmailHtml(wrapper, msg.text, BASE_URL)),
       });
     },
   };

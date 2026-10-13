@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useApi, ScrollToTop, ShareButton } from "../../components/ui";
@@ -12,6 +12,7 @@ import { CollectionsCard } from "../../components/CollectionsCard";
 import { useFollowStore, setFollow, loadFollowing } from "../../components/FollowButton";
 import { useDateFmt } from "../../components/DateFormat";
 import { SURVEY_PREF_EVENT, SURVEY_STATE_EVENT, reopenSurvey, startFeedback } from "../../lib/surveyClient";
+import { DIGEST_MODE_LABELS, DIGEST_WEEKDAY_NAMES, formatDigestHour, type DigestMode } from "@skilly/shared/email-digest";
 
 interface Me {
   userId: string | null;
@@ -20,6 +21,8 @@ interface Me {
   systemDateFormat: "eu" | "us";
   leaderboardHidden: boolean;
   emailNotifications: boolean;
+  emailDigest: DigestMode | null;
+  emailDigestOptions: { enabled: boolean; defaultMode: DigestMode; hour: number; weekday: number };
   driftNotifications: boolean;
   newVersionNotifications: boolean;
   discussionNotifications: boolean;
@@ -244,7 +247,59 @@ function EmailNotificationsPref() {
           ? "You'll get an email for each notification (when the platform has email delivery configured)."
           : "You won't receive notification email. Your in-app inbox keeps working as usual."}
       </p>
+      <EmailFrequencyPref data={data} reload={reload} />
     </section>
+  );
+}
+
+const SELECT_STYLE: CSSProperties = { width: "100%", padding: "10px 38px 10px 12px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", background: "var(--surface)", color: "var(--ink)", fontSize: 14 };
+
+// §48.10 "Email frequency": each update, or a daily/weekly digest of the awareness notifications
+// not yet read. Hidden while the admin kill switch is off; disabled while email is off. Saving
+// resets the digest clock server-side, so a switch never fires a near-empty digest at once.
+function EmailFrequencyPref({ data, reload }: { data: Me; reload: () => void }) {
+  const fmt = useDateFmt();
+  const [busy, setBusy] = useState(false);
+  const opts = data.emailDigestOptions;
+  if (!opts?.enabled) return null;
+  const choose = async (value: DigestMode | null) => {
+    if (value === data.emailDigest) return;
+    setBusy(true);
+    try {
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ emailDigest: value }) });
+      reload();
+    } finally { setBusy(false); }
+  };
+  const effective = data.emailDigest ?? opts.defaultMode;
+  const day = effective === "weekly" ? `, on ${DIGEST_WEEKDAY_NAMES[opts.weekday - 1]}s` : "";
+  return (
+    <div style={{ marginTop: 18 }} data-testid="email-frequency">
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <label htmlFor="email-frequency" style={{ minWidth: 130, fontWeight: 600, fontSize: 14 }}>Email frequency</label>
+        <div className="select-wrap" style={{ width: 280, maxWidth: "100%" }}>
+          <select
+            id="email-frequency"
+            style={SELECT_STYLE}
+            value={data.emailDigest ?? ""}
+            disabled={busy || !data.emailNotifications}
+            onChange={(e) => void choose(e.target.value === "" ? null : (e.target.value as DigestMode))}
+          >
+            <option value="">Organization default ({DIGEST_MODE_LABELS[opts.defaultMode]})</option>
+            <option value="immediate">{DIGEST_MODE_LABELS.immediate}</option>
+            <option value="daily">{DIGEST_MODE_LABELS.daily}</option>
+            <option value="weekly">{DIGEST_MODE_LABELS.weekly}</option>
+          </select>
+          <svg className="select-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        {data.emailNotifications
+          ? `Digests arrive at ${formatDigestHour(opts.hour, fmt.style)} your time${day}. Direct messages, @mentions and review requests always arrive right away.`
+          : "Turn on email notifications to choose"}
+      </p>
+    </div>
   );
 }
 
