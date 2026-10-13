@@ -129,7 +129,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0092, the email digest, §48), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -246,6 +246,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `notifications`
 - `id`, `user_id`, `type`, `payload`, `read_at`, `created_at`, plus delivery bookkeeping (migration 0006): `delivered_at`, `delivery_attempts`, `delivery_error` (drive the leader-only email/webhook delivery sweep, §12).
+- `digest_state` (TEXT, nullable — `pending` | `sent` | `dropped`; migration 0092): set when the delivery sweep defers the row's email to the user's digest (§48.5); `NULL` = never deferred. Partial index on `(user_id) WHERE digest_state = 'pending'`.
 - A **partial unique index** (migration 0053) pins **one unread coalesced `message.new` row per (user, conversation)** — the §24 coalescing is an atomic upsert (`ON CONFLICT DO UPDATE`), so concurrent posts can never produce duplicate rows (= duplicate emails, §12).
 
 ### `email_service_account` (migration 0053)
@@ -267,7 +268,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -1166,6 +1167,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **AI integration (§40.11):** `ai.config_updated` (provider / base URL / model before→after plus a `token_rotated` flag — **never the token or any part of it**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests, model-list calls and AI runtime calls are **not audited** (they are telemetry in `ai_usage`).
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
+  - **Email digests (§48.13):** `settings.updated` for the five `email_digest*` platform keys. The user's digest choice and the digest sends are **not audited**.
   - **Feedback survey (§36.11):** submissions, closes and first uses are **never audited** (an audit row would tie a person to an anonymous response). Audited: `settings.updated` for `survey_enabled`, and **`survey.response_deleted`** (the admin; `before` = date, feature, segment, catalog version, answer count and text length — **never the text**).
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
 - **Retention:** configurable, **default indefinite**. **SIEM export via syslog/stdout** (structured JSON).
@@ -1223,7 +1225,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To the **people in a discussion thread** (specified ahead, GAP-1 — §24 *Replies to discussion comments*): `skill.discussion_reply` when someone replies in a skill-discussion thread. Recipients are the root comment's author ∪ earlier repliers in that thread, minus the author, minus opt-outs, visibility-filtered at insert. It is **coalesced per thread per recipient until read** and gated by the same `discussion_notifications` toggle. For one message a person gets one row: `message.mention` beats `skill.discussion_reply`, which beats `skill.discussion`.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
-  - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only**, have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
+  - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only** (the one exception: a digest-mode recipient gets them in the email digest, §48), have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
 - **Deferred:** —
@@ -1376,6 +1378,7 @@ current or future type can ever leak JSON to a user.
 - **Transport selection (exactly one fires per email):** the email **channel** has two **transports**. The **Graph service account** sends when *operational* (connected + token refreshable + wrapper saved + `EMAIL_TOKEN_ENC_KEY` present — below); otherwise **env SMTP** (`SMTP_HOST` et al.), exactly as before — plain-text, no wrapper; with neither, no email (in-app only). A non-operational Graph transport therefore degrades to SMTP where configured. A notification that fires while **no transport is operational** is marked delivered on schedule and is simply in-app only (same contract as SMTP-unconfigured today) — **emails are never queued to burst-send later** when a transport recovers. Distinct from that: a **transient send error on an operational transport** (Graph 5xx, SMTP connection failure) follows the existing per-row retry/back-off (`delivery_attempts` up to the max) — retrying a real send failure is not burst-sending. **Graph throttling (429) is special-cased**: it consumes **no** attempt — the sweep records the error, stops its batch, and pauses delivery until the `Retry-After` window elapses (default one sweep interval) — so sustained throttling can never park rows or drop their email.
 - **Coalescing carve-outs:** `message.new` is one coalesced row per conversation, refreshed until read — and the refresh **must preserve the row's delivery bookkeeping** (update-in-place; a delete+reinsert would reset `delivered_at` and re-email on every new message — §24 amended to match) → **at most one email per conversation until the recipient reads it**. `system.error` platform-admin alerts stay **in-app only** (rows are pre-stamped `delivered_at`, §25) — no email even when the channel is up.
 - **Opt-out discoverability:** both transports append a **"Manage email notifications"** pointer to `<PUBLIC_BASE_URL>/profile` — an HTML footer link on wrapped Graph mail, a trailing plain-text line on SMTP mail.
+- **Digest mode (§48).** A user can trade per-update email for a **daily or weekly digest** (Profile → *Email frequency*; platform default, send time, digestible types and a kill switch on the admin card). For a digest-mode recipient, the sweep defers the email of each **digestible** row (`digest_state = 'pending'`, §48.5) and still delivers in-app and webhook immediately. The digest sweep later sends one email of the rows still unread (§48.6). People-to-people messages and the review queue are **never** digested (§48.3). This bullet is the only change §48 makes to the per-update rules above.
 
 ### Email service account (Graph `sendMail`)
 
@@ -1707,14 +1710,14 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `PUT /api/admin/ai/prereview { enabled }` — the AI pre-review switch (§46.2, platform-admin); `GET /api/admin/ai` gains `prereview`.
 - **Feedback survey (§36.10, all platform-admin):** `GET /api/admin/survey/summary`, `GET /api/admin/survey/comments`, `DELETE /api/admin/survey/responses/:id` (audited `survey.response_deleted`); `survey_enabled` on `GET|PATCH /api/admin/settings`.
-- `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), …).
+- `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), **email digests** (`email_digests_enabled`, `email_digest_default_mode`, `email_digest_hour`, `email_digest_weekday`, `email_digest_types`, §48.11), …).
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
 - **Email channel (§12, all platform-admin):** `GET /api/admin/email` (status: connected account, token state, wrapper present), `GET /api/admin/email/connect` (starts the Entra authorization-code redirect), `GET /api/admin/email/callback` (completes it; stores account + encrypted tokens), `DELETE /api/admin/email` (disconnect), `PUT /api/admin/email/wrapper` (sanitize + validate `[SYSTEM MESSAGE]` + save), `POST /api/admin/email/test` (test send to the actor).
 - **AI integration (§40.9, all platform-admin):** `GET|PUT|PATCH|DELETE /api/admin/ai` (status / save-with-test / enable-disable / remove), `POST /api/admin/ai/models` (provider model list), `POST /api/admin/ai/test` (connectivity test of the form values). The token is write-only — no response ever contains it.
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`**, §36, and **`emailDigest`** / **`emailDigestOptions`**, §48.12), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - **Skill collections (§38.11):** `GET /api/collections/mine?skillId=` · `POST /api/collections` · `GET|PATCH|DELETE /api/collections/:id` · `PUT|DELETE /api/collections/:id/skills/:skillId` · `GET /api/collections/suggest?q=`. `GET /api/skills` gains **`?collection=<id>`** and **`?collectionsBy=<userId>`** (viewer-visibility-scoped).
@@ -1882,6 +1885,17 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Minor** release (v2.27.0).
 
     **DONE.**
+
+37. **Email digests (§48):**
+    - **Data:** migration 0092 (`users.email_digest`, `email_digest_last_run_at`,
+      `email_digest_failures`, `notifications.digest_state`) and the five `email_digest*` platform
+      keys.
+    - **Worker:** deferral in the delivery sweep, the 5-minute leader-only digest sweep (slots in
+      each user's zone, unread-only, re-checks, forward-only drops, failure handling), and the
+      shared digest renderer.
+    - **Surfaces:** the Profile *Email frequency* select, and the *Email digests* subsection of the
+      Administration Email notifications card.
+    - **Minor** release. **Specified ahead — not built yet** (see the marker at the top of §48).
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -6981,7 +6995,9 @@ shared `NOTIFICATION_LABELS` map):
 
 The delivery sweep marks every `follow.*` row **delivered as in-app only**, the `achievement.earned`
 rule (§12). The renderer still has cases for all five, so no path can emit JSON (§12 *Notification
-content*).
+content*). **One exception, the email digest (§48):** for a recipient in daily or weekly digest
+mode, a digestible `follow.*` row is deferred to the digest instead (§48.3, §48.5). That is the only
+way a `follow.*` row reaches email; per-update recipients still get them in-app only.
 
 ### 35.7 Leaderboard & leader badges (§21 / §26 extension)
 - **A sixth stat per row: "followers".**
@@ -10633,3 +10649,247 @@ telemetry, not audit.
 - **Non-determinism and cost** follow §46: a re-run can differ, every result carries its model, and a
   platform-rule edit re-runs the latest version of every skill (about 60 an hour).
 - **Rule contexts are readable by every signed-in user.**
+
+---
+
+## 48. Email digests
+
+> ⚠ GAP-2 · new feature — none of §48 is built yet: no digest columns or platform keys (migration
+> 0092), no deferral in the delivery sweep, no digest sweep or renderer, and no Profile or
+> Administration controls. Every user still gets one email per update.
+
+A user who prefers fewer emails can switch from **one email per update** to a **daily or weekly
+digest**: one email summarising the awareness notifications (watched skills, discussions, people
+they follow and the like) that they have not yet read. Only **email** is batched. The in-app inbox,
+the bell and the webhook channel behave exactly as today. Platform admins set the organization
+default, the send time, which types are digestible, and can switch the feature off.
+
+### 48.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Email only.** In-app rows and the bell badge appear immediately, as today; webhook delivery is unchanged. A digest is an email, never a `notifications` row. | The inbox is already a pull channel; only push email is noisy. |
+| 2 | **Per-user mode:** *Organization default* / *Each update* / *Daily digest* / *Weekly digest*. Everyone starts on *Organization default*, which ships as *Each update*. | Nothing changes for anyone until they, or an admin, choose. |
+| 3 | **Digestible = awareness.** People-to-people messages and the review queue are **always** immediate; proposer lifecycle, safety flags, deprecations and fulfilled requests are immediate **by default** (§48.3). | Anything the recipient must act on promptly is never delayed by default. |
+| 4 | **`follow.*` join the digest.** They stay in-app only for per-update users; the digest is their only route to email. | The digest is "a summary of what you follow". |
+| 5 | **Unread only.** A row read in-app before the send is left out; nothing left → no email. | A digest reports what the user has not seen. |
+| 6 | **One send time for the org, in each user's own zone** — default 08:00 daily, Monday 08:00 weekly. | Simple, predictable; the zone is already captured (§31.3). |
+| 7 | **Grouped by subject, capped.** Several rows about one skill or one person collapse into one line. | A digest must be scannable. |
+| 8 | **Visibility re-checked at send.** | A row may be up to 7 days old; invariant #3 must still hold. |
+| 9 | **Forward-only.** Leaving digest mode never flushes; waiting rows stay in-app only. | The §12 posture for every preference toggle. |
+| 10 | **Platform admins control it** — default mode, send hour and weekday, digestible types, and a kill switch that is dormant, not destructive. | Org-wide policy without removing the user's choice. |
+
+### 48.2 Data model (migration 0092)
+- **`users.email_digest`** — `TEXT NULL`, `CHECK (email_digest IN ('immediate','daily','weekly'))`.
+  `NULL` = follow the organization default. No backfill: every existing user starts `NULL`.
+- **`users.email_digest_last_run_at`** — `TIMESTAMPTZ NULL`: the last scheduled slot the digest
+  sweep closed for this user (sent, empty or dropped). Drives *due* (§48.6).
+- **`users.email_digest_failures`** — `SMALLINT NOT NULL DEFAULT 0`: consecutive transient send
+  failures of the current digest (§48.7).
+- **`notifications.digest_state`** — `TEXT NULL`, `CHECK (digest_state IN ('pending','sent','dropped'))`.
+  `NULL` = the row's email was never deferred (sent per update, or the row is in-app only).
+  A partial index on `(user_id) WHERE digest_state = 'pending'`. No payload change.
+- **`platform_settings` keys** (all optional; absent ⇒ the default):
+  - `email_digests_enabled` — boolean, default `true` (the kill switch);
+  - `email_digest_default_mode` — `'immediate'` | `'daily'` | `'weekly'`, default `'immediate'`;
+  - `email_digest_hour` — integer 0–23, default `8` (local hour, §48.6);
+  - `email_digest_weekday` — integer 1–7, ISO (1 = Monday), default `1`;
+  - `email_digest_types` — array of type keys, default the *digestible by default* tier (§48.3).
+
+### 48.3 Which types are digestible
+One client-safe shared module, **`@skilly/shared/email-digest`**, holds the tiers, the defaults,
+the validation and the pure helpers below. The worker, the Profile page and the Administration card
+all read it, so they can never disagree.
+
+| Tier | Types | Admin can change? |
+|---|---|---|
+| **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.revise`, `proposal.resubmit` — the review queue | No |
+| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, and the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`) | Yes — each can be switched off |
+| **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled` | Yes — each can be switched on |
+| **Never emailed** | `system.error`, `achievement.earned` | No (not candidates) |
+
+- **`email_digest_types`** holds the enabled candidates from the two changeable tiers. The server
+  rejects (422) any other key. **The candidate list is closed:** a notification type added by a
+  later section is **immediate** until that section classifies it here, so no new type slips into
+  digests by default.
+- **Per-type opt-outs run first.** The §12 toggles (`new_version_notifications`,
+  `discussion_notifications`, …) still decide whether a row exists at all; digesting only changes
+  how an existing row's **email** goes out.
+- **`follow.*`.** A digestible `follow.*` row reaches email **only** through a digest. Per-update
+  users never get it by email (§35.6 unchanged), and a `follow.*` type the admin switches off is
+  in-app only for everyone again.
+
+### 48.4 Effective mode
+A pure shared function `effectiveDigestMode(user, settings)` decides, in order:
+1. `email_notifications = false` → **no email at all** — the channel toggle wins (§12).
+2. `email_digests_enabled = false` → `immediate` for everyone. Saved choices are **kept, unused**;
+   switching the feature back on restores each user's choice, with no catch-up.
+3. Otherwise `users.email_digest ?? email_digest_default_mode`.
+
+Users who are not `status = 'active'`, or have no email address, get no email of any kind, as §12
+already skips them.
+
+### 48.5 Deferral in the delivery sweep
+The leader-only delivery sweep (§12) gains one branch, evaluated **per row, when the sweep
+processes it**:
+- **Deferred.** The row's type is in `email_digest_types` **and** the recipient's effective mode
+  is `daily` or `weekly`: the in-app and webhook delivery happen exactly as today, the **email is
+  skipped**, the row is marked delivered, and `digest_state = 'pending'`.
+- **Otherwise unchanged:** a per-update email, or in-app only (`follow.*`, `system.error`,
+  `achievement.earned`).
+- **Classification is fixed at that moment.** A later change to the type list, the default mode,
+  the kill switch or the user's choice never re-classifies a row already processed. §48.6 settles
+  what happens to rows still pending.
+- **Coalesced rows** (`skill.discussion`, §24). The update-in-place refresh preserves the delivery
+  bookkeeping (§12), and so `digest_state`. A `pending` row carries its latest payload into the
+  digest. After a digest has included it (`sent`), the same unread row is never emailed again
+  until it is read — the per-update rule of "at most one email per coalesced row until read".
+
+### 48.6 The digest sweep (schedule)
+- A new **leader-only worker job** runs every 5 minutes.
+- **Slot.** Daily: the most recent `email_digest_hour`:00 in the user's zone. Weekly: the most
+  recent `email_digest_weekday` at that hour. The zone is `users.time_zone` (browser-reported,
+  §31.3); `NULL` → UTC. The hour is **wall-clock**, so it follows DST. A slot hour that does not
+  exist on a spring-forward day fires at the next instant that does.
+- **Due.** A user is due when their effective mode is `daily` or `weekly` and
+  `email_digest_last_run_at` is before their current slot.
+  - `NULL` `last_run_at` (first sight, or just after the user changed their choice — §48.10) is
+    stamped to the current slot **without sending**; any pending rows wait for the next slot. So
+    switching into digest mode never fires a near-empty digest at once.
+  - A worker outage that misses several slots produces **one** digest on recovery, never one per
+    missed slot.
+- **One pass per due user.** Take the user's `pending` rows:
+  - read (`read_at` set) → `dropped`;
+  - failing a re-check (§48.8) → `dropped`;
+  - the rest go into the digest and become `sent` once the email goes out.
+
+  Nothing left → no email; the slot is stamped either way.
+- **Leaving digest mode (forward-only).** On each pass the sweep also marks `dropped` the pending
+  rows of any user whose effective mode is now `immediate` or whose email is off. That covers a
+  user switching back, an admin changing the default, and the kill switch. Those rows stay in the
+  inbox; nothing is flushed by email.
+
+### 48.7 Sending and failures
+- **Transport:** the §12 selection, unchanged (Graph service account → env SMTP → none).
+- **No transport operational at the slot:** the digest is **not queued**. Its rows become
+  `dropped` and the slot is stamped (the §12 rule: emails are never burst-sent later).
+- **Transient error on an operational transport:** rows stay `pending`, the slot is **not**
+  stamped, and `email_digest_failures` goes up by one; the next pass retries. After the §12 maximum
+  delivery attempts in a row, the rows become `dropped`, the slot is stamped and the counter
+  resets. A success also resets it.
+- **Graph throttling (429)** consumes no attempt. Digests pause with the delivery sweep until
+  `Retry-After` elapses (§12). The digest job never blocks per-update delivery.
+
+### 48.8 Re-checks at send
+- **Skill-bearing rows** (payload `skillId`) are kept only if the user can **still see** the skill
+  — through the shared visibility predicate (`isSkillVisible` / `skillVisibilityWhere`, invariant
+  #7, never inlined) — and the skill still exists and is not archived.
+- **Request-bearing rows** are dropped when the request no longer exists.
+- **Actors.** An actor erased since the row was created (§4) renders as **"Deleted User"**.
+  Unfollowing or a paused follow after insert does **not** drop a `follow.*` row; that matches the
+  §35.6 evaluated-at-insert posture.
+
+### 48.9 Content
+- **Subject:** `Skilly - Daily digest` / `Skilly - Weekly digest`. These are fixed labels, per the
+  §12 principle (no per-instance detail in a subject), kept in the shared module. They are **not**
+  `NOTIFICATION_LABELS` entries, because a digest is not a notification type.
+- **Opening line:** *"Here is your daily summary from skilly: {n} updates."* (*weekly* for the
+  weekly digest).
+- **Sections**, in this order, each omitted when empty; lines within a section run newest first:
+  1. **Skills** — one line per skill, merging every skill-bearing row except `follow.*` and the
+     proposal/request types. The line is `{ns}/{slug}` followed by its parts joined with `·`:
+     *"new version v{semver}"* or *"{k} new versions (latest v{semver})"*; *"new comments (latest
+     from {fromName})"*; *"marked official"*; *"shared with your namespace"*; *"scored {stars} ★"*.
+     Any other admin-enabled type (safety flags, `skill.deprecated`) uses its §12 body sentence.
+     The line links to the skill page (`#discussion` when its only part is comments).
+  2. **People you follow** — one line per followed person: `{actorName}` followed by each of their
+     events as a linked fragment (*"published {ns}/{slug}"*, *"published v{semver} of {ns}/{slug}"*,
+     *"earned the {badgeName} badge"*, *"requested "{requestTitle}""*, *"fulfilled
+     "{requestTitle}""*, *"created the collection {name}"*). Each fragment links to its §35.6 /
+     §38.8 CTA target.
+  3. **Your proposals and requests** — only when the admin made those types digestible. One line
+     per proposal or request, using its rows' §12 body sentences in order, linked to the proposal
+     or request.
+- **Cap:** 50 lines across all sections, filled in section order. Beyond that: *"…and {n} more
+  updates."* followed by **See everything in skilly** → `/notifications`.
+- **Footer:** the §12 **"Manage email notifications"** pointer to `/profile`, in both transports.
+- **Transports.** The HTML part puts the digest body in the §12 wrapper in place of
+  `[SYSTEM MESSAGE]`, with section titles as bold lines and lines as a list. The plain-text part
+  uses §12's `label: url` flattening. Without `PUBLIC_BASE_URL`, links degrade to bare labels (§12).
+  No skill icons in v1.
+- **Renderer:** a pure function in the shared module (rows in → subject, text and HTML out), used
+  by the worker and unit-tested in isolation.
+
+### 48.10 Profile
+- In the **Email** group on `/profile`, under the *Email notifications* toggle, a select labelled
+  **"Email frequency"**: **Organization default ({current default})** / **Each update** / **Daily
+  digest** / **Weekly digest**.
+- **Helper text:** *"Digests arrive at {08:00} your time{, on Mondays}. Direct messages, @mentions
+  and review requests always arrive right away."* The hour and weekday come from the admin
+  settings. The time is formatted in the browser in the viewer's date style (the DateFormat rule:
+  EU 24 h, US AM/PM).
+- **Disabled** with the hint *"Turn on email notifications to choose"* while
+  `email_notifications` is off. **Hidden** while `email_digests_enabled` is off.
+- **Saving** sends `PATCH /api/me { emailDigest }`. It is silent (not audited), like every profile
+  preference, and **resets `email_digest_last_run_at` to `NULL`** whenever the value changes
+  (§48.6 first sight). The user's zone is already kept current by the §31.3 `timeZone` write.
+
+### 48.11 Administration
+Inside the **Email notifications** card (§12), an **Email digests** subsection:
+- **Allow email digests** — switch (`email_digests_enabled`).
+- **Default frequency** — Each update / Daily digest / Weekly digest
+  (`email_digest_default_mode`).
+- **Send time** — hour select 00–23, shown in the admin's date style, captioned *"in each person's
+  own time zone"*. **Weekly digest day** — Monday to Sunday.
+- **What goes into digests** — a checklist of the two changeable tiers (§48.3), grouped *Following
+  and skills* / *Proposals, requests and alerts*, with **Reset to defaults**. Below it, the floor
+  is listed read-only as *"Always sent right away"*.
+- Shown whatever the transport status; digests simply don't go out while email is down (§48.7).
+- Saved through `PATCH /api/admin/settings`. Platform-admin only, server-re-verified; each changed
+  key is audited as `settings.updated` (before → after).
+
+### 48.12 API surface
+- **`GET /api/me`** gains `emailDigest` (`null` | `'immediate'` | `'daily'` | `'weekly'`) and
+  `emailDigestOptions { enabled, defaultMode, hour, weekday }` for the select's labels and helper
+  text. **`PATCH /api/me`** accepts `emailDigest` (`null` or one of the three modes; 400
+  otherwise). It is accepted while the kill switch is off: the choice is stored, dormant.
+- **`GET|PATCH /api/admin/settings`** gains the five §48.2 keys. 422 on an hour outside 0–23, a
+  weekday outside 1–7, an unknown mode, or a type outside the two changeable tiers.
+
+### 48.13 Audit, privacy and lifecycle
+- **Audited:** `settings.updated` for the five keys. **Not audited:** the user's choice, and digest
+  sends (notification email is never audited, §11).
+- **GDPR erasure (§4):** the user columns are scrubbed with the row; the user's notifications are
+  already deleted.
+- **Deprovisioned users** get no digests (§48.4).
+- **Pruning:** the notifications row cap can prune `pending` rows before a weekly send; they are
+  then missing from the digest. Accepted.
+
+### 48.14 Tests (ship with the change)
+- **Unit (`@skilly/shared`):** tier classification, the closed candidate list and unknown types;
+  the `effectiveDigestMode` table; slot computation (daily and weekly, several zones, a DST gap, a
+  `NULL` zone); the due rule (first sight, missed slots → one digest); the renderer (grouping and
+  aggregation, section order, the cap and overflow line, both transports, no base URL); settings
+  validation.
+- **Integration (worker + DB):** deferral marks `pending` only for digestible types and digest-mode
+  users; floor types stay immediate; `follow.*` reach email only by digest; read → `dropped`;
+  narrowed visibility → `dropped`; mode switch, default change and kill switch → `dropped`, and
+  the kill switch restores choices; no transport → `dropped` with nothing queued; transient-failure
+  retry and give-up; a 429 consumes no attempt; the coalesced discussion row; migration 0092.
+- **Integration (web):** `PATCH /api/me` validation and the `last_run_at` reset; admin settings
+  validation, audit, and 403 for non-admins.
+- **e2e:** choose *Weekly digest* on the Profile page and it persists; an admin changes the default
+  frequency and the Profile label reads *Organization default (Daily digest)*. Email delivery itself
+  is covered by the worker integration tests, not e2e.
+
+### 48.15 Out of scope and accepted trade-offs
+- **Out of scope:** a per-user send hour or weekday; per-user type choice; monthly digests; in-app
+  or webhook digests; flushing waiting rows on switch-out; digesting messages, mentions or the
+  review queue; skill icons in digests; a one-click unsubscribe link (the footer goes to
+  `/profile`).
+- **Active users rarely get a digest.** Opening the inbox marks everything read (§12), so someone
+  who checks skilly daily may get few or no digests. Intended: a digest reports only what the user
+  has not seen.
+- **Up to a week of delay** for awareness items in weekly mode. Intended; anything that needs a
+  prompt response is immediate by default.
+- **One send hour for the whole org**, applied in each person's own zone.
