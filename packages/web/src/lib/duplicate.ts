@@ -24,7 +24,7 @@ import { pool } from "./db";
  */
 export function findSlugMatches(
   access: EffectiveAccess,
-  slug: string | null | undefined,
+  slug: unknown,
   db: Pool | PoolClient = pool,
 ): Promise<SlugMatch[]> {
   return findSlugMatchesShared(db, access, slug);

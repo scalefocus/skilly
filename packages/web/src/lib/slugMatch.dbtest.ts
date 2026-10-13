@@ -140,6 +140,17 @@ test("§8 slug match: lookup, submit gate, accept re-check, review alert", { ski
   assert.deepEqual(!raced.ok && raced.matches?.map((m) => m.namespaceSlug), [`${K}-a`]);
   assert.equal((await pool.query<{ state: string }>(`select state from proposals where id = $1`, [pRace])).rows[0]!.state, "under_review", "nothing changed");
 
+  // The 409 names only what the REVIEWER can see too (invariant #3): a skill visible to the proposer
+  // (restricted to C) but not to A's admin blocks the accept without being named.
+  const cOnlySlug = `${K}-c-only`;
+  const cMemberInC = await mkUserIn(`${K}-cown`, C, "namespace_admin");
+  await mkSkill(C, cMemberInC, meta(cOnlySlug, "namespace"));
+  const pCOnly = await mkOpenProposal(A, cMember, meta(cOnlySlug, "namespace"));
+  const blind = await acceptAs(pCOnly, aAdmin, asA);
+  assert.equal(!blind.ok && blind.code, SLUG_EXISTS_CODE, "still blocked — the proposer can see it");
+  assert.deepEqual(!blind.ok && blind.matches, [], "…but nothing the reviewer can't see is named");
+  assert.doesNotMatch(!blind.ok ? blind.error : "", new RegExp(`${K}-c/`));
+
   // Hidden from the proposer → never a slug_exists 409 (the reviewer was alerted instead).
   const hiddenSlug = `${K}-hidden`;
   await mkSkill(A, aAdmin, meta(hiddenSlug, "namespace"));

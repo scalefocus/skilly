@@ -60,7 +60,7 @@ import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
 import { findDuplicateSkill, findSlugMatches, publicMatch, type DuplicateMatch } from "./duplicate";
 import { resolveUserAccessById } from "./access";
-import { slugExistsMessage, SLUG_EXISTS_CODE, type SlugMatch } from "@skilly/shared";
+import { lockSlugForCreate, slugExistsMessage, SLUG_EXISTS_CODE, type SlugMatch } from "@skilly/shared";
 import { syncGrants, validateGrantTargets, GRANT_TARGET_MESSAGES, type GrantVia } from "./grants";
 import { fulfilOriginRequest } from "./requests";
 import { M } from "./metrics";
@@ -785,6 +785,13 @@ export async function performProposalAction(
   input: ActionInput,
   store: ArtifactStore = s3ArtifactStore(),
 ): Promise<ActionResult> {
+  // §8 slug re-check on accept: the PROPOSER's access, resolved before the transaction so it never
+  // holds a second pool connection while this one sits on the proposal's row lock.
+  let proposerAccess: EffectiveAccess | null = null;
+  if (input.action === "accept") {
+    const sub = (await pool.query<{ submitted_by: string; target_skill_id: string | null }>(`select submitted_by, target_skill_id from proposals where id = $1`, [input.proposalId])).rows[0];
+    if (sub && !sub.target_skill_id) proposerAccess = await resolveUserAccessById(sub.submitted_by);
+  }
   const client = await pool.connect();
   // Staged upload superseded by a revise (§8) — deleted from storage AFTER commit (eager cleanup).
   let supersededKey: string | null = null;
@@ -829,15 +836,28 @@ export async function performProposalAction(
       // same-slug active skill now uses — visible to the PROPOSER, as of now (a racing proposal
       // accepted first, a target-namespace edit, a new grant). The slug is locked on revise/resubmit,
       // so the reviewer rejects it and the proposer re-versions the existing skill instead. A skill
-      // hidden from the proposer never blocks (the reviewer was alerted on the review page).
+      // hidden from the proposer never blocks (the reviewer was alerted on the review page). The
+      // per-slug lock makes a racing accept / direct publish of the same slug wait for this one.
+      // The 409 names only the matches the REVIEWER can see too (invariant #3).
       if (!p.target_skill_id) {
         const lp = await latestPayload(client, input.proposalId);
         if (!lp.promotedFromSkillVersionId) {
-          const proposerAccess = await resolveUserAccessById(p.submitted_by);
-          const matches = await findSlugMatches(proposerAccess, lp.metadata?.skillSlug, client);
+          const slug = lp.metadata?.skillSlug;
+          await lockSlugForCreate(client, slug);
+          const matches = await findSlugMatches(proposerAccess ?? (await resolveUserAccessById(p.submitted_by)), slug, client);
           if (matches.length > 0) {
+            const reviewerSees = new Set((await findSlugMatches(input.access, slug, client)).map((m) => m.skillId));
+            const shown = matches.filter((m) => reviewerSees.has(m.skillId));
             await client.query("rollback");
-            return { ok: false, status: 409, error: slugExistsMessage(matches), code: SLUG_EXISTS_CODE, matches: matches.map(publicMatch) };
+            return {
+              ok: false,
+              status: 409,
+              error: shown.length > 0
+                ? slugExistsMessage(shown)
+                : "a skill with this slug that the proposer can see already exists — reject this proposal so they propose a new version of it instead",
+              code: SLUG_EXISTS_CODE,
+              matches: shown.map(publicMatch),
+            };
           }
         }
       }
@@ -1356,7 +1376,11 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
 export type DirectPublishResult =
   | { ok: true; skillId: string; versionId?: string; pending?: boolean }
   | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[]; routedReason: "content_risk" | "policy" }
-  | { ok: false; status: number; error: string; requiresOverride?: boolean; findings?: ScanFinding[]; severity?: string };
+  | {
+      ok: false; status: number; error: string; requiresOverride?: boolean; findings?: ScanFinding[]; severity?: string;
+      /** §8 slug match found inside the publish transaction (a race the route's pre-check missed). */
+      code?: typeof SLUG_EXISTS_CODE; matches?: Omit<SlugMatch, "skillId">[];
+    };
 
 /**
  * The content check for a direct publish (§37.4). `findings` are the submission's scan findings;
@@ -1465,6 +1489,16 @@ export async function directPublish(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    // §8 slug match, under the per-slug lock: a racing accept / publish of the same new slug that
+    // committed after the route's pre-check is caught here instead of creating a second skill.
+    if (!existing) {
+      await lockSlugForCreate(client, input.payload.metadata.skillSlug);
+      const matches = await findSlugMatches(input.access, input.payload.metadata.skillSlug, client);
+      if (matches.length > 0) {
+        await client.query("rollback");
+        return { ok: false, status: 409, error: slugExistsMessage(matches), code: SLUG_EXISTS_CODE, matches: matches.map(publicMatch) };
+      }
+    }
     const result = await materializeVersion(client, {
       targetNamespaceId: ns.id,
       targetSkillId: existing?.id ?? null,

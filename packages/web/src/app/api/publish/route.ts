@@ -5,7 +5,7 @@ import { pool } from "../../../lib/db";
 import { directPublish, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, type RevisionPayload, type DirectPublishContentCheck } from "../../../lib/proposals";
 import { fetchPointerContentForCheck } from "../../../lib/pointerFetch";
 import { getMaxBundleBytes } from "../../../lib/settings";
-import { runScanners, PURE_SCANNERS, bundleContentCap } from "@skilly/shared";
+import { runScanners, PURE_SCANNERS, bundleContentCap, canDirectPublish } from "@skilly/shared";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { findDuplicateSkill, newSkillSlugClash } from "../../../lib/duplicate";
 import { verifyPointerSkill } from "../../../lib/pointerVerify";
@@ -54,9 +54,11 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   ).rows[0];
   // Slug match (§8): a NEW skill whose slug a visible active skill already uses — in any namespace —
   // must be a new version of it instead. Always hard (independent of the duplicate setting).
+  // Only for a caller who may publish here at all — anyone else gets directPublish's 403, so this
+  // can't become a probe for slugs in a namespace they can't publish into.
   if (!existing && b.metadata?.skillSlug) {
-    const ns = (await pool.query<{ id: string }>(`select id from namespaces where slug = $1`, [b.namespaceSlug])).rows[0];
-    if (ns) {
+    const ns = (await pool.query<{ id: string; require_review: boolean }>(`select id, require_review from namespaces where slug = $1`, [b.namespaceSlug])).rows[0];
+    if (ns && canDirectPublish(access, ns.id, ns.require_review)) {
       const clash = await newSkillSlugClash(access, ns.id, b.metadata.skillSlug);
       if (clash) return clash;
     }
@@ -149,7 +151,7 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   });
   if (!r.ok) {
     return Response.json(
-      { error: r.error, ...(r.requiresOverride ? { requiresOverride: true, contentRisk: true, severity: r.severity ?? null, findings: r.findings ?? [] } : {}) },
+      { error: r.error, ...(r.requiresOverride ? { requiresOverride: true, contentRisk: true, severity: r.severity ?? null, findings: r.findings ?? [] } : {}), ...(r.code ? { code: r.code, matches: r.matches ?? [] } : {}) },
       { status: r.status },
     );
   }

@@ -22,8 +22,8 @@ export type SlugMatchView = Omit<SlugMatch, "skillId">;
 export const SLUG_EXISTS_CODE = "slug_exists";
 
 /** Slugs are stored lowercase (§6); compare on the trimmed, lowercased form. */
-export function normalizeMatchSlug(slug: string | null | undefined): string {
-  return (slug ?? "").trim().toLowerCase();
+export function normalizeMatchSlug(slug: unknown): string {
+  return typeof slug === "string" ? slug.trim().toLowerCase() : "";
 }
 
 /**
@@ -53,6 +53,9 @@ export function slugExistsMessage(matches: readonly Pick<SlugMatch, "namespaceSl
  * locked on revise/resubmit, so the proposer's way forward is a new version of the existing skill.
  */
 export function slugRejectReason(matches: readonly Pick<SlugMatch, "namespaceSlug" | "slug">[]): string {
+  // No nameable match: the clashing skill is one the proposer can see but this reviewer can't —
+  // the reason names nothing (invariant #3); the proposer will find it from their own view.
+  if (matches.length === 0) return "A skill with this slug already exists — please propose a new version of it instead (or a new skill under a different slug).";
   const links = matches.map((m) => `/skills/${m.namespaceSlug}/${m.slug}`).join(", ");
   return matches.length === 1
     ? `A skill with this slug already exists: ${links} — please propose a new version of it instead (or a new skill under a different slug).`

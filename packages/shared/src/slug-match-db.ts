@@ -5,6 +5,16 @@ import type { EffectiveAccess } from "./rbac.js";
 import { skillVisibilityWhere } from "./visibility.js";
 import { normalizeMatchSlug, type SlugMatch } from "./slug-match.js";
 
+/**
+ * Serialize new-skill creation per slug for the rest of the transaction (§8): two accepts (or an
+ * accept and a direct publish) of the same new slug in different namespaces would otherwise both
+ * pass the slug-match check before either commits — the unique key is only per namespace. Take it
+ * BEFORE the check; it is released at commit/rollback.
+ */
+export async function lockSlugForCreate(db: SlugMatchDb, slug: unknown): Promise<void> {
+  await db.query(`select pg_advisory_xact_lock(hashtext($1))`, [`slugmatch:${normalizeMatchSlug(slug)}`]);
+}
+
 export interface SlugMatchDb {
   query(text: string, params?: any[]): Promise<{ rows: any[] }>; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
@@ -17,7 +27,7 @@ export interface SlugMatchDb {
 export async function findSlugMatches(
   db: SlugMatchDb,
   access: Pick<EffectiveAccess, "isPlatformAdmin" | "namespaceRoles">,
-  slug: string | null | undefined,
+  slug: unknown,
   opts: { excludeSkillId?: string | null } = {},
 ): Promise<SlugMatch[]> {
   const want = normalizeMatchSlug(slug);

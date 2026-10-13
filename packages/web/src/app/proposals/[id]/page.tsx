@@ -484,8 +484,9 @@ function ProposalDetailInner() {
       if (!r.ok) {
         // §8 slug match at accept: a same-slug skill the proposer can see now exists. The slug is
         // locked, so the way forward is a reject — pre-fill the reason with a link to that skill.
-        if (action === "accept" && r.status === 409 && j.code === SLUG_EXISTS_CODE && Array.isArray(j.matches) && j.matches.length > 0) {
-          setNote(slugRejectReason(j.matches as SlugMatchView[]));
+        if (action === "accept" && r.status === 409 && j.code === SLUG_EXISTS_CODE) {
+          const reason = slugRejectReason(Array.isArray(j.matches) ? (j.matches as SlugMatchView[]) : []);
+          setNote((prev) => (prev.trim() ? prev : reason)); // never clobber what the reviewer typed
         }
         if (action === "accept" && r.status === 409 && !j.requiresOverride) reload(); // stale revision (or a new slug match) — show the current one
         throw new Error(j.error ?? `Action failed (${r.status})`);

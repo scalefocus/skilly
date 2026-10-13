@@ -21,6 +21,7 @@ test("normalizeMatchSlug trims and lowercases", () => {
   assert.equal(normalizeMatchSlug("  PDF-Tools "), "pdf-tools");
   assert.equal(normalizeMatchSlug(null), "");
   assert.equal(normalizeMatchSlug(undefined), "");
+  assert.equal(normalizeMatchSlug({}), "", "a non-string never throws");
 });
 
 test("a clash needs a supplied source of the other type", () => {
@@ -84,6 +85,10 @@ test("rows map to SlugMatch", async () => {
     { skillId: "a", namespaceSlug: "data", slug: "pdf-tools", title: "PDF Tools", type: "pointer", deprecated: true },
     { skillId: "b", namespaceSlug: "global", slug: "pdf-tools", title: "PDF", type: "hosted", deprecated: false },
   ]);
+});
+
+test("slugRejectReason names nothing when the reviewer can't see the match", () => {
+  assert.doesNotMatch(slugRejectReason([]), /\/skills\//);
 });
 
 test("slugRejectReason links every match", () => {
