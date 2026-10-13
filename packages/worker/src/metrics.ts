@@ -10,6 +10,8 @@ export const M = {
   notificationsDelivered: metrics.counter("skilly_notifications_delivered_total", "Notifications delivered"),
   notificationsFailed: metrics.counter("skilly_notifications_failed_total", "Notification delivery failures"),
   gitClones: metrics.counter("skilly_git_clones_total", "Authenticated git fetches served"),
+  // §22 worker rate limiting, by surface (git_ip|git_token|scim|other).
+  workerRateLimited: metrics.counter("skilly_worker_rate_limited_total", "Worker requests refused by a rate limiter, by surface"),
   reconcile: metrics.counter("skilly_reconcile_runs_total", "Entra reconciliation sweeps"),
   pointerRefreshChecked: metrics.counter("skilly_pointer_refresh_checked_total", "Pointer refs re-verified"),
   pointerDrift: metrics.counter("skilly_pointer_drift_total", "Pointer refs whose upstream content drifted"),

@@ -2194,11 +2194,6 @@ responsibilities. Hardening that pins or clarifies invariants here:
   or one `skills update` over many installed skills, hit `429` in minutes. The Helm probes
   (`/readyz` every 10 s + `/healthz` every 20 s ≈ 135 / 15 min) also exceeded the limit on their own.
   The surfaces:
-
-  > ⚠ GAP-3 · code fix — the worker still mounts the single app-wide 100 / 15 min per-IP limiter
-  > over git, SCIM and the health endpoints. None of the per-surface limiters, the env knobs, the
-  > health exemption or the `skilly_worker_rate_limited_total` counter below exist yet.
-
   - **Git smart server (§9) — two layers.**
     - **Per-IP flood guard**: default **600 requests / 1 min** per client IP. It applies **only** to
       requests the git router recognizes as git smart-HTTP (`info/refs`, `git-upload-pack`,
@@ -2241,11 +2236,14 @@ responsibilities. Hardening that pins or clarifies invariants here:
     | `SCIM_RATE_WINDOW_MS` | `60000` | SCIM per-IP window |
 
     The variables are documented in `deploy/.env.example` and exposed in the Helm chart as
-    `worker.rateLimits.*` values rendered into the worker Deployment's env.
+    `worker.rateLimits.*` values rendered into the worker Deployment's env (only the ones set).
   - **Common to all:** per-IP keys honor the configured `trust proxy` (`TRUST_PROXY`), so the real
-    client is counted behind the edge proxy rather than the proxy itself. Responses carry the
-    standard `RateLimit-*` headers (`RateLimit-Policy` names the bucket that applied) plus `Retry-After`
-    on **`429`**. The 429 body is short plain text (`rate limit exceeded — retry in <n> s`); git
+    client is counted behind the edge proxy rather than the proxy itself. **Unset, every client
+    shares the proxy's single bucket**, so the compose file passes `TRUST_PROXY` through to the worker
+    and the Helm chart exposes it as `worker.trustProxy`. Set it to the number of proxies in front of
+    the worker. Responses carry the IETF draft-8 `RateLimit-Policy` / `RateLimit` headers, each item
+    naming its bucket (`"git_ip"; q=600; w=60; …`). An authorized git request lists both `git_ip`
+    and `git_token`. A **`429`** also carries `Retry-After`. The 429 body is short plain text (`rate limit exceeded — retry in <n> s`); git
     clients typically surface only the status line, so the body is best-effort. Every 429 bumps a new
     worker counter `skilly_worker_rate_limited_total` with a `surface` label (`git_ip` | `git_token` | `scim` | `other`)
     so operators can tell which limit fired.

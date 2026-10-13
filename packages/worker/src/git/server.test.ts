@@ -16,6 +16,7 @@ import { synthesizeVersion } from "./synth.js";
 import { repoPath } from "./repoStore.js";
 import { synthesizeMarketplace, marketplaceRepoDir, marketplaceHead } from "./marketplace.js";
 import type { MarketplaceCredit } from "./server.js";
+import { GitTokenLimiter } from "../rateLimit.js";
 
 const exec = promisify(execFile);
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -356,4 +357,58 @@ test("marketplace: no token, wrong-scope token, and a disabled marketplace are a
   const auth = "Basic " + Buffer.from("x-access-token:mkt-ns").toString("base64");
   const off = await fetch(`${base()}/_marketplace/team-off.git/info/refs?service=git-upload-pack`, { headers: { authorization: auth } });
   assert.equal(off.status, 404);
+});
+
+test("per-installation bucket (§22): a real clone spends it; once spent → 429 before anything is served or recorded", async () => {
+  // A second server over the same repos, with a small per-token bucket. How many authorized
+  // requests one clone makes depends on the git protocol version (v0: info/refs + upload-pack;
+  // v2 adds ls-refs), so the test drains whatever the clone left rather than assuming a count.
+  const limiter = new GitTokenLimiter({ max: 8, windowMs: 900_000 });
+  const app = express();
+  app.use(gitServer(deps, { tokenLimiter: limiter }));
+  const limited: Server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  const lport = (limited.address() as AddressInfo).port;
+  const refs = `http://127.0.0.1:${lport}/team-a/pdf.git/info/refs?service=git-upload-pack`;
+  const basic = (raw: string) => ({ authorization: "Basic " + Buffer.from(`x-access-token:${raw}`).toString("base64") });
+  try {
+    // Failed auth never touches a token bucket: these 401/403s spend nothing.
+    for (let i = 0; i < 10; i++) {
+      assert.equal((await fetch(refs, { headers: basic("not-a-token") })).status, 401);
+      assert.equal((await fetch(refs, { headers: basic("good-secret") })).status, 403);
+    }
+
+    await exec("git", ["clone", `http://x-access-token:good-pdf@127.0.0.1:${lport}/team-a/pdf.git`, join(workDir, "c-bucket-1")], { env: cloneEnv });
+
+    // Spend what's left; every allowed advertisement names the bucket in RateLimit-Policy.
+    let allowed = 0;
+    for (;;) {
+      const r = await fetch(refs, { headers: basic("good-pdf") });
+      await r.arrayBuffer();
+      if (r.status === 429) break;
+      assert.equal(r.status, 200);
+      assert.match(r.headers.get("ratelimit-policy") ?? "", /"git_token"; q=8; w=900/);
+      assert.ok(++allowed < 8, "the clone must have spent part of the bucket");
+    }
+    assert.ok(allowed >= 1 && allowed <= 6, `a clone costs 2–7 authorized requests (left ${allowed})`);
+
+    logged.length = 0;
+    stamped.length = 0;
+    const blocked = await fetch(refs, { headers: basic("good-pdf") });
+    assert.equal(blocked.status, 429);
+    assert.ok(Number(blocked.headers.get("retry-after")) >= 1);
+    assert.match(await blocked.text(), /^rate limit exceeded — retry in \d+ s$/);
+    assert.deepEqual(logged, [], "a throttled fetch is not logged as access");
+    assert.deepEqual(stamped, [], "a throttled fetch does not stamp freshness");
+    await assert.rejects(
+      exec("git", ["clone", `http://x-access-token:good-pdf@127.0.0.1:${lport}/team-a/pdf.git`, join(workDir, "c-bucket-2")], { env: cloneEnv }),
+      /429/,
+    );
+
+    // Another installation has its own bucket — a system token clones the restricted skill fine.
+    await exec("git", ["clone", `http://x-access-token:system-secret@127.0.0.1:${lport}/team-a/secret.git`, join(workDir, "c-bucket-sys")], { env: cloneEnv });
+  } finally {
+    await new Promise<void>((resolve) => limited.close(() => resolve()));
+  }
 });

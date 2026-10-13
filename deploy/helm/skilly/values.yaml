@@ -30,6 +30,19 @@ web:
 worker:
   replicas: 1
   resources: {}
+  # Express `trust proxy` (TRUST_PROXY): the number of proxies in front of the worker, so install
+  # IPs and every per-IP rate limit see the real client (§9/§22). "" = don't trust X-Forwarded-For
+  # (all clients then share the ingress controller's single rate-limit bucket).
+  trustProxy: ""
+  # §22 per-surface rate limits, per worker instance. Empty = the built-in default (in brackets).
+  # /healthz /readyz /metrics are never limited, so probes are unaffected.
+  rateLimits:
+    gitIpMax: ""          # [600] git requests per IP per window, before auth
+    gitIpWindowMs: ""     # [60000]
+    gitTokenMax: ""       # [300] git requests per installation per window, after auth
+    gitTokenWindowMs: ""  # [900000]
+    scimMax: ""           # [600] SCIM requests per IP per window
+    scimWindowMs: ""      # [60000]
   gitStorage:
     size: 10Gi
     storageClass: ""

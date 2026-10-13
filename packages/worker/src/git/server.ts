@@ -15,6 +15,7 @@ import type { MarketplaceScope } from "@skilly/shared";
 import { repoProvisioned, defaultRepoRoot } from "./repoStore.js";
 import { marketplaceRepoDir, marketplaceHead, changedSlugsSince } from "./marketplace.js";
 import { gitHttpBackend } from "./httpBackend.js";
+import type { GitTokenLimiter } from "../rateLimit.js";
 
 /**
  * The originating client IP of a clone (the consumer running `npx skills add`), for the owner's
@@ -100,7 +101,15 @@ function gitRouteTemplate(parsed: ParsedGitRequest): string {
     : `/[ns]/[slug].git/${endpoint}`;
 }
 
-export function gitServer(deps: GitServerDeps): Router {
+export interface GitServerOptions {
+  /**
+   * The per-installation bucket (§22), checked after authorization and before anything is served
+   * or recorded. Absent = no per-token limiting (the per-IP guard still applies upstream).
+   */
+  tokenLimiter?: GitTokenLimiter;
+}
+
+export function gitServer(deps: GitServerDeps, opts: GitServerOptions = {}): Router {
   const r = Router();
   const root = deps.repoRoot ?? defaultRepoRoot();
 
@@ -131,6 +140,10 @@ export function gitServer(deps: GitServerDeps): Router {
         }
         return res.status(decision.status).type("text/plain").send(decision.reason);
       }
+
+      // Per-installation bucket (§22), keyed by the token ROW id — never the credential. A
+      // throttled request stops here: no http-backend, no access log, no freshness stamp.
+      if (decision.principal && opts.tokenLimiter && !opts.tokenLimiter.enforce(decision.principal.tokenId, res)) return;
 
       // "Provisioned" requires ≥1 ref, not just a HEAD file — an empty repo (init'd but never
       // synthesized, e.g. a crash mid-sweep) would otherwise serve a successful but empty clone,

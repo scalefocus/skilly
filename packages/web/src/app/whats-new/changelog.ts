@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.33.0",
+    date: "2026-10-13",
+    summary:
+      "Installing skills no longer fails with \"error: 429\" when several people install at once or you update many skills. Git installs now have their own, much larger limits: a generous ceiling per network address plus a separate allowance for each installation. Health checks are never throttled. Operators: set TRUST_PROXY to the number of proxies in front of the worker.",
+  },
+  {
     version: "2.32.0",
     date: "2026-10-13",
     summary: "Proposing a skill whose slug is already in use in any namespace you can see now turns your proposal into a new version of that skill. If several namespaces use the slug, you pick which one. “Use a different slug” takes you back to a new skill, with everything you entered kept.",

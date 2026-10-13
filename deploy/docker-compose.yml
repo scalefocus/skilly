@@ -154,6 +154,16 @@ services:
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
       GIT_REPO_ROOT: /data/git
+      # Real client IP behind the proxies (install IPs + per-IP rate-limit keys, §9/§22). Unset =
+      # every client shares the proxy's single rate-limit bucket. See .env.example.
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      # §22 per-surface rate limits; empty = the built-in defaults.
+      GIT_IP_RATE_MAX: ${GIT_IP_RATE_MAX:-}
+      GIT_IP_RATE_WINDOW_MS: ${GIT_IP_RATE_WINDOW_MS:-}
+      GIT_TOKEN_RATE_MAX: ${GIT_TOKEN_RATE_MAX:-}
+      GIT_TOKEN_RATE_WINDOW_MS: ${GIT_TOKEN_RATE_WINDOW_MS:-}
+      SCIM_RATE_MAX: ${SCIM_RATE_MAX:-}
+      SCIM_RATE_WINDOW_MS: ${SCIM_RATE_WINDOW_MS:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-skilly}
