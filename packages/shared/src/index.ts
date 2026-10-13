@@ -26,6 +26,8 @@ export * from "./email-digest.js";
 export * from "./featured.js";
 export * from "./mentions.js";
 export * from "./visibility.js";
+export * from "./slug-match.js";
+export * from "./slug-match-db.js";
 export * from "./installs.js";
 export * from "./remote-refs.js";
 export * from "./oauth.js";

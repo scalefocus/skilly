@@ -12,6 +12,7 @@ import { MarkdownField } from "../../../components/MarkdownField";
 import { ToolHarnessPicker } from "../../../components/ToolHarnessPicker";
 import { FileChangeList } from "../../../components/FileChanges";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
+import { SLUG_EXISTS_CODE, slugRejectReason, type SlugMatchView } from "@skilly/shared/slug-match";
 import { useDateFmt } from "../../../components/DateFormat";
 import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
 import type { MentionMap } from "../../../components/MentionChips";
@@ -94,6 +95,8 @@ interface Detail {
   submitterCard: SubmitterCard | null;
   conversationId: string | null;
   duplicate: { namespaceSlug: string; skillSlug: string; title: string } | null;
+  /** §8 slug match: visible active skills with this new-skill proposal's slug (open proposals only). */
+  slugMatches?: SlugMatchView[];
   targetSkillCurrent: TargetSkillCurrent | null;
 }
 interface SubmitterCard { userId: string; displayName: string; email: string; avatar: string | null; role: string; priorSubmissions: number }
@@ -479,7 +482,13 @@ function ProposalDetailInner() {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        if (action === "accept" && r.status === 409 && !j.requiresOverride) reload(); // stale revision — show the current one
+        // §8 slug match at accept: a same-slug skill the proposer can see now exists. The slug is
+        // locked, so the way forward is a reject — pre-fill the reason with a link to that skill.
+        if (action === "accept" && r.status === 409 && j.code === SLUG_EXISTS_CODE) {
+          const reason = slugRejectReason(Array.isArray(j.matches) ? (j.matches as SlugMatchView[]) : []);
+          setNote((prev) => (prev.trim() ? prev : reason)); // never clobber what the reviewer typed
+        }
+        if (action === "accept" && r.status === 409 && !j.requiresOverride) reload(); // stale revision (or a new slug match) — show the current one
         throw new Error(j.error ?? `Action failed (${r.status})`);
       }
       if (action === "accept" || action === "reject" || action === "request_changes") reportFeatureUse("review"); // §36.3
@@ -588,6 +597,34 @@ function ProposalDetailInner() {
           </span>
         </div>
       )}
+      {(() => {
+        // §8 slug match: shown only to a viewer who can see a same-slug skill the submitter couldn't
+        // (else the form would have made it a new version). A match the duplicate alert already
+        // names is not repeated.
+        const matches = (data.slugMatches ?? []).filter((m) => !(data.duplicate && m.namespaceSlug === data.duplicate.namespaceSlug && m.slug === data.duplicate.skillSlug));
+        if (matches.length === 0) return null;
+        return (
+          <div
+            data-testid="slug-match-alert"
+            className="card card-pad"
+            style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "var(--warn-soft)", borderColor: "color-mix(in oklab, var(--warn) 35%, var(--line))" }}
+          >
+            <span aria-hidden style={{ fontSize: 18 }}>⚠</span>
+            <span style={{ fontSize: 13.5, flex: 1, minWidth: 220 }}>
+              A skill with this slug already exists:{" "}
+              {matches.map((m, i) => (
+                <span key={`${m.namespaceSlug}/${m.slug}`}>
+                  {i > 0 && ", "}
+                  <Link className="mono" href={`/skills/${m.namespaceSlug}/${m.slug}`} style={{ fontWeight: 600, textDecoration: "underline" }}>
+                    {m.namespaceSlug}/{m.slug}
+                  </Link>
+                </span>
+              ))}
+              . The submitter can’t see it, so this came in as a new skill — decide whether it should be a new version of the existing one instead.
+            </span>
+          </div>
+        );
+      })()}
       {data.duplicate && (
         <div
           className="card card-pad"

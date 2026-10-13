@@ -39,6 +39,10 @@
       "types": "./dist/proposal.d.ts",
       "default": "./dist/proposal.js"
     },
+    "./slug-match": {
+      "types": "./dist/slug-match.d.ts",
+      "default": "./dist/slug-match.js"
+    },
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"

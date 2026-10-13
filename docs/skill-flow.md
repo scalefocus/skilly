@@ -86,8 +86,11 @@ Handler: `packages/web/src/app/api/proposals/route.ts`. If the namespace has
 namespace always requires review.
 
 1. Auth + `enforceRateLimit("proposals", userId, 30)`; resolve namespace; contribution-policy check.
-2. **Slug-uniqueness 409** — a new-skill submission whose `(namespace, slug)` exists is bounced
-   to "propose a new version instead".
+2. **Slug match 409** (`newSkillSlugClash`, `packages/web/src/lib/duplicate.ts`) — a new-skill
+   submission whose slug an ACTIVE skill the submitter can see already uses, in ANY namespace
+   (`findSlugMatches`, `packages/shared/src/slug-match-db.ts`), is bounced with
+   `{ code: "slug_exists", matches }` so the form redirects into the new-version flow. A hidden
+   skill in the target namespace still 409s (unique key) without being named. Always hard.
 3. **`verifySubmissionPayload`** (`packages/web/src/lib/proposals.ts:103`):
    visibility backstop (`namespace` visibility can't live in `global`); **closed tool/harness
    vocab** (`normalizeHarness` → `isAllowedToolHarness`); **hosted ownership + scan gate** (the
@@ -117,6 +120,8 @@ Handler: `packages/web/src/app/api/proposals/[id]/actions/route.ts` → `perform
   reviewer (`canReviewNamespace`).
 - **Reviewer edits** — a `newPayload` is re-validated and appended as a new `proposal_revisions`
   row; `materializeVersion` reads the *latest* revision.
+- **Slug re-check on accept** — a new-skill proposal (not a promotion) whose slug a same-slug active
+  skill the PROPOSER can now see uses → **409** `slug_exists`; the reviewer rejects it.
 - **Scan-override gate on accept** — if the artifact scan severity `requiresOverride` (high/critical)
   and no `override`, → **409**; an override writes a `proposal.scan_override` audit row.
 

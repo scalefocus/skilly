@@ -7,7 +7,7 @@
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
 // from a description — absent from the code.
 import type { Pool } from "pg";
-import { parseMinQuality, deprecationWarning, loadPrereviewView, proposalPolicyPayload, PREREVIEW_OPEN_STATES } from "@skilly/shared";
+import { parseMinQuality, deprecationWarning, findSlugMatches, loadPrereviewView, proposalPolicyPayload, PREREVIEW_OPEN_STATES } from "@skilly/shared";
 import { aiAvailable, parseAiTokenKey } from "@skilly/shared/ai";
 import {
   MCP_TOOL_NAMES,
@@ -247,7 +247,7 @@ export function toolDefinitions(): ToolDefinition[] {
       title: "Check for a duplicate skill",
       readOnly: true,
       description:
-        "Before proposing, check whether the registry already has this skill — by slug in the target namespace, or by external origin URL for a mirrored skill. Cheap, and it saves a rejected proposal.",
+        "Before proposing, check whether the registry already has this skill — by slug (in the target namespace AND every other namespace you can see: a new skill can't reuse a slug that is already taken — propose a new version of that skill instead), or by external origin URL for a mirrored skill. Cheap, and it saves a rejected proposal.",
       inputSchema: {
         type: "object",
         properties: {
@@ -696,7 +696,14 @@ export async function callTool(
       const slug = s(args, "skillSlug");
       const originUrl = s(args, "originUrl");
       const subdir = s(args, "subdir");
-      const out: Record<string, unknown> = { slugTaken: false, originMatch: null };
+      const out: Record<string, unknown> = { slugTaken: false, slugMatches: [], originMatch: null };
+      // §8 slug match: every visible active skill using this slug, in ANY namespace.
+      const matches = slug ? await findSlugMatches(pool, caller.access, slug) : [];
+      if (matches.length > 0) {
+        out.slugTaken = true;
+        out.slugMatches = matches.map((m) => `${m.namespaceSlug}/${m.slug}`);
+        out.slugNote = `${(out.slugMatches as string[]).join(", ")} already ${matches.length === 1 ? "uses" : "use"} this slug — a new skill can't take it. Propose a NEW VERSION by proposing to that skill's namespace.`;
+      }
       if (nsSlug && slug) {
         const ns = await findNamespace(pool, nsSlug);
         if (!ns) return toolError(`no such namespace: ${nsSlug}`);
@@ -704,8 +711,8 @@ export async function callTool(
           `select slug, status from skills where namespace_id = $1 and slug = $2`,
           [ns.id, slug],
         );
-        out.slugTaken = rows.length > 0;
-        if (rows[0]) {
+        out.slugTaken = out.slugTaken === true || rows.length > 0;
+        if (rows[0] && !out.slugNote) {
           out.slugNote = `${nsSlug}/${slug} already exists — propose a NEW VERSION of it rather than a new skill`;
         }
       }
@@ -759,7 +766,7 @@ export async function callTool(
       if (tool === "propose_pointer_skill") {
         const built = buildPointerPayload(args, meta.value);
         if (!built.ok) return toolError(built.error);
-        const res = await createMcpProposal(pool, caller.userId, ns, semver, built.value, caller.clientName);
+        const res = await createMcpProposal(pool, caller.userId, caller.access, ns, semver, built.value, caller.clientName);
         return res.ok ? toolJson(res) : toolError(res.error);
       }
 
@@ -781,7 +788,7 @@ export async function callTool(
         artifactFilename: ingested.artifactFilename,
         contentSha256: ingested.contentSha256,
       };
-      const res = await createMcpProposal(pool, caller.userId, ns, semver, payload, caller.clientName, ingested.scanSeverity);
+      const res = await createMcpProposal(pool, caller.userId, caller.access, ns, semver, payload, caller.clientName, ingested.scanSeverity);
       return res.ok ? toolJson(res) : toolError(res.error);
     }
 
