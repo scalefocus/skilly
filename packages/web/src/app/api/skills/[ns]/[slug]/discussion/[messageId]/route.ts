@@ -1,7 +1,9 @@
 // Moderator delete of a single skill-discussion comment (SKILLY_SPEC.md §24). The ONLY message
 // delete in the system: effective maintainers (explicit ∪ namespace admins) ∪ platform admins may
-// hard-delete any comment on their skill's discussion. Audited (skill.discussion_message_deleted);
-// the body is never recorded. No edits and no author self-delete anywhere.
+// delete any comment on their skill's discussion. A top-level comment that has replies becomes a
+// tombstone instead (`outcome: "tombstoned"`); everything else is hard-deleted. Audited
+// (skill.discussion_message_deleted); the body is never recorded. No edits and no author
+// self-delete anywhere.
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../../../lib/access";
@@ -39,5 +41,5 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ ns: string;
   // Authority (and skill-thread membership) is re-verified inside deleteSkillDiscussionMessage.
   const r = await deleteSkillDiscussionMessage(access, skill, messageId);
   if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
-  return Response.json({ ok: true });
+  return Response.json({ ok: true, outcome: r.outcome, tombstoneRemoved: r.tombstoneRemoved });
 }

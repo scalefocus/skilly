@@ -12,7 +12,19 @@
 //      author-and-self-approve hole (§29 Excluded surface) at the code level, not in a doc.
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { categorySlug, checkCategoryNames, fanOutToFollowers, isSkillVisible, normalizeCategoryNames, sharedNamespaceIdsSql, userCanSeeSkillSql, type KnownCategory } from "@skilly/shared";
+import {
+  DISCUSSION_THREAD_PEOPLE_SQL,
+  categorySlug,
+  checkCategoryNames,
+  discussionFanOutPlan,
+  discussionReplyNotifySql,
+  fanOutToFollowers,
+  isSkillVisible,
+  normalizeCategoryNames,
+  sharedNamespaceIdsSql,
+  userCanSeeSkillSql,
+  type KnownCategory,
+} from "@skilly/shared";
 import {
   MAX_MENTIONS_PER_MESSAGE,
   PURE_SCANNERS,
@@ -216,7 +228,7 @@ async function insertMcpMessage(
   authorId: string,
   body: string,
   clientName: string,
-  opts: { contextSemver?: string | null; trackParticipant?: boolean; mentions?: PreparedMention[] },
+  opts: { contextSemver?: string | null; trackParticipant?: boolean; mentions?: PreparedMention[]; parentId?: string | null },
 ): Promise<{ id: string; createdAt: string }> {
   // §31 Conversationalist needs the thread's opener BEFORE this message lands.
   const { rows: openerRows } = await pool.query<{ author_id: string }>(
@@ -224,9 +236,9 @@ async function insertMcpMessage(
     [conversationId],
   );
   const { rows } = await pool.query<{ id: string; created_at: string }>(
-    `insert into messages (conversation_id, author_id, body, context_semver, via_mcp_client)
-     values ($1,$2,$3,$4,$5) returning id, created_at`,
-    [conversationId, authorId, body, opts.contextSemver ?? null, clientName],
+    `insert into messages (conversation_id, author_id, body, context_semver, via_mcp_client, parent_id)
+     values ($1,$2,$3,$4,$5,$6) returning id, created_at`,
+    [conversationId, authorId, body, opts.contextSemver ?? null, clientName, opts.parentId ?? null],
   );
   const msg = rows[0]!;
   if (opts.mentions?.length) await insertMentionRows(pool, msg.id, opts.mentions);
@@ -302,7 +314,10 @@ export async function postSkillComment(
   rawBody: string,
   contextSemver: string | null,
   clientName: string,
-): Promise<{ ok: true; messageId: string } | WriteFailure> {
+  parentId: string | null = null,
+): Promise<{ ok: true; messageId: string; parentId: string | null } | WriteFailure> {
+  if (parentId != null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(parentId)) return fail("parentId must be a comment id from get_skill_discussion");
+  if (parentId != null && contextSemver != null) return fail("a reply inherits its thread's version — omit contextSemver");
   const body = rawBody.trim();
   if (!body) return fail("message is empty");
   if (body.length > MAX_DISCUSSION_LEN) return fail(`message too long (max ${MAX_DISCUSSION_LEN})`);
@@ -316,22 +331,49 @@ export async function postSkillComment(
   );
   if (!mentions.ok) return mentions;
 
-  const { rows: active } = await pool.query<{ semver: string }>(
-    `select semver from skill_versions where skill_id = $1 and status = 'active'`,
-    [skill.id],
-  );
   let semver: string | null = null;
-  if (contextSemver != null) {
-    if (!active.some((v) => v.semver === contextSemver)) return fail("unknown or inactive version");
-    semver = contextSemver;
+  let root: { id: string; authorId: string } | null = null;
+  if (parentId != null) {
+    // §24 Replies: normalise to the thread's root (one level) inside THIS skill's discussion; a
+    // tombstoned root takes no replies; the reply inherits the root's version.
+    const { rows } = await pool.query<{ id: string; author_id: string; context_semver: string | null; removed_at: string | null }>(
+      `select r.id, r.author_id, r.context_semver, r.removed_at
+         from messages p
+         join conversations c on c.id = p.conversation_id and c.subject_type = 'skill' and c.subject_id = $2
+         join messages r on r.id = coalesce(p.parent_id, p.id) and r.conversation_id = p.conversation_id
+        where p.id = $1`,
+      [parentId, skill.id],
+    );
+    const r = rows[0];
+    if (!r) return fail("comment not found");
+    if (r.removed_at) return fail("that comment was removed — it can't take replies");
+    root = { id: r.id, authorId: r.author_id };
+    semver = r.context_semver;
+  } else {
+    const { rows: active } = await pool.query<{ semver: string }>(
+      `select semver from skill_versions where skill_id = $1 and status = 'active'`,
+      [skill.id],
+    );
+    if (contextSemver != null) {
+      if (!active.some((v) => v.semver === contextSemver)) return fail("unknown or inactive version");
+      semver = contextSemver;
+    }
   }
 
   const conversationId = await getOrCreateConversation(pool, "skill", skill.id);
-  const message = await insertMcpMessage(pool, conversationId, userId, body, clientName, {
-    contextSemver: semver,
-    trackParticipant: false, // skill discussions are open forums with no participant rows (§24)
-    mentions: mentions.mentions,
-  });
+  let message: { id: string; createdAt: string };
+  try {
+    message = await insertMcpMessage(pool, conversationId, userId, body, clientName, {
+      contextSemver: semver,
+      trackParticipant: false, // skill discussions are open forums with no participant rows (§24)
+      mentions: mentions.mentions,
+      parentId: root?.id ?? null,
+    });
+  } catch (e) {
+    // The root was hard-deleted between the check and the insert (FK violation).
+    if (root && (e as { code?: string }).code === "23503") return fail("that comment was removed — it can't take replies");
+    throw e;
+  }
   const fromName = await displayName(pool, userId);
   const mentioned = await notifyMentions(pool, mentions.mentions, userId, {
     conversationId,
@@ -340,6 +382,18 @@ export async function postSkillComment(
     namespaceSlug: skill.namespaceSlug,
     skillSlug: skill.skillSlug,
   });
+  // §24 Replies: the thread's people get skill.discussion_reply (the shared statement the web tier
+  // uses); precedence mention > reply > discussion keeps it to one row per person per message.
+  let exclude = mentioned;
+  if (root) {
+    const people = (await pool.query<{ user_id: string }>(DISCUSSION_THREAD_PEOPLE_SQL, [root.id, message.id])).rows.map((r) => r.user_id);
+    const plan = discussionFanOutPlan(userId, mentioned, people);
+    if (plan.replyCandidates.length) {
+      const payload = JSON.stringify({ conversationId, rootId: root.id, messageId: message.id, namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug, fromName });
+      await pool.query(discussionReplyNotifySql(), [skill.id, plan.replyCandidates, payload, root.authorId]);
+    }
+    exclude = plan.discussionExclude;
+  }
   // Coalesced skill.discussion fan-out to watchers ∪ maintainers ∪ namespace admins — the same
   // predicate the web tier uses, including the visibility gate on restricted skills.
   await pool.query(
@@ -365,11 +419,11 @@ export async function postSkillComment(
       JSON.stringify({ conversationId, namespaceSlug: skill.namespaceSlug, skillSlug: skill.skillSlug, fromName }),
       skill.namespaceId,
       userId,
-      mentioned,
+      exclude,
     ],
   );
   M.mcpWrites.inc({ kind: "discussion" });
-  return { ok: true, messageId: message.id };
+  return { ok: true, messageId: message.id, parentId: root?.id ?? null };
 }
 
 // ── Proposal review thread (§24) ────────────────────────────────────────────────────────────────

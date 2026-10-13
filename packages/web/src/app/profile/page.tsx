@@ -270,7 +270,7 @@ function MaintainerNotificationsPref() {
     { field: "contentRiskNotifications", label: "Content check flags", offHint: "You won't be alerted when the content check flags a published version of a skill you maintain.", value: data.contentRiskNotifications },
     { field: "qualityNotifications", label: "Low quality scores", offHint: "You won't be alerted when a published version of a skill you maintain scores 2 stars or below on the quality check.", value: data.qualityNotifications },
     { field: "policyNotifications", label: "Policy flags", offHint: "You won't be alerted when the policy check flags a published version of a skill you maintain.", value: data.policyNotifications },
-    { field: "discussionNotifications", label: "Discussion comments and @mentions", offHint: "You won't be alerted about new comments on skills you maintain or watch, or when someone @mentions you.", value: data.discussionNotifications },
+    { field: "discussionNotifications", label: "Discussion comments, replies and @mentions", offHint: "You won't be alerted about new comments on skills you maintain or watch, replies in threads you're part of, or when someone @mentions you.", value: data.discussionNotifications },
     // §46.10 — only namespace admins receive it, so only they see the toggle.
     ...(data.administersNamespace
       ? [{ field: "aiPrereviewNotifications" as const, label: "AI pre-review flags in namespaces I administer", offHint: "You won't be alerted when an AI pre-review flags a version that was published without a reviewer seeing the result.", value: data.aiPrereviewNotifications ?? true }]

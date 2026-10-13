@@ -129,7 +129,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0092, the email digest, §48), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -246,7 +246,8 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `notifications`
 - `id`, `user_id`, `type`, `payload`, `read_at`, `created_at`, plus delivery bookkeeping (migration 0006): `delivered_at`, `delivery_attempts`, `delivery_error` (drive the leader-only email/webhook delivery sweep, §12).
-- `digest_state` (TEXT, nullable — `pending` | `sent` | `dropped`; migration 0092): set when the delivery sweep defers the row's email to the user's digest (§48.5); `NULL` = never deferred. Partial index on `(user_id) WHERE digest_state = 'pending'`.
+- `digest_state` (TEXT, nullable — `pending` | `sent` | `dropped`; migration 0093): set when the delivery sweep defers the row's email to the user's digest (§48.5); `NULL` = never deferred. Partial index on `(user_id) WHERE digest_state = 'pending'`.
+- A **partial unique index** (migration 0092) pins **one unread `skill.discussion_reply` row per (user, thread root)** (`payload->>'rootId'`) — the same update-in-place coalescing as `skill.discussion` (§24 *Replies to discussion comments*).
 - A **partial unique index** (migration 0053) pins **one unread coalesced `message.new` row per (user, conversation)** — the §24 coalescing is an atomic upsert (`ON CONFLICT DO UPDATE`), so concurrent posts can never produce duplicate rows (= duplicate emails, §12).
 
 ### `email_service_account` (migration 0053)
@@ -291,7 +292,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### Messaging tables (migration 0031, detailed in §24)
 - **`conversations`** — `id`, `subject_type`, `subject_id` (polymorphic; partial unique on `(subject_type, subject_id)`), `created_at`, `updated_at`.
 - **`conversation_participants`** — `conversation_id`, `user_id`, `last_read_at`, `created_at` (PK first two).
-- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `context_semver` (nullable TEXT, migration 0059 — **skill-discussion context only**: the skill version the comment is about, §24), `created_at`; specified ahead (GAP-1, §24 *Replies to discussion comments*): `parent_id` (nullable self-FK — a one-level reply, skill discussion only) and `removed_at` (nullable — a moderator tombstone). Immutable — no edits for anyone; the **only** delete is the skill-discussion **moderator delete** (§24), and its tombstone variant is the only in-place change. The body may embed **mention tokens** (`<@uuid>` / `<#uuid>`, §24 *Mentions*).
+- **`messages`** — `id`, `conversation_id`, `author_id`, `body`, `context_semver` (nullable TEXT, migration 0059 — **skill-discussion context only**: the skill version the comment is about, §24), `created_at`, `parent_id` (nullable self-FK, `ON DELETE CASCADE`, migration 0092 — a one-level reply, skill discussion only, §24 *Replies to discussion comments*) and `removed_at` (nullable, migration 0092 — a moderator tombstone). Immutable — no edits for anyone; the **only** delete is the skill-discussion **moderator delete** (§24), and its tombstone variant is the only in-place change. The body may embed **mention tokens** (`<@uuid>` / `<#uuid>`, §24 *Mentions*).
 - **`message_mentions`** (migration 0062, detailed in §24 *Mentions*) — `message_id` (FK → `messages`, ON DELETE CASCADE), `kind` (`'user'` | `'skill'`), `target_id` (UUID — `users.id` or `skills.id`; **no FK**, polymorphic like `conversations.subject_id`), `label` (TEXT NULL — **skill mentions only**: the `ns/slug` handle captured at post time, used solely as the plain-text fallback after the skill is hard-deleted; user mentions store **no** label — they resolve live, and users are never hard-deleted). PK `(message_id, kind, target_id)`.
 
 ### `system_event` (migration 0032, detailed in §25)
@@ -1154,7 +1155,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Scan overrides** (`proposal.scan_override`).
   - **Content risk (§37.12):** `proposal.routed_to_review`, `skill.publish_scan_override`, `skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
-  - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*; specified ahead, GAP-1: plus `parentId`, `tombstoned`, `tombstoneRemoved` — §24 *Replies to discussion comments*). Posting a comment is not audited (the immutable message row is its own provenance).
+  - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*; plus `parentId`, `tombstoned`, `tombstoneRemoved` — §24 *Replies to discussion comments*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15).
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
@@ -1222,7 +1223,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To the **admins of each namespace a restricted skill is shared with** (§42): `skill.shared` when the grant is created (who shared it, from which namespace, CTA → the skill), and `skill.shared_new_version` when a new version of a skill shared with their namespace is published — they can see the skill but do not govern it, so this is awareness, not a review-queue item. Both are per-recipient, **deduped** against a `skill.new_version` row the same person already receives as watcher/maintainer, delivered over the same channels as `skill.new_version`, and **not** sent to platform admins who merely inherit access. No per-type opt-out in v1.
   - To **watchers ∪ effective maintainers ∪ current installers** of a skill (§45.6): `skill.deprecated` when an admin deprecates it, or later **changes its successor** (a note-only edit does not re-fire; un-deprecating notifies nobody). *Current installer* = a user holding a **used, non-expired** personal `install` token on the skill (**inactive** installs are excluded — an expired credential is not a running installation), plus the **minting admin** of each active **system** install (`created_by_user_id`, when still present). Minus the actor; **one row per recipient** however many ways they qualify; visibility-filtered at insert, and the body names the successor **only for recipients who can see it**. Delivered over the same channels as `skill.new_version` (in-app + email/webhook), gated by the channel-level `email_notifications` toggle **only** — **no per-type opt-out** (it is actionable: something the recipient runs is being retired). Fired synchronously by the deprecation endpoint (web tier), like `skill.shared`.
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
-  - To the **people in a discussion thread** (specified ahead, GAP-1 — §24 *Replies to discussion comments*): `skill.discussion_reply` when someone replies in a skill-discussion thread. Recipients are the root comment's author ∪ earlier repliers in that thread, minus the author, minus opt-outs, visibility-filtered at insert. It is **coalesced per thread per recipient until read** and gated by the same `discussion_notifications` toggle. For one message a person gets one row: `message.mention` beats `skill.discussion_reply`, which beats `skill.discussion`.
+  - To the **people in a discussion thread** (§24 *Replies to discussion comments*): `skill.discussion_reply` when someone replies in a skill-discussion thread. Recipients are the root comment's author ∪ earlier repliers in that thread, minus the author, minus opt-outs, visibility-filtered at insert. It is **coalesced per thread per recipient until read** and gated by the same `discussion_notifications` toggle. For one message a person gets one row: `message.mention` beats `skill.discussion_reply`, which beats `skill.discussion`.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
   - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only** (the one exception: a digest-mode recipient gets them in the email digest, §48), have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
@@ -1267,7 +1268,7 @@ current or future type can ever leak JSON to a user.
   | `message.mention` | You were mentioned | {fromName} mentioned you in "{title}". *(skill discussion: … mentioned you in the discussion on {ns}/{slug}.; direct: … mentioned you in a direct message.)* | View the message → `/proposals/{id}` / `/requests/{id}` / `/skills/{ns}/{slug}#discussion` / `/?conversation={conversationId}` |
   | `skill.new_version` | New version published | {ns}/{slug} published version {semver}. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.discussion` | New discussion comment | {fromName} commented on {ns}/{slug}. | View the discussion → `/skills/{ns}/{slug}#discussion` |
-  | `skill.discussion_reply` *(GAP-1)* | New reply | {fromName} replied to your comment on {ns}/{slug}. *(earlier replier, not the root's author: … replied in a discussion thread you're part of on {ns}/{slug}.)* | View the reply → `/skills/{ns}/{slug}#discussion-{rootId}` |
+  | `skill.discussion_reply` | New reply | {fromName} replied to your comment on {ns}/{slug}. *(earlier replier, not the root's author: … replied in a discussion thread you're part of on {ns}/{slug}.)* | View the reply → `/skills/{ns}/{slug}#discussion-{rootId}` |
   | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
   | `skill.quality_low` | Low quality score | {ns}/{slug} v{semver} scored {stars} ★ ({score}/100, {mode}). *(+ the full findings list, then the AI summary and suggestions when present — §41.9)* | Open the Quality card → `/skills/{ns}/{slug}#quality`; plus **Draft improvements with {aiName}** → `/skills/{ns}/{slug}?draft=ai#quality` when §44.9 applies |
   | `proposal.policy_violation` | Policy check flagged your proposal | The policy check flagged your proposal for {ns}/{slug}: {rule titles}. *(+ each violated rule's explanation — §47.10)* | See the policy check → `/proposals/{proposalId}#policy` |
@@ -1302,11 +1303,12 @@ current or future type can ever leak JSON to a user.
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
   `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
-  **"Discussion comments and @mentions"** (`users.discussion_notifications`,
+  **"Discussion comments, replies and @mentions"** (`users.discussion_notifications`,
   `BOOLEAN NOT NULL DEFAULT true`, migration 0059; gates `skill.discussion` — §24 *Skill
-  discussion* — **and `message.mention` in every context**, §24 *Mentions*; relabeled from
-  "Discussion comments on skills I maintain or watch" when mentions shipped — same column, no
-  migration). `GET /api/me` returns them; `PATCH /api/me { driftNotifications,
+  discussion* — `skill.discussion_reply` — §24 *Replies to discussion comments* — **and
+  `message.mention` in every context**, §24 *Mentions*; relabeled from "Discussion comments on
+  skills I maintain or watch" when mentions shipped, and from "Discussion comments and
+  @mentions" when replies shipped — same column, no migration). `GET /api/me` returns them; `PATCH /api/me { driftNotifications,
   newVersionNotifications, discussionNotifications }` updates them.
   The fourth is **"Content check flags on skills I maintain"** (`users.content_risk_notifications`,
   `BOOLEAN NOT NULL DEFAULT true`, migration 0081, §37.9); `PATCH /api/me` also accepts
@@ -1339,9 +1341,7 @@ current or future type can ever leak JSON to a user.
     at insert time (§24 *Skill discussion*). The **same toggle also gates `message.mention`** in
     all four messaging contexts (§24 *Mentions*) — a deliberate single switch, no separate
     mention toggle: opting out of discussion chatter opts out of being pinged by name too. It
-    likewise gates `skill.discussion_reply` (specified ahead, GAP-1). When replies ship, the
-    toggle is relabeled **"Discussion comments, replies and @mentions"** (same column, no
-    migration).
+    likewise gates `skill.discussion_reply` (§24 *Replies to discussion comments*).
   - `content_risk_notifications` gates `skill.content_risk` entirely, like the drift toggle: it
     only ever targets effective maintainers (§37.9).
   - `quality_notifications` gates `skill.quality_low` entirely, the same way (§41.9).
@@ -1688,7 +1688,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Messaging (§24)**
 - `GET /api/messages` (list + unread), `GET|POST /api/messages/:id`, `POST /api/messages/:id/read`, `POST /api/messages/direct {userId}`.
-- `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET paginated newest-first, 100/page; POST `{body, contextSemver}`) and `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator hard delete, audited `skill.discussion_message_deleted`) — the skill Discussion card, §24. Specified ahead (GAP-1, §24 *Replies to discussion comments*): POST gains an optional `parentId`; GET nests `replies[]` + `replyCount` under each top-level message; DELETE may tombstone a top-level comment that has replies.
+- `GET|POST /api/skills/:ns/:slug/discussion` (lazy get-or-create; GET pages top-level comments newest-first, 100/page, each with `replyCount` + `replies[]`, plus the viewer's `unreadThreads`; POST `{body, contextSemver}`, or `{body, parentId}` for a reply), `DELETE /api/skills/:ns/:slug/discussion/:messageId` (moderator delete — a hard delete, or a tombstone for a top-level comment that has replies; the response's `outcome` says which; audited `skill.discussion_message_deleted`) and `POST /api/skills/:ns/:slug/discussion/read` (the viewport read; `{rootIds}` is the per-thread read of reply alerts) — the skill Discussion card, §24 (*Replies to discussion comments*).
 - **Mentions (§24 *Mentions*):** `GET /api/users/suggest?q=&context=` — people typeahead for the composer `@` picker and the header-search people mode (§10); any signed-in user, rate-limited, 2-char floor, top 6 (5 in the header), name+email substring match, excludes erased/non-active users. The optional `context` (`proposal:<id>` | `skill:<ns>/<slug>`) narrows candidates to that thread's audience (server re-derives it; a caller who can't see the context 404s); no context = whole directory (request threads, direct chats, org-visible skill discussions, header search). Skill (`#`) suggestions reuse `GET /api/skills/suggest` with `scope=mention` — bare query matches **org-visible** skills only; a `<ns>/` prefix the author can see into unlocks that namespace's restricted skills. Every message GET returns a per-reader-resolved `mentions` map alongside the bodies (the `GET /api/messages` conversation list instead returns each `lastBody` pre-flattened to plain text for the reader — §24 *Conversation-list previews*); every message POST validates tokens (≤10 distinct, audience + visibility rules) and writes `message_mentions`.
 
 **Presence**
@@ -1887,7 +1887,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     **DONE.**
 
 37. **Email digests (§48):**
-    - **Data:** migration 0092 (`users.email_digest`, `email_digest_last_run_at`,
+    - **Data:** migration 0093 (`users.email_digest`, `email_digest_last_run_at`,
       `email_digest_failures`, `notifications.digest_state`) and the five `email_digest*` platform
       keys.
     - **Worker:** deferral in the delivery sweep, the 5-minute leader-only digest sweep (slots in
@@ -1896,6 +1896,19 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Surfaces:** the Profile *Email frequency* select, and the *Email digests* subsection of the
       Administration Email notifications card.
     - **Minor** release. **Specified ahead — not built yet** (see the marker at the top of §48).
+
+38. **Replies to discussion comments (§24):**
+    - **Data:** migration 0092 (`messages.parent_id` + `removed_at`, the coalescing index for
+      `skill.discussion_reply`).
+    - **Shared:** `@skilly/shared` `discussion.ts` — parent normalisation, the fan-out precedence
+      plan, the tombstone decision, and the one reply-notification statement both tiers run.
+    - **Web:** replies on POST, nested GET with per-reader `unreadThreads`, the tombstoning delete in
+      one transaction, the per-thread read; the Discussion card's threads, "Show N more replies", the
+      single inline reply composer with the pre-inserted @mention chip, tombstones and the
+      `#discussion-<rootId>` deep link; the relabeled discussion toggle.
+    - **Worker:** the `skill.discussion_reply` renderer; MCP `post_skill_comment` `parentId` and
+      nested `get_skill_discussion`.
+    - **Minor** release (v2.29.0). **DONE.**
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -2979,8 +2992,8 @@ A **general** conversation/message layer. Its first use is **review discussion**
 proposal's submitter and its reviewers; the model is deliberately context-polymorphic, and a second
 context — a **skill request's discussion** — was added in §26 without changing the review-discussion
 context's own access rules or lifecycle. A third context — the **skill discussion** (the skill
-detail page's Discussion card, below) — follows the same pattern. Specified ahead (GAP-1), the skill
-discussion alone also gains **one-level replies** (*Replies to discussion comments*, below); every
+detail page's Discussion card, below) — follows the same pattern. The skill discussion alone
+also has **one-level replies** (*Replies to discussion comments*, below); every
 other context stays flat.
 
 ### Data model
@@ -3312,11 +3325,6 @@ card and the skill-specific message semantics.
 
 ### Replies to discussion comments (one level)
 
-> **⚠ GAP-1 · new feature** — none of this subsection is built yet: `messages` has no
-> `parent_id`/`removed_at`, the skill Discussion card is a flat list with no Reply action, the
-> moderator delete never tombstones, and there is no `skill.discussion_reply` notification. Closing it
-> also updates the §12, §15 API, §29 MCP and data-model text that points here.
-
 People can **reply directly to a comment** in a skill's Discussion card, so a back-and-forth stays in
 one thread instead of scattering through the newest-first list. Whoever is in that thread is
 notified when someone answers. **Scope: the skill discussion only.** Proposal review threads,
@@ -3335,7 +3343,7 @@ request Discussion cards and direct chats stay flat.
   when the parent is **not a tombstone** (below). Otherwise the post fails with **409** and the Reply
   action is hidden.
 
-**Data model (new migration, numbered when built).**
+**Data model (migration 0092).**
 - `messages.parent_id UUID NULL REFERENCES messages(id) ON DELETE CASCADE`, plus a partial index on
   `(parent_id) WHERE parent_id IS NOT NULL`. The server enforces two rules on insert: the parent is
   in the same conversation, and the parent's own `parent_id` is NULL. Only `subject_type='skill'`
@@ -3397,7 +3405,8 @@ depends on the target:
 - **Deep link:** the CTA opens **`/skills/{ns}/{slug}#discussion-{rootId}`**. The card expands for
   that view, without touching the stored collapse preference. That thread's replies expand fully,
   the thread scrolls into view, and the **newest reply is briefly highlighted**. A thread that no
-  longer exists falls back to plain `#discussion`.
+  longer exists — or is not on the first page of top-level comments — falls back to plain
+  `#discussion`.
 - **Read:** the viewer's `skill.discussion_reply` row for a thread clears when **that thread** (its
   root plus replies) enters the viewport of the expanded card. This is the card's existing viewport
   rule, applied per thread. The standard inbox-open read (§12) clears it too. Seeing one thread does
@@ -3410,7 +3419,12 @@ depends on the target:
   omitted when `parentId` is present.
 - `GET` returns each top-level message with `replyCount` and a `replies[]` array (oldest-first, same
   message shape, sharing the page's per-reader `mentions` map). A tombstone carries
-  `removed: true` and no author or body.
+  `removed: true` and no author or body. Each message carries `parentId` and `authorMentionable`
+  (whether the reply composer may pre-insert a chip for its author), and the thread carries the
+  viewer's `unreadThreads` — the roots holding an unread `skill.discussion_reply` row for them.
+- `POST …/discussion/read` with `{ rootIds }` (up to 100) is the **per-thread read**: the card sends
+  it when a thread listed in `unreadThreads` enters the viewport. Without a body it stays the
+  whole-card read of `skill.discussion` and mention rows.
 - `DELETE` is unchanged in shape. The response says whether the target was deleted or tombstoned.
 - MCP (§29): `post_skill_comment` gains an optional `parentId`, normalised to the root as in the UI.
   `get_skill_discussion` nests replies the same way.
@@ -4232,8 +4246,8 @@ authors; a human decides. The tool descriptions say so, so the boundary isn't a 
 | Tool | Behavior |
 |---|---|
 | `rate_skill` | Set (1–5) or clear (`null`) the caller's own rating (§18). |
-| `get_skill_discussion` | Paginated skill discussion (§24). Specified ahead (GAP-1): replies nested under their top-level comment. |
-| `post_skill_comment` | Post to a skill discussion, optionally with `contextSemver` (§24). Specified ahead (GAP-1): optional `parentId` to reply, normalised to the thread's root. |
+| `get_skill_discussion` | Paginated skill discussion (§24): top-level comments newest-first, each with its `id`, `replyCount` and replies (oldest-first); a tombstone carries `removed: true` and no author or body. |
+| `post_skill_comment` | Post to a skill discussion, optionally with `contextSemver` (§24), or reply with `parentId` (normalised to the thread's root; a reply omits `contextSemver`). |
 | `list_skill_requests` | The §26 Requested-skills list, with its own filters. |
 | `request_skill` | File a skill request (§26). |
 
@@ -10655,7 +10669,7 @@ telemetry, not audit.
 ## 48. Email digests
 
 > ⚠ GAP-2 · new feature — none of §48 is built yet: no digest columns or platform keys (migration
-> 0092), no deferral in the delivery sweep, no digest sweep or renderer, and no Profile or
+> 0093), no deferral in the delivery sweep, no digest sweep or renderer, and no Profile or
 > Administration controls. Every user still gets one email per update.
 
 A user who prefers fewer emails can switch from **one email per update** to a **daily or weekly
@@ -10679,7 +10693,7 @@ default, the send time, which types are digestible, and can switch the feature o
 | 9 | **Forward-only.** Leaving digest mode never flushes; waiting rows stay in-app only. | The §12 posture for every preference toggle. |
 | 10 | **Platform admins control it** — default mode, send hour and weekday, digestible types, and a kill switch that is dormant, not destructive. | Org-wide policy without removing the user's choice. |
 
-### 48.2 Data model (migration 0092)
+### 48.2 Data model (migration 0093)
 - **`users.email_digest`** — `TEXT NULL`, `CHECK (email_digest IN ('immediate','daily','weekly'))`.
   `NULL` = follow the organization default. No backfill: every existing user starts `NULL`.
 - **`users.email_digest_last_run_at`** — `TIMESTAMPTZ NULL`: the last scheduled slot the digest
@@ -10875,7 +10889,7 @@ Inside the **Email notifications** card (§12), an **Email digests** subsection:
   users; floor types stay immediate; `follow.*` reach email only by digest; read → `dropped`;
   narrowed visibility → `dropped`; mode switch, default change and kill switch → `dropped`, and
   the kill switch restores choices; no transport → `dropped` with nothing queued; transient-failure
-  retry and give-up; a 429 consumes no attempt; the coalesced discussion row; migration 0092.
+  retry and give-up; a 429 consumes no attempt; the coalesced discussion row; migration 0093.
 - **Integration (web):** `PATCH /api/me` validation and the `last_run_at` reset; admin settings
   validation, audit, and 403 for non-admins.
 - **e2e:** choose *Weekly digest* on the Profile page and it persists; an admin changes the default

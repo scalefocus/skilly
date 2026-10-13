@@ -140,7 +140,9 @@ export default function NotificationsPage() {
             // skill.content_risk opens the owner Content risk card (§37.9).
             // §47.10: skill.policy_flag opens the owner Policy card; proposal.policy_violation links the
             // proposal's Policy section instead (its skill may not exist yet).
-            const skillHref = nsSlug && skSlug && n.type !== "proposal.policy_violation" ? `/skills/${nsSlug}/${skSlug}${n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : n.type === "skill.policy_flag" ? "#policy" : n.type === "skill.ai_prereview_flagged" ? "#ai-prereview" : ""}` : null;
+            // skill.discussion_reply opens its thread (#discussion-<root>, §24 Replies).
+            const replyRoot = n.type === "skill.discussion_reply" && typeof n.payload.rootId === "string" ? n.payload.rootId : null;
+            const skillHref = nsSlug && skSlug && n.type !== "proposal.policy_violation" ? `/skills/${nsSlug}/${skSlug}${replyRoot ? `#discussion-${replyRoot}` : n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : n.type === "skill.policy_flag" ? "#policy" : n.type === "skill.ai_prereview_flagged" ? "#ai-prereview" : ""}` : null;
             // A DIRECT-chat mention has no page of its own: deep-link to the topbar Messages
             // panel via ?conversation=<id> (§24 Mentions), like the email CTA.
             const conversationHref =
