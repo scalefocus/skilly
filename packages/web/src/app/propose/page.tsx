@@ -8,6 +8,7 @@ import { parseInstallCommand } from "@skilly/shared/external-tool";
 import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
+import { SLUG_EXISTS_CODE, normalizeMatchSlug, slugMatchClashes, slugClashMessage, type SlugMatchView } from "@skilly/shared/slug-match";
 import { Modal, Pill, ScrollToTop } from "../../components/ui";
 import { PolicyRulesPanel } from "../../components/PolicyRulesPanel";
 import { useDateFmt } from "../../components/DateFormat";
@@ -116,9 +117,10 @@ function ProposeForm() {
   // tool/harness, usage, and the semver are all editable (synced to the skill on accept, §8); the
   // source is optional (default "Keep current files"). It's entered either by URL
   // (?newVersion=1&ns=&slug=) OR in-place when a duplicate is detected and the user accepts the
-  // redirect (carry-over): `forcedNV` keeps the already-entered source (the staged bundle /
-  // pointer fields) so they don't re-do it.
-  const [forcedNV, setForcedNV] = useState<{ ns: string; slug: string } | null>(null);
+  // redirect, or when the slug matches a visible skill (§8 slug match — always, no opt-out). The
+  // carry-over keeps the already-entered source (the staged bundle / pointer fields) when there is
+  // one (`carrySource`), so they don't re-do it.
+  const [forcedNV, setForcedNV] = useState<{ ns: string; slug: string; reason: "slug" | "duplicate"; carrySource: boolean } | null>(null);
   const nvNs = forcedNV?.ns ?? params.get("ns");
   const nvSlug = forcedNV?.slug ?? params.get("slug");
   const isNewVersion = !!forcedNV || (params.get("newVersion") === "1" && !!nvNs && !!nvSlug);
@@ -134,8 +136,10 @@ function ProposeForm() {
   // and carries the request id through submission.
   const fromRequest = params.get("fromRequest");
   const [originRequestId, setOriginRequestId] = useState<string | null>(null);
+  const requestPrefilled = useRef(false);
   useEffect(() => {
-    if (!fromRequest || isNewVersion) return;
+    if (!fromRequest || isNewVersion || requestPrefilled.current) return;
+    requestPrefilled.current = true;
     fetch(`/api/requests/${fromRequest}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j: { request?: { id: string; title: string; description: string; usageExamples: string | null; toolHarness: string; categories: string[]; state: string } } | null) => {
@@ -262,10 +266,10 @@ function ProposeForm() {
   // submit so the user can't miss that they must re-version rather than re-propose.
   const dupRef = useRef<HTMLDivElement>(null);
   const pasteRef = useRef<HTMLInputElement>(null);
-  const [flash, setFlash] = useState<{ key: number; target: "err" | "dup" } | null>(null);
+  const [flash, setFlash] = useState<{ key: number; target: "err" | "dup" | "slug" } | null>(null);
   useEffect(() => {
     if (!flash) return;
-    const el = (flash.target === "dup" ? dupRef : errRef).current;
+    const el = (flash.target === "dup" ? dupRef : flash.target === "slug" ? slugPanelRef : errRef).current;
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     el.classList.remove("field-flash");
@@ -277,6 +281,7 @@ function ProposeForm() {
   }, [flash]);
   const flashIssue = () => setFlash((p) => ({ key: (p?.key ?? 0) + 1, target: "err" }));
   const flashDup = () => setFlash((p) => ({ key: (p?.key ?? 0) + 1, target: "dup" }));
+  const flashSlug = () => setFlash((p) => ({ key: (p?.key ?? 0) + 1, target: "slug" }));
   // Paste-to-fill accelerator: an `npx skills add …` command parsed into the pointer fields. §8
   const [pasteCmd, setPasteCmd] = useState("");
   const [pasteErr, setPasteErr] = useState<string | null>(null);
@@ -343,10 +348,16 @@ function ProposeForm() {
     }, 500);
     return () => { live = false; clearTimeout(t); };
   }, [f.externalUrl, sourceType]);
-  // Slug-collision hint: when proposing a NEW skill whose namespace/slug already exists (and is
-  // visible to the caller — the detail endpoint 404s otherwise, so nothing restricted leaks),
-  // point the user at the new-version flow instead of letting them hit the 409 on submit.
-  const [existingSkill, setExistingSkill] = useState<{ ns: string; slug: string } | null>(null);
+  // Slug match (§8): the visible active skills — any namespace — already using the slug being
+  // proposed. A NEW skill can't take it: one match switches the form into the new-version flow for
+  // that skill (on blur, so typing isn't interrupted); several → the proposer picks one. Keyed to
+  // the slug it was fetched for.
+  const [slugMatches, setSlugMatches] = useState<{ slug: string; matches: SlugMatchView[] } | null>(null);
+  const [slugFocused, setSlugFocused] = useState(false);
+  const slugInput = useRef<HTMLInputElement>(null);
+  const slugPanelRef = useRef<HTMLDivElement>(null);
+  // What the proposer had entered when the slug match redirected them — restored by "Use a different slug".
+  const slugRedirectSnapshot = useRef<{ f: typeof f; categories: string[]; sharedNs: string[]; sourceType: "hosted" | "pointer"; iconEmoji: string } | null>(null);
   // Duplicate match (§8): a DIFFERENT existing skill this new-skill proposal would duplicate — a
   // pointer to the same repo/folder under the same slug, or a byte-identical upload. `block` mode
   // disables submit (the only way forward is "propose a new version"); `warn` is advisory.
@@ -416,12 +427,65 @@ function ProposeForm() {
   // Carry-over: turn the current draft into a NEW-VERSION proposal of the matched skill, keeping
   // the source the proposer already provided (staged bundle / pointer fields). Pre-fill + lock are
   // driven by the new-version effect once `forcedNV` is set.
-  function enterNewVersion(ns: string, slug: string) {
+  function enterNewVersion(ns: string, slug: string, reason: "slug" | "duplicate" = "duplicate", carrySource = true) {
     setDup(null);
     setErr(null);
-    setRefAuto(true);
-    setForcedNV({ ns, slug });
+    setSlugMatches(null);
+    // A carried pointer keeps the ref the proposer pinned; otherwise the source default applies.
+    if (!(carrySource && sourceType === "pointer" && f.externalUrl.trim())) setRefAuto(true);
+    setForcedNV({ ns, slug, reason, carrySource });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // The source the proposer has already supplied, if any — decides the §8 delivery-type clash.
+  const suppliedSource: "hosted" | "pointer" | null =
+    sourceType === "hosted" ? (file ? "hosted" : null) : f.externalUrl.trim() ? "pointer" : null;
+
+  // Drop the supplied source ("Discard my files and continue", §8 type clash).
+  function discardSource() {
+    setFile(null);
+    setScan(null);
+    setQuality(null);
+    setBundleIcon(null);
+    setPasteCmd("");
+    setRefAuto(true);
+    setF((prev) => ({ ...prev, externalUrl: "", externalRef: "", externalSubdir: "" }));
+  }
+
+  // §8 slug match → the new-version flow for `m`, snapshotting what was entered for "Use a different
+  // slug". With `discard`, the supplied source is dropped first (a type clash).
+  function enterSlugVersion(m: SlugMatchView, discard = false) {
+    const fNow = discard ? { ...f, externalUrl: "", externalRef: "", externalSubdir: "" } : f;
+    slugRedirectSnapshot.current = { f: fNow, categories, sharedNs, sourceType, iconEmoji };
+    if (discard) discardSource();
+    enterNewVersion(m.namespaceSlug, m.slug, "slug", !discard && suppliedSource != null);
+  }
+
+  // "Use a different slug" (§8): back to new-skill mode with everything the proposer had entered,
+  // slug cleared and focused. A newly set slug is matched again.
+  function useDifferentSlug() {
+    const snap = slugRedirectSnapshot.current;
+    slugRedirectSnapshot.current = null;
+    setForcedNV(null);
+    setSlugMatches(null);
+    setErr(null);
+    setReuseFiles(false);
+    setNvLatest(null);
+    setCurrentIcon(null);
+    setIconMode("keep");
+    setNvVisibility(null);
+    nvBaseline.current = null;
+    noteIsDefault.current = false;
+    if (snap) {
+      setF({ ...snap.f, skillSlug: "", whatChanged: "" });
+      setCategories(snap.categories);
+      setSharedNs(snap.sharedNs);
+      setSourceType(snap.sourceType);
+      setIconEmoji(snap.iconEmoji);
+    } else {
+      setF((prev) => ({ ...prev, skillSlug: "" }));
+    }
+    setTimeout(() => slugInput.current?.focus(), 0);
   }
 
   // On opening the propose form, put the cursor in the "paste an install command" field.
@@ -461,22 +525,31 @@ function ProposeForm() {
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error ?? "Could not load the skill");
         if (cancelled) return;
-        setF((prev) => ({
-          ...prev,
-          namespaceSlug: nvNs!,
-          skillSlug: nvSlug!,
-          title: j.meta?.title ?? "",
-          description: j.meta?.description ?? "",
-          usageExamples: j.usageExamples ?? "",
-          // Default the required note to "Updated metadata" when Keep-current-files will be on (a
-          // metadata-only re-version); a fresh source starts blank so the proposer describes it (§8).
-          whatChanged: !forcedNV && j.latest != null ? METADATA_ONLY_NOTE : "",
-          toolHarness: j.meta?.toolHarness ?? prev.toolHarness,
-          semver: bumpPatch(j.latest ?? null),
-          externalUrl: j.pointer?.originUrl ?? "",
-          externalSubdir: j.pointer?.subdir ?? "",
-          externalRef: "",
-        }));
+        // A carried-over source (duplicate / slug-match redirect) means Keep-current-files is off.
+        const carried = !!forcedNV?.carrySource;
+        setF((prev) => {
+          // §8 slug match: skill-level fields come from the existing skill (what was typed for them is
+          // discarded), but version-level inputs the proposer supplied ride along — their usage
+          // examples, and a pointer source they had entered.
+          const keepPointer = carried && !!prev.externalUrl.trim();
+          const keepUsage = forcedNV?.reason === "slug" && !!prev.usageExamples.trim();
+          return {
+            ...prev,
+            namespaceSlug: nvNs!,
+            skillSlug: nvSlug!,
+            title: j.meta?.title ?? "",
+            description: j.meta?.description ?? "",
+            usageExamples: keepUsage ? prev.usageExamples : j.usageExamples ?? "",
+            // Default the required note to "Updated metadata" when Keep-current-files will be on (a
+            // metadata-only re-version); a fresh source starts blank so the proposer describes it (§8).
+            whatChanged: !carried && j.latest != null ? METADATA_ONLY_NOTE : "",
+            toolHarness: j.meta?.toolHarness ?? prev.toolHarness,
+            semver: bumpPatch(j.latest ?? null),
+            externalUrl: keepPointer ? prev.externalUrl : j.pointer?.originUrl ?? "",
+            externalSubdir: keepPointer ? prev.externalSubdir : j.pointer?.subdir ?? "",
+            externalRef: keepPointer ? prev.externalRef : "",
+          };
+        });
         setCategories(j.meta?.categories ?? []);
         setSourceType(j.meta?.type ?? "hosted");
         setNvLatest(j.latest ?? null);
@@ -496,9 +569,9 @@ function ProposeForm() {
           sharedNamespaceIds: currentShared,
         };
         // Default to "Keep current files" when there's a stable version to reuse — EXCEPT on a
-        // duplicate carry-over (`forcedNV`), where the proposer already provided a fresh source.
-        setReuseFiles(!forcedNV && j.latest != null);
-        noteIsDefault.current = !forcedNV && j.latest != null;
+        // carry-over (duplicate / slug-match redirect) where the proposer already provided a source.
+        setReuseFiles(!carried && j.latest != null);
+        noteIsDefault.current = !carried && j.latest != null;
       } catch (e) {
         if (!cancelled) setErr(String((e as Error).message));
       } finally {
@@ -513,22 +586,33 @@ function ProposeForm() {
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF({ ...f, [k]: e.target.value });
   const lock = isNewVersion; // slug + namespace (→ visibility) + delivery type are locked when re-versioning
 
-  // Debounced existing-slug probe (new-skill mode only).
+  // §8 slug match: debounced lookup of the visible active skills already using this slug, in any
+  // namespace (new-skill mode only). The server re-checks on submit and on accept.
   useEffect(() => {
-    if (lock) return;
-    setExistingSkill(null);
-    const ns = f.namespaceSlug.trim();
-    const slug = f.skillSlug.trim();
-    if (!ns || !slug) return;
+    if (lock || mode !== "have") { setSlugMatches(null); return; }
+    const slug = normalizeMatchSlug(f.skillSlug);
+    if (!slug) { setSlugMatches(null); return; }
+    let live = true;
     const t = setTimeout(() => {
-      fetch(`/api/skills/${encodeURIComponent(ns)}/${encodeURIComponent(slug)}`)
-        .then((r) => {
-          if (r.ok) setExistingSkill({ ns, slug });
+      fetch(`/api/skills/slug-matches?slug=${encodeURIComponent(slug)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: { matches?: SlugMatchView[] } | null) => {
+          if (live && j) setSlugMatches({ slug, matches: Array.isArray(j.matches) ? j.matches : [] });
         })
         .catch(() => {});
     }, 450);
-    return () => clearTimeout(t);
-  }, [f.namespaceSlug, f.skillSlug, lock]);
+    return () => { live = false; clearTimeout(t); };
+  }, [f.skillSlug, lock, mode]);
+  // The matches for the slug currently in the field (a stale lookup for an older slug doesn't count).
+  const currentSlugMatches = !lock && mode === "have" && slugMatches && slugMatches.slug === normalizeMatchSlug(f.skillSlug) ? slugMatches.matches : [];
+  // One match without a type clash → straight into its new-version flow — once the slug field is
+  // left (typed) or immediately (set by a filename / paste / request pre-fill).
+  const soleMatch = currentSlugMatches.length === 1 ? currentSlugMatches[0]! : null;
+  const autoRedirect = !!soleMatch && !slugFocused && !slugMatchClashes(soleMatch, suppliedSource);
+  useEffect(() => {
+    if (autoRedirect && soleMatch) enterSlugVersion(soleMatch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on the decision only
+  }, [autoRedirect, soleMatch?.namespaceSlug, soleMatch?.slug]);
 
   // Live duplicate pre-check for POINTER sources (§8): the same repo+folder under the same slug
   // already in the catalog (visible to me). Hosted is checked at upload time (in submit). Skipped
@@ -836,6 +920,12 @@ function ProposeForm() {
     setScan(null);
     setDraftUndo(null);
     if (categoryError) { setErr(categoryError); return; } // §10 — the server would 422 with the same text
+    if (currentSlugMatches.length > 0) {
+      // §8 slug match: a new skill can't take this slug — pick the skill to re-version (or another slug).
+      setErr(currentSlugMatches.length === 1 ? "This slug is taken — propose a new version of the existing skill, or use a different slug." : "This slug is taken in several namespaces — pick the skill to propose a new version of, or use a different slug.");
+      flashSlug();
+      return;
+    }
     setBusy(true);
     try {
       const metadata = {
@@ -962,8 +1052,9 @@ function ProposeForm() {
         ...(reusing ? { reuseCurrentFiles: true } : {}),
         // §44.8: provenance of an AI-drafted bundle (the server ignores a token that doesn't verify).
         ...(usedQualityDraft && qualityDraft ? { aiDraftToken: qualityDraft.aiDraftToken } : {}),
-        // Fulfilment link (§26): accepted proposal → the originating request is fulfilled.
-        ...(originRequestId && !isNewVersion ? { originRequestId } : {}),
+        // Fulfilment link (§26): accepted proposal → the originating request is fulfilled. It
+        // survives a slug-match / duplicate redirect: the new version then fulfils it (§8).
+        ...(originRequestId ? { originRequestId } : {}),
         // §37.4: the confirmed, audited override of a flagged direct publish.
         ...(mode === "direct" && contentOverride && overrideChecked ? { override: true, overrideReason: overrideReason.trim() || null } : {}),
       };
@@ -979,6 +1070,10 @@ function ProposeForm() {
             flashDup();
             return;
           }
+          if (r.status === 409 && j.code === SLUG_EXISTS_CODE && Array.isArray(j.matches)) {
+            applyServerSlugMatches(j.matches as SlugMatchView[]);
+            return;
+          }
           throw new Error(j.error ?? "Could not create proposal");
         }
         reportFeatureUse("propose"); // §36.3
@@ -991,6 +1086,10 @@ function ProposeForm() {
           if (r.status === 409 && j.duplicate) {
             setDup({ ns: j.duplicate.namespaceSlug, slug: j.duplicate.skillSlug, mode: "block" });
             flashDup();
+            return;
+          }
+          if (r.status === 409 && j.code === SLUG_EXISTS_CODE && Array.isArray(j.matches)) {
+            applyServerSlugMatches(j.matches as SlugMatchView[]);
             return;
           }
           if (r.status === 409 && j.requiresOverride && j.contentRisk) {
@@ -1016,6 +1115,13 @@ function ProposeForm() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // The server found a slug match the live lookup hadn't (§8): show the same chooser / redirect.
+  function applyServerSlugMatches(matches: SlugMatchView[]) {
+    setSlugFocused(false);
+    setSlugMatches({ slug: normalizeMatchSlug(f.skillSlug), matches });
+    flashSlug();
   }
 
   // Post a skill request ("I want a skill", §26). First click runs the advisory similar-check
@@ -1110,6 +1216,17 @@ function ProposeForm() {
             aria-hidden
             style={{ position: "absolute", inset: 0, zIndex: 5, borderRadius: "var(--radius)", background: "color-mix(in oklab, var(--surface) 55%, transparent)", backdropFilter: "blur(1.5px)", cursor: "progress" }}
           />
+        )}
+        {/* §8 slug match: the proposer typed a slug a visible skill already uses, so this is now a
+            new version of it. "Use a different slug" returns to the new-skill flow as it was. */}
+        {forcedNV?.reason === "slug" && (
+          <div data-testid="slug-redirect-banner" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "12px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
+            <span aria-hidden style={{ fontSize: 16 }}>ℹ</span>
+            <span style={{ flex: 1, minWidth: 220 }}>
+              <span className="mono">{forcedNV.ns}/{forcedNV.slug}</span> already exists — you’re proposing a new version of it.
+            </span>
+            <button type="button" className="btn btn-sm" onClick={useDifferentSlug}>Use a different slug</button>
+          </div>
         )}
         {/* "I have / I want" toggle (§26) — new-skill flow only (a new version is always "have"). */}
         {!lock && (
@@ -1398,19 +1515,47 @@ function ProposeForm() {
               </p>
             </div>
           )}
-          <div><label style={label}>Skill slug{lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · locked</span>}</label><input className="input input-lg" style={{ width: "100%", ...(lock ? lockedStyle : {}) }} value={f.skillSlug} onChange={set("skillSlug")} onBlur={() => { const slug = f.skillSlug.trim(); if (!lock && slug && !f.title.trim()) setF((prev) => ({ ...prev, title: titleize(slug) })); }} placeholder="pdf-tools" disabled={lock} /></div>
-        {!lock && existingSkill && existingSkill.ns === f.namespaceSlug.trim() && existingSkill.slug === f.skillSlug.trim() && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
-            <span aria-hidden>ℹ</span>
-            <span>
-              <span className="mono">{existingSkill.ns}/{existingSkill.slug}</span> already exists —{" "}
-              <Link href={`/propose?ns=${encodeURIComponent(existingSkill.ns)}&slug=${encodeURIComponent(existingSkill.slug)}&newVersion=1`} style={{ fontWeight: 600, textDecoration: "underline" }}>
-                propose a new version of it
-              </Link>{" "}
-              instead.
-            </span>
-          </div>
-        )}
+          <div><label style={label}>Skill slug{lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · locked</span>}</label><input ref={slugInput} className="input input-lg" style={{ width: "100%", ...(lock ? lockedStyle : {}) }} value={f.skillSlug} onChange={set("skillSlug")} onFocus={() => setSlugFocused(true)} onBlur={() => { setSlugFocused(false); const slug = f.skillSlug.trim(); if (!lock && slug && !f.title.trim()) setF((prev) => ({ ...prev, title: titleize(slug) })); }} placeholder="pdf-tools" disabled={lock} /></div>
+        {currentSlugMatches.length > 0 && !autoRedirect && (() => {
+          // §8 slug match chooser: a new skill can't take a slug a visible skill already uses. Pick
+          // the skill to propose a new version of; a delivery-type clash with the source already
+          // supplied disables that row (with guidance) until the source is discarded.
+          const anyClash = currentSlugMatches.some((m) => slugMatchClashes(m, suppliedSource));
+          return (
+            <div ref={slugPanelRef} data-testid="slug-match-panel" style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5 }}>
+              <span>
+                {currentSlugMatches.length === 1
+                  ? <>A skill with this slug already exists. A new skill can’t reuse the slug — propose a new version of it instead.</>
+                  : <>Skills with this slug already exist in several namespaces. Pick the one to propose a new version of.</>}
+              </span>
+              {currentSlugMatches.map((m) => {
+                const clash = slugMatchClashes(m, suppliedSource);
+                return (
+                  <div key={`${m.namespaceSlug}/${m.slug}`} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ flex: 1, minWidth: 200 }}>
+                      <Link className="mono" href={`/skills/${m.namespaceSlug}/${m.slug}`} target="_blank" style={{ fontWeight: 600, textDecoration: "underline" }}>{m.namespaceSlug}/{m.slug}</Link>
+                      {" "}— {m.title} <Pill tone="muted">{m.type}</Pill>{m.deprecated && <> <Pill tone="warn">Deprecated</Pill></>}
+                      {clash && <span style={{ display: "block", color: "var(--danger)", fontSize: 12.5, marginTop: 4 }}>{slugClashMessage(m)}</span>}
+                    </span>
+                    <button type="button" className="btn btn-sm btn-primary" disabled={clash} onClick={() => enterSlugVersion(m)}>Propose a new version →</button>
+                  </div>
+                );
+              })}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button type="button" className="btn btn-sm" onClick={() => { setSlugMatches(null); setF((prev) => ({ ...prev, skillSlug: "" })); setTimeout(() => slugInput.current?.focus(), 0); }}>Use a different slug</button>
+                {anyClash && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => (currentSlugMatches.length === 1 ? enterSlugVersion(currentSlugMatches[0]!, true) : discardSource())}
+                  >
+                    Discard my files and continue
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
         {dup && (
           <div
             ref={dupRef}
@@ -1739,8 +1884,8 @@ function ProposeForm() {
         ) : (
           <>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button className="btn btn-primary" disabled={busy || dup?.mode === "block"} onClick={() => submit("review")}>{busy ? "Working…" : "Submit for review →"}</button>
-              <button className="btn" disabled={busy || dup?.mode === "block" || (!!contentOverride && !overrideChecked)} onClick={() => submit("direct")} title="Only where you may publish without review">
+              <button className="btn btn-primary" disabled={busy || dup?.mode === "block" || currentSlugMatches.length > 0} onClick={() => submit("review")}>{busy ? "Working…" : "Submit for review →"}</button>
+              <button className="btn" disabled={busy || dup?.mode === "block" || currentSlugMatches.length > 0 || (!!contentOverride && !overrideChecked)} onClick={() => submit("direct")} title="Only where you may publish without review">
                 {contentOverride ? "Publish over findings" : "Publish directly"}
               </button>
             </div>

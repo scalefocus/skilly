@@ -22,15 +22,16 @@ export function invalidateAccessCaches(): void {
   accessCache.clear();
 }
 
-/** Look up the internal user + their Entra group ids by Entra object id (oid from OIDC). */
-async function loadUserGroupIds(entraOid: string): Promise<{ userId: string | null; groupEntraIds: Set<string> }> {
+/** Look up the internal user + their Entra group ids by Entra object id (oid from OIDC) — or, with
+ *  `by: "id"`, by internal user id (resolving someone other than the caller, e.g. a proposer). */
+async function loadUserGroupIds(key: string, by: "oid" | "id" = "oid"): Promise<{ userId: string | null; groupEntraIds: Set<string> }> {
   const { rows } = await pool.query<{ user_id: string; group_oid: string | null }>(
     `select u.id as user_id, g.entra_object_id as group_oid
        from users u
        left join group_memberships gm on gm.user_id = u.id
        left join groups g on g.id = gm.group_id
-      where u.entra_object_id = $1 and u.status = 'active'`,
-    [entraOid],
+      where ${by === "id" ? "u.id" : "u.entra_object_id"} = $1 and u.status = 'active'`,
+    [key],
   );
   const userId = rows[0]?.user_id ?? null;
   const groupEntraIds = new Set<string>();
@@ -67,19 +68,30 @@ async function loadRoleMappings(): Promise<{ mappings: RoleMapping[]; groupOidBy
  * any role_mappings are configured.
  */
 export async function resolveUserAccess(entraOid: string): Promise<EffectiveAccess & { userId: string | null }> {
-  return accessCache.get(entraOid, async () => {
-    const [{ userId, groupEntraIds }, { mappings }] = await Promise.all([
-      loadUserGroupIds(entraOid),
-      roleMappingsCache.get("all", loadRoleMappings),
-    ]);
+  return accessCache.get(entraOid, () => resolveFrom(entraOid, "oid"));
+}
 
-    const access = resolveAccess(groupEntraIds, mappings);
+/**
+ * The effective access of ANOTHER user, by internal id — e.g. the proposer, when accept re-checks
+ * what THEY can see (§8 slug match). Same SCIM-synced resolution as the caller's (invariant #1); an
+ * inactive or unknown user resolves to no namespace roles (org-visible skills only). Not cached.
+ */
+export async function resolveUserAccessById(userId: string): Promise<EffectiveAccess & { userId: string | null }> {
+  return resolveFrom(userId, "id");
+}
 
-    const bootstrapGroup = process.env.SKILLY_BOOTSTRAP_ADMIN_GROUP?.trim();
-    if (bootstrapGroup && groupEntraIds.has(bootstrapGroup)) {
-      access.isPlatformAdmin = true;
-    }
+async function resolveFrom(key: string, by: "oid" | "id"): Promise<EffectiveAccess & { userId: string | null }> {
+  const [{ userId, groupEntraIds }, { mappings }] = await Promise.all([
+    loadUserGroupIds(key, by),
+    roleMappingsCache.get("all", loadRoleMappings),
+  ]);
 
-    return { ...access, userId };
-  });
+  const access = resolveAccess(groupEntraIds, mappings);
+
+  const bootstrapGroup = process.env.SKILLY_BOOTSTRAP_ADMIN_GROUP?.trim();
+  if (bootstrapGroup && groupEntraIds.has(bootstrapGroup)) {
+    access.isPlatformAdmin = true;
+  }
+
+  return { ...access, userId };
 }

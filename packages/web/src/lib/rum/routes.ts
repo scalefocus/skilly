@@ -151,6 +151,7 @@ export const RUM_API_ROUTES: readonly string[] = [
   "/api/skills/[ns]/[slug]/yank",
   "/api/skills/facets",
   "/api/skills/featured",
+  "/api/skills/slug-matches",
   "/api/skills/suggest",
   "/api/stats",
   "/api/system-banner",
