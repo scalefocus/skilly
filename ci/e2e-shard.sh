@@ -9,8 +9,9 @@
 #   E2E_HEAP_MB                   dev server heap ceiling (optional; ci/e2e-shard-plan.sh sizes it)
 #   E2E_TEST_LIST                 optional: absolute path of a Playwright --test-list file; only
 #                                 those tests run (the quick e2e sample, ci/e2e-quick-list.mjs)
-#   E2E_WARM                      optional route warm-up scope, all | pages (e2e/global-setup.ts);
-#                                 defaults to pages when E2E_TEST_LIST is set, all otherwise
+#   E2E_WARM                      optional route warm-up scope, all | core | pages
+#                                 (e2e/global-setup.ts); defaults to core when E2E_TEST_LIST is
+#                                 set, all otherwise
 #   BUILD_TAG, WORKSPACE          Jenkins build identity + checkout root
 #   CI_PG_IMAGES, CI_MINIO_IMAGES space-separated image candidate lists (first reachable wins)
 #   CI_E2E_PG_CONTAINER, CI_E2E_MINIO_CONTAINER, CI_E2E_MINIO_PASSWORD
@@ -162,11 +163,13 @@ done
 # E2E_TEST_LIST, when set, narrows the run to the tests that file names.
 rm -rf "packages/web/e2e/results/shard-${E2E_SHARD}" "packages/web/e2e/test-results/shard-${E2E_SHARD}"
 
-# A sampled run warms the pages only. Warming every route pins all ~190 in one webpack compiler: a
-# fully warmed dev server measured ~9.7 GB private memory under an 8 GB heap ceiling and ~31 min of
-# warm-up, and on the 16 GB agent the kernel OOM-killed it mid-warm-up — a quick run that never
-# ran a test. The sample's API routes compile on first use instead (e2e/global-setup.ts).
-if [ -n "${E2E_TEST_LIST:-}" ]; then E2E_WARM="${E2E_WARM:-pages}"; fi
+# A sampled run warms the pages plus the core API routes (the app shell's and the busiest pages').
+# Warming every route pins all ~190 in one webpack compiler: a fully warmed dev server measured
+# ~9.7 GB private memory under an 8 GB heap ceiling and ~31 min of warm-up, and on the 16 GB agent
+# the kernel OOM-killed it mid-warm-up — a quick run that never ran a test. Pages alone was too
+# little: the shell's and /admin's routes then compiled 10-37 s each inside the first specs.
+# The sample's other API routes compile on first use (e2e/global-setup.ts).
+if [ -n "${E2E_TEST_LIST:-}" ]; then E2E_WARM="${E2E_WARM:-core}"; fi
 E2E_WARM="${E2E_WARM:-all}"
 echo "[${TAG}] route warm-up scope: ${E2E_WARM}"
 

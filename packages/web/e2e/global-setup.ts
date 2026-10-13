@@ -20,9 +20,16 @@
 // and each new compile re-seals the whole pinned graph, so the full warm-up is slow AND heavy:
 // measured locally, ~31 min and ~9.7 GB private memory with an 8 GB heap ceiling (the heap cap
 // does not bound it), against ~3 min and ~4.3 GB after the pages alone. A run that executes only a
-// slice of the suite (the quick e2e sample, a single spec) does not need every API route pinned;
-// the routes its specs hit compile on first use against that much smaller graph, in seconds.
-// ci/e2e-shard.sh sets it for the quick run, which a fully warmed server got OOM-killed during.
+// slice of the suite (a single spec) does not need every API route pinned; the routes its specs
+// hit compile on first use against that much smaller graph. E2E_WARM=core is pages plus CORE_API
+// (below), the routes almost every spec meets: on the CI agent a cold compile took 10–37 s and
+// held up every request behind it, which pages-only could not absorb. ci/e2e-shard.sh sets core
+// for the quick run, which a fully warmed server got OOM-killed during.
+//
+// Every scope also stamps the dev user onboarded. A fresh stack's dev user has never seen Quick
+// start, so the first-login gate (AppShell, §8) sends the first page that learns this to
+// /quick-start, mid-spec. A full run used to clear it by luck of order (achievements.spec runs
+// second); a sampled run carried it into whatever spec came first.
 //
 // This only holds if the dev server KEEPS what it compiled: by default `next dev` retains 5
 // on-demand entries and disposes the rest after 60s idle, which undid this warm-up within a
@@ -79,6 +86,75 @@ const PAGES = [
   "/skill-icons/warm-up.png",
 ];
 
+// E2E_WARM=core: the API routes nearly every spec meets — the app shell's on-load calls (every
+// signed-in page) and what the most-visited pages (/admin, /catalog, a skill page, /propose,
+// /profile) fetch as they load. Cold, these compiled one after another on the first spec to open
+// such a page: on the CI agent 10–37 s each, and /admin alone fires ~15, so its cards were still
+// loading two minutes in and the specs' 45 s response waits ran out. Warming ~55 keeps the pinned
+// graph far below the full sweep's (~159). Keep in sync when the shell or one of these pages
+// starts loading a new endpoint. POST-only routes answer GET with 405 and compile all the same.
+const CORE_API = [
+  // App shell (AppShell.tsx) + the e2e sign-in (fixtures.ts devSignIn).
+  "/api/me",
+  "/api/me/whats-new-seen",
+  "/api/me/survey/check",
+  "/api/me/features/used",
+  "/api/me/following",
+  "/api/messages",
+  "/api/notifications",
+  "/api/notifications/read",
+  "/api/nav-badges",
+  "/api/system-banner",
+  "/api/presence/page",
+  "/api/levels",
+  "/api/leaders",
+  "/api/rum",
+  "/api/collections/mine",
+  // /admin
+  "/api/admin/namespaces",
+  "/api/admin/system-banner",
+  "/api/admin/mcp",
+  "/api/admin/search/languages",
+  "/api/admin/search/synonyms",
+  "/api/admin/settings",
+  "/api/admin/ai",
+  "/api/admin/ai/models",
+  "/api/admin/ai/test",
+  "/api/admin/ai/timeouts",
+  "/api/admin/email",
+  "/api/admin/policy",
+  "/api/policy/rules",
+  "/api/admin/jobs/search-index",
+  "/api/admin/jobs/content-risk",
+  "/api/admin/jobs/quality",
+  "/api/admin/jobs/related-rebuild",
+  // /catalog + the header search
+  "/api/skills",
+  "/api/skills/facets",
+  "/api/skills/suggest",
+  "/api/skills/featured",
+  "/api/collections",
+  "/api/collections/suggest",
+  // /skills/[ns]/[slug]
+  "/api/skills/global/pdf-tools",
+  "/api/skills/global/pdf-tools/readme",
+  "/api/skills/global/pdf-tools/maintainers",
+  "/api/skills/global/pdf-tools/content-risk",
+  "/api/skills/global/pdf-tools/ai-prereview",
+  "/api/skills/global/pdf-tools/discussion",
+  "/api/skills/global/pdf-tools/related",
+  "/api/skills/global/pdf-tools/usage-series",
+  // /propose
+  "/api/categories",
+  "/api/namespaces",
+  "/api/namespaces/share-targets",
+  "/api/namespaces/administered",
+  "/api/propose/ai-draft",
+  "/api/skills/slug-matches",
+  // /profile
+  "/api/users/00000000-0000-0000-0000-000000000000/achievements",
+];
+
 // API subtrees a GET must never touch: sign-in/out and cookie clearing, the email OAuth hop,
 // heavy exports, and anything that erases or trims. Everything else is read-only on GET or 405 —
 // including /api/admin/jobs/*, whose GETs are the Maintenance card's status polls (triggers are
@@ -119,10 +195,31 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   const started = Date.now();
   const log = (msg: string) => console.log(`[e2e warm-up] ${msg}`);
   const scope = process.env.E2E_WARM || "all";
-  if (scope !== "all" && scope !== "pages") {
-    throw new Error(`[e2e warm-up] E2E_WARM must be "all" or "pages" (got "${scope}")`);
+  if (scope !== "all" && scope !== "core" && scope !== "pages") {
+    throw new Error(`[e2e warm-up] E2E_WARM must be "all", "core" or "pages" (got "${scope}")`);
   }
   const ctx = await request.newContext({ baseURL });
+
+  // Stamp onboarded (idempotent — never moves the date), then mark the "Read the Manual" badge it
+  // awards read, so it does not toast over the first page of every spec. Best-effort: a spec that
+  // depends on it fails with a real assertion if it did not take.
+  const markOnboarded = async () => {
+    try {
+      const res = await ctx.post("/api/me/onboarded", { timeout: 120_000 });
+      if (!res.ok()) return console.warn(`[e2e warm-up] marking the dev user onboarded answered ${res.status()}`);
+      const list = (await (await ctx.get("/api/notifications", { timeout: 120_000 })).json()) as {
+        items?: { id: string; type: string; readAt: string | null; payload?: { key?: string } }[];
+      };
+      const ids = (list.items ?? [])
+        .filter((n) => n.type === "achievement.earned" && n.payload?.key === "onboarded" && !n.readAt)
+        .map((n) => n.id);
+      if (ids.length) await ctx.post("/api/notifications/read", { data: { ids }, timeout: 120_000 });
+      log(`dev user onboarded${ids.length ? " (badge notification marked read)" : ""}`);
+    } catch (err) {
+      console.warn(`[e2e warm-up] marking the dev user onboarded failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   try {
     // Sign in as the dev admin (the same handshake fixtures.ts uses) so signed-in-only pages
     // compile their real content, not the signed-out shell. Best-effort like everything here: a
@@ -132,6 +229,7 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
       const csrf = (await (await ctx.get("/api/auth/csrf")).json()) as { csrfToken: string };
       const signIn = await ctx.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true" } });
       if (!signIn.ok()) console.warn(`[e2e warm-up] dev sign-in answered ${signIn.status()} — warming the signed-out shell only`);
+      else await markOnboarded();
     } catch (err) {
       console.warn(`[e2e warm-up] dev sign-in failed (${err instanceof Error ? err.message : String(err)}) — warming the signed-out shell only`);
     }
@@ -160,6 +258,9 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     // 2. Every API route, discovered from the source tree (config lives in e2e/, next to src/).
     if (scope === "pages") {
       log("E2E_WARM=pages — API routes compile on first use");
+    } else if (scope === "core") {
+      log(`E2E_WARM=core — ${CORE_API.length} core API routes; the rest compile on first use`);
+      for (const route of CORE_API) await hit(route);
     } else {
       const api = apiRoutes(join(config.rootDir, "..", "src", "app", "api"));
       log(`${api.length} API routes discovered`);
