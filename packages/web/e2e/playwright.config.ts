@@ -1,9 +1,9 @@
 // Playwright config for the skilly e2e suite. Lives outside `src` so it is excluded from the
 // Next.js typecheck/build. The suite runs against the DEV stack (SKILLY_DEV_AUTH=1) — a live web
 // server + a migrated & seeded Postgres + MinIO. It is opt-in (browsers + a live stack required),
-// so it is NOT part of the default `pnpm -r test`; CI runs it behind a gate (Jenkins RUN_E2E_TESTS,
-// or RUN_E2E_QUICK for a random 20% sample drawn by ci/e2e-quick-list.mjs; the GitHub Actions
-// `e2e` job).
+// so it is NOT part of the default `pnpm -r test`; CI runs it behind a gate (the Jenkins E2E_TESTS
+// dropdown: FULL_E2E_TESTS, or QUICK_E2E_TESTS for a random 20% sample drawn by
+// ci/e2e-quick-list.mjs; the GitHub Actions `e2e` job).
 //
 // Locally:
 //   docker compose … up -d postgres minio migrate     # backends + migrations

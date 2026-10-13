@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Picks the random sample of e2e tests a QUICK e2e run executes (Jenkins RUN_E2E_QUICK): about 20%
-// of the suite, written as a Playwright --test-list file (https://playwright.dev/docs/test-cli).
+// Picks the random sample of e2e tests a QUICK e2e run executes (Jenkins E2E_TESTS=QUICK_E2E_TESTS):
+// about 20% of the suite, written as a Playwright --test-list file (https://playwright.dev/docs/test-cli).
 //
 // Usage (from the repo root):  node ci/e2e-quick-list.mjs <out-file> [fraction=0.2]
 // Then:                        pnpm --filter @skilly/web e2e --test-list <absolute out-file>
