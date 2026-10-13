@@ -47,9 +47,8 @@ pipeline {
   parameters {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
-    booleanParam(name: 'RUN_E2E_TESTS', defaultValue: false, description: 'Run the gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). Pick this OR RUN_E2E_QUICK, not both (or neither).')
-    booleanParam(name: 'RUN_E2E_QUICK', defaultValue: false, description: 'Run a QUICK e2e pass instead: a fresh random 20% of the e2e tests, in a single shard (E2E_SHARDS is ignored). Spec files with serial tests are sampled whole. Pick this OR RUN_E2E_TESTS, not both (or neither).')
-    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
+    choice(name: 'E2E_TESTS', choices: ['NO_E2E_TESTS', 'QUICK_E2E_TESTS', 'FULL_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 20% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards.')
+    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one shard): split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
     string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     string(name: 'CI_MINIO_IMAGE', defaultValue: '', description: 'Pin the MinIO image for the gated e2e stack (blank = quay.io/minio/minio:latest, falling back to minio/minio:latest — Docker Hub denies the pull). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
@@ -86,12 +85,6 @@ pipeline {
   stages {
     stage('Toolchain') {
       steps {
-        // Reject contradictory e2e choices before spending any time: full and quick are alternatives.
-        script {
-          if (params.RUN_E2E_TESTS && params.RUN_E2E_QUICK) {
-            error 'RUN_E2E_TESTS and RUN_E2E_QUICK are mutually exclusive: tick one of them, or neither.'
-          }
-        }
         sh '''
           set -eu
           # Activate asdf and install the Node version declared in .tool-versions (or latest 20).
@@ -234,12 +227,14 @@ pipeline {
 
         stage('E2E tests') {
           // Opt-in like the db-tests: a full live stack (headless browser + web dev server + Postgres +
-          // MinIO) is required, so this never runs by default. Toggle with RUN_E2E_TESTS (the whole
-          // suite, sharded) or RUN_E2E_QUICK (a random 20% of it, one shard) — never both (Toolchain).
-          when { expression { return params.RUN_E2E_TESTS || params.RUN_E2E_QUICK } }
+          // MinIO) is required, so this never runs by default. The E2E_TESTS dropdown picks
+          // FULL_E2E_TESTS (the whole suite, sharded per E2E_SHARDS) or QUICK_E2E_TESTS (a random 20%
+          // of it, always one shard). A blank value — the first build after the parameter appears,
+          // before Jenkins has registered it — counts as NO_E2E_TESTS.
+          when { expression { return params.E2E_TESTS in ['QUICK_E2E_TESTS', 'FULL_E2E_TESTS'] } }
           steps {
             script {
-              boolean quick = params.RUN_E2E_QUICK
+              boolean quick = params.E2E_TESTS == 'QUICK_E2E_TESTS'
               def shards = quick ? '1' : (params.E2E_SHARDS ?: '1').trim()
               if (!(shards ==~ /[1-9]/)) {
                 error "E2E_SHARDS must be a whole number from 1 to 9 (got '${params.E2E_SHARDS}')"
