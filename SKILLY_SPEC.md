@@ -1635,7 +1635,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
     **App/browser icons** (apple-touch, PWA manifest) remain **out of scope** — the existing
     `icon.svg` favicon is unchanged.
 - **Backup/DR:** documented Postgres + object-store backup/restore; skilly stateless beyond those.
-- **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6. The **worker's** HTTP surfaces — the git smart server (§9), the SCIM provisioning target (§5), and the operational `/healthz` `/readyz` `/metrics` endpoints — are additionally rate-limited **app-wide** via `express-rate-limit` (see §22 *Rate limiting (worker HTTP surfaces)*).
+- **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6. The **worker's** HTTP surfaces are additionally rate-limited **per surface** via `express-rate-limit`: the git smart server (§9) gets a per-IP flood guard plus a per-installation bucket, and the SCIM provisioning target (§5) gets its own per-IP limiter. The operational `/healthz` `/readyz` `/metrics` endpoints are **exempt** (see §22 *Rate limiting (worker HTTP surfaces)*).
 
 ---
 
@@ -2164,27 +2164,80 @@ responsibilities. Hardening that pins or clarifies invariants here:
   task must declare its data egress and keep its output within the viewer's visibility (§40.10).
 - **Decompression limits**: archive extraction caps cumulative *actual* (not declared) bytes +
   entry count on both the upload and the publish/mirror paths.
-- **Rate limiting (worker HTTP surfaces)**: every worker HTTP endpoint — the git smart server
-  (§9), the SCIM provisioning target (§5), and the operational `/healthz` `/readyz` `/metrics`
-  endpoints — is fronted by a single **`express-rate-limit`** middleware mounted **app-wide** in
-  `buildServer()` (`worker/src/index.ts`), immediately after the baseline security-headers
-  middleware and **before** the git handler and any body parser. Mounting it there is safe because
-  the limiter only reads `req.ip`/headers and never touches the raw request stream the git backend
-  consumes (the same reason the security-headers middleware precedes the git handler). This closes
-  CodeQL `js/missing-rate-limiting` (CWE-307/400/770) on **all three** worker surfaces: the
-  authorization-bearing handlers (SCIM bearer auth, git token-in-URL basic auth) and the DB-touching
-  handlers no longer accept unbounded request volume. Configuration:
-  - **Keyed by client IP**, honoring the already-configured `trust proxy` (§ worker `buildServer`)
-    so the real client is counted behind the edge proxy rather than the proxy itself.
-  - **Limits match the `express-rate-limit` example: `windowMs: 15 * 60 * 1000` (15 min), `max: 100`
-    requests per window per IP.**
-  - Standard `RateLimit-*` + `Retry-After` response headers; **`429`** when exceeded.
-  - **Health/ops endpoints are NOT exempt** — `/healthz`, `/readyz`, and `/metrics` are covered by
-    the same app-wide limit (a deliberate choice; operators whose probe/scrape cadence approaches
-    100 requests / 15 min per source IP must widen the limit or place probes on an unthrottled path).
-  This is the worker analogue of the web app's in-memory limiter (`web/lib/ratelimit.ts`, §14/§15);
-  both remain **per-instance** — the HA note (§14, build-plan #20) applies, and a shared store is the
-  next upgrade.
+- **Rate limiting (worker HTTP surfaces)**: the worker's HTTP surfaces are fronted by
+  **`express-rate-limit`** middleware, **one limiter per surface** so that one surface's traffic
+  never spends another's allowance. All of them are mounted in `buildServer()`
+  (`worker/src/index.ts`) after the baseline security-headers middleware and **before** the git
+  handler and any body parser. Mounting them there is safe because a limiter only reads
+  `req.ip`/headers and never touches the raw request stream the git backend consumes (the same reason
+  the security-headers middleware precedes the git handler). This keeps CodeQL
+  `js/missing-rate-limiting` (CWE-307/400/770) closed on the authorization-bearing handlers (SCIM
+  bearer auth, git token-in-URL basic auth).
+  *Why split:* the original single app-wide limit of 100 requests / 15 min per IP covered git,
+  SCIM and the probes together. One `npx skills add` costs ~3–5 git requests (an unauthenticated
+  `info/refs` that draws the 401 challenge, the authenticated retry, optionally `HEAD`, then
+  `git-upload-pack`), so one IP got only ~20–30 clones per 15 min. A team behind one office/VPN NAT,
+  or one `skills update` over many installed skills, hit `429` in minutes. The Helm probes
+  (`/readyz` every 10 s + `/healthz` every 20 s ≈ 135 / 15 min) also exceeded the limit on their own.
+  The surfaces:
+
+  > ⚠ GAP-3 · code fix — the worker still mounts the single app-wide 100 / 15 min per-IP limiter
+  > over git, SCIM and the health endpoints. None of the per-surface limiters, the env knobs, the
+  > health exemption or the `skilly_worker_rate_limited_total` counter below exist yet.
+
+  - **Git smart server (§9) — two layers.**
+    - **Per-IP flood guard**: default **600 requests / 1 min** per client IP. It applies **only** to
+      requests the git router recognizes as git smart-HTTP (`info/refs`, `git-upload-pack`,
+      `git-receive-pack`, `HEAD` under `/<ns>/<skill>.git/` and the §30.7 marketplace repos), and it
+      runs **before** authorization, so unauthenticated 401-challenge requests and bad-token floods
+      are capped here. Sized so a whole office behind one NAT can install concurrently.
+    - **Per-installation bucket**: default **300 requests / 15 min** per install token (≈ 60–100
+      clones). It is checked **after** a request is authorized, keyed by the token's **row id**
+      (`principal.tokenId`) — **never** the raw token or any credential, so no secret is held in
+      limiter memory (invariant #6). Every token regime counts (user `install`, system
+      installations, marketplace tokens, legacy `one_time`/`pat`). An authorized request with no
+      token principal is subject only to the per-IP guard. A request that fails authorization
+      (401/403/404) never touches a token bucket. When the bucket is exhausted the request gets
+      `429` **before** `git http-backend` runs and before any access logging or freshness stamp
+      (§23), so a throttled fetch is not recorded as an install or use.
+  - **SCIM provisioning target (§5)** (`/scim/v2/*`): its **own** per-IP limiter, default
+    **600 requests / 1 min**. Sized for an Entra initial sync, which can send hundreds of requests
+    in a burst. Entra honors `429` + `Retry-After` and retries.
+  - **Health/ops endpoints are EXEMPT**: `/healthz`, `/readyz` and `/metrics` are mounted **before**
+    every limiter and are never throttled. Probes and scrapes must not fail because of rate limiting,
+    and a throttled `/readyz` would take a healthy worker out of rotation. `/metrics` stays bearer-gated
+    (`METRICS_TOKEN`, §14), `/healthz` touches nothing, and `/readyz` runs only a bounded
+    `select 1`. This exemption is a **deliberate** decision: if CodeQL flags `/readyz` again, the
+    alert is dismissed as intentional with a pointer to this section.
+  - **Everything else** (any other worker path, i.e. the 404 fall-through) keeps a catch-all per-IP
+    limiter of **100 requests / 15 min** (the previous default). It is not configurable.
+  - The §29 **MCP + OAuth** mounts keep their own per-IP flood guard and per-user buckets (§29
+    *Rate limiting*), unchanged.
+  - **Configurable via env** (worker). Each value must be a positive integer. An unset, empty,
+    non-numeric, zero or negative value falls back to the default and logs one structured `warn`
+    line at startup naming the variable. These are the only rate-limit knobs; defaults ship as above:
+
+    | Variable | Default | Meaning |
+    |---|---|---|
+    | `GIT_IP_RATE_MAX` | `600` | git per-IP requests per window |
+    | `GIT_IP_RATE_WINDOW_MS` | `60000` | git per-IP window |
+    | `GIT_TOKEN_RATE_MAX` | `300` | git requests per installation per window |
+    | `GIT_TOKEN_RATE_WINDOW_MS` | `900000` | git per-installation window |
+    | `SCIM_RATE_MAX` | `600` | SCIM per-IP requests per window |
+    | `SCIM_RATE_WINDOW_MS` | `60000` | SCIM per-IP window |
+
+    The variables are documented in `deploy/.env.example` and exposed in the Helm chart as
+    `worker.rateLimits.*` values rendered into the worker Deployment's env.
+  - **Common to all:** per-IP keys honor the configured `trust proxy` (`TRUST_PROXY`), so the real
+    client is counted behind the edge proxy rather than the proxy itself. Responses carry the
+    standard `RateLimit-*` headers (`RateLimit-Policy` names the bucket that applied) plus `Retry-After`
+    on **`429`**. The 429 body is short plain text (`rate limit exceeded — retry in <n> s`); git
+    clients typically surface only the status line, so the body is best-effort. Every 429 bumps a new
+    worker counter `skilly_worker_rate_limited_total` with a `surface` label (`git_ip` | `git_token` | `scim` | `other`)
+    so operators can tell which limit fired.
+  This is the worker analogue of the web app's in-memory limiter (`web/lib/ratelimit.ts`, §14/§15).
+  All of these limiters remain **per-instance**: the HA note (§14, build-plan #20) applies, and a
+  shared store is the next upgrade.
 - **SCIM filter parsing (ReDoS hardening)**: `parseScimFilter` (`worker/src/scim/filter.ts`) parses
   the single `eq` filter grammar Entra issues (`<attr> eq "<value>"` or bare `<attr> eq <value>`)
   against the `filter` query string on `GET /scim/v2/Users` and `GET /scim/v2/Groups` (§5) —
@@ -4352,9 +4405,9 @@ depend on knowing:
   request) at the **same limits the web routes already enforce** — an agent gets no more proposal
   throughput than a person; `install_skill` at the existing install-mint limit; **DCR** per-IP.
 - **A per-IP flood guard in front of both mounts** (default 600 req/min). The MCP and OAuth routes
-  sit *before* the worker's app-wide limiter — 100 req/15 min per IP is sized for git + SCIM and
-  would throttle a working agent in seconds — but an UNAUTHENTICATED caller never reaches the
-  per-user buckets, so the 401 and token-exchange paths need their own ceiling.
+  are limited separately from the worker's git and SCIM limiters (§22), which are sized for clones and
+  provisioning, not a working agent. An UNAUTHENTICATED caller never reaches the per-user buckets,
+  so the 401 and token-exchange paths need this ceiling of their own.
 - **Per-instance, like the rest of skilly's limiting** (§16 #20) — a shared store remains the
   documented next upgrade.
 
