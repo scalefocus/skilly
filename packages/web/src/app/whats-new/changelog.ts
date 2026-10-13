@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.28.2",
+    date: "2026-10-13",
+    summary:
+      "The Coming soon list on this page has a new upcoming feature: email digests. Soon you'll be able to get a daily or weekly summary of what you follow instead of one email per update.",
+  },
+  {
     version: "2.28.1",
     date: "2026-10-13",
     summary:
