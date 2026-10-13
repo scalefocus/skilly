@@ -38,6 +38,8 @@ interface AiDraftHandoff {
   baseSemver: string;
   aiDraftToken: string;
   whatChanged: string;
+  /** "ai" = the note was written by the AI (§44.7) — the field shows a hint until edited. */
+  whatChangedSource?: "ai" | "summaries";
   model: string | null;
   upload: {
     artifactObjectKey: string;
@@ -364,6 +366,8 @@ function ProposeForm() {
   // It stands in for an attached file until the proposer attaches a different bundle.
   const [qualityDraft, setQualityDraft] = useState<AiDraftHandoff | null>(null);
   const qualityDraftApplied = useRef(false);
+  // §44.7: the note is the AI's own until the proposer first edits it.
+  const [noteByAi, setNoteByAi] = useState(false);
   useEffect(() => {
     if (params.get("aiDraft") !== "1" || !isNewVersion) return;
     try {
@@ -382,6 +386,7 @@ function ProposeForm() {
     setReuseFiles(false);
     noteIsDefault.current = false;
     setF((prev) => ({ ...prev, whatChanged: qualityDraft.whatChanged || prev.whatChanged }));
+    setNoteByAi(qualityDraft.whatChangedSource === "ai" && !!qualityDraft.whatChanged);
     setScan(qualityDraft.upload.scan ?? null);
     setQuality(qualityDraft.upload.quality ?? null);
     setBundleIcon(qualityDraft.upload.bundleIcon ?? null);
@@ -1623,9 +1628,14 @@ function ProposeForm() {
               value={f.whatChanged}
               // Any keystroke makes the note the proposer's — the default is never re-applied
               // or cleared from under them afterwards (§8).
-              onChange={(e) => { noteIsDefault.current = false; setF((prev) => ({ ...prev, whatChanged: e.target.value })); }}
+              onChange={(e) => { noteIsDefault.current = false; setNoteByAi(false); setF((prev) => ({ ...prev, whatChanged: e.target.value })); }}
               placeholder={"What’s new in this version? e.g.\n\n- Fixed PDF page-range parsing\n- Added a --lang option"}
             />
+            {noteByAi && (
+              <p className="muted" style={{ fontSize: 12, marginTop: 7 }} data-testid="what-changed-ai-hint">
+                ✦ Written by {aiName} — edit as needed.
+              </p>
+            )}
             <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
               Shown per version on the skill page and to reviewers. Plain text — no Markdown. <span className="mono">{f.whatChanged.length}/{WHAT_CHANGED_MAX_LEN}</span>
             </p>

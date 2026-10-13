@@ -8,8 +8,9 @@ import AdmZip from "adm-zip";
 import {
   canReviewNamespace, isSkillVisible, latestArtifactFindings, loadVersionQuality, bundleContentCap, diffLines,
   planDraft, buildQualityDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftReasonText, draftWhatChangedNote,
-  parseFrontmatter, decodeScanText, resolveLatest,
-  DRAFT_AI_FEATURE, DRAFT_MAX_TOKENS, DRAFT_CONCURRENCY, DRAFT_HEARTBEAT_MS, DRAFT_TOKEN_TTL_MS,
+  buildDraftNotePrompt, validateDraftNote, parseFrontmatter, decodeScanText, resolveLatest,
+  DRAFT_AI_FEATURE, DRAFT_NOTE_AI_FEATURE, DRAFT_MAX_TOKENS, DRAFT_NOTE_MAX_TOKENS, DRAFT_CONCURRENCY, DRAFT_HEARTBEAT_MS, DRAFT_TOKEN_TTL_MS,
+  DRAFT_SUMMARY_MAX, DRAFT_ADDRESSED_MAX,
   type EffectiveAccess, type BundleEntry, type ScanFinding, type QualityVerdict, type DraftPlanFile, type DraftFileResult,
   type DraftUnavailableReason,
 } from "@skilly/shared";
@@ -399,7 +400,9 @@ export interface AssembleChange {
   path: string;
   action: "modify" | "delete";
   content?: string;
+  /** The run's per-file values, echoed back for the note — unsigned, they only feed the proposer's own note. */
   summary?: string;
+  addressed?: string[];
 }
 
 export function parseAssembleChanges(raw: unknown): AssembleChange[] | null {
@@ -411,18 +414,65 @@ export function parseAssembleChanges(raw: unknown): AssembleChange[] | null {
     const x = c as Record<string, unknown>;
     if (typeof x.path !== "string" || !x.path || seen.has(x.path)) return null;
     seen.add(x.path);
-    const summary = typeof x.summary === "string" ? x.summary.slice(0, 200) : "";
-    if (x.action === "delete") out.push({ path: x.path, action: "delete", summary });
-    else if (x.action === "modify" && typeof x.content === "string") out.push({ path: x.path, action: "modify", content: x.content, summary });
+    const summary = typeof x.summary === "string" ? x.summary.trim().slice(0, DRAFT_SUMMARY_MAX) : "";
+    const addressed = Array.isArray(x.addressed)
+      ? x.addressed.filter((a): a is string => typeof a === "string").map((a) => a.trim().slice(0, 20)).filter(Boolean).slice(0, DRAFT_ADDRESSED_MAX)
+      : [];
+    if (x.action === "delete") out.push({ path: x.path, action: "delete", summary, addressed });
+    else if (x.action === "modify" && typeof x.content === "string") out.push({ path: x.path, action: "modify", content: x.content, summary, addressed });
     else return null;
   }
   return out;
 }
 
+export type WhatChangedSource = "ai" | "summaries";
+
+/**
+ * The pre-filled "What changed" note (§44.7): one AI call over the kept changes' summaries and what
+ * they address (never file contents). Never throws — AI unavailable, any AiError, an unusable
+ * answer or an abort all fall back to the per-file list.
+ */
+export async function draftNote(
+  access: { userId: string },
+  ctx: DraftContext,
+  changes: AssembleChange[],
+  signal?: AbortSignal,
+): Promise<{ whatChanged: string; whatChangedSource: WhatChangedSource }> {
+  const fallback = () => ({
+    whatChanged: draftWhatChangedNote(changes.map((c) => ({ path: c.path, action: c.action, summary: c.summary ?? "" }))),
+    whatChangedSource: "summaries" as const,
+  });
+  try {
+    if (!(await aiAvailable())) return fallback();
+    const prompt = buildDraftNotePrompt({
+      skillSlug: ctx.skill.slug,
+      skillTitle: ctx.skill.title,
+      baseSemver: ctx.semver,
+      changes: changes.map((c) => ({ path: c.path, action: c.action, summary: c.summary ?? "", addressed: c.addressed ?? [] })),
+      findings: ctx.findings,
+      verdict: ctx.verdict,
+    });
+    const res = await aiComplete({
+      feature: DRAFT_NOTE_AI_FEATURE,
+      userId: access.userId,
+      system: prompt.system,
+      messages: [{ role: "user", content: prompt.user }],
+      maxTokens: DRAFT_NOTE_MAX_TOKENS,
+      json: true,
+      signal,
+    });
+    const note = validateDraftNote(res.json);
+    return note ? { whatChanged: note, whatChangedSource: "ai" } : fallback();
+  } catch {
+    return fallback();
+  }
+}
+
 /**
  * Turn the kept changes into a staged bundle: verify every change against the run token, apply
- * them to the base version's files, zip, and run the ordinary upload pipeline. The 201 response
- * gains `aiDraftToken` and the pre-filled `whatChanged` note.
+ * them to the base version's files, zip, and run the ordinary upload pipeline. The note call runs
+ * alongside the pipeline and is aborted if the pipeline fails. The 201 response gains
+ * `aiDraftToken`, the pre-filled `whatChanged` note and its `whatChangedSource`.
  */
 export async function assembleDraft(
   access: EffectiveAccess & { userId: string },
@@ -454,10 +504,23 @@ export async function assembleDraft(
   for (const [path, bytes] of [...map.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) zip.addFile(path, Buffer.from(bytes));
   const bundle = zip.toBuffer();
 
-  const res = await processBundleUpload(access, bundle, `${ctx.skill.slug}-draft.zip`, ctx.skill.slug, await getMaxBundleBytes(), { store: deps.store });
-  if (res.status !== 201) return res;
+  const noteAbort = new AbortController();
+  const note = draftNote(access, ctx, input.changes, noteAbort.signal);
+  let res: Response;
+  try {
+    res = await processBundleUpload(access, bundle, `${ctx.skill.slug}-draft.zip`, ctx.skill.slug, await getMaxBundleBytes(), { store: deps.store });
+  } catch (err) {
+    noteAbort.abort();
+    await note;
+    throw err;
+  }
+  if (res.status !== 201) {
+    noteAbort.abort();
+    await note;
+    return res;
+  }
   const j = (await res.json()) as Record<string, unknown>;
   const aiDraftToken = signDraftToken({ u: access.userId, s: ctx.skill.id, a: String(j.artifactObjectKey), m: tok.m ?? "unknown" });
-  const whatChanged = draftWhatChangedNote(input.changes.map((c) => ({ path: c.path, action: c.action, summary: c.summary ?? "" })));
-  return Response.json({ ...j, aiDraftToken, whatChanged, model: tok.m, baseSemver: tok.v }, { status: 201 });
+  const { whatChanged, whatChangedSource } = await note;
+  return Response.json({ ...j, aiDraftToken, whatChanged, whatChangedSource, model: tok.m, baseSemver: tok.v }, { status: 201 });
 }
