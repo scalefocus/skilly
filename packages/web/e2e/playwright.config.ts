@@ -1,8 +1,9 @@
 // Playwright config for the skilly e2e suite. Lives outside `src` so it is excluded from the
 // Next.js typecheck/build. The suite runs against the DEV stack (SKILLY_DEV_AUTH=1) — a live web
 // server + a migrated & seeded Postgres + MinIO. It is opt-in (browsers + a live stack required),
-// so it is NOT part of the default `pnpm -r test`; CI runs it behind a gate (Jenkins RUN_E2E_TESTS
-// / the GitHub Actions `e2e` job).
+// so it is NOT part of the default `pnpm -r test`; CI runs it behind a gate (the Jenkins E2E_TESTS
+// dropdown: FULL_E2E_TESTS, or QUICK_E2E_TESTS for a random 20% sample drawn by
+// ci/e2e-quick-list.mjs; the GitHub Actions `e2e` job).
 //
 // Locally:
 //   docker compose … up -d postgres minio migrate     # backends + migrations
@@ -33,6 +34,19 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 // run on a free port when something else on the agent already holds 3000.
 const port = new URL(baseURL).port || "3000";
 
+// Sharded CI run (Jenkins E2E_SHARDS > 1): each shard is a full stack of its own (Postgres + MinIO +
+// `next dev`), and this process runs only its slice of the suite. E2E_SHARD is 1-based. Each shard
+// also gets its own Next build folder (next.config.mjs reads SKILLY_NEXT_DIST_DIR), test-results
+// folder and JUnit file, so parallel shards on one agent never write to the same place. Unset =
+// the whole suite, exactly as before.
+const shardIndex = Number(process.env.E2E_SHARD ?? 0);
+const shardTotal = Number(process.env.E2E_SHARD_TOTAL ?? 0);
+const shard =
+  Number.isInteger(shardIndex) && Number.isInteger(shardTotal) && shardTotal > 1 && shardIndex >= 1 && shardIndex <= shardTotal
+    ? { current: shardIndex, total: shardTotal }
+    : null;
+const shardDir = shard ? `shard-${shard.current}` : "";
+
 export default defineConfig({
   testDir: ".",
   testMatch: /.*\.spec\.ts/,
@@ -43,6 +57,8 @@ export default defineConfig({
   // generous per-test budget. Locally (warm dev server) the tighter default is fine.
   timeout: process.env.CI ? 90_000 : 30_000,
   fullyParallel: true,
+  shard,
+  outputDir: shard ? `test-results/${shardDir}` : "test-results",
   // In CI, serialize: the webpack dev compiler is a shared bottleneck, and many workers all
   // triggering first-compiles at once thrash it into navigation timeouts. One worker lets each
   // route compile once and stay cached for the rest of the run — slower but reliable. Locally
@@ -52,7 +68,7 @@ export default defineConfig({
   // trace-on-first-retry below.
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI
-    ? [["list"], ["junit", { outputFile: "results/junit.xml" }]]
+    ? [["list"], ["junit", { outputFile: shard ? `results/${shardDir}/junit.xml` : "results/junit.xml" }]]
     : "html",
   // Per-assertion budget. Specs gate on the hydrated shell (helpers/ready.ts) and pair every
   // mutation with its response, so assertions rarely wait long — but a loaded CI agent still
@@ -71,7 +87,12 @@ export default defineConfig({
     // LEADERBOARD_CACHE_TTL_MS=0: the shared per-(window,sort) board cache (lib/leaderboard.ts) is
     // primed by /api/leaders on EVERY page load, so a spec that creates a request and then reads
     // the board through the UI would see a board computed before its own fixture for up to 60s.
-    env: { SKILLY_DEV_KEEP_ROUTES: "1", LEADERBOARD_CACHE_TTL_MS: "0", NODE_OPTIONS: devServerNodeOptions },
+    env: {
+      SKILLY_DEV_KEEP_ROUTES: "1",
+      LEADERBOARD_CACHE_TTL_MS: "0",
+      NODE_OPTIONS: devServerNodeOptions,
+      ...(shard ? { SKILLY_NEXT_DIST_DIR: `.next-e2e-${shard.current}` } : {}),
+    },
     url: baseURL,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,

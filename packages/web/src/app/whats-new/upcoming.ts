@@ -22,7 +22,14 @@ export interface UpcomingEntry {
 }
 
 /** In display order. Empty while nothing is specified ahead — the section is then hidden. */
-export const UPCOMING: UpcomingEntry[] = [];
+export const UPCOMING: UpcomingEntry[] = [
+  {
+    ids: ["GAP-1"],
+    title: "Replies to comments",
+    teaser: "Reply directly to a comment and keep the conversation in one thread, and see when someone answers you.",
+    audience: "everyone",
+  },
+];
 
 export interface UpcomingViewer {
   isPlatformAdmin: boolean;

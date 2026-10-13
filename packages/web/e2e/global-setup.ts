@@ -25,6 +25,9 @@
 // Best-effort by design: a route that fails here is logged, not fatal — the spec that owns it
 // reports the failure with a real assertion and a real error context. Playwright starts the
 // `webServer` before running this, so the server is up (CI) or already running (local reuse).
+// The one fatal case is the server itself going away: a refused connection means nothing listens on
+// the port any more (on a shared CI agent, almost always the kernel's OOM killer), and Playwright
+// does not restart it — so stop here with that cause rather than run every spec into ECONNREFUSED.
 import { request, type FullConfig } from "@playwright/test";
 import { readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -127,7 +130,15 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
         const res = await ctx.get(path, { timeout: 120_000, maxRedirects: 0 });
         log(`${res.status()} ${path} (${Date.now() - t}ms)`);
       } catch (err) {
-        console.warn(`[e2e warm-up] ${path} failed: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("ECONNREFUSED")) {
+          throw new Error(
+            `[e2e warm-up] the dev server at ${baseURL} refused the connection for ${path} — it has exited ` +
+              `(see the [WebServer] output above; on a shared CI agent, check for an OOM kill). ` +
+              `Not running the suite against a dead server.`,
+          );
+        }
+        console.warn(`[e2e warm-up] ${path} failed: ${message}`);
       }
     };
 

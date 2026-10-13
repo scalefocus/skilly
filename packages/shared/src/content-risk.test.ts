@@ -180,11 +180,14 @@ test("every rule finishes quickly on 2 MB of adversarial input", () => {
     "сa".repeat(1_000_000),
     "env env ".repeat(250_000),
   ];
+  // Process CPU time, not wall clock: CI runs unit tests beside the e2e stacks, and a starved
+  // process can take many times longer on the clock while a polynomial blowup still burns CPU.
   for (const input of inputs) {
-    const t0 = Date.now();
+    const t0 = process.cpuUsage();
     scanContentFile("SKILL.md", input.slice(0, CONTENT_SCAN_MAX_CHARS));
-    const ms = Date.now() - t0;
-    assert.ok(ms < 5000, `took ${ms} ms on ${JSON.stringify(input.slice(0, 12))}…`);
+    const { user, system } = process.cpuUsage(t0);
+    const ms = Math.round((user + system) / 1000);
+    assert.ok(ms < 5000, `took ${ms} ms of CPU on ${JSON.stringify(input.slice(0, 12))}…`);
   }
 });
 

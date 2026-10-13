@@ -1,0 +1,42 @@
+#!/bin/sh
+# Fit the requested e2e shard count to this agent's RAM, and size each shard's dev-server heap.
+#
+# Every shard runs a full stack (Postgres + MinIO + Chromium + `next dev`), and every shard's dev
+# server warms and pins EVERY route (global-setup.ts + SKILLY_DEV_KEEP_ROUTES), so its memory does
+# not shrink with its slice of the suite: one warmed dev server was measured past ~6.4 GB of heap.
+# Splitting a fixed RAM budget across more shards than fit only lowers each ceiling until the
+# kernel's OOM killer takes a dev server mid-run, and every later test then fails ECONNREFUSED.
+# So: run as many shards as fit, never more than requested, and give each the heap that is left.
+#
+#   budget = MemTotal - E2E_MEM_RESERVE_MB         (agent JVM, OS, the other Verify branches)
+#   fit    = budget / (E2E_MIN_HEAP_MB + E2E_SHARD_OVERHEAD_MB)   (at least 1)
+#   shards = min(requested, fit)
+#   heap   = budget / shards - E2E_SHARD_OVERHEAD_MB  (Postgres, MinIO, Chromium, non-heap Node)
+#
+# Usage: sh ci/e2e-shard-plan.sh <requested shards>
+# Prints "<shards> <heap MB>" on stdout; the reasoning goes to stderr (the build log).
+set -eu
+
+REQUESTED="${1:?usage: e2e-shard-plan.sh <requested shards>}"
+RESERVE_MB="${E2E_MEM_RESERVE_MB:-3072}"
+OVERHEAD_MB="${E2E_SHARD_OVERHEAD_MB:-2048}"
+MIN_HEAP_MB="${E2E_MIN_HEAP_MB:-7168}"
+
+TOTAL_MB="$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo)"
+BUDGET_MB=$((TOTAL_MB - RESERVE_MB))
+FIT=$((BUDGET_MB / (MIN_HEAP_MB + OVERHEAD_MB)))
+[ "${FIT}" -ge 1 ] || FIT=1
+SHARDS="${REQUESTED}"
+[ "${SHARDS}" -le "${FIT}" ] || SHARDS="${FIT}"
+HEAP_MB=$((BUDGET_MB / SHARDS - OVERHEAD_MB))
+
+echo "[e2e plan] agent RAM ${TOTAL_MB} MB, budget ${BUDGET_MB} MB after a ${RESERVE_MB} MB reserve;" \
+  "a shard needs ${MIN_HEAP_MB} MB heap + ${OVERHEAD_MB} MB overhead, so ${FIT} fit" >&2
+if [ "${SHARDS}" -lt "${REQUESTED}" ]; then
+  echo "[e2e plan] E2E_SHARDS=${REQUESTED} does not fit this agent — running ${SHARDS} shard(s) instead" >&2
+fi
+if [ "${HEAP_MB}" -lt "${MIN_HEAP_MB}" ]; then
+  echo "[e2e plan] warning: only ${HEAP_MB} MB of heap is left for the dev server (wanted ${MIN_HEAP_MB} MB) — expect a heap-limit crash or an OOM kill" >&2
+fi
+echo "[e2e plan] ${SHARDS} shard(s), dev server heap ceiling ${HEAP_MB} MB each" >&2
+echo "${SHARDS} ${HEAP_MB}"
