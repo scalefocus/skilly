@@ -9,6 +9,8 @@
 #   E2E_HEAP_MB                   dev server heap ceiling (optional; ci/e2e-shard-plan.sh sizes it)
 #   E2E_TEST_LIST                 optional: absolute path of a Playwright --test-list file; only
 #                                 those tests run (the quick e2e sample, ci/e2e-quick-list.mjs)
+#   E2E_WARM                      optional route warm-up scope, all | pages (e2e/global-setup.ts);
+#                                 defaults to pages when E2E_TEST_LIST is set, all otherwise
 #   BUILD_TAG, WORKSPACE          Jenkins build identity + checkout root
 #   CI_PG_IMAGES, CI_MINIO_IMAGES space-separated image candidate lists (first reachable wins)
 #   CI_E2E_PG_CONTAINER, CI_E2E_MINIO_CONTAINER, CI_E2E_MINIO_PASSWORD
@@ -160,6 +162,14 @@ done
 # E2E_TEST_LIST, when set, narrows the run to the tests that file names.
 rm -rf "packages/web/e2e/results/shard-${E2E_SHARD}" "packages/web/e2e/test-results/shard-${E2E_SHARD}"
 
+# A sampled run warms the pages only. Warming every route pins all ~190 in one webpack compiler: a
+# fully warmed dev server measured ~9.7 GB private memory under an 8 GB heap ceiling and ~31 min of
+# warm-up, and on the 16 GB agent the kernel OOM-killed it mid-warm-up — a quick run that never
+# ran a test. The sample's API routes compile on first use instead (e2e/global-setup.ts).
+if [ -n "${E2E_TEST_LIST:-}" ]; then E2E_WARM="${E2E_WARM:-pages}"; fi
+E2E_WARM="${E2E_WARM:-all}"
+echo "[${TAG}] route warm-up scope: ${E2E_WARM}"
+
 # The kernel's running count of OOM kills (/proc/vmstat, readable without root — dmesg often is
 # not). Sampled around the run so a dev server the OOM killer took is named as such in the log,
 # instead of surfacing only as a wall of ECONNREFUSED test failures. It counts the whole agent, so
@@ -169,7 +179,7 @@ OOM_BEFORE="$(oom_kills)"
 
 set +e
 SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
-SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 \
+SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 E2E_WARM="${E2E_WARM}" \
 DATABASE_URL="${CI_E2E_DATABASE_URL}" \
 NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
 AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
@@ -185,7 +195,8 @@ if [ "${OOM_AFTER}" -gt "${OOM_BEFORE}" ]; then
   echo "[${TAG}] the kernel OOM-killed $((OOM_AFTER - OOM_BEFORE)) process(es) on this agent while this shard ran." \
     "A killed dev server fails every later test with ECONNREFUSED. With several shards: lower" \
     "E2E_SHARDS, or raise E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits fewer." \
-    "With one shard: lower E2E_MAX_HEAP_MB (the heap ceiling, ${E2E_HEAP_MB:-unset} MB here) so V8" \
-    "collects before RSS outgrows RAM, or raise E2E_MEM_RESERVE_MB if another Verify branch is the hog." >&2
+    "With one shard, the heap ceiling (${E2E_HEAP_MB:-unset} MB here) does not bound the dev server:" \
+    "most of its memory is the pinned route graph (warm-up scope here: ${E2E_WARM}). A run that pins" \
+    "every route needs an agent with more RAM, or fewer Verify branches beside it (E2E_MEM_RESERVE_MB)." >&2
 fi
 exit "${rc}"
