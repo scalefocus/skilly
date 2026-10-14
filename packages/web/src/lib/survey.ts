@@ -12,6 +12,7 @@ import { getPlatformSettings } from "./settings";
 import { rumBucketFor } from "./rum/math";
 import type { RumRange } from "./rum/queries";
 import {
+  SURVEY_CATALOG_VERSION,
   SURVEY_FEATURES,
   SURVEY_FLOOR_DAYS,
   SURVEY_GRACE_DAYS,
@@ -32,14 +33,16 @@ import {
   surveyRollWins,
   surveySegment,
   surveyWithheld,
+  validateBugReport,
   validateSurveySubmission,
   type StoredSurveyOffer,
   type SurveyFeatureKey,
   type SurveyOfferView,
+  type SurveyResponseTrigger,
   type SurveySegment,
   type SurveySource,
-  type SurveyTrigger,
 } from "@skilly/shared/survey";
+import { APP_VERSION } from "@skilly/shared/version";
 
 /** Today's UTC date — the only time a response or a funnel counter records. */
 const TODAY = `(now() at time zone 'utc')::date`;
@@ -79,7 +82,7 @@ function state(u: UserSurveyRow, platformEnabled: boolean, now: Date) {
   };
 }
 
-type DailyCounter = "shown" | "closed" | "submitted" | "submitted_from_menu" | "shown_self" | "submitted_self";
+type DailyCounter = "shown" | "closed" | "submitted" | "submitted_from_menu" | "shown_self" | "submitted_self" | "submitted_bug";
 
 async function bumpDaily(db: Pool | PoolClient, column: DailyCounter, extra?: "submitted_from_menu"): Promise<void> {
   const cols = extra ? [column, extra] : [column];
@@ -299,12 +302,7 @@ export async function submitSurvey(r: SurveyRespondent, body: unknown): Promise<
       await client.query("rollback");
       return { ok: false, status: 422, error: v.error };
     }
-    const maintains = await client.query(`select 1 from skill_maintainers where user_id = $1 limit 1`, [r.userId]);
-    const segment = surveySegment({
-      isPlatformAdmin: r.isPlatformAdmin,
-      isNamespaceAdmin: [...r.namespaceRoles.values()].includes("namespace_admin"),
-      maintainsSkills: (maintains.rowCount ?? 0) > 0,
-    });
+    const segment = await respondentSegment(client, r);
     const { rows } = await client.query<{ id: string }>(
       `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text)
        values (${TODAY}, $1, $2, $3, $4, $5, $6) returning id`,
@@ -322,6 +320,62 @@ export async function submitSurvey(r: SurveyRespondent, body: unknown): Promise<
     // An on-demand submission counts only in its own funnel (§36.16).
     if (offer.trigger === "self") await bumpDaily(client, "submitted_self");
     else await bumpDaily(client, "submitted", v.via === "menu" ? "submitted_from_menu" : undefined);
+    await client.query("commit");
+    return { ok: true };
+  } catch (e) {
+    await client.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** §36.6 the respondent's segment, computed at submit time: admin > maintainer > consumer. */
+async function respondentSegment(db: PoolClient, r: SurveyRespondent): Promise<SurveySegment> {
+  const maintains = await db.query(`select 1 from skill_maintainers where user_id = $1 limit 1`, [r.userId]);
+  return surveySegment({
+    isPlatformAdmin: r.isPlatformAdmin,
+    isNamespaceAdmin: [...r.namespaceRoles.values()].includes("namespace_admin"),
+    maintainsSkills: (maintains.rowCount ?? 0) > 0,
+  });
+}
+
+export type BugReportResult = { ok: true } | { ok: false; status: 409 | 422; error: string };
+
+/**
+ * §36.17 store a bug report: an anonymous `survey_responses` row with `trigger = 'bug'`, the
+ * description as its text, no answers, the sanitized page path and the server's APP_VERSION. One
+ * transaction. `fromOffer` = the card holds the user's open `self` offer: it is re-read under the
+ * row lock (409 when none is open) and cleared, and `via` says whether it had been reopened. Never
+ * touches either survey cooldown stamp; never audited or logged with an identity (§36.11).
+ */
+export async function submitBugReport(r: SurveyRespondent, body: unknown): Promise<BugReportResult> {
+  const settings = await getPlatformSettings();
+  if (!settings.surveyEnabled) return { ok: false, status: 409, error: "surveys_off" };
+  if (!settings.bugReportsEnabled) return { ok: false, status: 409, error: "bug_reports_off" };
+  const v = validateBugReport(body);
+  if (!v.ok) return { ok: false, status: 422, error: v.error };
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    let via: "popup" | "menu" = "popup";
+    if (v.fromOffer) {
+      const u = await loadUser(r.userId, client, true);
+      const live = u ? liveOffer(u, settings.surveyEnabled, new Date()) : null;
+      if (!live || live.offer.trigger !== "self") {
+        await client.query("rollback");
+        return { ok: false, status: 409, error: "no_open_survey" };
+      }
+      if (live.offer.closed) via = "menu";
+      await client.query(`update users set survey_offer = null where id = $1`, [r.userId]);
+    }
+    const segment = await respondentSegment(client, r);
+    await client.query(
+      `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text, page_path, app_version)
+       values (${TODAY}, $1, 'bug', null, $2, $3, $4, $5, $6)`,
+      [SURVEY_CATALOG_VERSION, segment, via, v.description, v.pagePath, APP_VERSION],
+    );
+    await bumpDaily(client, "submitted_bug");
     await client.query("commit");
     return { ok: true };
   } catch (e) {
@@ -352,12 +406,16 @@ export interface SurveyFilters {
   range: RumRange;
   segment: SurveySegment | null;
   feature: string | null;
-  /** §36.16 the Source filter: prompted (`feature` / `visit`) or self-initiated; null = all. */
+  /** §36.16 the Source filter: prompted (`feature` / `visit`), self-initiated, or bug reports (§36.17); null = all. */
   source: SurveySource | null;
 }
 
-/** `answered_on` within the last `range` UTC days (today included), plus the segment/feature/source filters. */
-function whereFor(f: SurveyFilters, alias = "r"): { sql: string; params: unknown[] } {
+/**
+ * `answered_on` within the last `range` UTC days (today included), plus the segment/feature/source
+ * filters. `surveysOnly` leaves out bug reports (§36.17), which carry no stars: the question cards,
+ * the trend and the response count are about surveys.
+ */
+function whereFor(f: SurveyFilters, alias = "r", surveysOnly = false): { sql: string; params: unknown[] } {
   const params: unknown[] = [];
   const clauses: string[] = [];
   if (f.range !== "all") {
@@ -372,7 +430,10 @@ function whereFor(f: SurveyFilters, alias = "r"): { sql: string; params: unknown
     params.push(f.feature);
     clauses.push(`${alias}.feature = $${params.length}`);
   }
-  if (f.source) clauses.push(f.source === "self" ? `${alias}.trigger = 'self'` : `${alias}.trigger <> 'self'`);
+  if (f.source === "self") clauses.push(`${alias}.trigger = 'self'`);
+  else if (f.source === "prompted") clauses.push(`${alias}.trigger in ('feature', 'visit')`);
+  else if (f.source === "bug") clauses.push(`${alias}.trigger = 'bug'`);
+  if (surveysOnly) clauses.push(`${alias}.trigger <> 'bug'`);
   return { sql: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
@@ -388,10 +449,14 @@ export interface SurveyQuestionStat {
 
 export interface SurveySummary {
   enabled: boolean;
+  /** §36.17 the bug-report switch, for its header Switch beside `enabled`. */
+  bugReportsEnabled: boolean;
   lastDate: string | null;
   bucket: "day" | "week" | "month";
+  /** Survey responses in range (unfiltered); bug reports are counted apart in `bugCount` (§36.17). */
   responses: number;
-  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number; shownSelf: number; submittedSelf: number };
+  bugCount: number;
+  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number; shownSelf: number; submittedSelf: number; submittedBug: number };
   series: { date: string; n: number | null; overallAvg: number | null; withheld: boolean }[];
   questions: SurveyQuestionStat[];
   features: { key: string; label: string; n: number | null }[];
@@ -400,7 +465,7 @@ export interface SurveySummary {
 const round1 = (v: number | null): number | null => (v == null ? null : Math.round(v * 10) / 10);
 
 export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promise<SurveySummary> {
-  const w = whereFor(f);
+  const w = whereFor(f, "r", true);
   const rangeOnly = whereFor({ ...f, segment: null, feature: null, source: null });
   const settings = await getPlatformSettings(db);
 
@@ -408,8 +473,12 @@ export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promi
     db.query<{ last: string | null; first: string | null }>(
       `select max(answered_on)::text as last, min(answered_on)::text as first from survey_responses`,
     ),
-    // The section header's "N responses in range" — unfiltered.
-    db.query<{ n: number }>(`select count(*)::int as n from survey_responses r ${rangeOnly.sql}`, rangeOnly.params),
+    // The section header's "N responses · M bug reports in range" — unfiltered (§36.17).
+    db.query<{ n: number; bugs: number }>(
+      `select count(*) filter (where r.trigger <> 'bug')::int as n, count(*) filter (where r.trigger = 'bug')::int as bugs
+         from survey_responses r ${rangeOnly.sql}`,
+      rangeOnly.params,
+    ),
     db.query<{ key: string; n: number; avg: number; d1: number; d2: number; d3: number; d4: number; d5: number }>(
       `select a.question_key as key, count(*)::int as n, avg(a.stars)::float8 as avg,
               count(*) filter (where a.stars = 1)::int as d1, count(*) filter (where a.stars = 2)::int as d2,
@@ -428,10 +497,11 @@ export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promi
         fw.params,
       );
     })(),
-    db.query<{ shown: number; closed: number; submitted: number; from_menu: number; shown_self: number; submitted_self: number }>(
+    db.query<{ shown: number; closed: number; submitted: number; from_menu: number; shown_self: number; submitted_self: number; submitted_bug: number }>(
       `select coalesce(sum(shown), 0)::int as shown, coalesce(sum(closed), 0)::int as closed,
               coalesce(sum(submitted), 0)::int as submitted, coalesce(sum(submitted_from_menu), 0)::int as from_menu,
-              coalesce(sum(shown_self), 0)::int as shown_self, coalesce(sum(submitted_self), 0)::int as submitted_self
+              coalesce(sum(shown_self), 0)::int as shown_self, coalesce(sum(submitted_self), 0)::int as submitted_self,
+              coalesce(sum(submitted_bug), 0)::int as submitted_bug
          from survey_daily d
         ${f.range === "all" ? "" : `where d.day > ${TODAY} - $1::int`}`,
       f.range === "all" ? [] : [f.range],
@@ -470,9 +540,11 @@ export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promi
   const fn = funnel.rows[0]!;
   return {
     enabled: settings.surveyEnabled,
+    bugReportsEnabled: settings.bugReportsEnabled,
     lastDate: meta.rows[0]?.last ?? null,
     bucket,
     responses: responses.rows[0]!.n,
+    bugCount: responses.rows[0]!.bugs,
     funnel: {
       shown: fn.shown,
       closed: fn.closed,
@@ -481,6 +553,7 @@ export async function getSurveySummary(f: SurveyFilters, db: Pool = pool): Promi
       optedOut: optedOut.rows[0]!.n,
       shownSelf: fn.shown_self,
       submittedSelf: fn.submitted_self,
+      submittedBug: fn.submitted_bug,
     },
     series: series.rows.map((r) => {
       const withheld = surveyWithheld(r.n);
@@ -499,13 +572,17 @@ export interface SurveyComment {
   answeredOn: string;
   feature: string | null;
   segment: SurveySegment;
-  trigger: SurveyTrigger;
+  trigger: SurveyResponseTrigger;
   text: string;
+  /** §36.17 a bug report's page path and app version; null for survey responses. */
+  pagePath: string | null;
+  appVersion: string | null;
 }
 
 /**
  * §36.9 the free-text feed: newest date first, then by the random id within a day (so it never
- * reveals intra-day order). Withheld as a whole when the filtered response set is under 5.
+ * reveals intra-day order). The survey comments are withheld when the filtered set holds fewer than
+ * 5 SURVEY responses; bug reports are never withheld (§36.17) and are still listed then.
  */
 export async function getSurveyComments(
   f: SurveyFilters,
@@ -514,13 +591,14 @@ export async function getSurveyComments(
   db: Pool = pool,
 ): Promise<{ comments: SurveyComment[]; total: number; hasMore: boolean; withheld: boolean }> {
   const w = whereFor(f);
-  const set = await db.query<{ n: number }>(`select count(*)::int as n from survey_responses r ${w.sql}`, w.params);
-  if (surveyWithheld(set.rows[0]!.n)) return { comments: [], total: 0, hasMore: false, withheld: true };
-  const textWhere = `${w.sql ? `${w.sql} and` : "where"} r.free_text is not null`;
+  const sw = whereFor(f, "r", true);
+  const set = await db.query<{ n: number }>(`select count(*)::int as n from survey_responses r ${sw.sql}`, sw.params);
+  const withheld = f.source !== "bug" && surveyWithheld(set.rows[0]!.n);
+  const textWhere = `${w.sql ? `${w.sql} and` : "where"} r.free_text is not null${withheld ? ` and r.trigger = 'bug'` : ""}`;
   const [count, page] = await Promise.all([
     db.query<{ n: number }>(`select count(*)::int as n from survey_responses r ${textWhere}`, w.params),
-    db.query<{ id: string; answered_on: string; feature: string | null; segment: SurveySegment; trigger: SurveyTrigger; free_text: string }>(
-      `select r.id, r.answered_on::text as answered_on, r.feature, r.segment, r.trigger, r.free_text
+    db.query<{ id: string; answered_on: string; feature: string | null; segment: SurveySegment; trigger: SurveyResponseTrigger; free_text: string; page_path: string | null; app_version: string | null }>(
+      `select r.id, r.answered_on::text as answered_on, r.feature, r.segment, r.trigger, r.free_text, r.page_path, r.app_version
          from survey_responses r ${textWhere}
         order by r.answered_on desc, r.id
         offset $${w.params.length + 1} limit $${w.params.length + 2}`,
@@ -529,10 +607,19 @@ export async function getSurveyComments(
   ]);
   const total = count.rows[0]!.n;
   return {
-    comments: page.rows.map((r) => ({ id: r.id, answeredOn: r.answered_on, feature: r.feature, segment: r.segment, trigger: r.trigger, text: r.free_text })),
+    comments: page.rows.map((r) => ({
+      id: r.id,
+      answeredOn: r.answered_on,
+      feature: r.feature,
+      segment: r.segment,
+      trigger: r.trigger,
+      text: r.free_text,
+      pagePath: r.page_path,
+      appVersion: r.app_version,
+    })),
     total,
     hasMore: offset + page.rows.length < total,
-    withheld: false,
+    withheld,
   };
 }
 
@@ -545,8 +632,8 @@ export async function deleteSurveyResponse(id: string, actorUserId: string): Pro
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const { rows } = await client.query<{ answered_on: string; feature: string | null; segment: string; catalog_version: number; text_length: number; answers: number }>(
-      `select r.answered_on::text as answered_on, r.feature, r.segment, r.catalog_version,
+    const { rows } = await client.query<{ answered_on: string; trigger: string; feature: string | null; segment: string; catalog_version: number; text_length: number; answers: number }>(
+      `select r.answered_on::text as answered_on, r.trigger, r.feature, r.segment, r.catalog_version,
               coalesce(char_length(r.free_text), 0)::int as text_length,
               (select count(*)::int from survey_answers a where a.response_id = r.id) as answers
          from survey_responses r where r.id = $1 for update`,
@@ -563,7 +650,8 @@ export async function deleteSurveyResponse(id: string, actorUserId: string): Pro
       action: "survey.response_deleted",
       targetType: "survey_response",
       targetId: id,
-      before: { answeredOn: row.answered_on, feature: row.feature, segment: row.segment, catalogVersion: row.catalog_version, answerCount: row.answers, textLength: row.text_length },
+      // Never the text, and never a bug report's page path (§36.11, §36.17).
+      before: { answeredOn: row.answered_on, trigger: row.trigger, feature: row.feature, segment: row.segment, catalogVersion: row.catalog_version, answerCount: row.answers, textLength: row.text_length },
     });
     await client.query("commit");
     return true;

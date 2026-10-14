@@ -160,6 +160,8 @@ export interface PlatformSettings {
   rumFlushIntervals: number[];
   /** §36.8 the feedback survey on/off. Ships ON; OFF creates no offers and ends the open ones. */
   surveyEnabled: boolean;
+  /** §36.17 bug reports on/off. Ships ON; effective only while `surveyEnabled` is on too. */
+  bugReportsEnabled: boolean;
   /** §34.9 the stored search language (a PostgreSQL text-search configuration name). The database
    *  resolves what search actually uses (skilly_search_config(), falling back to english). */
   searchLanguage: string;
@@ -196,7 +198,7 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, ...digestFields(() => undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, bugReportsEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, ...digestFields(() => undefined) };
 
 /** §48.2 the five digest keys, flattened into the settings shape (defaults applied). */
 function digestFields(get: (key: string) => unknown): Pick<PlatformSettings, "emailDigestsEnabled" | "emailDigestDefaultMode" | "emailDigestHour" | "emailDigestWeekday" | "emailDigestTypes"> {
@@ -233,6 +235,7 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
     rumSampleRate: coerceRumSampleRate(map.get("rum_sample_rate")),
     rumFlushIntervals: coerceRumFlushIntervals(map.get("rum_flush_intervals")),
     surveyEnabled: map.get("survey_enabled") !== false,
+    bugReportsEnabled: map.get("bug_reports_enabled") !== false,
     searchLanguage: typeof map.get("search_language") === "string" ? (map.get("search_language") as string) : DEFAULTS.searchLanguage,
     aiDisplayName: coerceAiDisplayName(map.get("ai_display_name")),
     ...digestFields((k) => map.get(k)),
@@ -336,6 +339,21 @@ export async function setSurveyEnabled(enabled: boolean, actorUserId: string): P
     targetType: "platform_settings",
     targetId: "survey_enabled",
     after: { surveyEnabled: enabled },
+  });
+}
+
+/**
+ * §36.17 the bug-report switch. OFF hides the bug button and the picker's Bug option, and the bug
+ * endpoint answers 409; collected reports stay visible. Audited as a setting like every toggle.
+ */
+export async function setBugReportsEnabled(enabled: boolean, actorUserId: string): Promise<void> {
+  await writeSetting("bug_reports_enabled", enabled, actorUserId);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "bug_reports_enabled",
+    after: { bugReportsEnabled: enabled },
   });
 }
 

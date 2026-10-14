@@ -9,7 +9,7 @@ import { EmptyState, Switch } from "../../../components/ui";
 import { useDateFmt } from "../../../components/DateFormat";
 import { readPref, writePref, adminCardPrefKey } from "../../../lib/prefs";
 import { CollapsibleCard } from "../CollapsibleCard";
-import { SURVEY_MIN_GROUP, surveyFeatureLabel, type SurveySegment, type SurveySource, type SurveyTrigger } from "@skilly/shared/survey";
+import { SURVEY_MIN_GROUP, surveyFeatureLabel, type SurveyResponseTrigger, type SurveySegment, type SurveySource } from "@skilly/shared/survey";
 
 const SurveyChart = nextDynamic(() => import("./SurveyChart").then((m) => m.SurveyChart), {
   ssr: false,
@@ -29,10 +29,12 @@ interface QuestionStat {
 }
 interface Summary {
   enabled: boolean;
+  bugReportsEnabled: boolean;
   lastDate: string | null;
   bucket: "day" | "week" | "month";
   responses: number;
-  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number; shownSelf: number; submittedSelf: number };
+  bugCount: number;
+  funnel: { shown: number; closed: number; submitted: number; submittedFromMenu: number; optedOut: number; shownSelf: number; submittedSelf: number; submittedBug: number };
   series: { date: string; n: number | null; overallAvg: number | null; withheld: boolean }[];
   questions: QuestionStat[];
   features: { key: string; label: string; n: number | null }[];
@@ -42,8 +44,11 @@ interface Comment {
   answeredOn: string;
   feature: string | null;
   segment: SurveySegment;
-  trigger: SurveyTrigger;
+  trigger: SurveyResponseTrigger;
   text: string;
+  /** §36.17 a bug report's page path and app version (null otherwise). */
+  pagePath: string | null;
+  appVersion: string | null;
 }
 
 const WITHHELD = `Not enough responses yet (fewer than ${SURVEY_MIN_GROUP}).`;
@@ -53,12 +58,14 @@ const SEGMENTS: { key: SurveySegment | null; label: string }[] = [
   { key: "maintainer", label: "Maintainer" },
   { key: "admin", label: "Admin" },
 ];
-// §36.16 the Source filter: random prompts vs on-demand ("Give feedback now").
+// §36.16 the Source filter: random prompts vs on-demand ("Give feedback now"), and bug reports (§36.17).
 const SOURCES: { key: SurveySource | null; label: string }[] = [
   { key: null, label: "All" },
   { key: "prompted", label: "Prompted" },
   { key: "self", label: "Self-initiated" },
+  { key: "bug", label: "Bug reports" },
 ];
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const segmentLabel = (s: SurveySegment) => SEGMENTS.find((x) => x.key === s)?.label ?? s;
 const CARD_KEY = adminCardPrefKey("survey");
 
@@ -127,10 +134,11 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
     void loadComments(0);
   }, [loadedOnce, loadComments, refreshTick, tick]);
 
-  const setEnabled = async (next: boolean) => {
+  // §36.8 the survey switch, and §36.17 the bug-report switch beside it.
+  const setEnabled = async (next: boolean, key: "surveyEnabled" | "bugReportsEnabled" = "surveyEnabled") => {
     setBusy(true);
     try {
-      const r = await fetch("/api/admin/settings", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyEnabled: next }) });
+      const r = await fetch("/api/admin/settings", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [key]: next }) });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Failed (${r.status})`);
       setTick((t) => t + 1);
     } catch (e) {
@@ -158,7 +166,7 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
 
   const f = summary?.funnel;
   const rate = f && f.shown > 0 ? Math.round((f.submitted / f.shown) * 100) : null;
-  const empty = !!summary && summary.responses === 0 && (f?.shown ?? 0) === 0 && (f?.shownSelf ?? 0) === 0;
+  const empty = !!summary && summary.responses === 0 && summary.bugCount === 0 && (f?.shown ?? 0) === 0 && (f?.shownSelf ?? 0) === 0 && (f?.submittedBug ?? 0) === 0;
   const general = summary?.questions.filter((q) => !q.key.startsWith("feature.")) ?? [];
   const featureQs = summary?.questions.filter((q) => q.key.startsWith("feature.")) ?? [];
 
@@ -167,15 +175,24 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
       <CollapsibleCard
         cardId="survey"
         title="Survey results"
-        summary={summary ? `${summary.responses} ${summary.responses === 1 ? "response" : "responses"} in range` : undefined}
+        summary={summary ? `${plural(summary.responses, "response", "responses")} · ${plural(summary.bugCount, "bug report", "bug reports")} in range` : undefined}
         action={
-          <Switch
-            label="Ask users"
-            checked={summary?.enabled ?? true}
-            disabled={busy || !summary}
-            onChange={(next) => void setEnabled(next)}
-            title="Off: no user is offered a survey; collected results stay visible."
-          />
+          <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+            <Switch
+              label="Ask users"
+              checked={summary?.enabled ?? true}
+              disabled={busy || !summary}
+              onChange={(next) => void setEnabled(next)}
+              title="Off: no user is offered a survey; collected results stay visible."
+            />
+            <Switch
+              label="Bug reports"
+              checked={summary?.bugReportsEnabled ?? true}
+              disabled={busy || !summary}
+              onChange={(next) => void setEnabled(next, "bugReportsEnabled")}
+              title="Off: the bug button disappears; collected reports stay visible. Needs surveys on too."
+            />
+          </div>
         }
         open={open}
         onToggle={toggle}
@@ -203,6 +220,10 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
             {/* §36.16 on-demand surveys, counted apart so the response rate stays about random prompts. */}
             <div className="muted" style={{ fontSize: 13, marginTop: -12 }} data-testid="survey-funnel-self">
               Self-initiated: {f!.shownSelf.toLocaleString()} opened · {f!.submittedSelf.toLocaleString()} submitted
+            </div>
+            {/* §36.17 bug reports, counted apart from both survey funnels. */}
+            <div className="muted" style={{ fontSize: 13, marginTop: -16 }} data-testid="survey-funnel-bug">
+              Bug reports: {f!.submittedBug.toLocaleString()} submitted
             </div>
 
             {/* Filters — apply to the stats, the trend and the feed. */}
@@ -264,26 +285,35 @@ export function SurveyResults({ range, refreshTick }: { range: Range; refreshTic
             {/* 4. Free-text feed. */}
             <div>
               <div className="muted mono" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                Comments{commentsWithheld ? "" : ` · ${commentsTotal}`}
+                Comments{commentsWithheld && commentsTotal === 0 ? "" : ` · ${commentsTotal}`}
               </div>
-              {commentsWithheld ? (
-                <div className="muted" style={{ fontSize: 13 }} data-testid="survey-comments-withheld">{WITHHELD}</div>
-              ) : comments.length === 0 ? (
-                <div className="muted" style={{ fontSize: 13 }}>{commentsLoading ? "Loading…" : "No comments in this selection."}</div>
+              {/* Survey comments under 5 are withheld; bug reports never are (§36.17), so they still list below. */}
+              {commentsWithheld && (
+                <div className="muted" style={{ fontSize: 13, marginBottom: comments.length > 0 ? 10 : 0 }} data-testid="survey-comments-withheld">{WITHHELD}</div>
+              )}
+              {comments.length === 0 ? (
+                !commentsWithheld && <div className="muted" style={{ fontSize: 13 }}>{commentsLoading ? "Loading…" : "No comments in this selection."}</div>
               ) : (
                 <div className="rows" data-testid="survey-comments">
                   {comments.map((c) => (
-                    <div className="row" key={c.id} style={{ alignItems: "flex-start" }} data-testid="survey-comment">
+                    <div className="row" key={c.id} style={{ alignItems: "flex-start" }} data-testid="survey-comment" data-trigger={c.trigger}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{c.text}</div>
                         <div className="sub" style={{ fontSize: 11.5, marginTop: 4 }}>
-                          {fmt.date(`${c.answeredOn}T12:00:00Z`)} · {c.feature ? surveyFeatureLabel(c.feature) : "General"} · {segmentLabel(c.segment)}
+                          {fmt.date(`${c.answeredOn}T12:00:00Z`)} ·{" "}
+                          {c.trigger === "bug" ? <span className="chip">Bug</span> : c.feature ? surveyFeatureLabel(c.feature) : "General"} · {segmentLabel(c.segment)}
                           {c.trigger === "self" && <span className="chip" style={{ marginLeft: 6 }}>Self-initiated</span>}
                         </div>
+                        {c.trigger === "bug" && (c.pagePath || c.appVersion) && (
+                          // §36.17 plain text, never a link.
+                          <div className="sub mono" style={{ fontSize: 11, marginTop: 2, overflowWrap: "anywhere" }} data-testid="survey-comment-bug-context">
+                            {c.pagePath ?? "unknown page"}{c.appVersion ? ` · v${c.appVersion}` : ""}
+                          </div>
+                        )}
                       </div>
                       {confirming === c.id ? (
                         <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                          <span className="muted" style={{ fontSize: 12 }}>Delete this response? Its star answers are removed too.</span>
+                          <span className="muted" style={{ fontSize: 12 }}>{c.trigger === "bug" ? "Delete this bug report?" : "Delete this response? Its star answers are removed too."}</span>
                           <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void remove(c.id)}>Delete</button>
                           <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setConfirming(null)}>Cancel</button>
                         </div>

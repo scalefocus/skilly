@@ -27,13 +27,23 @@ export const SURVEY_FEATURE_USED_RATE_PER_MIN = 120;
 export const SURVEY_CHECK_RATE_PER_MIN = 30;
 export const SURVEY_SUBMIT_RATE_PER_MIN = 10;
 export const SURVEY_START_RATE_PER_MIN = 10;
+/** §36.17 bug reports have their own limits, never the survey cooldowns. */
+export const BUG_REPORT_RATE_PER_MIN = 3;
+export const BUG_REPORT_RATE_PER_DAY = 20;
+/** §36.17 the stored page path's cap, in characters. */
+export const BUG_PAGE_PATH_MAX = 512;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** `self` = on-demand, started by the user (§36.16); `feature` / `visit` = the random prompt. */
 export type SurveyTrigger = "feature" | "visit" | "self";
-/** The admin results' Source filter (§36.16): `prompted` covers `feature` and `visit`. */
-export type SurveySource = "prompted" | "self";
+/** A stored response's trigger: a survey's, or `bug` for a bug report (§36.17). */
+export type SurveyResponseTrigger = SurveyTrigger | "bug";
+/**
+ * The admin results' Source filter (§36.16): `prompted` covers `feature` and `visit`; `bug` is the
+ * bug reports (§36.17).
+ */
+export type SurveySource = "prompted" | "self" | "bug";
 export type SurveySegment = "consumer" | "maintainer" | "admin";
 export type SurveyVia = "popup" | "menu";
 export const SURVEY_SEGMENTS: readonly SurveySegment[] = ["consumer", "maintainer", "admin"];
@@ -346,10 +356,99 @@ export function isSurveySegment(v: unknown): v is SurveySegment {
 }
 
 export function isSurveySource(v: unknown): v is SurveySource {
-  return v === "prompted" || v === "self";
+  return v === "prompted" || v === "self" || v === "bug";
 }
 
 /** §36.9 is a figure over `n` responses withheld? */
 export function surveyWithheld(n: number): boolean {
   return n < SURVEY_MIN_GROUP;
+}
+
+// ---- bug reports (§36.17) ------------------------------------------------------------------------
+
+/** The picker value of the Bug category. Not a feature key: a bug report has no feature. */
+export const SURVEY_BUG_CATEGORY = "bug";
+
+/** One option of the on-demand card's "What would you like to tell us about?" picker. */
+export interface SurveyPickerOption {
+  /** "" = skilly in general, "bug" = Bug, otherwise a catalog feature key. */
+  value: string;
+  label: string;
+}
+
+/** §36.17 the picker: skilly in general, then Bug (when bug reports are on), then every feature. */
+export function surveyPickerOptions(bugReports: boolean): SurveyPickerOption[] {
+  return [
+    { value: "", label: "skilly in general" },
+    ...(bugReports ? [{ value: SURVEY_BUG_CATEGORY, label: "Bug" }] : []),
+    ...SURVEY_FEATURES.map((f) => ({ value: f.key, label: f.label.charAt(0).toUpperCase() + f.label.slice(1) })),
+  ];
+}
+
+/** §36.17 `GET /api/me` `bugReports`: both platform switches on (the survey switch is the master). */
+export function bugReportsEnabled(surveyEnabled: boolean, bugReportsSwitch: boolean): boolean {
+  return surveyEnabled && bugReportsSwitch;
+}
+
+/** §36.17 is the sidebar's bug button shown? Signed in, onboarded, and bug reports on. */
+export function bugButtonVisible(s: { signedIn: boolean; onboarded: boolean; bugReports: boolean }): boolean {
+  return s.signedIn && s.onboarded && s.bugReports;
+}
+
+/**
+ * §36.17 the page path a bug report carries: the pathname only. Anything from the first `?` or `#`
+ * is stripped (invariant #6); a path that doesn't start with `/`, starts with `/api/`, or runs past
+ * 512 characters is dropped (null) rather than rejecting the report.
+ */
+export function sanitizeBugPagePath(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const path = raw.split(/[?#]/, 1)[0]!.trim();
+  if (!path.startsWith("/") || path.startsWith("//") || path === "/api" || path.startsWith("/api/")) return null;
+  if ([...path].length > BUG_PAGE_PATH_MAX || /[\u0000-\u001f\u007f]/.test(path)) return null;
+  return path;
+}
+
+export type BugReportSubmission =
+  | { ok: true; description: string; pagePath: string | null; fromOffer: boolean }
+  | { ok: false; error: string };
+
+/** §36.17 validate a bug-report body: a required, trimmed description of at most 2000 code points. */
+export function validateBugReport(body: unknown): BugReportSubmission {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  if (b.description !== undefined && b.description !== null && typeof b.description !== "string") return { ok: false, error: "description must be a string" };
+  const description = normalizeSurveyText(b.description);
+  if (!description) return { ok: false, error: "describe the problem you found" };
+  if ([...description].length > SURVEY_FREE_TEXT_MAX) return { ok: false, error: `description is limited to ${SURVEY_FREE_TEXT_MAX} characters` };
+  return { ok: true, description, pagePath: sanitizeBugPagePath(b.pagePath), fromOffer: b.fromOffer === true };
+}
+
+/**
+ * §36.17 why a Bug-mode card WITHOUT an offer can't switch to another category, or null when it
+ * can (switching then starts an on-demand survey). An open random offer wins over the cooldown.
+ */
+export type BugCardBlock = { reason: "random" } | { reason: "cooldown"; nextAt: string } | null;
+
+export function bugCardBlock(s: { randomOfferOpen: boolean; selfSurvey: { nextAt: string | null } | null }, now: Date): BugCardBlock {
+  if (s.randomOfferOpen) return { reason: "random" };
+  const nextAt = s.selfSurvey?.nextAt ?? null;
+  if (nextAt && Date.parse(nextAt) > now.getTime()) return { reason: "cooldown", nextAt };
+  return null;
+}
+
+/**
+ * §36.17 what a click on the bug button does, from the open offer and the card open in this tab:
+ * - `focus`: a Bug-mode card without an offer is already open (case 4);
+ * - `switch`: the open card holds the `self` offer, so it just switches to Bug (case 2);
+ * - `reopen`: a `self` offer is open but its card isn't, so it reopens with Bug selected (case 2);
+ * - `replace`: a random offer's card is open, so it is closed ("not now") and a Bug card opens (case 3);
+ * - `open`: a Bug card without an offer opens (cases 1 and 3).
+ */
+export type BugButtonAction = "focus" | "switch" | "reopen" | "replace" | "open";
+
+export function bugButtonAction(s: { offer: "none" | "self" | "random"; card: "none" | "bug" | "self" | "random" }): BugButtonAction {
+  if (s.card === "bug") return "focus";
+  if (s.card === "self") return "switch";
+  if (s.offer === "self") return "reopen";
+  if (s.card === "random") return "replace";
+  return "open";
 }

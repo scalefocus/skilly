@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.34.0",
+    date: "2026-10-14",
+    summary:
+      "Found a problem? Click the small bug icon at the bottom-right of the sidebar to report it. Describe what went wrong; your report is anonymous, and we attach only the page you were on and the app version. Bug reports don't count against the weekly feedback limit, and admins read them in Survey results under Bug reports.",
+  },
+  {
     version: "2.33.0",
     date: "2026-10-13",
     summary:
