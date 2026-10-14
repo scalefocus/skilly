@@ -88,11 +88,11 @@ const PAGES = [
 
 // E2E_WARM=core: the API routes nearly every spec meets — the app shell's on-load calls (every
 // signed-in page) and what the most-visited pages (/admin, /catalog, a skill page, /propose,
-// /profile) fetch as they load. Cold, these compiled one after another on the first spec to open
-// such a page: on the CI agent 10–37 s each, and /admin alone fires ~15, so its cards were still
-// loading two minutes in and the specs' 45 s response waits ran out. Warming ~60 keeps the pinned
-// graph far below the full sweep's (~159). Keep in sync when the shell or one of these pages
-// starts loading a new endpoint. POST-only routes answer GET with 405 and compile all the same.
+// /proposals/[id], /profile) fetch as they load. Cold, these compiled one after another on the
+// first spec to open such a page: on the CI agent 10–37 s each, and /admin alone fires ~15, so its
+// cards were still loading two minutes in and the specs' 45 s response waits ran out. Warming ~70
+// keeps the pinned graph far below the full sweep's (~159). Keep in sync when the shell or one of
+// these pages starts loading a new endpoint. POST-only routes answer GET with 405 and compile all the same.
 const CORE_API = [
   // App shell (AppShell.tsx) + the e2e sign-in (fixtures.ts devSignIn).
   "/api/me",
@@ -164,6 +164,17 @@ const CORE_API = [
   "/api/namespaces/administered",
   "/api/propose/ai-draft",
   "/api/skills/slug-matches",
+  "/api/pointer/refs",
+  // Submit + review: the upload and create a spec's proposal fixture POSTs, and what
+  // /proposals/[id] loads and posts. Cold, the detail GET compiled for 66 s and the actions POST
+  // queued behind the messages compile (43 s), so proposal-revise.spec timed out on both attempts.
+  "/api/uploads",
+  "/api/proposals",
+  "/api/proposals/duplicate-check",
+  "/api/proposals/00000000-0000-0000-0000-000000000000",
+  "/api/proposals/00000000-0000-0000-0000-000000000000/actions",
+  "/api/proposals/00000000-0000-0000-0000-000000000000/messages",
+  "/api/proposals/00000000-0000-0000-0000-000000000000/changes",
   // /profile
   "/api/users/00000000-0000-0000-0000-000000000000/achievements",
 ];

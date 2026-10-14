@@ -11,6 +11,7 @@
 import { randomBytes } from "node:crypto";
 import AdmZip from "adm-zip";
 import { test, expect, devSignIn, type Page } from "./fixtures";
+import { gotoLoaded, NAV_TIMEOUT } from "./helpers/ready";
 
 /** A tiny valid .skill (zip) bundle whose SKILL.md name matches `slug`. `salt` makes the
  *  content-set digest unique per build so duplicate detection never trips across runs. */
@@ -36,6 +37,9 @@ async function uploadBundle(page: Page, slug: string): Promise<{ artifactObjectK
 
 test.describe.serial("proposer mid-review revise + revision-pinned accept (§8)", () => {
   test("revise in place, semver locked, pinned accept bounces on a stale revision", async ({ page }) => {
+    // A sampled quick run may meet the proposal routes cold (global-setup.ts warms them, but a
+    // compile can still land here) — leave room for that plus the finally-block DELETE.
+    test.setTimeout(180_000);
     await devSignIn(page);
     const slug = `revise-e2e-${Date.now().toString(36)}`;
 
@@ -54,7 +58,9 @@ test.describe.serial("proposer mid-review revise + revision-pinned accept (§8)"
 
     try {
       // ── UI: the submitter sees the revise affordances while the proposal is `proposed`. ──
-      await page.goto(`/proposals/${id}`);
+      // Hydrated, with the detail and the review thread both in — a late thread compile otherwise
+      // holds up the Save round-trip behind it.
+      await gotoLoaded(page, `/proposals/${id}`, [new RegExp(`/api/proposals/${id}$`), `/api/proposals/${id}/messages`]);
       await expect(page.getByRole("heading", { name: "Update proposal" })).toBeVisible({ timeout: 20_000 });
       await expect(page.getByText("the proposed version doesn’t change")).toBeVisible();
       // Open the edit form: the semver input is read-only (locked mid-review).
@@ -64,7 +70,7 @@ test.describe.serial("proposer mid-review revise + revision-pinned accept (§8)"
       // Save is a no-op guard round-trip: nothing changed yet → the server answers 422.
       // Generous timeout: the FIRST hit on the actions route pays the dev-server compile.
       await page.getByRole("button", { name: "Save changes" }).click();
-      await expect(page.getByText(/nothing changed — edit at least one field/i)).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByText(/nothing changed — edit at least one field/i)).toBeVisible({ timeout: NAV_TIMEOUT });
 
       // ── API: a real revise — new title + replacement bundle. No state change, revision 2. ──
       const detail1 = await (await page.request.get(`/api/proposals/${id}`)).json();
