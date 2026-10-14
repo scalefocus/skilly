@@ -127,8 +127,10 @@ test.describe("Feedback survey (§36)", () => {
     const header = section.getByRole("button", { name: /Survey results/ });
     await expect(header).toBeVisible({ timeout: 20_000 });
     if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
-    await expect(section.getByTestId("survey-funnel")).toBeVisible();
-    await expect(section.getByRole("switch")).toBeVisible();
+    await expect(section.getByTestId("survey-funnel")).toBeVisible({ timeout: 20_000 });
+    // Two switches in the header since §36.17: the survey's and the bug-report one.
+    await expect(section.getByRole("switch", { name: "Ask users" })).toBeVisible();
+    await expect(section.getByRole("switch", { name: "Bug reports" })).toBeVisible();
     await expect(section.getByTestId("survey-comments")).toContainText(`${MARK} seeded`, { timeout: 15_000 });
     await expect(section.getByTestId("survey-questions")).toBeVisible();
   });
@@ -386,8 +388,9 @@ test.describe("Feedback survey (§36)", () => {
     // The cooldown runs: a new Bug card can't switch away, and says when it can.
     await page.getByTestId("report-bug").click();
     await expect(card.getByTestId("survey-pick-hint")).toContainText("You can share other feedback again on");
-    await expect(card.locator('option[value=""]')).toBeDisabled();
-    await expect(card.locator('option[value="bug"]')).toBeEnabled();
+    // toBeDisabled() doesn't treat a disabled <option> as disabled: read the DOM property instead.
+    await expect(card.locator('option[value=""]')).toHaveJSProperty("disabled", true);
+    await expect(card.locator('option[value="bug"]')).toHaveJSProperty("disabled", false);
   });
 
   test("Give feedback, then Bug: Bug mode, and a submit ends the on-demand offer", async ({ page }) => {
