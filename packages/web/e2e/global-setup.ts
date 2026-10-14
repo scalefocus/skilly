@@ -90,7 +90,7 @@ const PAGES = [
 // signed-in page) and what the most-visited pages (/admin, /catalog, a skill page, /propose,
 // /profile) fetch as they load. Cold, these compiled one after another on the first spec to open
 // such a page: on the CI agent 10–37 s each, and /admin alone fires ~15, so its cards were still
-// loading two minutes in and the specs' 45 s response waits ran out. Warming ~55 keeps the pinned
+// loading two minutes in and the specs' 45 s response waits ran out. Warming ~60 keeps the pinned
 // graph far below the full sweep's (~159). Keep in sync when the shell or one of these pages
 // starts loading a new endpoint. POST-only routes answer GET with 405 and compile all the same.
 const CORE_API = [
@@ -128,6 +128,14 @@ const CORE_API = [
   "/api/admin/jobs/content-risk",
   "/api/admin/jobs/quality",
   "/api/admin/jobs/related-rebuild",
+  // /admin/rum — its Currently online card, the routes table, the errors list, and the per-route
+  // users expander. Cold, summary alone compiled for 15 s and the expander's route queued behind
+  // the errors compile, so rum.spec's 10–15 s assertions ran out on both attempts.
+  "/api/admin/rum/summary",
+  "/api/admin/rum/errors",
+  "/api/admin/rum/routes/%2Fcatalog/users",
+  "/api/admin/users/online",
+  "/api/admin/users/active-series",
   // /catalog + the header search
   "/api/skills",
   "/api/skills/facets",
@@ -142,6 +150,11 @@ const CORE_API = [
   "/api/skills/global/pdf-tools/content-risk",
   "/api/skills/global/pdf-tools/ai-prereview",
   "/api/skills/global/pdf-tools/discussion",
+  // The read mark fires on every load with the discussion expanded; the moderator delete is
+  // DELETE-only (GET 405s and compiles). Cold, each took ~18 s mid-spec in skill-discussion.spec,
+  // and the dev server answered the next spec's page load with a 500 while it rewrote manifests.
+  "/api/skills/global/pdf-tools/discussion/read",
+  "/api/skills/global/pdf-tools/discussion/00000000-0000-0000-0000-000000000000",
   "/api/skills/global/pdf-tools/related",
   "/api/skills/global/pdf-tools/usage-series",
   // /propose
