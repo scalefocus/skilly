@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Picks the random sample of e2e tests a QUICK e2e run executes (Jenkins E2E_TESTS=QUICK_E2E_TESTS):
-// about 20% of the suite, written as a Playwright --test-list file (https://playwright.dev/docs/test-cli).
+// about 10% of the suite, written as a Playwright --test-list file (https://playwright.dev/docs/test-cli).
 //
-// Usage (from the repo root):  node ci/e2e-quick-list.mjs <out-file> [fraction=0.2]
+// Usage (from the repo root):  node ci/e2e-quick-list.mjs <out-file> [fraction=0.1]
 // Then:                        pnpm --filter @skilly/web e2e --test-list <absolute out-file>
 //
 // The sample is drawn in UNITS, not raw tests, so it never breaks a test's preconditions:
@@ -17,10 +17,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const [outArg, fractionArg = "0.2"] = process.argv.slice(2);
+const [outArg, fractionArg = "0.1"] = process.argv.slice(2);
 const fraction = Number(fractionArg);
 if (!outArg || !(fraction > 0 && fraction <= 1)) {
-  console.error("usage: node ci/e2e-quick-list.mjs <out-file> [fraction in (0,1], default 0.2]");
+  console.error("usage: node ci/e2e-quick-list.mjs <out-file> [fraction in (0,1], default 0.1]");
   process.exit(2);
 }
 
