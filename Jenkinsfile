@@ -46,7 +46,7 @@ pipeline {
 
   parameters {
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: true, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
-    choice(name: 'E2E_TESTS', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole; only the pages and the core API routes are pre-warmed, the rest compile on first use). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards.')
+    choice(name: 'E2E_TESTS', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards. Either way only the pages and the core API routes are pre-warmed; the rest compile on first use.')
     string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one shard): split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
@@ -240,9 +240,9 @@ pipeline {
                 error "E2E_SHARDS must be a whole number from 1 to 9 (got '${params.E2E_SHARDS}')"
               }
               // Cap the shard count at what this agent's RAM holds and size each dev server's heap
-              // (ci/e2e-shard-plan.sh): every shard warms and pins every route, so two shards on a
-              // 16 GB agent got the dev server OOM-killed mid-warm-up and the whole shard failed
-              // ECONNREFUSED. The plan's reasoning is in the log; stdout is "<shards> <heap MB>".
+              // (ci/e2e-shard-plan.sh): every shard pins every route it warms or compiles, so two
+              // shards on a 16 GB agent got the dev server OOM-killed mid-warm-up and the whole shard
+              // failed ECONNREFUSED. The plan's reasoning is in the log; stdout is "<shards> <heap MB>".
               def plan = sh(script: "sh ci/e2e-shard-plan.sh ${shards}", returnStdout: true).trim().split(' ')
               int total = plan[0] as int
               String heapMb = plan[1]

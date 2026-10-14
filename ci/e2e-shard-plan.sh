@@ -2,8 +2,9 @@
 # Fit the requested e2e shard count to this agent's RAM, and size each shard's dev-server heap.
 #
 # Every shard runs a full stack (Postgres + MinIO + Chromium + `next dev`), and every shard's dev
-# server warms and pins EVERY route (global-setup.ts + SKILLY_DEV_KEEP_ROUTES), so its memory does
-# not shrink with its slice of the suite: one warmed dev server was measured past ~6.4 GB of heap.
+# server warms the pages + core API routes and then pins every route its slice compiles
+# (global-setup.ts + SKILLY_DEV_KEEP_ROUTES), so its memory does not shrink in step with its slice
+# of the suite: one fully warmed dev server was measured past ~6.4 GB of heap.
 # Splitting a fixed RAM budget across more shards than fit only lowers each ceiling until the
 # kernel's OOM killer takes a dev server mid-run, and every later test then fails ECONNREFUSED.
 # So: run as many shards as fit, never more than requested, and give each the heap that is left —
