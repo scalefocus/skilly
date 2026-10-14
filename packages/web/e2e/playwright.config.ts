@@ -42,13 +42,27 @@ const port = new URL(baseURL).port || "3000";
 // also gets its own Next build folder (next.config.mjs reads SKILLY_NEXT_DIST_DIR), test-results
 // folder and JUnit file, so parallel shards on one agent never write to the same place. Unset =
 // the whole suite, exactly as before.
-const shardIndex = Number(process.env.E2E_SHARD ?? 0);
-const shardTotal = Number(process.env.E2E_SHARD_TOTAL ?? 0);
+//
+// Passes (E2E_PASS of E2E_PASS_TOTAL, ci/e2e-shard.sh): a stack's slice run as several Playwright
+// invocations one after another, each starting a fresh dev server, because one server's pinned
+// route graph grows until the kernel OOM-kills it. Pass p of P on stack shard s of S is Playwright
+// shard (s-1)*P+p of S*P, so a stack's passes together cover exactly its contiguous slice. Passes
+// share the stack's build folder (its webpack cache carries over), not its result folders.
+function sliceOf(index: string | undefined, total: string | undefined) {
+  const i = Number(index ?? 0);
+  const n = Number(total ?? 0);
+  return Number.isInteger(i) && Number.isInteger(n) && n > 1 && i >= 1 && i <= n ? { current: i, total: n } : null;
+}
+const stackShard = sliceOf(process.env.E2E_SHARD, process.env.E2E_SHARD_TOTAL);
+const pass = sliceOf(process.env.E2E_PASS, process.env.E2E_PASS_TOTAL);
 const shard =
-  Number.isInteger(shardIndex) && Number.isInteger(shardTotal) && shardTotal > 1 && shardIndex >= 1 && shardIndex <= shardTotal
-    ? { current: shardIndex, total: shardTotal }
+  stackShard || pass
+    ? {
+        current: ((stackShard?.current ?? 1) - 1) * (pass?.total ?? 1) + (pass?.current ?? 1),
+        total: (stackShard?.total ?? 1) * (pass?.total ?? 1),
+      }
     : null;
-const shardDir = shard ? `shard-${shard.current}` : "";
+const shardDir = [stackShard && `shard-${stackShard.current}`, pass && `pass-${pass.current}`].filter(Boolean).join("/");
 
 export default defineConfig({
   testDir: ".",
@@ -94,7 +108,7 @@ export default defineConfig({
       SKILLY_DEV_KEEP_ROUTES: "1",
       LEADERBOARD_CACHE_TTL_MS: "0",
       NODE_OPTIONS: devServerNodeOptions,
-      ...(shard ? { SKILLY_NEXT_DIST_DIR: `.next-e2e-${shard.current}` } : {}),
+      ...(stackShard ? { SKILLY_NEXT_DIST_DIR: `.next-e2e-${stackShard.current}` } : {}),
     },
     url: baseURL,
     timeout: 120_000,
