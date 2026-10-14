@@ -1425,6 +1425,7 @@ current or future type can ever leak JSON to a user.
 ### Deployment — docker compose (v1)
 Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO**, **ClamAV**, **DB migrations** (run on startup) — plus, in `deploy/docker-compose.yml`, a one-shot **`git-perms`** init job (chowns the git volume) and a dev-only **`proxy`** (Caddy sample), for **eight** compose services total. TLS terminated at the **org reverse proxy** (the bundled `proxy` is for dev). **Helm/K8s** are now **shipped** (chart at `deploy/helm/skilly`, §16 Tier 4), not deferred.
 - **§29 routing (new, and it splits across both processes):** `/mcp`, `/oauth/token`, `/oauth/revoke` and both `/.well-known/oauth-*` paths route to the **worker** (beside `/scim` and `*.git`); `/oauth/authorize` and `/oauth/register` route to **web** (the authorize leg needs the Auth.js/Entra session, which only web has). The dev Caddy sample and the Helm Ingress rules (§16 #19) both gain this split. No new service and no new port — MCP rides the worker's existing Express app and is **not** gated on its leader lock.
+- **Ops paths are internal-only at the proxy:** the dev Caddy sample answers **`404`** for `/healthz`, `/readyz` and `/metrics` (exact paths, matched before every other route) and never forwards them to web or worker. Probes and scrapes reach the containers directly — compose/Kubernetes probes and Prometheus never go through the proxy — so nothing legitimate breaks, and the public edge loses an unauthenticated path that runs a DB query (`/readyz`). Out-of-band readiness checks use the container network instead: the Jenkins deploy smoke check (and `deployment_manual.md` §8) runs `docker compose exec -T web wget -qO- http://localhost:3000/readyz` (busybox `wget` ships in the `node:20-alpine` web image), and the worker's `/readyz` likewise through `docker compose exec -T worker node -e "fetch('http://localhost:4000/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"` (the `node:20-slim` worker image has no `curl`/`wget`). The Helm chart is **not** changed: its Ingress is controller-agnostic (`className: ""`), so operators block these paths at their own ingress/edge (§22 *Rate limiting (worker HTTP surfaces)*).
 
 ### Assumption to revisit
 - **Outbound network assumed available** (Pointer proxying + ClamAV signature updates). **Air-gapped operation would change both** — revisit if required.
@@ -1648,7 +1649,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
     **App/browser icons** (apple-touch, PWA manifest) remain **out of scope** — the existing
     `icon.svg` favicon is unchanged.
 - **Backup/DR:** documented Postgres + object-store backup/restore; skilly stateless beyond those.
-- **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6. The **worker's** HTTP surfaces are additionally rate-limited **per surface** via `express-rate-limit`: the git smart server (§9) gets a per-IP flood guard plus a per-installation bucket, and the SCIM provisioning target (§5) gets its own per-IP limiter. The operational `/healthz` `/readyz` `/metrics` endpoints are **exempt** (see §22 *Rate limiting (worker HTTP surfaces)*).
+- **Abuse/rate-limiting:** sensible defaults on proposal submission, token minting, search; size caps per §6. The **worker's** HTTP surfaces are additionally rate-limited **per surface** via `express-rate-limit`: the git smart server (§9) gets a per-IP flood guard plus a per-installation bucket, and the SCIM provisioning target (§5) gets its own per-IP limiter. The operational `/healthz` `/readyz` `/metrics` endpoints are **exempt** in-app and are instead kept off the public edge — the bundled proxy answers `404` for them (§13; see §22 *Rate limiting (worker HTTP surfaces)*).
 
 ---
 
@@ -2216,8 +2217,14 @@ responsibilities. Hardening that pins or clarifies invariants here:
     every limiter and are never throttled. Probes and scrapes must not fail because of rate limiting,
     and a throttled `/readyz` would take a healthy worker out of rotation. `/metrics` stays bearer-gated
     (`METRICS_TOKEN`, §14), `/healthz` touches nothing, and `/readyz` runs only a bounded
-    `select 1`. This exemption is a **deliberate** decision: if CodeQL flags `/readyz` again, the
-    alert is dismissed as intentional with a pointer to this section.
+    `select 1`. The compensating control sits at the **edge, not in the app**: the bundled Caddy
+    proxy answers `404` for `/healthz`, `/readyz` and `/metrics` and never forwards them (§13), so
+    the only callers that can reach the DB-touching `/readyz` (on web or worker) are on the
+    container network. Operators fronting skilly with their own ingress must do the same (blocking
+    is preferred over rate-limiting, which would need a non-stock proxy module and could still
+    throttle a legitimate check). This exemption is a **deliberate** decision: CodeQL analyses the
+    Express handler and cannot see the proxy, so if it flags `/readyz` (alert 14 and any recurrence),
+    the alert is dismissed as *won't fix* with a pointer to this section and the proxy block.
   - **Everything else** (any other worker path, i.e. the 404 fall-through) keeps a catch-all per-IP
     limiter of **100 requests / 15 min** (the previous default). It is not configurable.
   - The §29 **MCP + OAuth** mounts keep their own per-IP flood guard and per-user buckets (§29

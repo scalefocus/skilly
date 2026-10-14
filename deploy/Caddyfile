@@ -13,6 +13,14 @@
 		Referrer-Policy no-referrer
 	}
 
+	# Ops endpoints are internal-only (SKILLY_SPEC.md §13, §22): never forwarded to web or worker.
+	# Probes and Prometheus reach the containers directly; out-of-band checks use
+	# `docker compose exec` (deployment_manual.md §8). Keeps the DB-touching /readyz off the edge.
+	@ops path /healthz /readyz /metrics
+	handle @ops {
+		respond 404
+	}
+
 	# SCIM provisioning endpoint -> worker (keep /scim prefix; worker mounts at /scim/v2)
 	handle /scim/* {
 		reverse_proxy worker:4000 {

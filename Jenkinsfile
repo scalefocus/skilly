@@ -378,7 +378,8 @@ MINIO_SCRIPT
                 rm -f /tmp/_skilly_minio.sh
 
                 # ── 5. Smoke-check readiness ──────────────────────────────────────────────────
-                $SSH "${DEPLOY_HOST}" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && break || sleep 3; done'
+                #       Inside the web container: the proxy answers 404 for /readyz (SKILLY_SPEC.md §13).
+                $SSH "${DEPLOY_HOST}" "cd ${DEPLOY_PATH}/deploy && for i in \\$(seq 1 30); do docker compose exec -T web wget -qO- http://localhost:3000/readyz && break || sleep 3; done"
               '''
             } // withEnv
           } // withCredentials
