@@ -170,9 +170,9 @@ export const RUM_API_ROUTES: readonly string[] = [
 ];
 
 /** API paths the collector must never measure — the monitor must not measure itself (§32.4) — and
- *  the feedback-survey submit, whose user-attributed, timestamped sample would de-anonymize the
- *  response (§36.11). */
-export const RUM_API_EXCLUDED: readonly string[] = ["/api/rum", "/api/presence/page", "/api/csp-report", "/api/me/survey/responses"];
+ *  the feedback-survey and bug-report submits, whose user-attributed, timestamped samples would
+ *  de-anonymize the response (§36.11, §36.17). */
+export const RUM_API_EXCLUDED: readonly string[] = ["/api/rum", "/api/presence/page", "/api/csp-report", "/api/me/survey/responses", "/api/me/survey/bug"];
 
 const PAGE_TEMPLATES = new Set(RUM_PAGE_ROUTES.map((r) => r.template));
 const API_TEMPLATES = new Set(RUM_API_ROUTES);

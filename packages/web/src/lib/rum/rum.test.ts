@@ -38,6 +38,8 @@ test("templateForApiUrl: same-origin /api only, excludes the monitor's own beaco
   assert.equal(templateForApiUrl(`${o}/api/presence/page`, o), null);
   // §36.11 the feedback-survey submit is never sampled (it would tie a person to a response).
   assert.equal(templateForApiUrl(`${o}/api/me/survey/responses`, o), null);
+  // §36.17 nor is the bug-report submit.
+  assert.equal(templateForApiUrl(`${o}/api/me/survey/bug`, o), null);
   assert.equal(templateForApiUrl(`${o}/api/me/survey/close`, o), "/api/me/survey/close");
   assert.equal(templateForApiUrl(`${o}/api/csp-report`, o), null);
   assert.equal(templateForApiUrl(`${o}/_next/static/x.js`, o), null);

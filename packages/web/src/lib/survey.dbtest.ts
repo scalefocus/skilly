@@ -11,6 +11,9 @@
 // leaving responses untouched. On-demand feedback (§36.16): start returning an open offer unchanged,
 // stamping and counting once under concurrency, the cooldown and switch-off 409s, no random roll
 // while it is open, surviving the opt-out, and a `self` submit counted only in its own funnel.
+// Bug reports (§36.17): the stored shape (no answers, path, server version), `submitted_bug` only,
+// no cooldown stamps, `fromOffer` ending a `self` offer (409 for none or a random one), both switches,
+// the Source filter, the bug-aware withholding, the audited switch and the migration's CHECKs.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { Pool } from "pg";
@@ -25,9 +28,12 @@ import {
   recordFeatureUse,
   setUserSurveysEnabled,
   startSelfSurvey,
+  submitBugReport,
   submitSurvey,
 } from "./survey";
 import { eraseUser } from "./eraseUser";
+import { getPlatformSettings, setBugReportsEnabled } from "./settings";
+import { APP_VERSION } from "@skilly/shared/version";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
 const P = "srv";
@@ -62,8 +68,8 @@ after(async () => {
   await pool.query(`delete from survey_daily`);
   for (const r of dailySnapshot) {
     await pool.query(
-      `insert into survey_daily (day, shown, closed, submitted, submitted_from_menu, shown_self, submitted_self) values ($1, $2, $3, $4, $5, $6, $7)`,
-      [r.day, r.shown, r.closed, r.submitted, r.submitted_from_menu, r.shown_self, r.submitted_self],
+      `insert into survey_daily (day, shown, closed, submitted, submitted_from_menu, shown_self, submitted_self, submitted_bug) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [r.day, r.shown, r.closed, r.submitted, r.submitted_from_menu, r.shown_self, r.submitted_self, r.submitted_bug ?? 0],
     );
   }
 });
@@ -77,20 +83,23 @@ async function userRow(id: string) {
   )).rows[0]!;
 }
 
-async function withSurveySwitch<T>(on: boolean, fn: () => Promise<T>): Promise<T> {
-  const prev = (await pool.query<{ value: unknown }>(`select value from platform_settings where key = 'survey_enabled'`)).rows[0]?.value;
+async function withSurveySwitch<T>(on: boolean, fn: () => Promise<T>, key = "survey_enabled"): Promise<T> {
+  const prev = (await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [key])).rows[0]?.value;
   await pool.query(
-    `insert into platform_settings (key, value) values ('survey_enabled', $1::jsonb)
+    `insert into platform_settings (key, value) values ($1, $2::jsonb)
      on conflict (key) do update set value = excluded.value`,
-    [JSON.stringify(on)],
+    [key, JSON.stringify(on)],
   );
   try {
     return await fn();
   } finally {
-    if (prev === undefined) await pool.query(`delete from platform_settings where key = 'survey_enabled'`);
-    else await pool.query(`update platform_settings set value = $1::jsonb where key = 'survey_enabled'`, [JSON.stringify(prev)]);
+    if (prev === undefined) await pool.query(`delete from platform_settings where key = $1`, [key]);
+    else await pool.query(`update platform_settings set value = $1::jsonb where key = $2`, [JSON.stringify(prev), key]);
   }
 }
+
+/** §36.17 run with the bug-report switch set (the survey switch is set separately). */
+const withBugSwitch = <T>(on: boolean, fn: () => Promise<T>) => withSurveySwitch(on, fn, "bug_reports_enabled");
 
 test("first use: recorded once; ineligible and canShow=false uses are consumed without a roll", { skip: !enabled }, async () => {
   await withSurveySwitch(true, async () => {
@@ -179,7 +188,9 @@ test("close and submit: funnel once, no user reference, the offer cleared, 409 /
     const row = (await pool.query(`select * from survey_responses where free_text = $1`, [marker])).rows[0] as Record<string, unknown>;
     assert.ok(row);
     // Anonymous by construction: no column references the user, and the stamp is a date.
-    assert.deepEqual(Object.keys(row).sort(), ["answered_on", "catalog_version", "feature", "free_text", "id", "segment", "trigger", "via"]);
+    // (page_path / app_version belong to bug reports only, §36.17, and stay null here.)
+    assert.deepEqual(Object.keys(row).sort(), ["answered_on", "app_version", "catalog_version", "feature", "free_text", "id", "page_path", "segment", "trigger", "via"]);
+    assert.deepEqual([row.page_path, row.app_version], [null, null]);
     assert.equal(row.segment, "consumer");
     assert.equal(row.feature, "search");
     assert.equal(row.via, "menu");
@@ -469,6 +480,199 @@ test("migration 0080: the trigger CHECK accepts 'self' and still rejects junk", 
     await client.query("savepoint s");
     await assert.rejects(ins("bogus"));
     await client.query("rollback to savepoint s");
+  } finally {
+    await client.query("rollback").catch(() => {});
+    client.release();
+  }
+});
+
+// ---- bug reports (§36.17) ------------------------------------------------------------------------
+
+test("bug report: stored as trigger 'bug' with text, path and server version; no answers; only submitted_bug", { skip: !enabled }, async () => {
+  await withSurveySwitch(true, () => withBugSwitch(true, async () => {
+    const u = await mkUser("bug");
+    // A random offer is open: a bug report from an offer-less card leaves it alone.
+    const random = (await recordFeatureUse(u, "search", true, WIN)).survey!;
+    const shownBefore = await userRow(u);
+    const counters = async () => ({
+      shown: await daily("shown"), submitted: await daily("submitted"), fromMenu: await daily("submitted_from_menu"),
+      shownSelf: await daily("shown_self"), self: await daily("submitted_self"), bug: await daily("submitted_bug"),
+    });
+    const before = await counters();
+    const marker = `srv-bug-${Date.now()}`;
+    assert.deepEqual(
+      await submitBugReport({ userId: u, isPlatformAdmin: true, namespaceRoles: new Map() }, { description: `  ${marker}  `, pagePath: "/skills/ns/x?token=secret#frag", fromOffer: false }),
+      { ok: true },
+    );
+    const row = (await pool.query(`select * from survey_responses where free_text = $1`, [marker])).rows[0] as Record<string, unknown>;
+    assert.ok(row, "the description is stored trimmed");
+    assert.equal(row.trigger, "bug");
+    assert.equal(row.feature, null);
+    assert.equal(row.segment, "admin");
+    assert.equal(row.via, "popup");
+    assert.equal(row.page_path, "/skills/ns/x"); // never the query string or the fragment
+    assert.equal(row.app_version, APP_VERSION);
+    assert.ok(!("user_id" in row), "no user reference");
+    assert.equal((await pool.query(`select 1 from survey_answers where response_id = $1`, [row.id])).rowCount, 0);
+    assert.deepEqual(await counters(), { ...before, bug: before.bug + 1 });
+    // Neither cooldown stamp moves, and the random offer is still open.
+    const after = await userRow(u);
+    assert.equal(after.survey_last_shown_at?.getTime(), shownBefore.survey_last_shown_at?.getTime());
+    assert.equal(after.survey_self_shown_at, null);
+    assert.equal((await getOpenSurvey(u))?.shownAt, random.shownAt);
+
+    // An invalid path is dropped, not a reason to refuse; an empty description is a 422.
+    const odd = `srv-bug-odd-${Date.now()}`;
+    assert.deepEqual(await submitBugReport(respondent(u), { description: odd, pagePath: "https://evil.example/" }), { ok: true });
+    assert.equal((await pool.query(`select page_path from survey_responses where free_text = $1`, [odd])).rows[0]!.page_path, null);
+    assert.deepEqual(await submitBugReport(respondent(u), { description: "   " }), { ok: false, status: 422, error: "describe the problem you found" });
+    await pool.query(`delete from survey_responses where free_text = any($1)`, [[marker, odd]]);
+  }));
+});
+
+test("bug report fromOffer: ends an open self offer (via from its closed flag); 409 for none or a random one", { skip: !enabled }, async () => {
+  await withSurveySwitch(true, () => withBugSwitch(true, async () => {
+    const u = await mkUser("bug-offer");
+    assert.equal((await startSelfSurvey(u)).ok, true);
+    await closeSurvey(u); // reopened later → via 'menu'
+    const selfBefore = await daily("submitted_self");
+    const marker = `srv-bug-offer-${Date.now()}`;
+    assert.deepEqual(await submitBugReport(respondent(u), { description: marker, pagePath: "/catalog", fromOffer: true }), { ok: true });
+    assert.equal((await pool.query(`select via from survey_responses where free_text = $1`, [marker])).rows[0]!.via, "menu");
+    const row = await userRow(u);
+    assert.equal(row.survey_offer, null, "the self offer ended");
+    assert.ok(row.survey_self_shown_at, "the cooldown stamp is kept");
+    assert.equal(await daily("submitted_self"), selfBefore, "a bug report never counts as a self-initiated survey");
+    // Nothing open any more: fromOffer is a 409, while an offer-less report still works.
+    assert.deepEqual(await submitBugReport(respondent(u), { description: "late", fromOffer: true }), { ok: false, status: 409, error: "no_open_survey" });
+
+    // A random offer can't back a bug report.
+    const v = await mkUser("bug-offer-random");
+    assert.ok((await recordFeatureUse(v, "search", true, WIN)).survey);
+    assert.deepEqual(await submitBugReport(respondent(v), { description: "x", fromOffer: true }), { ok: false, status: 409, error: "no_open_survey" });
+    assert.ok((await userRow(v)).survey_offer, "the random offer is untouched");
+    await pool.query(`delete from survey_responses where free_text = $1`, [marker]);
+  }));
+});
+
+test("bug report switches: either off is a 409 (the survey switch first); the bug switch is audited", { skip: !enabled }, async () => {
+  const u = await mkUser("bug-switch");
+  await withSurveySwitch(false, () => withBugSwitch(true, async () => {
+    assert.deepEqual(await submitBugReport(respondent(u), { description: "x" }), { ok: false, status: 409, error: "surveys_off" });
+  }));
+  await withSurveySwitch(true, () => withBugSwitch(false, async () => {
+    assert.deepEqual(await submitBugReport(respondent(u), { description: "x" }), { ok: false, status: 409, error: "bug_reports_off" });
+    assert.equal((await getPlatformSettings()).bugReportsEnabled, false);
+  }));
+  // The audited setter (a fixed actor: audit rows keep their FK, §36.17 / settings.updated).
+  await withBugSwitch(true, async () => {
+    const admin = await mkUser("bug-switch-admin");
+    await setBugReportsEnabled(false, admin);
+    assert.equal((await getPlatformSettings()).bugReportsEnabled, false);
+    const audit = await pool.query<{ after: Record<string, unknown> }>(
+      `select after from audit_log where action = 'settings.updated' and target_id = 'bug_reports_enabled' and actor_user_id = $1 order by created_at desc limit 1`,
+      [admin],
+    );
+    assert.deepEqual(audit.rows[0]?.after, { bugReportsEnabled: false });
+  });
+});
+
+test("admin view with bug reports: Source=bug, counts apart, never withheld, kept out of the stars (isolated dataset)", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  const db = client as unknown as Pool;
+  try {
+    await client.query("begin");
+    await client.query(`delete from survey_responses`);
+    await client.query(`delete from survey_daily`);
+    const today = `(now() at time zone 'utc')::date`;
+    // 2 survey responses (under 5 → withheld) and 2 bug reports.
+    for (let i = 0; i < 2; i++) {
+      const id = (await client.query<{ id: string }>(
+        `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text)
+         values (${today}, 1, 'feature', 'search', 'consumer', 'popup', 'survey text') returning id`,
+      )).rows[0]!.id;
+      await client.query(`insert into survey_answers values ($1, 'general.overall', 4)`, [id]);
+    }
+    for (const path of ["/catalog", null]) {
+      await client.query(
+        `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text, page_path, app_version)
+         values (${today}, 1, 'bug', null, 'maintainer', 'popup', 'it broke', $1, '9.9.9')`,
+        [path],
+      );
+    }
+    await client.query(`insert into survey_daily (day, shown, submitted, submitted_bug) values (${today}, 2, 2, 2)`);
+
+    const all = await getSurveySummary({ range: 30, segment: null, feature: null, source: null }, db);
+    assert.equal(all.responses, 2, "bug reports are not survey responses");
+    assert.equal(all.bugCount, 2);
+    assert.equal(all.funnel.submittedBug, 2);
+    assert.equal(all.funnel.submitted, 2);
+    assert.equal(typeof all.bugReportsEnabled, "boolean");
+    assert.equal(all.series.reduce((n, p) => n + (p.withheld ? 0 : p.n ?? 0), 0), 0, "a 2-response trend bucket is withheld, bugs not counted in");
+
+    // The feed: survey comments withheld (2 < 5), bug reports listed anyway with their context.
+    const feed = await getSurveyComments({ range: 30, segment: null, feature: null, source: null }, 0, 50, db);
+    assert.equal(feed.withheld, true);
+    assert.equal(feed.total, 2);
+    assert.ok(feed.comments.every((c) => c.trigger === "bug" && c.text === "it broke" && c.appVersion === "9.9.9"));
+    assert.deepEqual(feed.comments.map((c) => c.pagePath).sort(), ["/catalog", null].sort());
+
+    // Source=bug: only bug reports, never withheld, and no star figures.
+    const bugs = await getSurveyComments({ range: 30, segment: null, feature: null, source: "bug" }, 0, 50, db);
+    assert.equal(bugs.withheld, false);
+    assert.equal(bugs.total, 2);
+    const sBug = await getSurveySummary({ range: 30, segment: null, feature: null, source: "bug" }, db);
+    assert.deepEqual(sBug.questions, []);
+    // Prompted no longer sweeps in bug reports; a segment filter applies to them too.
+    const prompted = await getSurveyComments({ range: 30, segment: null, feature: null, source: "prompted" }, 0, 50, db);
+    assert.ok(prompted.comments.every((c) => c.trigger !== "bug"));
+    const consumers = await getSurveyComments({ range: 30, segment: "consumer", feature: null, source: "bug" }, 0, 50, db);
+    assert.equal(consumers.total, 0);
+  } finally {
+    await client.query("rollback").catch(() => {});
+    client.release();
+  }
+});
+
+test("bug report delete: audited with the trigger, never the text or the path", { skip: !enabled }, async () => {
+  const admin = await mkUser("bug-del-admin");
+  const id = (await pool.query<{ id: string }>(
+    `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text, page_path, app_version)
+     values (current_date, 1, 'bug', null, 'consumer', 'popup', 'secret-ish text', '/profile', '1.0.0') returning id`,
+  )).rows[0]!.id;
+  assert.equal(await deleteSurveyResponse(id, admin), true);
+  const before = (await pool.query<{ before: Record<string, unknown> }>(
+    `select before from audit_log where action = 'survey.response_deleted' and target_id = $1`,
+    [id],
+  )).rows[0]!.before;
+  assert.equal(before.trigger, "bug");
+  assert.ok(!JSON.stringify(before).includes("secret-ish"));
+  assert.ok(!JSON.stringify(before).includes("/profile"));
+});
+
+test("migration 0094: 'bug' accepted; a bug needs text and no feature; only a bug carries a path", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const ins = (trigger: string, text: string | null, feature: string | null, path: string | null) =>
+      client.query(
+        `insert into survey_responses (answered_on, catalog_version, trigger, feature, segment, via, free_text, page_path)
+         values (current_date, 1, $1, $2, 'consumer', 'popup', $3, $4)`,
+        [trigger, feature, text, path],
+      );
+    await ins("bug", "it broke", null, "/catalog");
+    for (const bad of [
+      () => ins("bug", null, null, null), // no description
+      () => ins("bug", "x", "search", null), // a feature
+      () => ins("feature", "x", "search", "/catalog"), // a path on a survey response
+      () => ins("bug", "x", null, `/${"a".repeat(600)}`), // over 512
+    ]) {
+      await client.query("savepoint s");
+      await assert.rejects(bad());
+      await client.query("rollback to savepoint s");
+    }
+    const col = await client.query(`select 1 from information_schema.columns where table_name = 'survey_daily' and column_name = 'submitted_bug'`);
+    assert.equal(col.rowCount, 1);
   } finally {
     await client.query("rollback").catch(() => {});
     client.release();

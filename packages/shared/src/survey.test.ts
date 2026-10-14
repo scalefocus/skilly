@@ -10,6 +10,12 @@ import {
   SURVEY_ROTATING_QUESTIONS,
   SURVEY_FREE_TEXT_MAX,
   SURVEY_SELF_COOLDOWN_DAYS,
+  BUG_PAGE_PATH_MAX,
+  SURVEY_BUG_CATEGORY,
+  bugButtonAction,
+  bugButtonVisible,
+  bugCardBlock,
+  bugReportsEnabled,
   colophonFeedbackAction,
   composeSurveyOffer,
   isSurveyEligible,
@@ -19,15 +25,18 @@ import {
   isSurveySource,
   parseStoredOffer,
   pickFallbackFeature,
+  sanitizeBugPagePath,
   selfSurveyGate,
   selfSurveyNextAt,
   surveyFeatureQuestions,
   surveyOfferKeys,
   surveyOfferView,
+  surveyPickerOptions,
   surveyQuestionText,
   surveyRollWins,
   surveySegment,
   surveyWithheld,
+  validateBugReport,
   validateSurveySubmission,
   type StoredSurveyOffer,
   type SurveyUserState,
@@ -225,6 +234,7 @@ test("submission validation with a picked feature (§36.16)", () => {
 test("source filter values", () => {
   assert.ok(isSurveySource("prompted"));
   assert.ok(isSurveySource("self"));
+  assert.ok(isSurveySource("bug"));
   assert.ok(!isSurveySource("all"));
 });
 
@@ -239,4 +249,80 @@ test("withholding: fewer than 5 responses", () => {
   assert.equal(surveyWithheld(0), true);
   assert.equal(surveyWithheld(4), true);
   assert.equal(surveyWithheld(5), false);
+});
+
+// ---- bug reports (§36.17) ------------------------------------------------------------------------
+
+test("bug reports: the gate needs both platform switches; the button needs sign-in and onboarding (§36.17)", () => {
+  assert.equal(bugReportsEnabled(true, true), true);
+  assert.equal(bugReportsEnabled(false, true), false); // the survey switch is the master
+  assert.equal(bugReportsEnabled(true, false), false);
+  assert.equal(bugButtonVisible({ signedIn: true, onboarded: true, bugReports: true }), true);
+  assert.equal(bugButtonVisible({ signedIn: false, onboarded: true, bugReports: true }), false);
+  assert.equal(bugButtonVisible({ signedIn: true, onboarded: false, bugReports: true }), false);
+  assert.equal(bugButtonVisible({ signedIn: true, onboarded: true, bugReports: false }), false);
+});
+
+test("bug reports: the picker lists Bug right after 'skilly in general' only when bug reports are on (§36.17)", () => {
+  const on = surveyPickerOptions(true);
+  assert.deepEqual(on.slice(0, 2), [{ value: "", label: "skilly in general" }, { value: SURVEY_BUG_CATEGORY, label: "Bug" }]);
+  assert.equal(on.length, SURVEY_FEATURES.length + 2);
+  assert.equal(on[2]!.label, "Catalog search");
+  const off = surveyPickerOptions(false);
+  assert.equal(off.length, SURVEY_FEATURES.length + 1);
+  assert.ok(!off.some((o) => o.value === SURVEY_BUG_CATEGORY));
+  assert.ok(!isSurveyFeature(SURVEY_BUG_CATEGORY)); // Bug is never a feature key
+});
+
+test("bug reports: validation needs a trimmed description of at most 2000 code points (§36.17)", () => {
+  const ok = validateBugReport({ description: "  The install button does nothing  ", pagePath: "/skills/a/b", fromOffer: true });
+  assert.deepEqual(ok, { ok: true, description: "The install button does nothing", pagePath: "/skills/a/b", fromOffer: true });
+  assert.equal(validateBugReport({}).ok, false);
+  assert.equal(validateBugReport({ description: "   " }).ok, false);
+  assert.equal(validateBugReport({ description: 42 }).ok, false);
+  assert.equal(validateBugReport(null).ok, false);
+  assert.equal(validateBugReport({ description: "🪲".repeat(SURVEY_FREE_TEXT_MAX) }).ok, true); // code points, not UTF-16 units
+  assert.equal(validateBugReport({ description: "x".repeat(SURVEY_FREE_TEXT_MAX + 1) }).ok, false);
+  const plain = validateBugReport({ description: "broken", fromOffer: "yes" });
+  assert.ok(plain.ok && plain.fromOffer === false && plain.pagePath === null);
+  // An invalid path is dropped, not a reason to reject the report.
+  const bad = validateBugReport({ description: "broken", pagePath: "https://evil.example/x" });
+  assert.ok(bad.ok && bad.pagePath === null);
+});
+
+test("bug reports: the page path keeps the pathname only (§36.17, invariant #6)", () => {
+  assert.equal(sanitizeBugPagePath("/catalog"), "/catalog");
+  assert.equal(sanitizeBugPagePath("/catalog?q=secret&token=abc"), "/catalog");
+  assert.equal(sanitizeBugPagePath("/skills/ns/x#discussion"), "/skills/ns/x");
+  assert.equal(sanitizeBugPagePath("/"), "/");
+  assert.equal(sanitizeBugPagePath("catalog"), null);
+  assert.equal(sanitizeBugPagePath("//evil.example/x"), null);
+  assert.equal(sanitizeBugPagePath("/api/me"), null);
+  assert.equal(sanitizeBugPagePath("/api"), null);
+  assert.equal(sanitizeBugPagePath("/apiary"), "/apiary");
+  assert.equal(sanitizeBugPagePath(`/${"a".repeat(BUG_PAGE_PATH_MAX - 1)}`)?.length, BUG_PAGE_PATH_MAX);
+  assert.equal(sanitizeBugPagePath(`/${"a".repeat(BUG_PAGE_PATH_MAX)}`), null);
+  assert.equal(sanitizeBugPagePath(`/a${String.fromCharCode(10)}b`), null);
+  assert.equal(sanitizeBugPagePath(undefined), null);
+  assert.equal(sanitizeBugPagePath(7), null);
+});
+
+test("bug reports: what the bug button does for each open offer and card (§36.17 cases 1–4)", () => {
+  assert.equal(bugButtonAction({ offer: "none", card: "none" }), "open"); // case 1
+  assert.equal(bugButtonAction({ offer: "self", card: "none" }), "reopen"); // case 2, card closed
+  assert.equal(bugButtonAction({ offer: "self", card: "self" }), "switch"); // case 2, card open
+  assert.equal(bugButtonAction({ offer: "random", card: "none" }), "open"); // case 3, card closed
+  assert.equal(bugButtonAction({ offer: "random", card: "random" }), "replace"); // case 3, card open
+  assert.equal(bugButtonAction({ offer: "none", card: "bug" }), "focus"); // case 4
+  assert.equal(bugButtonAction({ offer: "random", card: "bug" }), "focus");
+});
+
+test("bug reports: an offer-less Bug card can't switch away during the cooldown or while a random offer waits (§36.17)", () => {
+  const later = new Date(NOW.getTime() + 3 * DAY).toISOString();
+  const past = new Date(NOW.getTime() - DAY).toISOString();
+  assert.equal(bugCardBlock({ randomOfferOpen: false, selfSurvey: { nextAt: null } }, NOW), null);
+  assert.equal(bugCardBlock({ randomOfferOpen: false, selfSurvey: { nextAt: past } }, NOW), null);
+  assert.deepEqual(bugCardBlock({ randomOfferOpen: false, selfSurvey: { nextAt: later } }, NOW), { reason: "cooldown", nextAt: later });
+  assert.deepEqual(bugCardBlock({ randomOfferOpen: true, selfSurvey: { nextAt: later } }, NOW), { reason: "random" });
+  assert.deepEqual(bugCardBlock({ randomOfferOpen: true, selfSurvey: { nextAt: null } }, NOW), { reason: "random" });
 });

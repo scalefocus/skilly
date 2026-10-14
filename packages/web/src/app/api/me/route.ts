@@ -26,6 +26,7 @@ import { invalidateLevels } from "../../../lib/levels";
 import { setUserTimeZone } from "../../../lib/achievements";
 import { validateTimeZone } from "@skilly/shared/achievements";
 import { getOpenSurvey, selfSurveyStatus, setUserSurveysEnabled } from "../../../lib/survey";
+import { bugReportsEnabled } from "@skilly/shared/survey";
 import { setUserEmailDigest } from "../../../lib/emailDigest";
 
 export const dynamic = "force-dynamic";
@@ -146,6 +147,8 @@ export async function GET() {
     openSurvey,
     // §36.16 on-demand feedback: null while the platform switch is off, else `{ nextAt }` (null = now).
     selfSurvey: access.userId ? selfSurveyStatus(prefs?.survey_self_shown_at ?? null, settings.surveyEnabled) : null,
+    // §36.17 bug reports: the bug button and the picker's Bug option (both platform switches on).
+    bugReports: access.userId ? bugReportsEnabled(settings.surveyEnabled, settings.bugReportsEnabled) : false,
     // §31.3 the browser-reported IANA zone (null until the web UI reports one). The app shell
     // compares it with the browser's own zone and PATCHes when they differ.
     timeZone: prefs?.time_zone ?? null,

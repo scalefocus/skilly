@@ -18,8 +18,8 @@ import { resolveStaticPageLabel } from "../lib/pageLabel";
 import { CHANGELOG } from "../app/whats-new/changelog";
 import { achievementDef } from "@skilly/shared/achievements";
 import { collectionPath } from "@skilly/shared/collections";
-import { colophonFeedbackAction, type SurveyOfferView, type SurveyVia } from "@skilly/shared/survey";
-import { SurveyCard } from "./SurveyCard";
+import { bugButtonAction, bugButtonVisible, bugCardBlock, colophonFeedbackAction, type BugCardBlock, type SurveyOfferView, type SurveyVia } from "@skilly/shared/survey";
+import { SurveyCard, type NeedOfferResult } from "./SurveyCard";
 import { SURVEY_OFFER_EVENT, SURVEY_PREF_EVENT, SURVEY_REOPEN_EVENT, SURVEY_START_EVENT, SURVEY_STATE_EVENT, setSurveyCanShow, setSurveyReady } from "../lib/surveyClient";
 
 const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "review" | "requests" }[] = [
@@ -77,7 +77,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   // card on screen (popup = just offered, menu = reopened), and the opt-out confirmation toast.
   // `surveyChecked` makes the §36.1 visit-fallback roll once per full page load.
   const [openSurvey, setOpenSurvey] = useState<SurveyOfferView | null>(null);
-  const [surveyCard, setSurveyCard] = useState<{ offer: SurveyOfferView; via: SurveyVia } | null>(null);
+  // The card on screen. `offer` is null for a Bug card the bug button opened with no offer behind it
+  // (§36.17); `key` stays put when such a card later gains an on-demand offer, so it isn't remounted.
+  const [surveyCard, setSurveyCard] = useState<SurveyCardState | null>(null);
+  const bugCardSeq = useRef(0);
+  // §36.17 bug reports on (both platform switches): the sidebar's bug button and the picker's Bug.
+  const [bugReports, setBugReports] = useState(false);
   const [surveyToast, setSurveyToast] = useState<string | null>(null);
   // §36.16 on-demand feedback: null while the platform switch is off; `nextAt` null = available now.
   const [selfSurvey, setSelfSurvey] = useState<{ nextAt: string | null } | null>(null);
@@ -276,7 +281,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null; timeZone?: string | null; openSurvey?: SurveyOfferView | null; selfSurvey?: { nextAt: string | null } | null }>("/api/me")
+    cachedGet<{ userId?: string | null; isPlatformAdmin?: boolean; maintainsSkills?: boolean; namespaceRoles?: { role: string }[]; onboardedAt?: string | null; whatsNewSeenVersion?: string | null; timeZone?: string | null; openSurvey?: SurveyOfferView | null; selfSurvey?: { nextAt: string | null } | null; bugReports?: boolean }>("/api/me")
       .then((j) => {
         setMyUserId(j.userId ?? null);
         setIsPlatformAdmin(Boolean(j.isPlatformAdmin));
@@ -290,6 +295,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         // a user before we know their status.
         setOnboarded(j.onboardedAt != null);
         setSelfSurvey(j.selfSurvey ?? null);
+        setBugReports(j.bugReports === true);
         // Timezone capture (§31.3): report the browser's IANA zone when it differs from the stored
         // one. Once per shell mount; best-effort; the server validates and ignores junk.
         if (!tzReported.current) {
@@ -327,7 +333,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             fetch("/api/me/survey/check", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ canShow: true }) })
               .then((r) => (r.ok ? (r.json() as Promise<{ survey: SurveyOfferView | null }>) : null))
               .then((k) => {
-                if (k?.survey) { setOpenSurvey(k.survey); setSurveyCard({ offer: k.survey, via: "popup" }); }
+                if (k?.survey) { setOpenSurvey(k.survey); setSurveyCard(offerCard(k.survey, "popup")); }
               })
               .catch(() => {});
           }
@@ -367,10 +373,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     const offered = (e: Event) => {
       const offer = (e as CustomEvent<SurveyOfferView>).detail;
       setOpenSurvey(offer);
-      setSurveyCard({ offer, via: "popup" });
+      setSurveyCard(offerCard(offer, "popup"));
     };
     const reopen = () => {
-      if (openSurveyRef.current) setSurveyCard({ offer: openSurveyRef.current, via: "menu" });
+      if (openSurveyRef.current) setSurveyCard(offerCard(openSurveyRef.current, "menu"));
     };
     // The profile toggle flipped the opt-out: off ends an open RANDOM offer at once (§36.7). An
     // on-demand offer survives it (§36.16).
@@ -389,7 +395,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           if (r.ok && j.survey) {
             setWhatsNewNotice(null);
             setOpenSurvey(j.survey);
-            setSurveyCard({ offer: j.survey, via: j.created ? "popup" : "menu" });
+            setSurveyCard(offerCard(j.survey, j.created ? "popup" : "menu"));
             if (j.created) setSelfSurvey({ nextAt: j.survey.expiresAt });
           } else if (j.error === "cooldown") {
             setSelfSurvey({ nextAt: j.nextAt ?? null });
@@ -417,17 +423,80 @@ export function AppShell({ children }: { children: ReactNode }) {
     const t = setTimeout(() => setSurveyToast(null), 5000);
     return () => clearTimeout(t);
   }, [surveyToast]);
+  const surveyCardRef = useRef<SurveyCardState | null>(null);
+  surveyCardRef.current = surveyCard;
   const dismissSurvey = useCallback(() => {
+    const hadOffer = surveyCardRef.current?.offer != null;
     setSurveyCard(null);
-    fetch("/api/me/survey/close", { method: "POST" }).catch(() => null); // optimistic, never retried
+    // An offer-less Bug card (§36.17) has nothing to close server-side.
+    if (hadOffer) fetch("/api/me/survey/close", { method: "POST" }).catch(() => null); // optimistic, never retried
   }, []);
-  const finishSurvey = useCallback(() => {
-    // Submitted, or the offer turned out to have ended: either way nothing is left to take.
+  const finishSurvey = useCallback((_submitted: boolean, endedOffer: boolean) => {
+    // Submitted, or the offer turned out to have ended. A bug report from an offer-less card leaves
+    // any open offer alone (§36.17).
     setSurveyCard(null);
-    setOpenSurvey(null);
+    if (endedOffer) setOpenSurvey(null);
     invalidateApi("/api/me");
     window.dispatchEvent(new Event(SURVEY_STATE_EVENT));
   }, []);
+  // §36.17 an offer-less Bug card switched to another category: start an on-demand survey for it.
+  const selfSurveyRef = useRef(selfSurvey);
+  selfSurveyRef.current = selfSurvey;
+  const needOffer = useCallback(async (): Promise<NeedOfferResult> => {
+    const r = await fetch("/api/me/survey/start", { method: "POST" });
+    const j = (await r.json().catch(() => ({}))) as { survey?: SurveyOfferView; created?: boolean; error?: string; nextAt?: string };
+    invalidateApi("/api/me");
+    window.dispatchEvent(new Event(SURVEY_STATE_EVENT));
+    if (r.ok && j.survey) {
+      setOpenSurvey(j.survey);
+      // A random offer turned up meanwhile: it can't back this card, so the card stays on Bug.
+      if (j.survey.trigger !== "self") return { ok: false, block: { reason: "random" } };
+      if (j.created) setSelfSurvey({ nextAt: j.survey.expiresAt });
+      const offer = j.survey;
+      setSurveyCard((c) => (c ? { ...c, offer, via: j.created ? "popup" : "menu", block: null } : c));
+      return { ok: true };
+    }
+    if (j.error === "cooldown" && j.nextAt) {
+      setSelfSurvey({ nextAt: j.nextAt });
+      return { ok: false, block: { reason: "cooldown", nextAt: j.nextAt } };
+    }
+    if (j.error === "surveys_off") setSelfSurvey(null);
+    return { ok: false, block: null };
+  }, []);
+  // §36.17 the sidebar's bug button: open the card on Bug, according to what is open (cases 1–4).
+  const reportBug = useCallback(() => {
+    setNavOpen(false);
+    const card = surveyCardRef.current;
+    const offer = openSurveyRef.current;
+    const action = bugButtonAction({
+      offer: !offer ? "none" : offer.trigger === "self" ? "self" : "random",
+      card: !card ? "none" : !card.offer ? "bug" : card.offer.trigger === "self" ? "self" : "random",
+    });
+    // Like "Give feedback" (§36.16), the click overrides canShow: What's new steps aside unstamped.
+    setWhatsNewNotice(null);
+    if (action === "focus" || action === "switch") {
+      setSurveyCard((c) => (c ? { ...c, bugNonce: c.bugNonce + 1 } : c));
+      return;
+    }
+    if (action === "reopen" && offer) {
+      setSurveyCard({ ...offerCard(offer, "menu"), initialBug: true });
+      return;
+    }
+    if (action === "replace") fetch("/api/me/survey/close", { method: "POST" }).catch(() => null); // the random card's "not now"
+    bugCardSeq.current += 1;
+    setSurveyCard({
+      key: `bug-${bugCardSeq.current}`,
+      offer: null,
+      via: "popup",
+      initialBug: true,
+      bugNonce: 0,
+      block: bugCardBlock({ randomOfferOpen: offer !== null && offer.trigger !== "self", selfSurvey: selfSurveyRef.current }, new Date()),
+    });
+  }, []);
+  // Bug reports switched off (a later /api/me read): an offer-less Bug card has nothing left to be.
+  useEffect(() => {
+    if (!bugReports && surveyCard && !surveyCard.offer) setSurveyCard(null);
+  }, [bugReports, surveyCard]);
   const optOutOfSurveys = useCallback(() => {
     setSurveyCard(null);
     setOpenSurvey(null);
@@ -750,7 +819,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       className="user-menu-item"
                       role="menuitem"
                       data-testid="take-survey"
-                      onClick={() => { setUserMenuOpen(false); setSurveyCard({ offer: openSurvey, via: "menu" }); }}
+                      onClick={() => { setUserMenuOpen(false); setSurveyCard(offerCard(openSurvey, "menu")); }}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                         <path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z" />
@@ -866,6 +935,20 @@ export function AppShell({ children }: { children: ReactNode }) {
               </>
             )}
           </span>
+          {bugButtonVisible({ signedIn: status === "authenticated", onboarded: onboarded === true, bugReports }) && (
+            // §36.17 report a bug: the card opens on the Bug category. An inline SVG (never an emoji),
+            // stroked in currentColor so it follows the theme.
+            <button
+              type="button"
+              className="bug-report-btn"
+              aria-label="Report a bug"
+              title="Report a bug"
+              data-testid="report-bug"
+              onClick={reportBug}
+            >
+              <BugIcon />
+            </button>
+          )}
         </div>
 
         {/* Scroll affordance: only while there's more menu below the fold. */}
@@ -1110,10 +1193,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           wins), survives navigation, and is hidden (not unmounted) while the mobile nav is open. */}
       {status === "authenticated" && surveyCard && typeof document !== "undefined" && createPortal(
         <SurveyCard
-          key={`${surveyCard.offer.shownAt}-${surveyCard.via}`}
+          key={surveyCard.key}
           offer={surveyCard.offer}
           via={surveyCard.via}
           hidden={navOpen}
+          bugReports={bugReports}
+          initialBug={surveyCard.initialBug}
+          bugBlock={surveyCard.block}
+          bugNonce={surveyCard.bugNonce}
+          onNeedOffer={needOffer}
           onDismiss={dismissSurvey}
           onFinished={finishSurvey}
           onOptOut={optOutOfSurveys}
@@ -1217,5 +1305,38 @@ function UpdateNotice({ since, hidden, onClose, onFollow }: { since: string | nu
         See what&rsquo;s new{overflow > 0 ? ` (+${overflow} more)` : ""}
       </Link>
     </div>
+  );
+}
+
+/** The survey card on screen (§36.4, §36.17). */
+interface SurveyCardState {
+  /** React key: the offer's shown time + via, or `bug-N` for a card the bug button opened offer-less. */
+  key: string;
+  /** The offer behind the card; null for an offer-less Bug card (§36.17). */
+  offer: SurveyOfferView | null;
+  via: SurveyVia;
+  /** Open on the Bug category. */
+  initialBug?: boolean;
+  /** Bumped when the bug button is clicked while this card is open: switch it to Bug. */
+  bugNonce: number;
+  /** Why an offer-less Bug card can't switch to another category. */
+  block?: BugCardBlock;
+}
+
+/** A card for an open offer. Same offer + via → same key, so reopening an open card keeps it. */
+function offerCard(offer: SurveyOfferView, via: SurveyVia): SurveyCardState {
+  return { key: `${offer.shownAt}-${via}`, offer, via, bugNonce: 0 };
+}
+
+/** §36.17 the bug button's glyph: a small beetle outline in currentColor (theme-aware, font-independent). */
+function BugIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden focusable="false">
+      <path d="M9 7.5V7a3 3 0 0 1 6 0v.5" />
+      <path d="M8.5 4.5 10 6M15.5 4.5 14 6" />
+      <rect x="7" y="7.5" width="10" height="13" rx="5" />
+      <path d="M12 11v9.5" />
+      <path d="M7 12H3.5M20.5 12H17M7.3 9.3 4.5 7.5M16.7 9.3l2.8-1.8M7.4 16.6 4.5 19M16.6 16.6l2.9 2.4" />
+    </svg>
   );
 }
