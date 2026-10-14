@@ -45,8 +45,8 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
-    choice(name: 'E2E_TESTS', choices: ['QUICK_E2E_TESTS', 'NO_E2E_TESTS', 'FULL_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole; only the pages and the core API routes are pre-warmed, the rest compile on first use). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards.')
+    booleanParam(name: 'RUN_DB_TESTS', defaultValue: true, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
+    choice(name: 'E2E_TESTS', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole; only the pages and the core API routes are pre-warmed, the rest compile on first use). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards.')
     string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one shard): split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
@@ -227,8 +227,8 @@ pipeline {
 
         stage('E2E tests') {
           // Needs a full live stack (headless browser + web dev server + Postgres + MinIO). The
-          // E2E_TESTS dropdown defaults to QUICK_E2E_TESTS (a random 10% of the suite, always one
-          // shard); FULL_E2E_TESTS runs the whole suite, sharded per E2E_SHARDS; NO_E2E_TESTS skips
+          // E2E_TESTS dropdown defaults to FULL_E2E_TESTS (the whole suite, sharded per E2E_SHARDS);
+          // QUICK_E2E_TESTS runs a random 10% of it in one shard; NO_E2E_TESTS skips
           // it. A blank value — the first build after the parameter appears, before Jenkins has
           // registered it — counts as NO_E2E_TESTS.
           when { expression { return params.E2E_TESTS in ['QUICK_E2E_TESTS', 'FULL_E2E_TESTS'] } }
