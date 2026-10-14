@@ -48,6 +48,7 @@ pipeline {
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: true, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
     choice(name: 'E2E_TESTS', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards. Either way only the pages and the core API routes are pre-warmed; the rest compile on first use.')
     string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one shard): split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
+    string(name: 'E2E_PASSES', defaultValue: '5', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one pass): run each shard\'s slice as this many passes (1-9), one after another on the same stack, each with a fresh web dev server. The dev server keeps every route it compiles pinned for the whole run, so one server driving the whole suite grows until the kernel OOM-kills it (on the 16 GB agent, ~60 tests in, just after the all-routes smoke spec) and every later test fails ECONNREFUSED. A fresh server per pass resets that; each pass repeats only the route warm-up. 1 = one dev server for the whole slice.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
@@ -239,6 +240,14 @@ pipeline {
               if (!(shards ==~ /[1-9]/)) {
                 error "E2E_SHARDS must be a whole number from 1 to 9 (got '${params.E2E_SHARDS}')"
               }
+              // Sequential passes per shard, each on a fresh dev server (ci/e2e-shard.sh): a server's
+              // pinned route graph only grows, and one server for the whole suite was OOM-killed
+              // ~60 tests in. A quick sample is small enough for one. Blank (the first build after the
+              // parameter appears) takes the parameter's default.
+              def passes = quick ? '1' : (params.E2E_PASSES ?: '5').trim()
+              if (!(passes ==~ /[1-9]/)) {
+                error "E2E_PASSES must be a whole number from 1 to 9 (got '${params.E2E_PASSES}')"
+              }
               // Cap the shard count at what this agent's RAM holds and size each dev server's heap
               // (ci/e2e-shard-plan.sh): every shard pins every route it warms or compiles, so two
               // shards on a 16 GB agent got the dev server OOM-killed mid-warm-up and the whole shard
@@ -271,7 +280,7 @@ pipeline {
               for (int i = 1; i <= total; i++) {
                 int shard = i
                 branches["e2e shard ${shard}/${total}".toString()] = {
-                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}", "E2E_HEAP_MB=${heapMb}"] + shardEnv) {
+                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}", "E2E_PASSES=${passes}", "E2E_HEAP_MB=${heapMb}"] + shardEnv) {
                     sh 'sh ci/e2e-shard.sh'
                   }
                 }
