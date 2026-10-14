@@ -338,15 +338,21 @@ comes from the synced groups — editing mappings never touches Entra.
 
 ## 8. Verify the deployment
 
+The bundled proxy answers `404` for `/healthz`, `/readyz` and `/metrics` (they are internal-only,
+SKILLY_SPEC.md §13), so check them inside the containers. Run these from the `deploy/` directory:
+
 ```bash
 # liveness / readiness (both services)
-curl http://localhost:8080/healthz            # web (via proxy)
-curl http://localhost:8080/readyz             # web — checks DB
-curl http://localhost:4000/readyz             # worker (direct)
+docker compose exec -T web wget -qO- http://localhost:3000/healthz     # web
+docker compose exec -T web wget -qO- http://localhost:3000/readyz      # web — checks DB
+docker compose exec -T worker node -e "fetch('http://localhost:4000/readyz').then(async r=>{console.log(await r.text());process.exit(r.ok?0:1)},()=>process.exit(1))"   # worker — checks DB
 
-# metrics (Prometheus exposition; add -H "Authorization: Bearer $METRICS_TOKEN" if set)
-curl http://localhost:4000/metrics
+# metrics (Prometheus exposition; add an Authorization: Bearer $METRICS_TOKEN header if set)
+docker compose exec -T worker node -e "fetch('http://localhost:4000/metrics').then(async r=>console.log(await r.text()))"
 ```
+
+If you front skilly with your own ingress instead of the bundled proxy, block these three paths
+there too.
 Then in the browser:
 - Sign in via Entra (or Dev sign-in) — you should land authenticated.
 - **`/admin`** is visible (you're a Platform Admin) and lists your synced groups.
