@@ -10,8 +10,7 @@
 #   E2E_TEST_LIST                 optional: absolute path of a Playwright --test-list file; only
 #                                 those tests run (the quick e2e sample, ci/e2e-quick-list.mjs)
 #   E2E_WARM                      optional route warm-up scope, all | core | pages
-#                                 (e2e/global-setup.ts); defaults to core when E2E_TEST_LIST is
-#                                 set, all otherwise
+#                                 (e2e/global-setup.ts); defaults to core
 #   BUILD_TAG, WORKSPACE          Jenkins build identity + checkout root
 #   CI_PG_IMAGES, CI_MINIO_IMAGES space-separated image candidate lists (first reachable wins)
 #   CI_E2E_PG_CONTAINER, CI_E2E_MINIO_CONTAINER, CI_E2E_MINIO_PASSWORD
@@ -163,14 +162,15 @@ done
 # E2E_TEST_LIST, when set, narrows the run to the tests that file names.
 rm -rf "packages/web/e2e/results/shard-${E2E_SHARD}" "packages/web/e2e/test-results/shard-${E2E_SHARD}"
 
-# A sampled run warms the pages plus the core API routes (the app shell's and the busiest pages').
+# Every run — quick sample or full suite — warms the pages plus the core API routes (the app
+# shell's and the busiest pages'); the other API routes compile on first use (e2e/global-setup.ts).
 # Warming every route pins all ~190 in one webpack compiler: a fully warmed dev server measured
-# ~9.7 GB private memory under an 8 GB heap ceiling and ~31 min of warm-up, and on the 16 GB agent
-# the kernel OOM-killed it mid-warm-up — a quick run that never ran a test. Pages alone was too
-# little: the shell's and /admin's routes then compiled 10-37 s each inside the first specs.
-# The sample's other API routes compile on first use (e2e/global-setup.ts).
-if [ -n "${E2E_TEST_LIST:-}" ]; then E2E_WARM="${E2E_WARM:-core}"; fi
-E2E_WARM="${E2E_WARM:-all}"
+# ~9.7 GB private memory under an 8 GB heap ceiling and ~29-31 min of warm-up, and on the 16 GB
+# agent the kernel OOM-killed it — mid-warm-up on a quick run, and ~90 s into the tests on a full
+# run, which then failed every later test ECONNREFUSED. Pages alone was too little: the shell's and
+# /admin's routes then compiled 10-37 s each inside the first specs. E2E_WARM=all is still there to
+# ask for, on an agent with the RAM for it.
+E2E_WARM="${E2E_WARM:-core}"
 echo "[${TAG}] route warm-up scope: ${E2E_WARM}"
 
 # The kernel's running count of OOM kills (/proc/vmstat, readable without root — dmesg often is
@@ -199,7 +199,8 @@ if [ "${OOM_AFTER}" -gt "${OOM_BEFORE}" ]; then
     "A killed dev server fails every later test with ECONNREFUSED. With several shards: lower" \
     "E2E_SHARDS, or raise E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits fewer." \
     "With one shard, the heap ceiling (${E2E_HEAP_MB:-unset} MB here) does not bound the dev server:" \
-    "most of its memory is the pinned route graph (warm-up scope here: ${E2E_WARM}). A run that pins" \
-    "every route needs an agent with more RAM, or fewer Verify branches beside it (E2E_MEM_RESERVE_MB)." >&2
+    "most of its memory is the pinned route graph (warm-up scope here: ${E2E_WARM}; the routes the" \
+    "tests compile on first use stay pinned too). A run that pins that many routes needs an agent" \
+    "with more RAM, or fewer Verify branches beside it (E2E_MEM_RESERVE_MB)." >&2
 fi
 exit "${rc}"
