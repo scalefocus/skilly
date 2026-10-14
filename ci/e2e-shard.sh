@@ -6,6 +6,8 @@
 #
 # Inputs (env):
 #   E2E_SHARD, E2E_SHARD_TOTAL   this shard (1-based) and the shard count
+#   E2E_PASSES                    optional: run this shard's slice as this many sequential passes,
+#                                 each on a fresh dev server (1-9, default 1; the run loop below)
 #   E2E_HEAP_MB                   dev server heap ceiling (optional; ci/e2e-shard-plan.sh sizes it)
 #   E2E_TEST_LIST                 optional: absolute path of a Playwright --test-list file; only
 #                                 those tests run (the quick e2e sample, ci/e2e-quick-list.mjs)
@@ -68,13 +70,11 @@ CI_E2E_DATABASE_URL="postgres://skilly:test@127.0.0.1:${E2E_PG_PORT}/skilly"
 CI_E2E_S3_ENDPOINT="http://127.0.0.1:${E2E_MINIO_PORT}"
 echo "[${TAG}] postgres on 127.0.0.1:${E2E_PG_PORT} | minio on 127.0.0.1:${E2E_MINIO_PORT}"
 
-# The web dev server gets a free port too: a fixed :3000 collides with whatever else the agent runs
-# there (another shard, another job, a stale dev server), and Playwright's webServer refuses an
-# occupied URL under CI=1. Ask the OS for an ephemeral port; playwright.config.ts starts `next dev`
-# on PLAYWRIGHT_BASE_URL's port.
-E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
-E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
-echo "[${TAG}] web dev server on ${E2E_WEB_URL}"
+E2E_PASSES="${E2E_PASSES:-1}"
+case "${E2E_PASSES}" in
+  [1-9]) ;;
+  *) echo "[${TAG}] E2E_PASSES must be a whole number from 1 to 9 (got '${E2E_PASSES}')" >&2; exit 1 ;;
+esac
 
 # Several dev servers share this agent's RAM. ci/e2e-shard-plan.sh sizes each one's heap ceiling
 # from the agent's RAM and the shard count; the Jenkins stage runs it once (it also caps the shard
@@ -158,7 +158,8 @@ done
 
 # Run this shard's slice. Playwright's webServer starts `next dev` (SKILLY_DEV_AUTH=1 is forbidden
 # in a production build), inheriting the env below; CI=1 makes it start a fresh server. E2E_SHARD /
-# E2E_SHARD_TOTAL select the slice and this shard's own build/result folders (playwright.config.ts);
+# E2E_SHARD_TOTAL select the slice and this shard's own build/result folders (playwright.config.ts),
+# E2E_PASS / E2E_PASS_TOTAL (set by the loop below) a pass's part of it and its own result folders;
 # E2E_TEST_LIST, when set, narrows the run to the tests that file names.
 rm -rf "packages/web/e2e/results/shard-${E2E_SHARD}" "packages/web/e2e/test-results/shard-${E2E_SHARD}"
 
@@ -178,29 +179,55 @@ echo "[${TAG}] route warm-up scope: ${E2E_WARM}"
 # instead of surfacing only as a wall of ECONNREFUSED test failures. It counts the whole agent, so
 # another shard or job being killed shows up here too.
 oom_kills() { awk '/^oom_kill / { n = $2 } END { print n + 0 }' /proc/vmstat 2>/dev/null || echo 0; }
-OOM_BEFORE="$(oom_kills)"
 
-set +e
-SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
-SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 E2E_WARM="${E2E_WARM}" \
-DATABASE_URL="${CI_E2E_DATABASE_URL}" \
-NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
-AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
-SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
-S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
-CI=1 \
-  pnpm --filter @skilly/web e2e ${E2E_TEST_LIST:+--test-list "${E2E_TEST_LIST}"}
-rc=$?
-set -e
+# Run the slice as E2E_PASSES passes, one after another on this same stack, each its own Playwright
+# invocation and so its own fresh `next dev` (CI=1). SKILLY_DEV_KEEP_ROUTES pins every route a
+# server compiles for as long as it lives, so one server driving the whole suite only grows: even
+# with the core warm-up it was OOM-killed ~60 tests (~40 min) into a full run on the 16 GB agent,
+# and every test after that failed ECONNREFUSED. A fresh server per pass drops that graph; a pass
+# repeats only the warm-up, against the build folder's webpack cache. playwright.config.ts maps
+# pass p of P to a finer Playwright shard, so the passes in order cover exactly this shard's slice
+# and the database sees the tests in the same order one long run would. Every pass runs even when
+# an earlier one fails, so a red run still reports all of its failures.
+rc=0
+p=1
+while [ "${p}" -le "${E2E_PASSES}" ]; do
+  PASS_TAG="${TAG}, pass ${p}/${E2E_PASSES}"
 
-OOM_AFTER="$(oom_kills)"
-if [ "${OOM_AFTER}" -gt "${OOM_BEFORE}" ]; then
-  echo "[${TAG}] the kernel OOM-killed $((OOM_AFTER - OOM_BEFORE)) process(es) on this agent while this shard ran." \
-    "A killed dev server fails every later test with ECONNREFUSED. With several shards: lower" \
-    "E2E_SHARDS, or raise E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits fewer." \
-    "With one shard, the heap ceiling (${E2E_HEAP_MB:-unset} MB here) does not bound the dev server:" \
-    "most of its memory is the pinned route graph (warm-up scope here: ${E2E_WARM}; the routes the" \
-    "tests compile on first use stay pinned too). A run that pins that many routes needs an agent" \
-    "with more RAM, or fewer Verify branches beside it (E2E_MEM_RESERVE_MB)." >&2
-fi
+  # Each pass's dev server gets a free port: a fixed :3000 collides with whatever else the agent
+  # runs there (another shard, another job, a stale dev server), and Playwright's webServer refuses
+  # an occupied URL under CI=1. A fresh port per pass, so the previous pass's server never matters.
+  # playwright.config.ts starts `next dev` on PLAYWRIGHT_BASE_URL's port.
+  E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
+  E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
+  echo "[${PASS_TAG}] web dev server on ${E2E_WEB_URL}"
+
+  OOM_BEFORE="$(oom_kills)"
+  set +e
+  SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
+  SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 E2E_WARM="${E2E_WARM}" \
+  E2E_PASS="${p}" E2E_PASS_TOTAL="${E2E_PASSES}" \
+  DATABASE_URL="${CI_E2E_DATABASE_URL}" \
+  NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
+  AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE= \
+  SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}" \
+  S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts \
+  CI=1 \
+    pnpm --filter @skilly/web e2e ${E2E_TEST_LIST:+--test-list "${E2E_TEST_LIST}"}
+  pass_rc=$?
+  set -e
+  [ "${pass_rc}" -eq 0 ] || rc="${pass_rc}"
+
+  OOM_AFTER="$(oom_kills)"
+  if [ "${OOM_AFTER}" -gt "${OOM_BEFORE}" ]; then
+    echo "[${PASS_TAG}] the kernel OOM-killed $((OOM_AFTER - OOM_BEFORE)) process(es) on this agent during this pass." \
+      "A killed dev server fails every later test of the pass with ECONNREFUSED. With several shards:" \
+      "lower E2E_SHARDS, or raise E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits" \
+      "fewer. Otherwise raise E2E_PASSES (${E2E_PASSES} here) so each dev server drives fewer tests: the" \
+      "heap ceiling (${E2E_HEAP_MB:-unset} MB here) does not bound it, because most of its memory is the" \
+      "pinned route graph (warm-up scope here: ${E2E_WARM}; the routes the tests compile on first use" \
+      "stay pinned too), and that graph grows with every test the server drives." >&2
+  fi
+  p=$((p + 1))
+done
 exit "${rc}"
