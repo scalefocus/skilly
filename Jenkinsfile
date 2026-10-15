@@ -39,7 +39,10 @@ pipeline {
 
   options {
     timestamps()
-    timeout(time: 60, unit: 'MINUTES')
+    // Sized for a FULL_E2E_TESTS run: on the 16 GB agent the whole suite runs as one shard of
+    // E2E_PASSES sequential passes (one worker, a route warm-up per pass), which alone takes well over
+    // an hour. At 60 minutes every full run was aborted mid-E2E, and on main its Deploy never ran.
+    timeout(time: 120, unit: 'MINUTES')
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '30'))
   }
