@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.36.0",
+    date: "2026-10-15",
+    summary:
+      "Installed skills is tidier: when you have several installs of the same skill — different versions, or the same one twice — they now share one card. The collapsed card shows how many there are, which versions, whether any is behind, and when you last installed; click it to see and manage each install.",
+  },
+  {
     version: "2.35.0",
     date: "2026-10-15",
     summary:

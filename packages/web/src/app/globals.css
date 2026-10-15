@@ -1422,6 +1422,24 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
 .installed-row { transition: background 0.16s, box-shadow 0.8s ease; }
 .installed-row.install-flash { box-shadow: inset 0 0 0 2px var(--accent); transition: background 0.16s, box-shadow 0.15s ease; }
 @media (prefers-reduced-motion: reduce) { .installed-row, .installed-row.install-flash { transition: none; } }
+/* §23 "One card per skill": 2+ installs of one skill share a collapsible card in the .rows list. The
+   card is the list item (it carries the separator); its header is a .row, its children are indented
+   .rows on a faint band. The ?highlight= ring is an inset OUTLINE here — it paints above the children,
+   which an inset box-shadow on the container would sit beneath. */
+.installed-card { border-bottom: 1px solid var(--line); outline: 2px solid transparent; outline-offset: -2px; transition: outline-color 0.8s ease; }
+.installed-card:last-child { border-bottom: 0; }
+.installed-card.install-flash { outline-color: var(--accent); transition: outline-color 0.15s ease; }
+.installed-card-head .install-card-toggle {
+  flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--muted);
+  font-size: 11px; line-height: 1; cursor: pointer; padding: 0;
+}
+.installed-card-head .install-card-toggle:hover { color: var(--ink); }
+.installed-card-head .install-card-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.installed-card-body { background: color-mix(in oklab, var(--surface-2) 55%, transparent); }
+.installed-card-body .installed-child { padding-left: 52px; }
+@media (max-width: 560px) { .installed-card-body .installed-child { padding-left: 20px; } }
+@media (prefers-reduced-motion: reduce) { .installed-card, .installed-card.install-flash { transition: none; } }
 /* flex-basis 0 (not auto): with the row wrapping for the activate panel, an `auto` basis would make
    the wrap algorithm bump .version-actions to its own line rather than shrink this column. Basis 0
    keeps the actions on line 1 (top-right) while this column grows to fill the rest and wraps inside. */

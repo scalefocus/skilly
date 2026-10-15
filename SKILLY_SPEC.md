@@ -2671,6 +2671,33 @@ works for both protocol versions).
   (`client_ip`, shown when known), and active/inactive. The IP is **owner-scoped** (visible only
   on the user's own Installed page), not surfaced to admins — **except on system-install rows**
   (see below).
+- **One card per skill (grouping).** Installs are grouped by **skill** (`@ns/slug` — every version
+  and every pinned/latest mode of one skill together; no sub-grouping by version). A skill with
+  **one** visible install renders as the **plain row** described here, unchanged. A skill with
+  **two or more** visible installs renders as **one collapsible card**:
+  - **Header** — icon, title (a link to the skill page), `@ns/slug`, then a summary: the count
+    (*"3 installations"*; *"2 of 3 installations"* when a filter hides some — below), the
+    **de-duplicated version modes** (*"latest · pinned v1.2.0 · pinned v1.0.0"* — latest first, then
+    pinned highest → lowest), the **worst freshness badge** of its installs (**Withdrawn** if any is
+    withdrawn, else **Behind** if any is behind; none otherwise), **active / inactive counts** as
+    pills (*"2 active"*, *"1 inactive"* — a zero count is omitted), and the **newest installed
+    date** (*"last installed ‹date›"*). Skill-level markers live here, not on the children: the
+    **`deprecated`** pill + *"Use **<successor>** instead"* link, the **`archived`** pill, and (System
+    installs view) the **System install** pill.
+  - **Starts collapsed** on every visit (no persistence; switching Mine ⇄ System collapses all).
+    Clicking **anywhere on the header** toggles it (a ▸/▾ chevron; the header is a keyboard-operable
+    button with `aria-expanded`); the **title link** still opens the skill page (it doesn't toggle).
+  - **Children** (expanded) are the per-install rows **without** the repeated icon/title/`@ns/slug`:
+    version pill, freshness line, active/inactive, client, IP, installed / expires, minted-by
+    (System view), and the **per-install actions** — *Uninstall*, *Show install URL*, *Activate* —
+    each opening its panel under that child. Ordered **newest install first** (`used_at`
+    descending), whatever the page sort. A child row's click opens the skill page, as a plain row's
+    does today.
+  - **Skill-level actions sit on the header:** *Install latest* (§45.5, deprecated with an
+    installable successor, Mine only) — its expiry/command panel opens under the header. There is
+    **no bulk "uninstall all"**.
+  Grouping is **client-side** over the loaded rows — `GET /api/installs`, its row shape and MCP
+  `list_installed_skills` (§29) are unchanged.
 - **Sort toggle** (top of the page, a `sort-toggle` group beside the scope/filter chips):
   **A–Z** (**default**) — skill title, case-insensitive ascending, ties broken by most-recent
   `used_at` — or **Recently installed** — `used_at` descending, ties broken by title A–Z. The
@@ -2678,14 +2705,17 @@ works for both protocol versions).
   `recent`; read/write wrapped in try/catch — blocked storage just means A–Z every visit); it is
   **not** mirrored to the URL. **One preference for both scopes** (Mine and System installs), and
   it **composes** with the header live-filter and the *Behind latest* chip (sorting applies to
-  whatever rows survive them). Applied client-side over the loaded rows — `GET /api/installs`
+  whatever rows survive them). It orders **cards and plain rows together** as list entries: under
+  A–Z an entry ranks by its skill title (ties: newest install); under Recently installed a card
+  ranks by its **newest** install. Applied client-side over the loaded rows — `GET /api/installs`
   takes no sort param.
 - **Highlight on arrival (`?highlight=‹ns›/‹slug›`)** — the target of the already-installed
   prompt's *Go to skill* (above). On arrival the page forces the **Mine** scope, **clears `?q=`
   and the *Behind latest* chip** (so the rows can't be filtered out; the sort choice is kept),
   scrolls the **first** matching row into view, and gives **every** row of that skill an accent
-  ring that **fades out after ~3 s**; the param is then dropped via `router.replace` (a reload
-  doesn't re-flash). No matching row → nothing happens. From the §45.5 successor panel the same
+  ring that **fades out after ~3 s**; when that skill is a **card**, the card is **expanded** and
+  the ring goes on the card (header and children) instead. The param is then dropped via
+  `router.replace` (a reload doesn't re-flash). No matching row → nothing happens. From the §45.5 successor panel the same
   behavior runs in place on the already-open page.
 - Edge actions (styled like the detail-page version buttons): **Uninstall** always; **Show install
   URL** on revealable rows (*Show install URL* above); **Activate**
@@ -2697,7 +2727,9 @@ works for both protocol versions).
   successor is already installed, the *Already-installed prompt* above runs first — its *Override*
   replaces only the successor's installs). **Mine scope only**
   (system installs are minted from the admin surface, §23). Deprecated rows also carry the
-  **`deprecated` pill** and a *"Use **<successor title>** instead"* link (§45.5). `GET /api/installs`, `DELETE /api/installs/[id]`,
+  **`deprecated` pill** and a *"Use **<successor title>** instead"* link (§45.5). On a **card**,
+  *Install latest* and the deprecated marker move to the header (*One card per skill* above); the
+  per-install actions stay on each child. `GET /api/installs`, `DELETE /api/installs/[id]`,
   `PATCH /api/installs/[id] {expiresAt}`, `GET /api/installs/[id]/command` — owner-checked for personal rows; on **system** rows
   the check is **platform admin** instead (any admin, not just the minter).
 - **System installs view (platform admins only):** a **"Mine / System installs" toggle filter**
@@ -2706,7 +2738,8 @@ works for both protocol versions).
   platform-wide, same columns plus: a **"System install" pill** on each row, **minted-by** (the
   `created_by_user_id` label — renders the tombstone name if that admin was since erased), and
   the **client IP** (a deliberate exception to the owner-only-IP rule: it is the only forensic
-  handle a system install has, and every viewer here is a platform admin). Uninstall / Activate /
+  handle a system install has, and every viewer here is a platform admin). System installs are
+  **grouped per skill the same way** (several CI tokens for one skill → one card). Uninstall / Activate /
   **Show install URL** edge actions work identically for any platform admin (a system reveal is
   audited — *Show install URL* above). Served by `GET /api/installs?scope=system`
   (403 for non-admins). The version column, badges and the **Behind latest** filter below apply
@@ -2719,7 +2752,11 @@ works for both protocol versions).
   exactly like `?q=`), **persists across the Mine/System toggle**, and **composes with the header
   live-filter** (`?q=` narrows within the behind set). The filter is applied **client-side** over the
   already-loaded rows — `GET /api/installs` returns every row with its freshness fields and takes
-  no new query param. The chosen **sort order** (A–Z or Recently installed) is preserved. **No-match state:** filter on and
+  no new query param. **Filtering happens before grouping:** a card holds only its matching
+  installs and its count reads *"‹shown› of ‹total› installations"*; a skill left with **one**
+  matching install renders as a plain row. **Turning the chip on expands every card** (the point is
+  to see the stale installs; a card can still be collapsed by hand while it is on); switching it
+  off returns them all to collapsed. The chosen **sort order** (A–Z or Recently installed) is preserved. **No-match state:** filter on and
   nothing behind → *"Everything is up to date."* (and, when `?q=` is also set, the existing
   *"No installed skills match …"* state wins, with a hint naming both the search and the filter).
 - **`GET /api/installs` row shape gains** `lastServedSemver` (string | null), `lastClonedAt` (ISO |
@@ -2741,7 +2778,9 @@ works for both protocol versions).
   arrival**, and **clearing it restores the full list**. The filter applies within whichever
   **scope** is active (**Mine**, or **System installs** for platform admins) and the query
   **persists across the Mine/System toggle**; the placeholder is "Search installed skills" in
-  **both** scopes. The chosen **sort order** (A–Z or Recently installed) is preserved among the matches. **No-match
+  **both** scopes. The search matches **skill-level** fields only, so a skill's installs match or
+  miss **together** — a matching card keeps all its installs and stays collapsed (search never
+  expands it). The chosen **sort order** (A–Z or Recently installed) is preserved among the matches. **No-match
   state:** when the box is non-empty and no install matches, the page shows a **distinct empty
   state** (*"No installed skills match "…".*", with a hint to clear the search) — separate from the
   "No installs yet" / "No system installs yet" empty states shown when the list is genuinely empty.
@@ -10221,6 +10260,8 @@ notifying the people who run the skill, and leaving an in-band hint in the git-s
   *Already-installed prompt* for the successor — *Go to skill* highlights the successor's rows in place, *Override*
   replaces the successor installs (never the deprecated row); §39's freshness axis is orthogonal — deprecation never makes a row *behind*).
   Mine scope only. The header live-filter matches the same fields as before (not the successor).
+  When the deprecated skill has **several** installs (a §23 card), the pill, the link and *Install
+  latest* appear **once, on the card header**, not on each install.
 - **Archived view:** the manager-only Archived catalog toggle shows the pill as well.
 - **Proposals / review pages:** a new-version proposal **to** a deprecated skill shows a one-line
   notice *"This skill is deprecated (use <successor>)"* so reviewers know; it blocks nothing.
