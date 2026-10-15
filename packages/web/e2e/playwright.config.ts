@@ -104,9 +104,12 @@ export default defineConfig({
     // LEADERBOARD_CACHE_TTL_MS=0: the shared per-(window,sort) board cache (lib/leaderboard.ts) is
     // primed by /api/leaders on EVERY page load, so a spec that creates a request and then reads
     // the board through the UI would see a board computed before its own fixture for up to 60s.
+    // INSTALL_TOKEN_ENC_KEY: a TEST-ONLY key so minted installs keep a recoverable copy and the §23
+    // "Show install URL" step of already-installed.spec.ts runs (the caller's own key wins if set).
     env: {
       SKILLY_DEV_KEEP_ROUTES: "1",
       LEADERBOARD_CACHE_TTL_MS: "0",
+      INSTALL_TOKEN_ENC_KEY: process.env.INSTALL_TOKEN_ENC_KEY ?? "c2tpbGx5LWUyZS1pbnN0YWxsLXRva2VuLWtleS0zMmI=",
       NODE_OPTIONS: devServerNodeOptions,
       ...(stackShard ? { SKILLY_NEXT_DIST_DIR: `.next-e2e-${stackShard.current}` } : {}),
     },

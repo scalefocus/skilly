@@ -1,62 +1,110 @@
 // Install tokens = the durable consumer "installation" handle (SKILLY_SPEC.md §23). Each is a
 // reusable, skill-scoped token with an optional pinned version and an optional expiry (null =
-// never). The raw token is shown once (baked into the install URL); only its hash is stored.
+// never). The raw token is baked into the install URL; the gateway validates by hash only. Since
+// migration 0095 an AES-256-GCM copy (token_enc, under INSTALL_TOKEN_ENC_KEY) is also kept so the
+// owner can re-show the command from the Installed page (§23 "Show install URL").
 import { pool } from "./db";
 import { tryAward } from "./achievements";
+import { installTokenKey, sealInstallToken } from "@skilly/shared/install-crypto";
 import { generateToken, hashToken, deriveFreshness, deprecationLite, successorJsonSql, type DeprecationLite, type EffectiveAccess, type Freshness, type SuccessorJson } from "@skilly/shared";
 import { M } from "./metrics";
+import type { ExistingInstall } from "./installMint";
 
 /**
  * Mint a new (unused) install token. `expiresAt` null = never; `pinnedSemver` null = latest.
  * A SYSTEM installation (§23) is platform-owned: `user_id` is null, `is_system` is set, and the
  * minting platform admin is recorded in `created_by_user_id` (provenance only, no authority).
+ * `replaceClaimed` (personal only — §23 "Already-installed prompt" → Override) also hard-deletes the
+ * user's CLAIMED installs of the skill, in the same transaction as the mint: if the insert fails,
+ * nothing was deleted. Returns how many claimed installs it replaced.
  */
 export async function mintInstallToken(
   userId: string,
   skillId: string,
   pinnedSemver: string | null,
   expiresAt: Date | null,
-  opts: { system?: boolean } = {},
-): Promise<{ raw: string }> {
+  opts: { system?: boolean; replaceClaimed?: boolean } = {},
+): Promise<{ raw: string; replaced: number }> {
   const raw = generateToken();
   const system = opts.system === true;
-  // Supersede the prior UNCLAIMED install tokens for this skill: regenerating a command (changed
-  // version/expiry, or just re-clicking Install) invalidates any earlier one that was never
-  // claimed by `npx skills` (used_at still null), so we delete those here to avoid piling up
-  // dangling valid tokens. Purge scopes never cross the system boundary (§23): a personal mint
-  // purges the minting user's unclaimed personal tokens; a SYSTEM mint purges unclaimed system
-  // tokens for that skill across ALL admins (the last generated system command is the live one).
-  // CLAIMED installs (used_at set) are the durable handle — left intact; the worker also purges
-  // siblings on first claim (markInstallUsed). SKILLY_SPEC.md §23.
-  if (system) {
-    await pool.query(
-      `delete from tokens where skill_id = $1 and type = 'install' and is_system and used_at is null`,
-      [skillId],
+  const replaceClaimed = !system && opts.replaceClaimed === true;
+  const c = await pool.connect();
+  let replaced = 0;
+  try {
+    await c.query("begin");
+    if (replaceClaimed) {
+      // An ordinary uninstall of each — the URLs are refused from now on; counts/history stay (§23).
+      const del = await c.query(
+        `delete from tokens where user_id = $1 and skill_id = $2 and type = 'install' and not is_system and used_at is not null`,
+        [userId, skillId],
+      );
+      replaced = del.rowCount ?? 0;
+    }
+    // Supersede the prior UNCLAIMED install tokens for this skill: regenerating a command (changed
+    // version/expiry, or just re-clicking Install) invalidates any earlier one that was never
+    // claimed by `npx skills` (used_at still null), so we delete those here to avoid piling up
+    // dangling valid tokens. Purge scopes never cross the system boundary (§23): a personal mint
+    // purges the minting user's unclaimed personal tokens; a SYSTEM mint purges unclaimed system
+    // tokens for that skill across ALL admins (the last generated system command is the live one).
+    // CLAIMED installs (used_at set) are the durable handle — left intact (unless replaceClaimed);
+    // the worker also purges siblings on first claim (markInstallUsed). SKILLY_SPEC.md §23.
+    if (system) {
+      await c.query(
+        `delete from tokens where skill_id = $1 and type = 'install' and is_system and used_at is null`,
+        [skillId],
+      );
+    } else {
+      await c.query(
+        `delete from tokens where user_id = $1 and skill_id = $2 and type = 'install' and not is_system and used_at is null`,
+        [userId, skillId],
+      );
+    }
+    await c.query(
+      `insert into tokens (user_id, type, hashed_token, skill_id, pinned_semver, scope, expires_at, is_system, created_by_user_id, token_enc)
+       values ($1, 'install', $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`,
+      // scope.skillId is also populated so the gateway's existing skill-scope check keeps working.
+      [
+        system ? null : userId,
+        hashToken(raw),
+        skillId,
+        pinnedSemver,
+        JSON.stringify({ skillId, semver: pinnedSemver }),
+        expiresAt,
+        system,
+        system ? userId : null,
+        sealInstallToken(raw), // null without INSTALL_TOKEN_ENC_KEY → not revealable (§23)
+      ],
     );
-  } else {
-    await pool.query(
-      `delete from tokens where user_id = $1 and skill_id = $2 and type = 'install' and not is_system and used_at is null`,
-      [userId, skillId],
-    );
+    await c.query("commit");
+  } catch (e) {
+    await c.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
   }
-  await pool.query(
-    `insert into tokens (user_id, type, hashed_token, skill_id, pinned_semver, scope, expires_at, is_system, created_by_user_id)
-     values ($1, 'install', $2, $3, $4, $5::jsonb, $6, $7, $8)`,
-    // scope.skillId is also populated so the gateway's existing skill-scope check keeps working.
-    [
-      system ? null : userId,
-      hashToken(raw),
-      skillId,
-      pinnedSemver,
-      JSON.stringify({ skillId, semver: pinnedSemver }),
-      expiresAt,
-      system,
-      system ? userId : null,
-    ],
-  );
   M.tokensMinted.inc({ type: "install" });
   M.installCommands.inc();
-  return { raw };
+  return { raw, replaced };
+}
+
+/** One of the caller's existing installs, as the already-installed prompt lists it (§23) — the
+ *  same shape the client helper reads back out of the 409. */
+export type { ExistingInstall } from "./installMint";
+
+/**
+ * The user's CLAIMED personal installs of one skill (`used_at` set, active OR inactive, any version)
+ * — what triggers the §23 "Already-installed prompt". Unclaimed generated commands never count.
+ * Newest first.
+ */
+export async function listClaimedInstallsForSkill(userId: string, skillId: string): Promise<ExistingInstall[]> {
+  const { rows } = await pool.query<{ id: string; pinned_semver: string | null; used_at: string; expires_at: string | null; inactive: boolean }>(
+    `select id, pinned_semver, used_at, expires_at, (expires_at is not null and expires_at <= now()) as inactive
+       from tokens
+      where user_id = $1 and skill_id = $2 and type = 'install' and not is_system and used_at is not null
+      order by used_at desc`,
+    [userId, skillId],
+  );
+  return rows.map((r) => ({ id: r.id, pinnedSemver: r.pinned_semver, installedAt: r.used_at, expiresAt: r.expires_at, inactive: r.inactive }));
 }
 
 export interface InstallView {
@@ -82,6 +130,8 @@ export interface InstallView {
   /** The skill's current latest stable, null when it has none. */
   latestSemver: string | null;
   freshness: Freshness;
+  /** §23 "Show install URL": a stored copy exists AND the key is configured. Never the token itself. */
+  revealable: boolean;
 }
 
 /** The row shape both install queries share; the freshness fields are derived from `active_semvers`. */
@@ -91,6 +141,8 @@ interface InstallRow {
   title: string; inactive: boolean; skill_status: "active" | "archived";
   icon_sha256: string | null; icon_emoji: string | null;
   last_served_semver: string | null; last_cloned_at: string | null;
+  /** token_enc is set — the row has a recoverable copy (the copy itself is never selected here). */
+  has_enc: boolean;
   /** The skill's ACTIVE versions (yanked excluded), any channel — the input to deriveFreshness. */
   active_semvers: string[];
   deprecated_at: string | null; deprecation_note: string | null; successor: SuccessorJson | null;
@@ -103,7 +155,7 @@ const INSTALL_SELECT = `
            s.icon_sha256, s.icon_emoji,
            s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor,
            (t.expires_at is not null and t.expires_at <= now()) as inactive,
-           t.last_served_semver, t.last_cloned_at,
+           t.last_served_semver, t.last_cloned_at, (t.token_enc is not null) as has_enc,
            v.active_semvers
       from tokens t
       join skills s on s.id = t.skill_id
@@ -113,7 +165,7 @@ const INSTALL_SELECT = `
           from skill_versions sv where sv.skill_id = s.id and sv.status = 'active'
       ) v on true`;
 
-function toInstallView(r: InstallRow, access: EffectiveAccess): InstallView {
+function toInstallView(r: InstallRow, access: EffectiveAccess, keyConfigured: boolean): InstallView {
   const { freshness, latestSemver } = deriveFreshness({ lastServedSemver: r.last_served_semver, activeSemvers: r.active_semvers });
   return {
     id: r.id,
@@ -133,6 +185,7 @@ function toInstallView(r: InstallRow, access: EffectiveAccess): InstallView {
     lastClonedAt: r.last_cloned_at,
     latestSemver,
     freshness,
+    revealable: keyConfigured && r.has_enc,
   };
 }
 
@@ -144,7 +197,8 @@ export async function listInstalls(userId: string, access: EffectiveAccess): Pro
       order by lower(s.title) asc, t.used_at desc`,
     [userId],
   );
-  return rows.map((r) => toInstallView(r, access));
+  const keyConfigured = installTokenKey() !== null;
+  return rows.map((r) => toInstallView(r, access, keyConfigured));
 }
 
 export interface SystemInstallView extends InstallView {
@@ -160,7 +214,8 @@ export async function listSystemInstalls(access: EffectiveAccess): Promise<Syste
       where t.type = 'install' and t.is_system and t.used_at is not null
       order by lower(s.title) asc, t.used_at desc`,
   );
-  return rows.map((r) => ({ ...toInstallView(r, access), mintedBy: r.minted_by }));
+  const keyConfigured = installTokenKey() !== null;
+  return rows.map((r) => ({ ...toInstallView(r, access, keyConfigured), mintedBy: r.minted_by }));
 }
 
 /**
@@ -193,6 +248,47 @@ export async function getInstallMeta(id: string): Promise<{
         skillRef: `${r.ns_slug}/${r.skill_slug}`,
         pinnedSemver: r.pinned_semver,
         expiresAt: r.expires_at,
+      }
+    : null;
+}
+
+/**
+ * What the §23 "Show install URL" reveal needs for one USED install row: its ownership (the route
+ * authorizes on it), the encrypted copy, and the pieces buildInstallCommand rebuilds the command
+ * from — the skill's CURRENT harness (`--agent`). Null = no such used install row. Callers must
+ * never log or audit `tokenEnc` (nor the command built from it).
+ */
+export async function getInstallRevealSource(id: string): Promise<{
+  isSystem: boolean; userId: string | null; skillId: string; namespaceId: string;
+  namespaceSlug: string; skillSlug: string; toolHarness: string | null;
+  pinnedSemver: string | null; expiresAt: string | null; tokenEnc: string | null;
+} | null> {
+  const { rows } = await pool.query<{
+    is_system: boolean; user_id: string | null; skill_id: string; namespace_id: string; ns_slug: string;
+    skill_slug: string; tool_harness: string | null; pinned_semver: string | null; expires_at: string | null;
+    token_enc: string | null;
+  }>(
+    `select t.is_system, t.user_id, t.skill_id, s.namespace_id, n.slug as ns_slug, s.slug as skill_slug,
+            s.tool_harness, t.pinned_semver, t.expires_at, t.token_enc
+       from tokens t
+       join skills s on s.id = t.skill_id
+       join namespaces n on n.id = s.namespace_id
+      where t.id = $1 and t.type = 'install' and t.used_at is not null`,
+    [id],
+  );
+  const r = rows[0];
+  return r
+    ? {
+        isSystem: r.is_system,
+        userId: r.user_id,
+        skillId: r.skill_id,
+        namespaceId: r.namespace_id,
+        namespaceSlug: r.ns_slug,
+        skillSlug: r.skill_slug,
+        toolHarness: r.tool_harness,
+        pinnedSemver: r.pinned_semver,
+        expiresAt: r.expires_at,
+        tokenEnc: r.token_enc,
       }
     : null;
 }

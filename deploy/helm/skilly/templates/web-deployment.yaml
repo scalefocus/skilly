@@ -101,6 +101,13 @@ spec:
                   name: {{ include "skilly.secretName" . }}
                   key: AI_TOKEN_ENC_KEY
                   optional: true # pre-0084 operator-managed Secrets lack this key
+            # §23 Show install URL: encrypts the recoverable copy of each install token.
+            - name: INSTALL_TOKEN_ENC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: INSTALL_TOKEN_ENC_KEY
+                  optional: true # pre-0095 operator-managed Secrets lack this key
             - name: SMTP_HOST
               value: {{ .Values.config.smtp.host | quote }}
           readinessProbe:

@@ -259,6 +259,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [status]);
 
+  // Pages can ask the header search to clear itself (the Installed page's ?highlight= arrival, §23):
+  // emptying the box lets the live-filter effect drop ?q= in turn.
+  useEffect(() => {
+    const clearSearch = () => { setQ(""); setAcOpen(false); };
+    window.addEventListener("skilly:clear-search", clearSearch);
+    return () => window.removeEventListener("skilly:clear-search", clearSearch);
+  }, []);
+
   // Pages can ask the header search to take focus (e.g. the catalog's "press Enter to search").
   useEffect(() => {
     const focusSearch = () => {

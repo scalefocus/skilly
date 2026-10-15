@@ -63,6 +63,10 @@
       "types": "./dist/email.d.ts",
       "default": "./dist/email.js"
     },
+    "./install-crypto": {
+      "types": "./dist/install-crypto.d.ts",
+      "default": "./dist/install-crypto.js"
+    },
     "./email-template": {
       "types": "./dist/email-template.d.ts",
       "default": "./dist/email-template.js"

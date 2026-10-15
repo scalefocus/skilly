@@ -19,6 +19,7 @@ import {
   type RefreshHint,
 } from "@skilly/shared";
 import { publicBaseUrl } from "./url.js";
+import { sealInstallToken } from "@skilly/shared/install-crypto";
 import { deprecationLite, successorJsonSql, type DeprecationLite, type EffectiveAccess, type SuccessorJson } from "@skilly/shared";
 import { getInstallMaxTtlMonths } from "./settings.js";
 import { M } from "../metrics.js";
@@ -76,9 +77,11 @@ export async function mintInstall(
     [userId, skill.id],
   );
   await pool.query(
-    `insert into tokens (user_id, type, hashed_token, skill_id, pinned_semver, scope, expires_at, is_system, created_by_user_id)
-     values ($1, 'install', $2, $3, $4, $5::jsonb, $6, false, null)`,
-    [userId, hashToken(raw), skill.id, pinnedSemver, JSON.stringify({ skillId: skill.id, semver: pinnedSemver }), expiresAt],
+    `insert into tokens (user_id, type, hashed_token, skill_id, pinned_semver, scope, expires_at, is_system, created_by_user_id, token_enc)
+     values ($1, 'install', $2, $3, $4, $5::jsonb, $6, false, null, $7)`,
+    // token_enc: the recoverable copy behind the Installed page's "Show install URL" (§23) — NULL
+    // without INSTALL_TOKEN_ENC_KEY. MCP itself never hands it back (§29).
+    [userId, hashToken(raw), skill.id, pinnedSemver, JSON.stringify({ skillId: skill.id, semver: pinnedSemver }), expiresAt, sealInstallToken(raw)],
   );
   M.mcpInstallsMinted.inc();
   return {

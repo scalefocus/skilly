@@ -122,6 +122,8 @@ services:
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       # §40 AI integration: encrypts/decrypts the stored provider token (web + worker).
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
+      # §23 Show install URL: encrypts the recoverable copy of each install token (web + worker).
+      INSTALL_TOKEN_ENC_KEY: ${INSTALL_TOKEN_ENC_KEY:-}
       SMTP_HOST: ${SMTP_HOST:-}
     restart: unless-stopped
     expose:
@@ -182,6 +184,8 @@ services:
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       # §40 AI integration: encrypts/decrypts the stored provider token (web + worker).
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
+      # §23 Show install URL: seals the recoverable copy of MCP-minted install tokens (web + worker).
+      INSTALL_TOKEN_ENC_KEY: ${INSTALL_TOKEN_ENC_KEY:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       POINTER_REFRESH_INTERVAL_MS: ${POINTER_REFRESH_INTERVAL_MS:-86400000}
       # Entra Graph credentials for group membership reconciliation (§4b).

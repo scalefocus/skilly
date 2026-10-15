@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.35.0",
+    date: "2026-10-15",
+    summary:
+      "Installing a skill you already have now asks first: go to it in Installed skills, override it (the old install is removed and its URL stops working), or install anyway. On Installed skills, “show install URL” brings back the command of anything installed from now on, and a new toggle sorts the list A–Z or by most recently installed — your choice is remembered.",
+  },
+  {
     version: "2.34.0",
     date: "2026-10-14",
     summary:
