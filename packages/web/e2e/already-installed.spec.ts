@@ -1,5 +1,5 @@
-// e2e: the already-installed prompt, Show install URL, and the Installed-page sort toggle
-// (SKILLY_SPEC.md §23). Runs against the dev stack (SKILLY_DEV_AUTH=1) on the seeded, git-published
+// e2e: the already-installed prompt, Show install URL, the Installed-page sort toggle, and the
+// per-skill install cards (SKILLY_SPEC.md §23). Runs against the dev stack (SKILLY_DEV_AUTH=1) on the seeded, git-published
 // `global/web-scraper` skill. A fresh mint only becomes an *install* when `npx skills` first clones
 // it (the gateway stamps used_at) — this dev-server suite has no git gateway, so the spec plays that
 // part with one SQL update (`claim()`), which needs DATABASE_URL in the launching shell; skipped
@@ -118,7 +118,8 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     const recent = page.getByRole("button", { name: "Recently installed", exact: true });
     await expect(az).toHaveAttribute("aria-pressed", "true");
     const order = async () => {
-      const refs = await page.locator(".installed-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-install-ref")));
+      // One entry per skill — a plain row or a card, both carry data-install-ref.
+      const refs = await page.locator(".rows [data-install-ref]").evaluateAll((els) => els.map((e) => e.getAttribute("data-install-ref")));
       return (ref: string) => refs.indexOf(ref);
     };
 
@@ -141,10 +142,82 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     // Remembered: a reload comes back sorted by install date.
     await page.reload();
     await expect(recent).toHaveAttribute("aria-pressed", "true", { timeout: 20_000 });
-    await expect(page.locator(".installed-row").first()).toHaveAttribute("data-install-ref", "global/web-scraper");
+    await expect(page.locator(".rows [data-install-ref]").first()).toHaveAttribute("data-install-ref", "global/web-scraper");
 
     await az.click();
     await expect(az).toHaveAttribute("aria-pressed", "true");
     expect(await page.evaluate(() => localStorage.getItem("skilly.installedSort"))).toBe("alpha");
+  });
+
+  test("several installs of one skill share one collapsible card (summary, children, Behind chip, highlight)", async ({ page }) => {
+    await devSignIn(page);
+    // Web Scraper holds one latest install from the first test. Add a pinned one, then make the
+    // latest-tracking install BEHIND (last served 1.0.0 < latest 1.2.0) and the pinned one current.
+    const mint = async (semver: string | null) => {
+      const r = await page.request.post("/api/skills/global/web-scraper/install", { data: { semver, expiresAt: null, onExisting: "keep" } });
+      expect(r.ok(), await r.text()).toBeTruthy();
+      await claim();
+    };
+    await mint("1.2.0");
+    const stamp = () => pool.query(
+      `update tokens t set last_served_semver = case when t.pinned_semver is null then '1.0.0' else t.pinned_semver end where ${MINE}`,
+      [DEV_OID],
+    );
+    await stamp();
+
+    await gotoLoaded(page, "/installed", /\/api\/installs$/);
+    const card = page.locator('[data-testid="install-card"][data-install-ref="global/web-scraper"]');
+    const toggle = card.getByRole("button", { name: /installations$/ });
+    const children = card.locator(".installed-child");
+
+    // Collapsed, with the summary: count, de-duplicated versions, worst freshness, active count.
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(card.getByTestId("install-card-count")).toHaveText("2 installations");
+    await expect(card.getByTestId("install-card-versions")).toHaveText("latest · pinned v1.2.0");
+    await expect(card.locator(".installed-card-head").getByText("Behind", { exact: true })).toBeVisible();
+    await expect(card.locator(".installed-card-head").getByText("2 active", { exact: true })).toBeVisible();
+    await expect(card.locator(".installed-card-head")).toContainText("last installed");
+    await expect(children).toHaveCount(0);
+    // A single-install skill stays a plain row.
+    await expect(page.locator('.installed-row[data-install-ref="global/pdf-tools"]')).toBeVisible();
+
+    // Clicking the header opens it: one child per install, newest first, with per-install actions.
+    await card.getByTestId("install-card-count").click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const newestFirst = (await pool.query<{ id: string }>(`select t.id from tokens t where ${MINE} order by t.used_at desc`, [DEV_OID])).rows.map((r) => r.id);
+    await expect(children).toHaveCount(2);
+    expect(await children.evaluateAll((els) => els.map((e) => e.getAttribute("data-install-id")))).toEqual(newestFirst);
+    await expect(children.first().getByRole("button", { name: "uninstall" })).toBeVisible();
+    await toggle.click();
+    await expect(children).toHaveCount(0);
+
+    // Behind chip: filter first, then group — with one behind install the skill is a plain row ...
+    const chip = page.getByRole("button", { name: "Behind latest" });
+    await chip.click();
+    await expect(page.locator('.installed-row[data-install-ref="global/web-scraper"]')).toBeVisible({ timeout: 10_000 });
+    await expect(card).toHaveCount(0);
+    await chip.click();
+
+    // ... and with two of three behind it is an EXPANDED card reading "2 of 3 installations".
+    await mint(null);
+    await stamp();
+    await page.reload();
+    await expect(card.getByTestId("install-card-count")).toHaveText("3 installations", { timeout: 20_000 });
+    await chip.click();
+    await expect(card.getByTestId("install-card-count")).toHaveText("2 of 3 installations", { timeout: 10_000 });
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(children).toHaveCount(2);
+    // Chip off → back to collapsed.
+    await chip.click();
+    await expect(card.getByTestId("install-card-count")).toHaveText("3 installations", { timeout: 10_000 });
+    await expect(children).toHaveCount(0);
+
+    // "Go to skill" lands here: the card opens and carries the highlight ring; the param is dropped.
+    await page.goto("/installed?highlight=global/web-scraper");
+    await expect(card).toHaveClass(/install-flash/, { timeout: 20_000 });
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(children).toHaveCount(3);
+    await expect(page).toHaveURL(/\/installed$/);
   });
 });
