@@ -75,6 +75,9 @@ secrets:
   # §40 AI integration: encrypts the AI provider token (32 bytes base64, `openssl rand -base64 32`).
   # Empty = the Administration "AI integration" card is disabled.
   aiTokenEncKey: ""
+  # §23 Show install URL: encrypts the recoverable copy of each install token (32 bytes base64,
+  # `openssl rand -base64 32`). Empty = installs mint as before and can't be re-shown later.
+  installTokenEncKey: ""
   s3SecretKey: "change-me-minio"
 
 # ── Non-secret config ────────────────────────────────────────────────────────

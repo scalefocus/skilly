@@ -6,11 +6,16 @@
 //   system  : true mints a SYSTEM installation — platform-owned (no user), for CI/org tools.
 //   Platform-admin only, re-verified here (hiding the checkbox is not authorization), and
 //   audited (install.system_minted) — §23 "System installations".
+//   onExisting: what to do when the caller already holds a CLAIMED personal install of this skill
+//   (§23 "Already-installed prompt"; personal mints only — ignored with system: true):
+//     "keep"    (default — MCP and every older caller unchanged) mint alongside;
+//     "ask"     mint nothing, answer 409 { error: "already_installed", installs } so the UI can ask;
+//     "replace" uninstall those installs and mint, in one transaction (the dialog's Override).
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../../lib/access";
 import { findSkill, listVersions } from "../../../../../../lib/catalog";
-import { mintInstallToken } from "../../../../../../lib/installs";
+import { listClaimedInstallsForSkill, mintInstallToken } from "../../../../../../lib/installs";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { withSystemLog } from "../../../../../../lib/apiLog";
 import { getInstallMaxTtlMonths, installExpiryCeiling } from "../../../../../../lib/settings";
@@ -40,7 +45,13 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/install", async funct
   }
   if (!access.userId) return Response.json({ error: "unknown user" }, { status: 403 });
 
-  const body = (await req.json().catch(() => ({}))) as { semver?: string | null; expiresAt?: string | null; system?: boolean };
+  const body = (await req.json().catch(() => ({}))) as {
+    semver?: string | null; expiresAt?: string | null; system?: boolean; onExisting?: "keep" | "ask" | "replace";
+  };
+  const onExisting = body.onExisting ?? "keep";
+  if (onExisting !== "keep" && onExisting !== "ask" && onExisting !== "replace") {
+    return Response.json({ error: "onExisting must be keep, ask or replace" }, { status: 422 });
+  }
 
   // System installation: platform-admin only, verified against SCIM-resolved roles (invariant #1)
   // regardless of what the UI showed. §23 "System installations".
@@ -77,7 +88,19 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/install", async funct
     expiresAt = d;
   }
 
-  const { raw } = await mintInstallToken(access.userId, skill.id, pinned, expiresAt, { system });
+  // Already-installed prompt (§23): checked only AFTER every validation above, so the dialog never
+  // offers an option that would then fail. Personal mints only — system mints never prompt.
+  if (!system && onExisting === "ask") {
+    const installs = await listClaimedInstallsForSkill(access.userId, skill.id);
+    if (installs.length > 0) {
+      return Response.json({ error: "already_installed", installs }, { status: 409 });
+    }
+  }
+
+  const { raw } = await mintInstallToken(access.userId, skill.id, pinned, expiresAt, {
+    system,
+    replaceClaimed: !system && onExisting === "replace",
+  });
   if (system) {
     // Audited (exception to "install tokens are not audited") — the compensating control for a
     // shared, visibility-bypassing credential. §11/§23.

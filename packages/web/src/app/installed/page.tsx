@@ -1,5 +1,5 @@
 "use client";
-import { Suspense, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApi, Pill, EmptyState, ScrollToTop, CopyCommand } from "../../components/ui";
@@ -7,7 +7,9 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { SkillIcon } from "../../components/SkillIcon";
-import { filterBehind, filterInstalls } from "../../lib/installedFilter";
+import { filterBehind, filterInstalls, installRef, installedHighlightHref, INSTALLED_SORT_KEY, parseInstalledSort, sortInstalls, type InstalledSort } from "../../lib/installedFilter";
+import { requestInstall, type ExistingInstall, type OnExisting } from "../../lib/installMint";
+import { AlreadyInstalledDialog } from "../../components/AlreadyInstalledDialog";
 import type { Freshness } from "@skilly/shared/freshness";
 
 interface Install {
@@ -33,6 +35,8 @@ interface Install {
   lastClonedAt: string | null;
   latestSemver: string | null;
   freshness: Freshness;
+  /** §23 "Show install URL": the row has a recoverable copy (and the key is configured). */
+  revealable: boolean;
 }
 
 /** Which installs to list: the caller's own, or (platform admins only) all system installs. §23 */
@@ -69,6 +73,17 @@ function freshnessLine(i: Install, date: (iso: string) => string): string {
   }
 }
 
+/** Caption under a revealed install command (§23 "Show install URL"). */
+function revealCaption(i: Install, system: boolean, date: (iso: string) => string): string {
+  const parts = [
+    i.pinnedSemver ? `pinned v${i.pinnedSemver}` : "latest",
+    i.expiresAt ? `expires ${date(i.expiresAt)}` : "never expires",
+    system ? "a shared credential" : "anyone with this URL can install as you",
+  ];
+  if (i.inactive) parts.push("inactive — this URL is refused until you reactivate it");
+  return parts.join(" · ");
+}
+
 function InstalledInner() {
   const fmt = useDateFmt();
   const router = useRouter();
@@ -95,9 +110,57 @@ function InstalledInner() {
     scope === "system" ? "/api/installs?scope=system" : "/api/installs",
   );
   const installs = data?.installs ?? [];
+  // Sort toggle (§23): A–Z (default) or Recently installed, remembered per browser — one preference
+  // for both scopes. Read after mount (no localStorage during SSR); blocked storage → A–Z every visit.
+  const [sort, setSort] = useState<InstalledSort>("alpha");
+  useEffect(() => {
+    try { setSort(parseInstalledSort(window.localStorage.getItem(INSTALLED_SORT_KEY))); } catch { /* storage blocked → A–Z */ }
+  }, []);
+  const pickSort = (next: InstalledSort) => {
+    setSort(next);
+    try { window.localStorage.setItem(INSTALLED_SORT_KEY, next); } catch { /* per-browser convenience only */ }
+  };
   // §23: case-insensitive substring match over title + @ns/slug (see lib/installedFilter). Applies
-  // in both scopes; the query persists across the Mine/System toggle (it lives in the URL).
-  const filtered = filterInstalls(filterBehind(installs, behindOnly), q);
+  // in both scopes; the query persists across the Mine/System toggle (it lives in the URL). The
+  // chosen sort applies to whatever survives the search + Behind-latest filters.
+  const filtered = sortInstalls(filterInstalls(filterBehind(installs, behindOnly), q), sort);
+
+  // Highlight on arrival (§23): ?highlight=<ns>/<slug> is where the already-installed prompt's
+  // "Go to skill" lands. Force Mine, clear the header search (?q= and its box) and the Behind chip
+  // so the rows can't be filtered out, then drop the param so a reload doesn't re-flash. The sort
+  // choice is kept. Every row of that skill gets an accent ring that fades after ~3 s.
+  const highlightParam = params.get("highlight");
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!highlightParam) return;
+    setScope("mine");
+    setFlash(highlightParam);
+    window.dispatchEvent(new Event("skilly:clear-search"));
+    router.replace("/installed", { scroll: false });
+  }, [highlightParam, router]);
+  useEffect(() => {
+    if (!flash || loading) return;
+    // Nothing of that skill is installed (e.g. uninstalled in another tab) → nothing to highlight.
+    if (!installs.some((i) => installRef(i) === flash)) { setFlash(null); return; }
+    const t = setTimeout(() => setFlash(null), 3000);
+    return () => clearTimeout(t);
+  }, [flash, loading, installs]);
+  // Scrolls the FIRST highlighted row into view once it is on the page (a new callback per flash,
+  // so React re-attaches it — and scrolls — even when the row was already mounted).
+  const scrollToFlash = useCallback((el: HTMLDivElement | null) => {
+    if (el && flash) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [flash]);
+  const firstFlashId = flash ? filtered.find((i) => installRef(i) === flash)?.id ?? null : null;
+
+  // §23 "Show install URL": the row whose command panel is open, and the command fetched for it.
+  const [revealFor, setRevealFor] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<{ rowId: string; command: string } | null>(null);
+  // Bumped on every open/close, so a slow response for a row the user has since moved on from is
+  // dropped instead of landing in (or closing) the panel that is open now.
+  const revealSeq = useRef(0);
+  // Closing a panel also drops the command from state — a credential shouldn't linger in memory.
+  const closeReveal = useCallback(() => { revealSeq.current++; setRevealFor(null); setRevealed(null); }, []);
+  useEffect(() => { closeReveal(); }, [scope, closeReveal]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [activateIso, setActivateIso] = useState<string | null>(null);
@@ -107,23 +170,48 @@ function InstalledInner() {
   const [successorIso, setSuccessorIso] = useState<string | null>(null);
   const [successorPending, setSuccessorPending] = useState(false);
   const [successorCmd, setSuccessorCmd] = useState<{ rowId: string; command: string; expiresAt: string | null } | null>(null);
+  // The already-installed prompt for the successor (§23/§45.5): set while the dialog is open.
+  const [succExisting, setSuccExisting] = useState<{ row: Install; installs: ExistingInstall[] } | null>(null);
+  const [succExistingErr, setSuccExistingErr] = useState<string | null>(null);
 
-  const installSuccessor = async (i: Install) => {
+  // Mints the SUCCESSOR at latest. Asks first (§23 "Already-installed prompt"): when the user already
+  // holds the successor, the dialog re-posts with "replace" (Override — replaces only the successor's
+  // installs, never this deprecated row) or "keep" (Install anyway).
+  const installSuccessor = async (i: Install, onExisting: OnExisting = "ask") => {
     const succ = i.skillDeprecation?.successor;
     if (!succ) return;
     if (successorPending) { setMsg({ kind: "err", text: "Pick an expiry date first, or switch the expiry to Never." }); return; }
+    setBusyId(i.id); setMsg(null); setSuccExistingErr(null);
+    const inDialog = succExisting !== null;
+    try {
+      const out = await requestInstall(succ.namespaceSlug, succ.skillSlug, { semver: null, expiresAt: successorIso, onExisting });
+      if (out.kind === "already_installed") { setSuccExisting({ row: i, installs: out.installs }); return; }
+      if (out.kind === "error") throw new Error(out.message);
+      setSuccExisting(null);
+      setSuccessorCmd({ rowId: i.id, command: out.install.command, expiresAt: out.install.expiresAt });
+      setMsg({ kind: "ok", text: `Install command for ${succ.title} generated — run it, then uninstall this one when you're ready.` });
+      if (onExisting === "replace") reload(); // the successor's replaced rows are gone
+    } catch (e) {
+      const text = String((e as Error).message);
+      if (inDialog) setSuccExistingErr(text); else setMsg({ kind: "err", text });
+    } finally { setBusyId(null); }
+  };
+
+  const toggleReveal = async (i: Install) => {
+    if (revealFor === i.id) { closeReveal(); return; }
+    const seq = ++revealSeq.current;
+    // One inline panel per row: opening the URL closes the Activate / Install-latest panels.
+    setRevealFor(i.id); setRevealed(null); setActivatingId(null); setSuccessorFor(null);
     setBusyId(i.id); setMsg(null);
     try {
-      const r = await fetch(`/api/skills/${succ.namespaceSlug}/${succ.skillSlug}/install`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ semver: null, expiresAt: successorIso }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { command?: string; expiresAt?: string | null; error?: string };
-      if (!r.ok || !j.command) throw new Error(j.error ?? "Failed to generate the install command");
-      setSuccessorCmd({ rowId: i.id, command: j.command, expiresAt: j.expiresAt ?? null });
-      setMsg({ kind: "ok", text: `Install command for ${succ.title} generated — run it, then uninstall this one when you're ready.` });
-    } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusyId(null); }
+      const r = await fetch(`/api/installs/${i.id}/command`, { cache: "no-store" });
+      const j = (await r.json().catch(() => ({}))) as { command?: string; error?: string };
+      if (seq !== revealSeq.current) return; // superseded by a later open/close
+      if (!r.ok || !j.command) throw new Error(j.error ?? "Couldn’t load the install URL");
+      setRevealed({ rowId: i.id, command: j.command });
+    } catch (e) {
+      if (seq === revealSeq.current) { closeReveal(); setMsg({ kind: "err", text: String((e as Error).message) }); }
+    } finally { setBusyId((b) => (b === i.id ? null : b)); }
   };
 
   const uninstall = async (i: Install) => {
@@ -174,6 +262,15 @@ function InstalledInner() {
               <button type="button" className={`sort-opt${scope === "system" ? " sort-on" : ""}`} onClick={() => setScope("system")}>System installs</button>
             </div>
           )}
+          {/* Sort (§23): A–Z (default) or Recently installed — remembered in this browser. */}
+          <div className="sort-toggle" role="group" aria-label="Sort installs">
+            <button type="button" className={`sort-opt${sort === "alpha" ? " sort-on" : ""}`} aria-pressed={sort === "alpha"} onClick={() => pickSort("alpha")}>
+              A–Z
+            </button>
+            <button type="button" className={`sort-opt${sort === "recent" ? " sort-on" : ""}`} aria-pressed={sort === "recent"} onClick={() => pickSort("recent")}>
+              Recently installed
+            </button>
+          </div>
           {/* "Behind latest" (§23): show only installs running an older or withdrawn version. */}
           <div className="sort-toggle" role="group" aria-label="Freshness filter">
             <button
@@ -190,6 +287,25 @@ function InstalledInner() {
       </div>
 
       {msg && <div style={{ marginBottom: 14, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
+      {succExisting?.row.skillDeprecation?.successor && (() => {
+        const row = succExisting.row;
+        const succ = succExisting.row.skillDeprecation.successor;
+        return (
+          <AlreadyInstalledDialog
+            title={succ.title}
+            installs={succExisting.installs}
+            busy={busyId === row.id}
+            error={succExistingErr}
+            onGoTo={() => {
+              setSuccExisting(null); setSuccessorFor(null);
+              router.replace(installedHighlightHref(succ.namespaceSlug, succ.skillSlug), { scroll: false });
+            }}
+            onOverride={() => void installSuccessor(row, "replace")}
+            onInstallAnyway={() => void installSuccessor(row, "keep")}
+            onCancel={() => { setSuccExisting(null); setSuccExistingErr(null); }}
+          />
+        );
+      })()}
 
       {error ? (
         <EmptyState icon="⚠" title="Couldn’t load your installs" hint={error} />
@@ -216,8 +332,10 @@ function InstalledInner() {
         <div className="rows reveal">
           {filtered.map((i) => (
             <div
-              className="row installed-row"
+              className={`row installed-row${flash && installRef(i) === flash ? " install-flash" : ""}`}
               key={i.id}
+              ref={i.id === firstFlashId ? scrollToFlash : undefined}
+              data-install-ref={installRef(i)}
               style={{ cursor: "pointer" }}
               onClick={() => router.push(`/skills/${i.namespaceSlug}/${i.skillSlug}`)}
             >
@@ -263,15 +381,28 @@ function InstalledInner() {
                   <button
                     className="btn btn-sm btn-primary"
                     disabled={busyId === i.id}
-                    onClick={() => { setSuccessorFor(successorFor === i.id ? null : i.id); setSuccessorIso(null); setSuccessorCmd(null); setActivatingId(null); }}
+                    onClick={() => { setSuccessorFor(successorFor === i.id ? null : i.id); setSuccessorIso(null); setSuccessorCmd(null); setActivatingId(null); closeReveal(); }}
                     title={`Generate an install command for ${i.skillDeprecation.successor.title} (latest)`}
                     data-testid="install-latest"
                   >
                     install latest
                   </button>
                 )}
+                {i.revealable && (
+                  // §23 "Show install URL": re-show this install's command (rows without a stored copy have no button).
+                  <button
+                    className="btn btn-sm"
+                    disabled={busyId === i.id}
+                    aria-expanded={revealFor === i.id}
+                    onClick={() => void toggleReveal(i)}
+                    title="Show this install's command again"
+                    data-testid="show-install-url"
+                  >
+                    show install URL
+                  </button>
+                )}
                 {i.inactive && (
-                  <button className="btn btn-sm" disabled={busyId === i.id} onClick={() => { setActivatingId(activatingId === i.id ? null : i.id); setActivateIso(null); }}>
+                  <button className="btn btn-sm" disabled={busyId === i.id} onClick={() => { setActivatingId(activatingId === i.id ? null : i.id); setActivateIso(null); closeReveal(); }}>
                     activate
                   </button>
                 )}
@@ -279,6 +410,17 @@ function InstalledInner() {
                   uninstall
                 </button>
               </div>
+              {revealFor === i.id && revealed?.rowId === i.id && (
+                <div
+                  style={{ flexBasis: "100%", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="install-url-panel"
+                >
+                  {/* The mint box's look (copy button, click-to-copy) — but never auto-copied. */}
+                  <CopyCommand command={revealed.command} />
+                  <div className="muted mono" style={{ fontSize: 11, marginTop: 8 }}>{revealCaption(i, scope === "system", fmt.dateTime)}</div>
+                </div>
+              )}
               {activatingId === i.id && (
                 <div
                   style={{ flexBasis: "100%", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}

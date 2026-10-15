@@ -1417,6 +1417,11 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
    card's top-right corner instead of dropping to its own line when the meta is wide (e.g. with the
    client IP). Works at every width — no separate mobile rule needed. */
 .installed-row { align-items: flex-start; flex-wrap: wrap; }
+/* §23 ?highlight= arrival: an accent ring on the skill's rows that fades out once the class drops.
+   Inset, because .rows clips (overflow: hidden) and its rows sit flush against each other. */
+.installed-row { transition: background 0.16s, box-shadow 0.8s ease; }
+.installed-row.install-flash { box-shadow: inset 0 0 0 2px var(--accent); transition: background 0.16s, box-shadow 0.15s ease; }
+@media (prefers-reduced-motion: reduce) { .installed-row, .installed-row.install-flash { transition: none; } }
 /* flex-basis 0 (not auto): with the row wrapping for the activate panel, an `auto` basis would make
    the wrap algorithm bump .version-actions to its own line rather than shrink this column. Basis 0
    keeps the actions on line 1 (top-right) while this column grows to fill the rest and wraps inside. */

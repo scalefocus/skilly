@@ -208,7 +208,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id`, `actor_user_id`, `skill_version_id`, `skill_id` (nullable FK, `ON DELETE SET NULL` — links a fetch to its skill even when the exact version isn't resolved; powers install analytics, §21), `source`, `created_at`, `is_system` (BOOLEAN default false — the clone presented a **system installation** token, §23; distinguishes system clones from legacy anonymous/tokenless rows, both of which have `actor_user_id = NULL`).
 
 ### `tokens`
-- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), **`last_served_semver`** (TEXT, nullable — the semver the gateway last served this install, migration **0083**, §23 *Installed-version freshness*; a plain string, deliberately **not** an FK to `skill_versions` so a later version delete leaves the row readable), **`last_cloned_at`** (TIMESTAMPTZ, nullable — when that serving happened; both NULL on `marketplace` tokens), `created_at`.
+- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), **`last_served_semver`** (TEXT, nullable — the semver the gateway last served this install, migration **0083**, §23 *Installed-version freshness*; a plain string, deliberately **not** an FK to `skill_versions` so a later version delete leaves the row readable), **`last_cloned_at`** (TIMESTAMPTZ, nullable — when that serving happened; both NULL on `marketplace` tokens), **`token_enc`** (TEXT, nullable — the raw `install` token AES-256-GCM-encrypted under `INSTALL_TOKEN_ENC_KEY`, migration **0095**, §23 *Show install URL*; never logged, never in audit payloads, never read by the gateway; NULL for pre-0095 rows, rows minted without the key, and all `marketplace` tokens), `created_at`.
 - **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23. **The §29 MCP/OAuth credentials are a separate regime in separate tables** (`oauth_*` below) — header-borne, short-lived and rotating; they never share a row or an enum with `tokens`.
 - **`marketplace` tokens** (§30.4) are the same handle for a **plugin marketplace** rather than a skill: `skill_id` is NULL and the scope is carried by **`marketplace_scope`** (`public` | `namespace`) + **`namespace_id`** (FK → `namespaces`, `ON DELETE CASCADE`; set **iff** scope = `namespace`). `skill_id` is therefore **nullable**, and a CHECK enforces the discriminant: `install` ⇒ `skill_id` NOT NULL ∧ `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL ∧ `marketplace_scope` NOT NULL ∧ (`namespace_id` NOT NULL ⇔ scope = `namespace`). **`last_served_commit`** (TEXT, nullable) is the per-token attribution cursor of §30.7. Same TTL, reuse, reactivate and hard-delete-on-remove semantics as `install`; **`is_system` is never set** — system marketplaces are deferred (§30.4).
 
@@ -1171,7 +1171,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*; plus `parentId`, `tombstoned`, `tombstoneRemoved` — §24 *Replies to discussion comments*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15).
-  - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
+  - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
   - **Skill quality (§41.10):** `skill.quality_reassess_requested` (actor; skill, version) and `job.quality_rescore_requested` (actor; row count). The sweep's own writes, AI calls and notifications are telemetry, **not audited**.
@@ -1417,6 +1417,7 @@ current or future type can ever leak JSON to a user.
 ### Configuration (env / mounted config; secrets external, never in images)
 - Postgres URL; object-store endpoint+creds; OIDC (tenant, client id/secret); SCIM bearer token; SMTP; registry base URL; scan config; retention policy; `SKILLY_BOOTSTRAP_ADMIN_GROUP`; **`EMAIL_TOKEN_ENC_KEY`** (32-byte base64 — encrypts the §12 email service-account tokens; shared by web + worker; required only for the Graph email transport). *(The **install-token max TTL** is no longer an env var — it's the global-admin `install_max_ttl_months` platform setting, §23. The legacy `ONE_TIME_TOKEN_TTL_SECONDS` still ships in `.env.example`/compose but is vestigial — install tokens don't use it.)*
 - **`AI_TOKEN_ENC_KEY`** (32-byte base64) — encrypts the §40 AI-integration provider token; shared by **web + worker** (both may call the AI helper); required only to configure or use the AI integration — without it the Administration card is disabled with a config hint. Shipped in `.env.example`, `docker-compose.yml` (web + worker) and the Helm values/secret. The integration itself (provider, URL, token, model, on/off) is **UI-only** — no env override.
+- **`INSTALL_TOKEN_ENC_KEY`** (32-byte base64) — encrypts the recoverable copy of each §23 install token (`tokens.token_enc`) behind **Show install URL**; shared by **web + worker** (the web install endpoint and the worker's MCP `install_skill` both mint and seal; only the web app reveals; the gateway validates by hash and never decrypts). **Optional:** without it installs mint exactly as before with no stored copy, and *Show install URL* never appears for them. Rotating or replacing the key makes previously stored copies unrecoverable (reveal → 409, generate a new one) — no re-encryption tooling in v1. Shipped in `.env.example`, `docker-compose.yml` (web + worker) and the Helm values/secret.
 - **Entra app prerequisites for the §12 Graph email transport** (documented deployment step): the existing skilly app registration needs delegated **`Mail.Send`** + **`offline_access`** admin-consented and the extra redirect URI **`/api/admin/email/callback`** registered. Env-SMTP remains the consent-free fallback.
 - **`CSP_MODE`** (`enforce` default | `report-only` | `off`) selects the Content-Security-Policy posture the web middleware emits (§22 *Content-Security-Policy*): ships **enforcing**; `report-only` is a no-block shakedown; `off` reverts to the legacy `unsafe-inline` policy. Production-only — development always uses the lenient dev policy.
 - **§29 MCP server — no new secret.** OAuth codes/access/refresh tokens are **opaque random values stored as sha256 hashes** (like `tokens.hashed_token`), so there is nothing to encrypt and no signing key to manage; the AS/protected-resource metadata is derived from the existing **registry base URL**, and client-IP attribution reuses **`TRUST_PROXY`** (§23). All tuning is platform settings, not env (`mcp_enabled`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`).
@@ -2163,7 +2164,12 @@ responsibilities. Hardening that pins or clarifies invariants here:
   (inactive). **System installations** (§23) relax two further terms — no owning user
   (platform-admin-managed, provenance via `created_by_user_id`) and **no clone-time
   visibility/namespace re-check** (a deliberate admin grant) — compensated by admin-only minting
-  and mandatory audit of mint/uninstall/reactivate. The original
+  and mandatory audit of mint/uninstall/reactivate/URL-reveal. Since migration 0095 each install
+  token also carries a **recoverable copy** (`token_enc`, AES-256-GCM under the env
+  `INSTALL_TOKEN_ENC_KEY`) so its owner can re-show the command (§23 *Show install URL*) — an
+  accepted widening of the at-rest exposure: a database leak alone still yields only hashes; a
+  leak of the database **and** the key yields working clone URLs. The copy is never logged, never
+  in audit payloads, never returned over MCP, and validation stays hash-only. The original
   single-use/short-TTL/delete-on-use rule still governs any residual
   legacy `one_time`/`pat` rows.
 - **Email service-account tokens** (§12): the delegated Graph refresh/access tokens are stored
@@ -2427,7 +2433,11 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   `is_system` (**system installation** flag — see below; `user_id` is NULL iff set, enforced by a
   CHECK), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — provenance: the
   platform admin who minted a system install; NULL on personal installs), **`last_served_semver`** /
-  **`last_cloned_at`** (the freshness stamp — *Installed-version freshness* below; migration 0083).
+  **`last_cloned_at`** (the freshness stamp — *Installed-version freshness* below; migration 0083),
+  **`token_enc`** (the raw token, **AES-256-GCM-encrypted** under `INSTALL_TOKEN_ENC_KEY` — the
+  recoverable copy behind *Show install URL*, below; migration 0095; NULL when minted before 0095 or
+  while the key was unset). `hashed_token` remains the **only** lookup/validation path — the gateway
+  never decrypts.
 - **Reusable**, skill-scoped, owner-revocable. **Every** clone (org *and* namespace) must
   present a valid install token — anonymous org clones are removed. Namespace skills
   additionally require the token's user to have namespace access at clone time
@@ -2457,7 +2467,10 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
   **Purge scopes never cross the system boundary:** a personal mint purges only the minting
   user's unclaimed personal tokens; a **system** mint purges prior unclaimed **system** tokens
   for that skill (across all admins — the last generated system command is the live one) and
-  never touches anyone's personal tokens, and vice versa.
+  never touches anyone's personal tokens, and vice versa. A **personal** mint from the detail page
+  (or the §45.5 successor panel) first passes the **already-installed prompt** (below) when the
+  user already holds a claimed install of that skill; the prompt's *Override* adds a further,
+  explicit purge of those **claimed** installs.
 - **UI staleness:** on the detail page, changing the selected version or the expiry
   (Never ⇄ a date, or picking a date) — **or toggling the "System install" checkbox** —
   **hides the previously generated command and its caption**
@@ -2485,6 +2498,77 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
 - **Uninstall:** **hard-delete** the token → the URL is refused. The skill is untouched and
   **install counts / usage / leaderboard history are preserved** (an uninstall is not a
   retro-erasure of past clones).
+
+### Already-installed prompt (personal mints)
+Minting a second install of a skill you already have is usually a mistake (a lost URL, a version
+change) — so the detail page asks first instead of silently stacking installations.
+
+- **Trigger.** A **personal** mint (System install checkbox **unticked**) when the caller already
+  holds **≥1 claimed personal install** of that skill (`used_at IS NOT NULL`, `user_id` = caller,
+  **active or inactive**, **any** version — pinned or latest, whatever the new selection is).
+  Unclaimed generated commands never trigger it (the mint purges them anyway). **System mints
+  never prompt** and never look at personal installs.
+- **Surfaces.** The skill **detail page** Install split-button and the **§45.5 successor panel** on
+  the Installed page (*Install latest* on a deprecated row — the check runs against the
+  **successor's** installs). **MCP `install_skill` (§29) never prompts** — it keeps today's
+  mint-alongside behavior.
+- **Server-authoritative check.** `POST /api/skills/:ns/:slug/install` gains an optional
+  **`onExisting`**: `"keep"` (**default** — today's behavior, so MCP and any other caller are
+  unchanged), `"ask"`, or `"replace"`. Both UI surfaces send `"ask"`. With `"ask"` and ≥1 claimed
+  personal install, the endpoint mints **nothing** (and purges nothing) and returns **409**
+  `{ error: "already_installed", installs: [{ id, pinnedSemver, installedAt, expiresAt, inactive }] }`
+  — the caller's own rows only. `onExisting` is ignored when `system: true`. All the existing
+  validation (visibility, version gating, expiry cap) runs **before** the check, so the dialog
+  never offers an option that would then fail.
+- **The dialog** (modal; Escape, the ✕ and a backdrop click cancel — **nothing minted**):
+  *"You already have **‹title›** installed"*, listing each existing install (latest / pinned v‹x› ·
+  installed ‹date› · active/inactive). Three actions:
+  1. **Go to skill** — navigates to **`/installed?highlight=‹ns›/‹slug›`** (below). Mints nothing.
+  2. **Override** — re-posts with `onExisting: "replace"`: in **one transaction** the server
+     hard-deletes **all** of the caller's claimed personal installs of that skill (an ordinary
+     uninstall each — URLs refused from then on, counts/history preserved), runs the usual
+     unclaimed purge, and mints the new token for the current version/expiry selection. If the
+     mint fails, nothing was deleted. The dialog's copy says the existing URL(s) **stop working
+     immediately** (an agent holding one can't `npx skills update` until it re-runs the new
+     command). Unaudited, like any personal uninstall/mint.
+  3. **Install anyway** — re-posts with `onExisting: "keep"`: today's behavior, the new token
+     is minted alongside the existing install(s).
+  On success the command shows exactly as a normal mint does (copy box + caption, auto-copied).
+- **Race.** If the installs vanish between the 409 and the click (uninstalled in another tab),
+  *Override* simply deletes nothing and mints; *Go to skill* lands on a page with nothing to
+  highlight (no-op).
+
+### Show install URL (recoverable command)
+Reverses the old "the registry cannot rebuild the command" stance — **for the owner, in the
+browser only** (MCP still never hands a credential back, §29).
+
+- **Storage.** Every `install` mint (personal **and** system, from the detail page, the Installed
+  page or MCP `install_skill`) stores `token_enc` — the raw token,
+  AES-256-GCM-encrypted under the env **`INSTALL_TOKEN_ENC_KEY`** (§13; same `v1:` format and code
+  as the email/AI keys; key separation from both). Without the key, minting works exactly as before
+  and stores NULL. **No backfill** — pre-0095 tokens have only a hash and are never revealable.
+  `marketplace` tokens (§30) are out of scope and never get a copy.
+- **Row flag.** `GET /api/installs` rows gain **`revealable`** (boolean) = `token_enc IS NOT NULL`
+  **and** the key is configured. A row that isn't revealable **has no Show install URL button**
+  (hidden, not disabled).
+- **Reveal endpoint.** **`GET /api/installs/:id/command`** → `{ command }` — the full
+  `npx skills add …` command rebuilt through the pinned adapter (`buildInstallCommand`,
+  `packages/shared/src/external-tool.ts` — the wire format is unchanged) from the decrypted token,
+  the row's `pinned_semver`, and the skill's **current** harness (`--agent`). Personal rows:
+  **owner-only** (404 to anyone else, existence not revealed). System rows: **any platform admin**,
+  and each reveal writes an **`install.system_url_revealed`** audit row (actor, skill,
+  pinned/latest — **never the token or command**). Personal reveals are unaudited. Rate-limited
+  per user; `Cache-Control: no-store`; the command is never logged. A decrypt failure (key
+  rotated/replaced) → **409** *"This install's URL can't be recovered — generate a new one from
+  the skill page."*
+- **UI.** A **Show install URL** edge action on every revealable row (Mine and, for platform
+  admins, System installs). It toggles an inline panel under the row — the **same copy box as the
+  detail-page mint** (`CopyCommand`: copy button, click-to-copy) but **not auto-copied** (revealing
+  never writes the clipboard by itself) — with the caption *"‹latest | pinned v‹x›› · ‹expires … |
+  never expires› · anyone with this URL can install as you"* (system rows: *"… · a shared
+  credential"*). On an **inactive** row the caption adds *"inactive — this URL is refused until you
+  reactivate it"* (Reactivate keeps the same token, so the URL works again afterwards). One inline
+  panel per row at a time (opening it closes that row's Activate / Install-latest panel).
 
 ### Gateway
 - `validateToken` accepts only `type='install'`, valid while `expires_at` is null-or-future, the
@@ -2586,17 +2670,35 @@ works for both protocol versions).
   or "Never"), client label (from `User-Agent`), **the client IP the install was made from**
   (`client_ip`, shown when known), and active/inactive. The IP is **owner-scoped** (visible only
   on the user's own Installed page), not surfaced to admins — **except on system-install rows**
-  (see below). Rows are ordered **alphabetically by
-  skill title** (case-insensitive, ascending; ties broken by most-recent `used_at`).
-- Edge actions (styled like the detail-page version buttons): **Uninstall** always; **Activate**
+  (see below).
+- **Sort toggle** (top of the page, a `sort-toggle` group beside the scope/filter chips):
+  **A–Z** (**default**) — skill title, case-insensitive ascending, ties broken by most-recent
+  `used_at` — or **Recently installed** — `used_at` descending, ties broken by title A–Z. The
+  choice is remembered **per browser** in `localStorage` (`skilly.installedSort` = `alpha` |
+  `recent`; read/write wrapped in try/catch — blocked storage just means A–Z every visit); it is
+  **not** mirrored to the URL. **One preference for both scopes** (Mine and System installs), and
+  it **composes** with the header live-filter and the *Behind latest* chip (sorting applies to
+  whatever rows survive them). Applied client-side over the loaded rows — `GET /api/installs`
+  takes no sort param.
+- **Highlight on arrival (`?highlight=‹ns›/‹slug›`)** — the target of the already-installed
+  prompt's *Go to skill* (above). On arrival the page forces the **Mine** scope, **clears `?q=`
+  and the *Behind latest* chip** (so the rows can't be filtered out; the sort choice is kept),
+  scrolls the **first** matching row into view, and gives **every** row of that skill an accent
+  ring that **fades out after ~3 s**; the param is then dropped via `router.replace` (a reload
+  doesn't re-flash). No matching row → nothing happens. From the §45.5 successor panel the same
+  behavior runs in place on the already-open page.
+- Edge actions (styled like the detail-page version buttons): **Uninstall** always; **Show install
+  URL** on revealable rows (*Show install URL* above); **Activate**
   (date/Never picker) only when inactive; **Install latest** (§45.5) on a row whose skill is
   **deprecated with a visible, installable successor** — it mints a personal install of the
   **successor at latest** (the same expiry picker as Activate, the same `POST
   /api/skills/:ns/:slug/install` the detail page uses — no new endpoint) and shows the command
-  in an **inline copy-command panel under the row**; it never uninstalls the deprecated row. **Mine scope only**
+  in an **inline copy-command panel under the row**; it never uninstalls the deprecated row (if the
+  successor is already installed, the *Already-installed prompt* above runs first — its *Override*
+  replaces only the successor's installs). **Mine scope only**
   (system installs are minted from the admin surface, §23). Deprecated rows also carry the
   **`deprecated` pill** and a *"Use **<successor title>** instead"* link (§45.5). `GET /api/installs`, `DELETE /api/installs/[id]`,
-  `PATCH /api/installs/[id] {expiresAt}` — owner-checked for personal rows; on **system** rows
+  `PATCH /api/installs/[id] {expiresAt}`, `GET /api/installs/[id]/command` — owner-checked for personal rows; on **system** rows
   the check is **platform admin** instead (any admin, not just the minter).
 - **System installs view (platform admins only):** a **"Mine / System installs" toggle filter**
   at the top of the page, **default Mine** (the personal view above, unchanged; non-admins never
@@ -2604,8 +2706,9 @@ works for both protocol versions).
   platform-wide, same columns plus: a **"System install" pill** on each row, **minted-by** (the
   `created_by_user_id` label — renders the tombstone name if that admin was since erased), and
   the **client IP** (a deliberate exception to the owner-only-IP rule: it is the only forensic
-  handle a system install has, and every viewer here is a platform admin). Uninstall / Activate
-  edge actions work identically for any platform admin. Served by `GET /api/installs?scope=system`
+  handle a system install has, and every viewer here is a platform admin). Uninstall / Activate /
+  **Show install URL** edge actions work identically for any platform admin (a system reveal is
+  audited — *Show install URL* above). Served by `GET /api/installs?scope=system`
   (403 for non-admins). The version column, badges and the **Behind latest** filter below apply
   identically here — this *is* the admin view of outdated system installations; there is no
   separate Administration surface for it.
@@ -2616,13 +2719,15 @@ works for both protocol versions).
   exactly like `?q=`), **persists across the Mine/System toggle**, and **composes with the header
   live-filter** (`?q=` narrows within the behind set). The filter is applied **client-side** over the
   already-loaded rows — `GET /api/installs` returns every row with its freshness fields and takes
-  no new query param. Alphabetical-by-title ordering is preserved. **No-match state:** filter on and
+  no new query param. The chosen **sort order** (A–Z or Recently installed) is preserved. **No-match state:** filter on and
   nothing behind → *"Everything is up to date."* (and, when `?q=` is also set, the existing
   *"No installed skills match …"* state wins, with a hint naming both the search and the filter).
 - **`GET /api/installs` row shape gains** `lastServedSemver` (string | null), `lastClonedAt` (ISO |
   null), `latestSemver` (string | null — the skill's current latest stable), and `freshness`
   (`current` | `behind` | `withdrawn` | `unknown`). Latest-per-skill is computed in the query (one
-  lateral join on `skill_versions`), no new counter or cache. Additive — nothing removed.
+  lateral join on `skill_versions`), no new counter or cache. Additive — nothing removed. It also
+  gains **`revealable`** (boolean — *Show install URL* above); the token itself is never in this
+  payload.
 - **Header search — live filter of the installed list (`/installed` only):** the app-shell
   top-bar search box takes a **third mode** here (alongside the registry typeahead and the catalog
   live-filter, §10). On `/installed` its placeholder reads **"Search installed skills…"** (not
@@ -2636,7 +2741,7 @@ works for both protocol versions).
   arrival**, and **clearing it restores the full list**. The filter applies within whichever
   **scope** is active (**Mine**, or **System installs** for platform admins) and the query
   **persists across the Mine/System toggle**; the placeholder is "Search installed skills" in
-  **both** scopes. The **alphabetical-by-title ordering is preserved** among the matches. **No-match
+  **both** scopes. The chosen **sort order** (A–Z or Recently installed) is preserved among the matches. **No-match
   state:** when the box is non-empty and no install matches, the page shows a **distinct empty
   state** (*"No installed skills match "…".*", with a hint to clear the search) — separate from the
   "No installs yet" / "No system installs yet" empty states shown when the list is genuinely empty.
@@ -2671,8 +2776,9 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   allowed. Because a Never system token is an **eternal shared credential**, the mint UI's
   caption/confirmation must say so explicitly when Never is selected.
 - **Audit (exception to "install tokens are not audited", §11):** minting
-  (`install.system_minted`), uninstalling (`install.system_uninstalled`), and
-  reactivating/extending (`install.system_reactivated`) a system install are written to
+  (`install.system_minted`), uninstalling (`install.system_uninstalled`),
+  reactivating/extending (`install.system_reactivated`), and **revealing its URL**
+  (`install.system_url_revealed` — never the token/command itself) for a system install are written to
   `audit_log` with actor, skill, pinned/latest, and expiry. This is the compensating control
   that makes a shared, visibility-bypassing credential defensible. Personal install tokens
   remain unaudited.
@@ -4296,8 +4402,8 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 **Install (4)**
 | Tool | Behavior |
 |---|---|
-| `install_skill` | Mints a **personal** §23 install token (`semver?`, `expiresAt?` honoring `install_max_ttl_months`) and returns the `npx skills add …` command. **`system: true` is refused** — system installations are platform-admin-only and administration is out of surface. **409** for a not-yet-`git_published` version, exactly as `POST /api/skills/:ns/:slug/install`. A **deprecated** skill still installs; the response then carries a **`warning`** string naming the successor the caller can see (§45.7). |
-| `list_installed_skills` | The caller's own installations with their derived state (§23) **and their freshness** (§23 *Installed-version freshness*): each row carries `installedVersion` (= `lastServedSemver`), `latestVersion`, `freshness` (`current` \| `behind` \| `withdrawn` \| `unknown`), `pinned` (bool), and for a behind/withdrawn row a `refresh` hint — `{ action: "rerun" }` (latest-tracking: re-run the **same** `npx skills add` command the caller already holds, or `npx skills update`; no re-mint — tokens are **hashed at rest**, so the registry cannot rebuild the command and never hands a credential back) or `{ action: "reinstall", semver }` (pinned: call `install_skill` with the new `semver`; the old pinned installation stays until `uninstall_skill`). Each row also carries **`deprecation`** (§45.7, same shape as `search_skills`). Optional input `onlyBehind: true` returns just the behind/withdrawn rows. **This is the "check for updates" tool** — folded in rather than added, so the §29 tool ceiling holds (no new tool). Personal installs only (`?scope=system` has no MCP equivalent); a check is a read — no audit row, no `access_log`, no stamp. |
+| `install_skill` | Mints a **personal** §23 install token (`semver?`, `expiresAt?` honoring `install_max_ttl_months`) and returns the `npx skills add …` command. **`system: true` is refused** — system installations are platform-admin-only and administration is out of surface. **409** for a not-yet-`git_published` version, exactly as `POST /api/skills/:ns/:slug/install`. **Never prompts** about an existing install (§23 *Already-installed prompt* is UI-only — MCP mints alongside, the endpoint's default `onExisting: "keep"`). A **deprecated** skill still installs; the response then carries a **`warning`** string naming the successor the caller can see (§45.7). |
+| `list_installed_skills` | The caller's own installations with their derived state (§23) **and their freshness** (§23 *Installed-version freshness*): each row carries `installedVersion` (= `lastServedSemver`), `latestVersion`, `freshness` (`current` \| `behind` \| `withdrawn` \| `unknown`), `pinned` (bool), and for a behind/withdrawn row a `refresh` hint — `{ action: "rerun" }` (latest-tracking: re-run the **same** `npx skills add` command the caller already holds, or `npx skills update`; no re-mint — the registry **never hands a credential back over MCP**: the recoverable copy behind §23 *Show install URL* is a browser-only, owner-initiated reveal by policy) or `{ action: "reinstall", semver }` (pinned: call `install_skill` with the new `semver`; the old pinned installation stays until `uninstall_skill`). Each row also carries **`deprecation`** (§45.7, same shape as `search_skills`). Optional input `onlyBehind: true` returns just the behind/withdrawn rows. **This is the "check for updates" tool** — folded in rather than added, so the §29 tool ceiling holds (no new tool). Personal installs only (`?scope=system` has no MCP equivalent); a check is a read — no audit row, no `access_log`, no stamp. |
 | `uninstall_skill` | Hard-deletes one of the caller's own install tokens. *(This is not "irreversible destruction" in the §29 exclusion sense — it destroys a credential the caller owns, not catalog content or history; install counts are preserved per §23.)* |
 | `reactivate_install` | Sets a new `expires_at` on the caller's inactive install (§23). |
 
@@ -10111,7 +10217,9 @@ notifying the people who run the skill, and leaving an in-band hint in the git-s
   (`latestInstallable` non-null) — the **Install latest** edge action: mints a personal install of
   the successor at latest via the detail page's install endpoint after the standard expiry picker,
   shows the command in an inline copy panel under the row, and leaves the deprecated row untouched (uninstalling is a
-  separate choice; §39's freshness axis is orthogonal — deprecation never makes a row *behind*).
+  separate choice; when the user **already has the successor installed**, *Generate command* first raises the §23
+  *Already-installed prompt* for the successor — *Go to skill* highlights the successor's rows in place, *Override*
+  replaces the successor installs (never the deprecated row); §39's freshness axis is orthogonal — deprecation never makes a row *behind*).
   Mine scope only. The header live-filter matches the same fields as before (not the successor).
 - **Archived view:** the manager-only Archived catalog toggle shows the pill as well.
 - **Proposals / review pages:** a new-version proposal **to** a deprecated skill shows a one-line

@@ -47,3 +47,43 @@ export function filterBehind<T extends { freshness: Freshness }>(installs: T[], 
   if (!on) return installs;
   return installs.filter((i) => isBehindLatest(i.freshness));
 }
+
+/** The Installed page's sort toggle (§23): A–Z (default) or Recently installed. */
+export type InstalledSort = "alpha" | "recent";
+
+/** Per-browser memory of the sort choice (§23) — one preference for both the Mine and System views. */
+export const INSTALLED_SORT_KEY = "skilly.installedSort";
+
+/** Read a stored sort value; anything unknown (or nothing stored) falls back to the A–Z default. */
+export function parseInstalledSort(raw: string | null | undefined): InstalledSort {
+  return raw === "recent" ? "recent" : "alpha";
+}
+
+/** Case-insensitive title comparison (the A–Z key, and the Recently-installed tie-break). */
+function byTitle(a: { title: string }, b: { title: string }): number {
+  const x = a.title.toLowerCase();
+  const y = b.title.toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/**
+ * Order installed rows for display (§23 sort toggle). `alpha`: title A–Z (case-insensitive), ties by
+ * most-recent `installedAt`. `recent`: `installedAt` newest first, ties by title A–Z. Returns a new
+ * array (the input — the API's own A–Z order — is left untouched); composes with the filters above.
+ */
+export function sortInstalls<T extends { title: string; installedAt: string }>(installs: T[], sort: InstalledSort): T[] {
+  const time = (i: T) => Date.parse(i.installedAt) || 0;
+  return [...installs].sort((a, b) =>
+    sort === "recent" ? time(b) - time(a) || byTitle(a, b) : byTitle(a, b) || time(b) - time(a),
+  );
+}
+
+/** The `@ns/slug` key the ?highlight= param names (§23 "Highlight on arrival"). */
+export function installRef(i: { namespaceSlug: string; skillSlug: string }): string {
+  return `${i.namespaceSlug}/${i.skillSlug}`;
+}
+
+/** Where the already-installed prompt's "Go to skill" lands (§23). */
+export function installedHighlightHref(namespaceSlug: string, skillSlug: string): string {
+  return `/installed?highlight=${namespaceSlug}/${skillSlug}`;
+}

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import nextDynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useApi, Pill, CopyCommand, EmptyState, ScrollToTop, formatCount, ShareButton } from "../../../../components/ui";
+import { useApi, Pill, CopyCommand, EmptyState, ScrollToTop, formatCount, ShareButton, invalidateApi } from "../../../../components/ui";
 import { AddToCollection } from "../../../../components/AddToCollection";
 import { ExpiryPicker } from "../../../../components/ExpiryPicker";
 import { useDateFmt } from "../../../../components/DateFormat";
@@ -28,6 +28,9 @@ import { ContentRiskChip } from "../../../../components/ContentRisk";
 import type { ContentRiskStatus } from "@skilly/shared/content-risk-status";
 import { FollowButton } from "../../../../components/FollowButton";
 import { reportFeatureUse } from "../../../../lib/surveyClient";
+import { AlreadyInstalledDialog } from "../../../../components/AlreadyInstalledDialog";
+import { requestInstall, type ExistingInstall, type MintedInstall, type OnExisting } from "../../../../lib/installMint";
+import { installedHighlightHref } from "../../../../lib/installedFilter";
 
 // recharts is heavy (d3) and owner-only — code-split it out of the route's initial bundle.
 // ssr:false since the chart measures the DOM; a skeleton holds its height while it loads.
@@ -205,7 +208,11 @@ export default function SkillDetail() {
   const { data: readme } = useApi<{ semver: string; content: string }>(ns && slug ? `/api/skills/${ns}/${slug}/readme` : null);
   // Admin-configured install-expiry horizon (calendar months) — bounds the picker; server re-validates. §23
   const { data: me } = useApi<{ installMaxTtlMonths?: number; isPlatformAdmin?: boolean }>("/api/me");
-  const [install, setInstall] = useState<{ command: string; semver: string | null; expiresAt: string | null; system?: boolean } | null>(null);
+  const [install, setInstall] = useState<MintedInstall | null>(null);
+  // §23 already-installed prompt: the caller's claimed installs of this skill, set when a personal
+  // mint (sent with onExisting "ask") came back 409 already_installed — the dialog is open while set.
+  const [existing, setExisting] = useState<ExistingInstall[] | null>(null);
+  const [existingErr, setExistingErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
   // §45 deprecate / edit-deprecation dialog.
@@ -269,7 +276,10 @@ export default function SkillDetail() {
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
   }, [verOpen, dlOpen]);
 
-  const mint = async () => {
+  // A personal mint first ASKS (§23 "Already-installed prompt"): when the caller already holds a
+  // claimed install of this skill the server mints nothing and lists them, and the dialog re-posts
+  // with "replace" (Override) or "keep" (Install anyway). System mints never prompt.
+  const mint = async (onExisting: OnExisting = "ask") => {
     // "On a date" is selected but no date was picked yet. Keep the button clickable (rather than
     // silently disabled) so this click tells the user WHY no command appears and what to do —
     // shown inline at the controls, right where they clicked.
@@ -278,17 +288,27 @@ export default function SkillDetail() {
       return;
     }
     setExpiryAlert(false);
-    setBusy(true); setMsg(null);
+    setBusy(true); setMsg(null); setExistingErr(null);
+    const inDialog = existing !== null;
     try {
-      const r = await fetch(`${base}/install`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ semver: selVersion, expiresAt: expiresIso, system: systemInstall }),
+      const out = await requestInstall(ns, slug, {
+        semver: selVersion,
+        expiresAt: expiresIso,
+        system: systemInstall,
+        onExisting: systemInstall ? "keep" : onExisting,
       });
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "Failed to mint command");
-      setInstall(await r.json());
+      if (out.kind === "already_installed") { setExisting(out.installs); return; }
+      if (out.kind === "error") throw new Error(out.message);
+      setExisting(null);
+      // Override uninstalled the caller's existing installs — don't let Installed skills show them
+      // from the client cache.
+      if (onExisting === "replace") invalidateApi("/api/installs");
+      setInstall(out.install);
       reportFeatureUse("install"); // §36.3
-    } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusy(false); }
+    } catch (e) {
+      const text = String((e as Error).message);
+      if (inDialog) setExistingErr(text); else setMsg({ kind: "err", text });
+    } finally { setBusy(false); }
   };
 
   const rate = async (stars: number | null) => {
@@ -596,6 +616,18 @@ export default function SkillDetail() {
         </div>
       )}
       {msg && <div style={{ marginTop: 12, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
+      {existing && ns && slug && (
+        <AlreadyInstalledDialog
+          title={data.meta?.title || data.skillSlug}
+          installs={existing}
+          busy={busy}
+          error={existingErr}
+          onGoTo={() => { setExisting(null); router.push(installedHighlightHref(ns, slug)); }}
+          onOverride={() => void mint("replace")}
+          onInstallAnyway={() => void mint("keep")}
+          onCancel={() => { setExisting(null); setExistingErr(null); }}
+        />
+      )}
       {depOpen && ns && slug && (
         <DeprecateDialog
           ns={ns}
@@ -632,7 +664,7 @@ export default function SkillDetail() {
               <>
                 <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: install ? 14 : 0 }}>
                   <div ref={verRef} style={{ position: "relative", display: "inline-flex" }}>
-                    <button className="btn btn-primary" onClick={mint} disabled={busy} title={expiryPending ? "Pick an expiry date first" : undefined} style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
+                    <button className="btn btn-primary" onClick={() => void mint()} disabled={busy} title={expiryPending ? "Pick an expiry date first" : undefined} style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
                       {busy ? "Working…" : selVersion ? `Install v${selVersion}` : "Install latest"}
                     </button>
                     <button
