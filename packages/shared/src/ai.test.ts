@@ -65,7 +65,7 @@ function fakeFetch(answers: Array<Response | Error | ((url: string, init: Reques
 test("normalizeAiBaseUrl: defaults, required, scheme, credentials, query/fragment, trailing slash", () => {
   assert.deepEqual(normalizeAiBaseUrl("anthropic", ""), { ok: true, url: "https://api.anthropic.com" });
   assert.equal(normalizeAiBaseUrl("openwebui", "  ").ok, false);
-  assert.deepEqual(normalizeAiBaseUrl("openwebui", "http://owui.corp.local:8080/"), { ok: true, url: "http://owui.corp.local:8080" });
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "http://owui.corp.example:8080/"), { ok: true, url: "http://owui.corp.example:8080" });
   assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://h.example/prefix//"), { ok: true, url: "https://h.example/prefix" });
   assert.equal(normalizeAiBaseUrl("anthropic", "ftp://x").ok, false);
   assert.equal(normalizeAiBaseUrl("anthropic", "https://u:p@x.example").ok, false);
@@ -628,4 +628,14 @@ test("aiComplete: the stored admin override (§40.15) sets the attempt timeout",
 test("aiComplete: without an override for this feature the registered default (60 s) applies", async () => {
   assert.deepEqual(await abortedAt({ ai_timeouts: { calls: { other_feature: 15_000 } } }, [15_000, 44_999, 1]), [false, false, true]);
   assert.deepEqual(await abortedAt({}, [59_999, 1]), [false, true]);
+});
+
+test("normalizeAiBaseUrl: private, loopback, link-local and local-zone hosts are refused unless allowed (§49.11)", () => {
+  for (const u of ["http://127.0.0.1:8080", "http://10.1.2.3", "http://169.254.169.254/latest", "http://localhost:3000", "http://owui.corp.local:8080", "http://ai.internal", "http://[::1]:8080"]) {
+    const r = normalizeAiBaseUrl("openwebui", u);
+    assert.equal(r.ok, false, u);
+    assert.equal((r as { code?: string }).code, "ai_base_url_private", u);
+  }
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "http://owui.corp.local:8080/", { allowPrivate: true }), { ok: true, url: "http://owui.corp.local:8080" });
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://ai.example.com/"), { ok: true, url: "https://ai.example.com" });
 });

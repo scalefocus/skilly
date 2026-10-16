@@ -9,10 +9,18 @@ skilly {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
 
 {{- if .Values.minio.enabled }}
 2. Create the artifact bucket once in the bundled MinIO:
-     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "skilly.fullname" . }}-minio -- \
+     kubectl -n {{ .Release.Namespace }} exec sts/{{ include "skilly.fullname" . }}-minio -- \
        sh -c 'mc alias set local http://localhost:9000 {{ .Values.minio.rootUser }} "$MINIO_ROOT_PASSWORD" && mc mb -p local/{{ .Values.minio.bucket }}'
+   SKILLY_SPEC.md §49.12: the app should authenticate with a BUCKET-SCOPED account, not the MinIO
+   root pair. The bundled MinIO wiring (evaluation grade) reuses secrets.s3SecretKey as the root
+   password; for production create a scoped IAM user with a policy limited to
+   "{{ .Values.minio.bucket }}" (mc admin policy create / mc admin user add / mc admin policy attach
+   — deploy/docker-compose.yml's minio-init job shows the exact commands) and point the app at it,
+   or run an external object store (minio.enabled=false) with such an account.
 {{- else }}
-2. Ensure bucket "{{ include "skilly.s3Bucket" . }}" exists in your external object store.
+2. Ensure bucket "{{ include "skilly.s3Bucket" . }}" exists in your external object store, and that
+   minio.external.accessKey / secrets.s3SecretKey belong to an account scoped to that bucket only
+   (SKILLY_SPEC.md §49.12) — never the store's root/admin credentials.
 {{- end }}
 
 3. App URL: {{ .Values.publicBaseUrl }}

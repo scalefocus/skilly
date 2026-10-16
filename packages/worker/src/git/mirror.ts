@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { lookup } from "node:dns/promises";
 import { create } from "tar";
-import { validateBundle, validatePointerUrl, validateGitRef, validateSubdir, isSkillsHubUrl, isBlockedIp, contentDigest, bundleContentCap, parseFrontmatter, type BundleEntry } from "@skilly/shared";
+import { validateBundle, validatePointerUrl, validateGitRef, validateSubdir, isSkillsHubUrl, isBlockedIp, contentDigest, bundleContentCap, parseFrontmatter, maxSeverity, type BundleEntry } from "@skilly/shared";
 import { resolveBundleIcon } from "@skilly/shared/icon";
 import { ingestBundleIcon } from "../icon.js";
 import { getMaxBundleBytes } from "../settings.js";
@@ -19,6 +19,8 @@ import type { Pool } from "pg";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { runScanPipeline } from "../scan/pipeline.js";
 import { writeArtifactScanReport } from "../scan/report.js";
+import { AV_UNAVAILABLE_RULE, CLAMAV_SCANNER } from "@skilly/shared/clamav";
+import { recordQuarantine } from "../scan/malware.js";
 import { fetchSkillsHubBundle } from "./skillsHub.js";
 import { recordContentRiskOnset } from "../scan/contentRisk.js";
 import { recordQualityAtMirror } from "../scan/quality.js";
@@ -66,6 +68,30 @@ function run(cmd: string, args: string[], opts: { cwd?: string } = {}): Promise<
       code === 0 ? resolve() : reject(new Error(`${cmd} ${args.join(" ")} failed (${code}): ${err}`));
     });
   });
+}
+
+/** `git rev-parse HEAD` of a checkout — the commit the pinned ref resolved to (§49.3). */
+function gitHead(cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["rev-parse", "HEAD"], { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1" } });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 && /^[0-9a-f]{40}/.test(out.trim()) ? resolve(out.trim().slice(0, 40)) : reject(new Error(`git rev-parse HEAD failed (${code})`))));
+  });
+}
+
+/**
+ * A mirror refusal that no retry can fix: the upstream ref no longer resolves to the commit that
+ * was verified at submission (`upstream_moved`), or the packed content differs from what the
+ * pre-scan reviewed (`content_changed`). The pending-mirror sweep dead-letters these at once
+ * (§49.3) — a new proposal is the only way forward.
+ */
+export class MirrorRefusal extends Error {
+  constructor(readonly code: "upstream_moved" | "content_changed", message: string) {
+    super(message);
+    this.name = "MirrorRefusal";
+  }
 }
 
 // Fallback cap when a caller doesn't pass the configured max_bundle_bytes (e.g. tests). The mirror
@@ -126,7 +152,7 @@ async function findSkillDir(root: string, name: string, maxDepth: number): Promi
  * (skilly's "one skill = one repo, SKILL.md at root" model). The skill must be self-contained
  * within its subdir; files outside it are dropped. SKILLY_SPEC.md §6.
  */
-export async function cloneAndPack(externalUrl: string, ref: string, subdir?: string | null, maxBytes: number = DEFAULT_MIRROR_MAX_BYTES): Promise<{ files: BundleEntry[]; targz: Buffer }> {
+export async function cloneAndPack(externalUrl: string, ref: string, subdir?: string | null, maxBytes: number = DEFAULT_MIRROR_MAX_BYTES): Promise<{ files: BundleEntry[]; targz: Buffer; commit: string | null }> {
   // Defense-in-depth: the web layer always validates user-submitted URLs at the API boundary;
   // this re-check guards the actual SSRF/RCE sink (the worker holds DB + object-store creds).
   // SKILLY_MIRROR_ALLOW_INSECURE=1 relaxes ONLY this worker-side scheme/host check + git
@@ -190,6 +216,13 @@ export async function cloneAndPack(externalUrl: string, ref: string, subdir?: st
       }
     }
     if (!cloned) throw lastErr;
+    // The commit the ref resolved to — compared with the pin recorded at submission (§49.3).
+    let commit: string | null = null;
+    try {
+      commit = await gitHead(src);
+    } catch {
+      commit = null;
+    }
 
     // Mirror only the requested subdir (validated above), rebased so SKILL.md lands at root.
     // Resolve + containment-check defends against any traversal that slipped past validation.
@@ -214,7 +247,7 @@ export async function cloneAndPack(externalUrl: string, ref: string, subdir?: st
     const out = join(tmp, "bundle.tgz");
     await create({ gzip: true, file: out, cwd: base }, files.map((f) => f.path));
     const targz = await readFile(out);
-    return { files, targz };
+    return { files, targz, commit };
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -232,6 +265,10 @@ export interface MirrorInput {
   isPrerelease: boolean;
   /** Per-version "What changed" note carried from the proposal (§8); null for a first version. */
   whatChanged?: string | null;
+  /** §49.3: the commit the ref resolved to at submission; the clone must resolve to the same one. */
+  externalCommit?: string | null;
+  /** §49.3: the pre-scan report's content digest; the packed files must match it. */
+  prescanContentSha256?: string | null;
 }
 
 /**
@@ -244,31 +281,47 @@ export async function fetchPointerFiles(
   subdir: string | null | undefined,
   skillSlug: string,
   maxBytes: number = DEFAULT_MIRROR_MAX_BYTES,
-): Promise<{ files: BundleEntry[]; targz: Buffer }> {
-  return isSkillsHubUrl(externalUrl)
-    ? fetchSkillsHubBundle(externalUrl, ref, skillSlug)
-    : cloneAndPack(externalUrl, ref, subdir, maxBytes);
+): Promise<{ files: BundleEntry[]; targz: Buffer; commit: string | null }> {
+  if (isSkillsHubUrl(externalUrl)) {
+    const r = await fetchSkillsHubBundle(externalUrl, ref, skillSlug);
+    return { ...r, commit: null }; // registry origin: pinned by version, no git commit (§49.3)
+  }
+  return cloneAndPack(externalUrl, ref, subdir, maxBytes);
 }
 
 /** Mirror an external pointer ref into a stored, unpublished skill_version. */
-export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, input: MirrorInput): Promise<{ versionId: string; artifactKey: string }> {
+export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, input: MirrorInput): Promise<{ versionId: string; artifactKey: string; quarantined: boolean }> {
   // Honor the platform's configured max so a pointer skill up to the admin's limit mirrors. §6.
   const cap = bundleContentCap(await getMaxBundleBytes(pool));
-  const { files, targz } = await fetchPointerFiles(input.externalUrl, input.ref, input.subdir, input.skillSlug, cap);
+  const { files, targz, commit } = await fetchPointerFiles(input.externalUrl, input.ref, input.subdir, input.skillSlug, cap);
+
+  // §49.3: what was reviewed must be what is served. The clone must resolve to the commit pinned at
+  // submission, and the packed content must match the pre-scan's digest. Either mismatch is final.
+  if (input.externalCommit && commit && commit !== input.externalCommit) {
+    throw new MirrorRefusal("upstream_moved", `upstream ref ${input.ref} now resolves to ${commit.slice(0, 7)}, not the pinned ${input.externalCommit.slice(0, 7)} — the version was not mirrored; propose it again`);
+  }
+  // Packaging-independent content digest for duplicate detection (§8) — matches what the upload
+  // route computes for hosted bundles, so a mirrored pointer and an identical hosted upload share it.
+  const contentSha = contentDigest(files);
+  if (input.prescanContentSha256 && contentSha !== input.prescanContentSha256) {
+    throw new MirrorRefusal("content_changed", `the content at ${input.ref} differs from what was scanned and reviewed — the version was not mirrored; propose it again`);
+  }
 
   // Blocking validation at ingest (before we store/publish).
   const v = validateBundle(files, { skillSlug: input.skillSlug, maxBytes: cap });
   if (!v.ok) throw new Error(`pointer bundle invalid: ${v.errors.join("; ")}`);
 
+  // Scan BEFORE storing (§49.2): an unreachable AV engine is a transient failure the pending-mirror
+  // sweep retries — nothing is stored or inserted; a `critical` verdict quarantines the version.
+  const findings = await runScanPipeline(files);
+  if (findings.some((f) => f.scanner === CLAMAV_SCANNER && f.rule === AV_UNAVAILABLE_RULE)) {
+    throw new Error("av unavailable: the anti-virus engine could not be reached — the mirror will be retried");
+  }
+  const quarantined = maxSeverity(findings) === "critical";
+
   const artifactKey = `pointers/${input.skillId}/v${input.semver}.tgz`;
   await store.put(artifactKey, targz);
   const sha = createHash("sha256").update(targz).digest("hex");
-  // Packaging-independent content digest for duplicate detection (§8) — matches what the upload
-  // route computes for hosted bundles, so a mirrored pointer and an identical hosted upload share it.
-  const contentSha = contentDigest(files);
-
-  // Advisory scan at ingest (mirror time) so reviewers see findings pre-accept.
-  const findings = await runScanPipeline(files);
   await writeArtifactScanReport(pool, artifactKey, findings);
 
   // Bundle-borne icon (§33.2/§33.6): a bundle icon (frontmatter `icon:` or root icon.*) OVERRIDES
@@ -296,11 +349,25 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
   const { rows } = await pool.query<{ id: string }>(
     `insert into skill_versions
        (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, content_sha256,
-        external_ref, external_origin_url, external_subdir, what_changed, created_by, git_published)
-     values ($1,$2,$3,'active',$4,$5,$6,$7,$8,$9,$10,$11,false)
+        external_ref, external_origin_url, external_subdir, what_changed, created_by, git_published, external_commit)
+     values ($1,$2,$3,$12::version_status,$4,$5,$6,$7,$8,$9,$10,$11,false,$13)
      returning id`,
-    [input.skillId, input.semver, input.isPrerelease, artifactKey, sha, contentSha, input.ref, input.externalUrl, input.subdir?.trim() || null, input.whatChanged ?? null, input.createdBy],
+    [input.skillId, input.semver, input.isPrerelease, artifactKey, sha, contentSha, input.ref, input.externalUrl, input.subdir?.trim() || null, input.whatChanged ?? null, input.createdBy, quarantined ? "quarantined" : "active", input.externalCommit ?? commit],
   );
+  if (quarantined) {
+    // §49.2: never latest, never synthesized, never served. Audit + alert; a human releases or yanks.
+    try {
+      const who = (await pool.query<{ namespace_id: string; ns_slug: string; skill_slug: string }>(
+        `select s.namespace_id, n.slug as ns_slug, s.slug as skill_slug from skills s join namespaces n on n.id = s.namespace_id where s.id = $1`,
+        [input.skillId],
+      )).rows[0];
+      if (who) await recordQuarantine(pool, { skillId: input.skillId, semver: input.semver, namespaceId: who.namespace_id, nsSlug: who.ns_slug, skillSlug: who.skill_slug }, findings, input.createdBy);
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "quarantine record failed", skillId: input.skillId, err: String(err) }));
+    }
+    console.error(JSON.stringify({ level: "warn", msg: "pointer version quarantined (critical scan verdict)", skillId: input.skillId, semver: input.semver }));
+    return { versionId: rows[0]!.id, artifactKey, quarantined: true };
+  }
   if (input.createdBy) {
     await tryAward(pool, input.createdBy, "first_published");
     if (priorVersions > 0) await tryAward(pool, input.createdBy, "first_new_version", { noHabits: true });
@@ -327,5 +394,5 @@ export async function mirrorPointerVersion(pool: Pool, store: ArtifactStore, inp
   } catch (err) {
     console.error(JSON.stringify({ level: "warn", msg: "content-risk onset check failed at mirror", skillId: input.skillId, err: String(err) }));
   }
-  return { versionId: rows[0]!.id, artifactKey };
+  return { versionId: rows[0]!.id, artifactKey, quarantined: false };
 }

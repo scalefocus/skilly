@@ -1,4 +1,5 @@
 // Web-side helpers for the §40 AI integration: the Administration card's status, model list,
+import { aiHostGuard, aiAllowPrivateBaseUrl } from "@skilly/shared/ai-egress";
 // connectivity test, save-runs-test, enable/disable and remove — plus the pool-bound helper web
 // features call (aiComplete / aiAvailable). Every admin caller is a platform-admin-only route
 // (re-verified there). The provider token is handled only through @skilly/shared/ai: encrypted
@@ -56,10 +57,15 @@ function aiKey(): Buffer | null {
   return parseAiTokenKey(process.env.AI_TOKEN_ENC_KEY);
 }
 
+/** §49.11: the per-call egress guard (DNS re-check), honouring the operator's private-host opt-in. */
+function hostGuard() {
+  return aiHostGuard({ allowPrivate: aiAllowPrivateBaseUrl() });
+}
+
 // ── The helper, bound to the web pool (for future web AI tasks) ─────────────────────────────
 
 export function aiComplete(o: AiCompleteOptions): Promise<AiCompleteResult> {
-  return sharedAiComplete(pool, { key: aiKey(), source: "web", fetchImpl }, o);
+  return sharedAiComplete(pool, { key: aiKey(), source: "web", fetchImpl, hostGuard: hostGuard() }, o);
 }
 
 export function aiAvailable(): Promise<boolean> {
@@ -237,8 +243,8 @@ interface ResolvedInput {
 async function resolveInput(body: Record<string, unknown>, key: Buffer): Promise<ResolvedInput | AiApiError> {
   if (!isAiProvider(body.provider)) return { error: "provider must be openwebui or anthropic", status: 422 };
   const provider = body.provider;
-  const url = normalizeAiBaseUrl(provider, typeof body.baseUrl === "string" ? body.baseUrl : null);
-  if (!url.ok) return { error: "invalid_base_url", detail: url.error, status: 422 };
+  const url = normalizeAiBaseUrl(provider, typeof body.baseUrl === "string" ? body.baseUrl : null, { allowPrivate: aiAllowPrivateBaseUrl() });
+  if (!url.ok) return { error: url.code === "ai_base_url_private" ? "ai_base_url_private" : "invalid_base_url", detail: url.error, status: 422 };
   const rawToken = typeof body.token === "string" ? body.token.trim() : "";
   if (rawToken.length > AI_TOKEN_MAX) return { error: "invalid_token", detail: `the token must be at most ${AI_TOKEN_MAX} characters`, status: 422 };
   if (/\s/.test(rawToken)) return { error: "invalid_token", detail: "the token must not contain whitespace", status: 422 };
@@ -269,7 +275,7 @@ export async function listModelsForForm(body: Record<string, unknown>): Promise<
   const input = await resolveInput(body, key);
   if (isAiApiError(input)) return input;
   try {
-    return { models: await listAiModels({ provider: input.provider, baseUrl: input.baseUrl, token: input.token }, { fetchImpl }) };
+    return { models: await listAiModels({ provider: input.provider, baseUrl: input.baseUrl, token: input.token }, { fetchImpl, hostGuard: hostGuard() }) };
   } catch (err) {
     const e = err instanceof AiError ? err : new AiError("ai_provider_error", String(err));
     return { error: "ai_models_failed", detail: e.message, status: 422 };
@@ -279,7 +285,7 @@ export async function listModelsForForm(body: Record<string, unknown>): Promise<
 // ── POST /api/admin/ai/test ──────────────────────────────────────────────────────────────────
 
 async function testAndRecord(input: ResolvedInput, model: string, userId: string): Promise<AiTestResult> {
-  const result = await runAiTest({ provider: input.provider, baseUrl: input.baseUrl, token: input.token, model }, { fetchImpl });
+  const result = await runAiTest({ provider: input.provider, baseUrl: input.baseUrl, token: input.token, model }, { fetchImpl, hostGuard: hostGuard() });
   // Every test costs tokens → one ai_usage row under the reserved `test` feature (§40.5).
   await recordAiUsage(pool, {
     feature: AI_TEST_FEATURE,

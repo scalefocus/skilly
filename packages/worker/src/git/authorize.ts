@@ -87,6 +87,22 @@ export interface GitAuthDeps {
   resolveAccess(userId: string): Promise<EffectiveAccess>;
 }
 
+/** Why a request was refused — recorded to the system log (§49.8), never shown to the client. */
+export type GitRefusalCode =
+  | "install_token_owner_inactive"
+  | "install_token_invalid"
+  | "install_token_scope_mismatch"
+  | "install_token_not_visible"
+  | "git_push_denied";
+
+export interface GitRefusal {
+  code: GitRefusalCode;
+  /** The forensic subject when the token row matched: its owner. */
+  ownerUserId?: string;
+  /** The token ROW id when the token row matched — never the credential. */
+  tokenId?: string;
+}
+
 export type GitDecision =
   | { allow: true; kind: "skill"; skill: SkillRef; principal: TokenPrincipal | null }
   | { allow: true; kind: "marketplace"; marketplace: MarketplaceRef; principal: TokenPrincipal }
@@ -94,9 +110,9 @@ export type GitDecision =
       allow: false;
       status: 401 | 403 | 404;
       reason: string;
-      /** Present only on the owner-inactive refusal: lets the server record the system_event
-       *  (§23/§25) while the HTTP response stays indistinguishable from any invalid token. */
-      ownerInactive?: { ownerUserId: string };
+      /** Present on every refusal the server records (§49.8); absent on the anonymous first leg of
+       *  git's auth handshake (no token at all), which is normal protocol traffic, not a refusal. */
+      refusal?: GitRefusal;
     };
 
 /** Parse a smart-HTTP path like `/team-a/pdf-tools.git/info/refs`, `/ns/s.git/git-upload-pack`,
@@ -163,7 +179,7 @@ export async function authorizeGitRequest(
 ): Promise<GitDecision> {
   // Read-only: never allow push.
   if (parsed.operation === "receive-pack") {
-    return { allow: false, status: 403, reason: "registry is read-only (push denied)" };
+    return { allow: false, status: 403, reason: "registry is read-only (push denied)", refusal: { code: "git_push_denied" } };
   }
   return parsed.marketplace
     ? authorizeMarketplace(parsed.marketplace, rawToken, deps)
@@ -175,22 +191,28 @@ async function authorizeSkill(
   rawToken: string | undefined,
   deps: GitAuthDeps,
 ): Promise<GitDecision> {
-  const skill = await deps.findSkill(parsed.namespaceSlug, parsed.skillSlug);
-  if (!skill || skill.status === "archived") {
-    return { allow: false, status: 404, reason: "skill not found" };
-  }
-
-  // Every clone — org or namespace — requires a valid install token (no anonymous access).
+  // §49.4 ordering: the TOKEN is resolved before the catalog is consulted. Before this change the
+  // skill lookup (404) ran first and an anonymous client could enumerate restricted skill names by
+  // comparing 404 (absent) with 401 (present). Now every unauthenticated request is a 401, and the
+  // catalog answers only a holder of a valid token.
   if (!rawToken) return { allow: false, status: 401, reason: "authentication required" };
   const principal = await deps.validateToken(rawToken);
-  if (!principal) return { allow: false, status: 401, reason: INVALID_TOKEN };
+  if (!principal) return { allow: false, status: 401, reason: INVALID_TOKEN, refusal: { code: "install_token_invalid" } };
 
   const inactive = ownerInactiveRefusal(principal);
   if (inactive) return inactive;
 
-  // A marketplace token is not a skill credential, and vice versa.
-  if (principal.type !== "install" || principal.scopedSkillId !== skill.id) {
-    return { allow: false, status: 403, reason: "token is scoped to a different skill" };
+  const skill = await deps.findSkill(parsed.namespaceSlug, parsed.skillSlug);
+  // A skill that does not exist, is archived, OR is not the one this token was minted for all
+  // answer the same 404: a scope mismatch used to be a 403, which told any token holder that the
+  // probed skill exists. A marketplace token is not a skill credential either.
+  if (!skill || skill.status === "archived" || principal.type !== "install" || principal.scopedSkillId !== skill.id) {
+    return {
+      allow: false,
+      status: 404,
+      reason: "skill not found",
+      refusal: { code: "install_token_scope_mismatch", ownerUserId: principal.userId ?? undefined, tokenId: principal.tokenId },
+    };
   }
 
   // Namespace-scoped skills additionally require the token's user to still have access.
@@ -198,10 +220,11 @@ async function authorizeSkill(
   // deliberately granting machine access to this one skill, and the grant survives later
   // visibility changes. Compensated by admin-only minting + audit. SKILLY_SPEC.md §23.
   if (skill.visibility === "namespace" && !principal.isSystem) {
-    if (!principal.userId) return { allow: false, status: 403, reason: "not authorized for this namespace" };
+    const refusal: GitRefusal = { code: "install_token_not_visible", ownerUserId: principal.userId ?? undefined, tokenId: principal.tokenId };
+    if (!principal.userId) return { allow: false, status: 403, reason: "not authorized for this namespace", refusal };
     const access = await deps.resolveAccess(principal.userId);
     if (!isSkillVisible(access, skill)) {
-      return { allow: false, status: 403, reason: "not authorized for this namespace" };
+      return { allow: false, status: 403, reason: "not authorized for this namespace", refusal };
     }
   }
   return { allow: true, kind: "skill", skill, principal };
@@ -221,7 +244,7 @@ async function authorizeMarketplace(
 
   if (!rawToken) return { allow: false, status: 401, reason: "authentication required" };
   const principal = await deps.validateToken(rawToken);
-  if (!principal) return { allow: false, status: 401, reason: INVALID_TOKEN };
+  if (!principal) return { allow: false, status: 401, reason: INVALID_TOKEN, refusal: { code: "install_token_invalid" } };
 
   const inactive = ownerInactiveRefusal(principal);
   if (inactive) return inactive;
@@ -249,7 +272,12 @@ async function authorizeMarketplace(
  *  token — only the internal decision carries the distinction, for the system_event record. */
 function ownerInactiveRefusal(principal: TokenPrincipal): GitDecision | null {
   if (principal.ownerInactive && principal.userId) {
-    return { allow: false, status: 401, reason: INVALID_TOKEN, ownerInactive: { ownerUserId: principal.userId } };
+    return {
+      allow: false,
+      status: 401,
+      reason: INVALID_TOKEN,
+      refusal: { code: "install_token_owner_inactive", ownerUserId: principal.userId, tokenId: principal.tokenId },
+    };
   }
   return null;
 }

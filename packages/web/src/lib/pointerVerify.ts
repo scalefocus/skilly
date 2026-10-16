@@ -57,7 +57,8 @@ function git(args: string[], opts: { cwd?: string } = {}): Promise<string> {
   });
 }
 
-export type PointerVerifyResult = { ok: true } | { ok: false; error: string };
+/** §49.3: `commit` is the 40-hex commit the ref resolved to (null for registry origins). */
+export type PointerVerifyResult = { ok: true; commit: string | null } | { ok: false; error: string };
 
 /**
  * Confirm `<url>@<ref>` contains a SKILL.md for `subdir` (or repo root). Returns ok, or a
@@ -66,7 +67,7 @@ export type PointerVerifyResult = { ok: true } | { ok: false; error: string };
  */
 export async function verifyPointerSkill(rawUrl: string, ref: string, subdir: string | null | undefined): Promise<PointerVerifyResult> {
   const url = rawUrl.trim();
-  if (isSkillsHubUrl(url)) return { ok: true };
+  if (isSkillsHubUrl(url)) return { ok: true, commit: null };
 
   const urlErr = validatePointerUrl(url);
   if (urlErr) return { ok: false, error: urlErr };
@@ -116,7 +117,15 @@ export async function verifyPointerSkill(rawUrl: string, ref: string, subdir: st
       const where = clean ? `folder '${clean}'` : "the repository root";
       return { ok: false, error: `no SKILL.md found in ${where} of ${url} at ${ref} — check the repository, the pinned ref, and the skill folder` };
     }
-    return { ok: true };
+    // §49.3: pin the commit the ref resolved to (an annotated tag is peeled by rev-parse HEAD).
+    let commit: string | null = null;
+    try {
+      const head = (await git(["-C", dir, "rev-parse", "HEAD"])).trim();
+      commit = /^[0-9a-f]{40}$/.test(head) ? head : null;
+    } catch {
+      commit = null;
+    }
+    return { ok: true, commit };
   } catch {
     return { ok: false, error: "couldn’t verify the repository — check it’s a public git URL and the pinned ref exists" };
   } finally {

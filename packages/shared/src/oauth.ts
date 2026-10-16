@@ -146,6 +146,13 @@ function isLoopbackHttp(u: URL): boolean {
  * scheme for native clients; never a wildcard, never a fragment, never `localhost` by name (it can
  * resolve off-host — `127.0.0.1` is the RFC 8252 recommendation).
  */
+/**
+ * Script-capable and local schemes a redirect target may never use (§49.5): a `javascript:` or
+ * `data:` redirect_uri would turn the authorize endpoint's redirect into script execution or a
+ * local resource read in the user's browser. Checked before the custom-scheme allowance.
+ */
+export const REFUSED_REDIRECT_SCHEMES: ReadonlySet<string> = new Set(["javascript:", "data:", "vbscript:", "file:", "blob:", "about:"]);
+
 export function validateRedirectUri(raw: string): string | null {
   if (typeof raw !== "string" || raw.trim() === "") return "redirect_uri must be a non-empty string";
   if (raw.includes("*")) return "redirect_uri must not contain a wildcard";
@@ -156,6 +163,9 @@ export function validateRedirectUri(raw: string): string | null {
     return `redirect_uri is not a valid absolute URI: ${raw}`;
   }
   if (u.hash) return "redirect_uri must not contain a fragment";
+  if (REFUSED_REDIRECT_SCHEMES.has(u.protocol.toLowerCase())) {
+    return `redirect_uri scheme ${u.protocol} is not allowed`;
+  }
   if (u.protocol === "https:") return null;
   if (u.protocol === "http:") {
     if (u.hostname === "localhost") return "use http://127.0.0.1 rather than localhost for a loopback redirect_uri";

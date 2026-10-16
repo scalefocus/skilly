@@ -11,7 +11,7 @@ import { canManageMaintainers } from "../../../../../../lib/maintainers";
 import { buildSkillDownload, DownloadFormatError, type DownloadFormat } from "../../../../../../lib/download";
 import { recordFirstDownload } from "../../../../../../lib/installs";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
-import { isSkillVisible } from "@skilly/shared";
+import { isSkillVisible, isSameSiteFetch } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -58,7 +58,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
   // A user's FIRST download of a skill counts toward install_count (deduped per (skill,user) —
   // subsequent downloads are no-ops). Owner-only archived downloads are NOT counted. Never blocks
   // the download: a counting failure is logged, not surfaced. SKILLY_SPEC.md §10.
-  if (skill.status !== "archived") {
+  // §49.9: a cross-site navigation is served but never counted — a GET must not be a cross-site
+  // state trigger (install counts, achievements).
+  if (skill.status !== "archived" && isSameSiteFetch(req.headers.get("sec-fetch-site"))) {
     try {
       await recordFirstDownload(skill.id, access.userId);
     } catch (e) {

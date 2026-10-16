@@ -696,7 +696,9 @@ export async function latestVersionUsage(skillId: string): Promise<string | null
 export interface SkillVersionView {
   semver: string;
   channel: "stable" | "beta";
-  status: "active" | "yanked";
+  status: "active" | "yanked" | "quarantined";
+  /** §49.2: for a quarantined version, the critical rules that quarantined it (owners/admins only). */
+  quarantine?: { rules: string[]; detectedAt: string } | null;
   createdAt: string;
   /** True once the serving git repo has this version's tag synthesized (the publish sweep ran).
    *  A version is only INSTALLABLE when this is true — until then `npx skills add` would 404. */
@@ -709,9 +711,15 @@ export interface SkillVersionView {
 }
 
 export async function listVersions(skillId: string): Promise<SkillVersionView[]> {
-  const { rows } = await pool.query<{ semver: string; is_prerelease: boolean; status: "active" | "yanked"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string; what_changed: string | null }>(
+  const { rows } = await pool.query<{ semver: string; is_prerelease: boolean; status: "active" | "yanked" | "quarantined"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string; what_changed: string | null; quarantine_rules: string[] | null }>(
     `select sv.semver, sv.is_prerelease, sv.status, sv.created_at, sv.git_published,
-            sv.artifact_filename, sv.external_ref, sv.what_changed, s.tool_harness
+            sv.artifact_filename, sv.external_ref, sv.what_changed, s.tool_harness,
+            case when sv.status = 'quarantined' then (
+              select array_agg(distinct f->>'rule')
+                from scan_reports r, jsonb_array_elements(r.findings) f
+               where r.subject_type = 'artifact' and r.subject_id = sv.artifact_object_key and f->>'severity' = 'critical'
+                 and r.created_at = (select max(created_at) from scan_reports where subject_type = 'artifact' and subject_id = sv.artifact_object_key)
+            ) end as quarantine_rules
        from skill_versions sv join skills s on s.id = sv.skill_id
       where sv.skill_id = $1 order by sv.created_at desc`,
     [skillId],
@@ -720,6 +728,7 @@ export async function listVersions(skillId: string): Promise<SkillVersionView[]>
     semver: r.semver,
     channel: r.is_prerelease ? "beta" : "stable",
     status: r.status,
+    quarantine: r.status === "quarantined" ? { rules: r.quarantine_rules ?? [], detectedAt: r.created_at } : null,
     createdAt: r.created_at,
     gitPublished: r.git_published,
     downloadExt: resolveDownloadExt({ artifactFilename: r.artifact_filename, isPointer: !!r.external_ref, toolHarness: r.tool_harness }),

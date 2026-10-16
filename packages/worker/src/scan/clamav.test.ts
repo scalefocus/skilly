@@ -63,7 +63,7 @@ test("flags an infected file, passes a clean one", async () => {
   assert.equal(clean.severity, "info");
 });
 
-test("reports advisory 'scanner-unavailable' when clamd is unreachable", async () => {
+test("reports a HIGH 'scanner-unavailable' when clamd is unreachable (§49.2)", async () => {
   // Port chosen after closing a throwaway server -> nothing listening -> ECONNREFUSED.
   const tmp = net.createServer();
   const p: number = await new Promise((r) => tmp.listen(0, "127.0.0.1", () => r((tmp.address() as AddressInfo).port)));
@@ -71,5 +71,5 @@ test("reports advisory 'scanner-unavailable' when clamd is unreachable", async (
   const findings = await clamavScanner({ host: "127.0.0.1", port: p, timeoutMs: 2000 }).scan([{ path: "a", bytes: enc("x") }]);
   assert.equal(findings.length, 1);
   assert.equal(findings[0]!.rule, "scanner-unavailable");
-  assert.equal(findings[0]!.severity, "info");
+  assert.equal(findings[0]!.severity, "high"); // §49.2: an engine outage trips the gate until the AV sweep supersedes it
 });

@@ -6,7 +6,7 @@ export type Role = "platform_admin" | "namespace_admin" | "namespace_member";
 export type SkillType = "hosted" | "pointer";
 export type Visibility = "org" | "namespace";
 export type SkillStatus = "active" | "archived";
-export type VersionStatus = "active" | "yanked";
+export type VersionStatus = "active" | "yanked" | "quarantined";
 export type ProposalState =
   | "proposed"
   | "under_review"

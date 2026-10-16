@@ -191,43 +191,28 @@ export async function exportAuditRows(scope: AuditScope, q: AuditQuery = {}): Pr
   return queryAuditRows(where, params, AUDIT_EXPORT_CAP, 0);
 }
 
+/** Thrown by trimAuditLog when `olderThan` is under the one-year floor (the route answers 422). */
+export const AUDIT_TRIM_FLOOR = "audit_trim_floor";
+
 /**
  * Trim audit events older than `olderThan` (default 1 year) — platform-admin retention, §11.
- * Relaxes the append-only invariant for this one explicit, transaction-scoped operation
- * (migration 0024). Records an `audit.trimmed` entry, deletes the old rows, then re-baselines
- * the tamper-evident hash chain over the survivors so verify_audit_chain() passes again.
- * Returns how many rows were deleted. Irreversible.
+ * The whole operation lives in the SECURITY DEFINER function `trim_audit_log()` (migration 0096,
+ * §49.6): it records the `audit.trimmed` entry, deletes the old rows and re-baselines the
+ * tamper-evident hash chain, all in one statement. The app role itself holds no UPDATE/DELETE on
+ * audit_log, so this is the only delete path and it cannot be forged from the app connection.
+ * Returns how many rows were deleted. Irreversible. Throws `Error("audit_trim_floor")` when
+ * `olderThan` is shorter than one year.
  */
 export async function trimAuditLog(actorUserId: string, olderThan = "1 year"): Promise<{ deleted: number }> {
-  const client = await pool.connect();
   try {
-    await client.query("begin");
-    await client.query("set local skilly.allow_audit_trim = 'on'");
-    // now() is fixed for the transaction, so the count and the delete use the same cutoff.
-    const { rows } = await client.query<{ n: string }>(
-      `select count(*)::text as n from audit_log where created_at < now() - $1::interval`,
-      [olderThan],
+    const { rows } = await pool.query<{ n: number }>(
+      `select trim_audit_log($1::uuid, $2::interval) as n`,
+      [actorUserId, olderThan],
     );
-    const deleted = Number(rows[0]?.n ?? 0);
-    // Record the trim FIRST (newest row, chained normally) so the action itself is audited;
-    // it post-dates the cutoff, so it survives the delete below.
-    await appendAudit(client, {
-      actorUserId,
-      action: "audit.trimmed",
-      targetType: "audit_log",
-      after: { deletedCount: deleted, olderThan },
-    });
-    if (deleted > 0) {
-      await client.query(`delete from audit_log where created_at < now() - $1::interval`, [olderThan]);
-      await client.query(`select rebaseline_audit_chain()`);
-    }
-    await client.query("commit");
-    return { deleted };
+    return { deleted: Number(rows[0]?.n ?? 0) };
   } catch (e) {
-    await client.query("rollback");
+    if (e instanceof Error && e.message === AUDIT_TRIM_FLOOR) throw new Error(AUDIT_TRIM_FLOOR);
     throw e;
-  } finally {
-    client.release();
   }
 }
 

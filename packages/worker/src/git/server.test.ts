@@ -11,7 +11,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
 import { resolveAccess, type RoleMapping } from "@skilly/shared";
-import { gitServer, type GitServerDeps, type OwnerInactiveRefusal } from "./server.js";
+import { gitServer, type GitServerDeps, type GitRefusalEvent } from "./server.js";
 import { synthesizeVersion } from "./synth.js";
 import { repoPath } from "./repoStore.js";
 import { synthesizeMarketplace, marketplaceRepoDir, marketplaceHead } from "./marketplace.js";
@@ -32,7 +32,7 @@ let port: number;
 const used: string[] = [];
 const ips: string[] = [];
 const logged: { skillId: string; userId: string | null; isSystem: boolean; countInstall: boolean }[] = [];
-const refusals: OwnerInactiveRefusal[] = [];
+const refusals: GitRefusalEvent[] = [];
 /** Freshness stamps (§23): one per clone advertisement, for every tokened skill clone. */
 const stamped: { tokenId: string; skillId: string }[] = [];
 const credits: MarketplaceCredit[] = [];
@@ -95,7 +95,7 @@ const deps: GitServerDeps = {
   async logAccess(skillId, userId, isSystem, countInstall) {
     logged.push({ skillId, userId, isSystem, countInstall });
   },
-  async recordOwnerInactiveRefusal(e) {
+  async recordGitRefusal(e) {
     refusals.push(e);
   },
 };
@@ -212,10 +212,14 @@ test("token of an inactive owner: generic 401, nothing served, refusal recorded 
   // the matched route template, and the concrete path — never the query string. §25 carve-out.
   assert.ok(refusals.length >= 1);
   assert.deepEqual(refusals[0], {
+    code: "install_token_owner_inactive",
+    status: 401,
     method: "GET",
     route: "/[ns]/[slug].git/info/refs",
     path: "/team-a/pdf.git/info/refs",
     ownerUserId: "u-gone",
+    tokenId: "t-gone",
+    clientIp: refusals[0]!.clientIp,
     namespaceSlug: "team-a",
     skillSlug: "pdf",
   });
@@ -376,7 +380,7 @@ test("per-installation bucket (§22): a real clone spends it; once spent → 429
     // Failed auth never touches a token bucket: these 401/403s spend nothing.
     for (let i = 0; i < 10; i++) {
       assert.equal((await fetch(refs, { headers: basic("not-a-token") })).status, 401);
-      assert.equal((await fetch(refs, { headers: basic("good-secret") })).status, 403);
+      assert.equal((await fetch(refs, { headers: basic("good-secret") })).status, 404); // §49.4: a token for another skill gets the unknown-skill answer
     }
 
     await exec("git", ["clone", `http://x-access-token:good-pdf@127.0.0.1:${lport}/team-a/pdf.git`, join(workDir, "c-bucket-1")], { env: cloneEnv });

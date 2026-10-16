@@ -50,6 +50,7 @@ import {
   toGateVerdict,
   type PolicyTrip,
   type ProposalPolicyPayload,
+  scanVerdict, scanVerdictText, type ScanVerdictReason,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { latestArtifactReport, recordAcknowledgement } from "./contentRisk";
@@ -145,7 +146,7 @@ export interface RevisionPayload {
    * folder *inside* the upstream repo where the skill's SKILL.md lives (multi-skill repos);
    * absent/null = repo root. §6.
    */
-  pointer?: { url: string; ref: string; subdir?: string | null };
+  pointer?: { url: string; ref: string; subdir?: string | null; /** §49.3: the commit the ref resolved to at verification (null for registry origins). */ commit?: string | null };
   /**
    * Keep current files (§8): this new version reuses, byte-for-byte, the artifact of the target
    * skill's latest stable version — snapshotted at submit time into the artifact fields above.
@@ -171,7 +172,7 @@ export interface CreateProposalInput {
   /** Skill request this proposal was started from (§26) — the explicit fulfilment link. */
   originRequestId?: string | null;
   /** Set when a direct publish was routed to review by the content check (§37.4) or by enforced policy rules (§47.7). */
-  routedReason?: "content_risk" | "policy" | null;
+  routedReason?: "content_risk" | "policy" | "scan_pending" | null;
   /** The content-risk rules (or policy rule titles) that caused the routing — audit context only. */
   routedRules?: string[];
   /** §44.8: the model that drafted the submitted files (from a verified aiDraftToken), else null. */
@@ -701,6 +702,8 @@ export type ActionResult =
   | { ok: true; state: ProposalState; materializedVersionId?: string }
   | {
       ok: false; status: number; error: string; requiresOverride?: boolean; severity?: string; policy?: { tripped: PolicyGateTripView[] };
+      /** §49.2: the scan verdict is not complete — the reviewer may override explicitly (reason required). */
+      scanPending?: boolean; scanPendingReason?: ScanVerdictReason;
       /** §8 slug match: accept found a same-slug skill the PROPOSER can now see. */
       code?: typeof SLUG_EXISTS_CODE; matches?: Omit<SlugMatch, "skillId">[];
     };
@@ -759,28 +762,35 @@ async function proposalPolicyView(
 async function loadGateScan(
   db: PoolClient,
   proposalId: string,
-): Promise<{ id: string; severity: string | null; findings: ScanFinding[] } | null> {
+): Promise<{ id: string; severity: string | null; status: string; findings: ScanFinding[] } | null> {
   const { rows: rev } = await db.query<{ payload: RevisionPayload }>(
     `select payload from proposal_revisions where proposal_id = $1 order by revision_no desc limit 1`,
     [proposalId],
   );
   const payload = rev[0]?.payload;
   const key = payload?.artifactObjectKey;
+  // §49.2: the LATEST report whatever its status — `unreachable` / `source_changed` pre-scans must reach
+  // the gate (they read as a missing verdict), not be filtered out as if nothing had happened.
   const { rows } = key
-    ? await db.query<{ id: string; severity: string | null; findings: ScanFinding[] | null }>(
-        `select id, severity, findings from scan_reports where subject_type = 'artifact' and subject_id = $1 order by created_at desc limit 1`,
+    ? await db.query<{ id: string; severity: string | null; status: string; findings: ScanFinding[] | null }>(
+        `select id, severity, status, findings from scan_reports where subject_type = 'artifact' and subject_id = $1 order by created_at desc limit 1`,
         [key],
       )
     : payload?.pointer
-      ? await db.query<{ id: string; severity: string | null; findings: ScanFinding[] | null }>(
-          `select id, severity, findings from scan_reports
-            where subject_type = 'proposal' and subject_id = $1 and status = 'scanned'
+      ? await db.query<{ id: string; severity: string | null; status: string; findings: ScanFinding[] | null }>(
+          `select id, severity, status, findings from scan_reports
+            where subject_type = 'proposal' and subject_id = $1
             order by created_at desc limit 1`,
           [proposalId],
         )
       : { rows: [] };
   const r = rows[0];
-  return r ? { id: r.id, severity: r.severity, findings: Array.isArray(r.findings) ? r.findings : [] } : null;
+  return r ? { id: r.id, severity: r.severity, status: r.status, findings: Array.isArray(r.findings) ? r.findings : [] } : null;
+}
+
+/** §49.2: whether this tier requires an AV engine result before a verdict counts as complete. */
+export function avRequired(): boolean {
+  return Boolean(process.env.CLAMAV_HOST);
 }
 
 /** Field-wise pointer equality (url/ref/subdir), null-tolerant. */
@@ -964,9 +974,38 @@ export async function performProposalAction(
 
     let materializedVersionId: string | undefined;
     if (input.action === "accept") {
-      // Override gate: high/critical scan findings require an explicit, logged decision.
+      // §49.2 fail-closed gate: a MISSING verdict (no report, unreachable / moved source, or no AV
+      // result while the engine is configured) blocks accept until the reviewer overrides it
+      // explicitly, with a reason, audited. Before this change a null report silently passed.
       const scan = await loadGateScan(client, input.proposalId);
-      if (scan && requiresOverride(scan.severity as never)) {
+      const verdict = scanVerdict(scan, { avRequired: avRequired() });
+      if (!verdict.complete) {
+        if (!input.override) {
+          await client.query("rollback");
+          return {
+            ok: false,
+            status: 409,
+            error: `scan not complete: ${scanVerdictText(verdict.reason)} — accepting anyway requires an explicit override with a reason`,
+            requiresOverride: true,
+            scanPending: true,
+            scanPendingReason: verdict.reason,
+          };
+        }
+        if (!(input.overrideReason ?? "").trim()) {
+          await client.query("rollback");
+          return { ok: false, status: 422, error: "accepting without a complete scan verdict needs a reason — write it in the note", requiresOverride: true, scanPending: true, scanPendingReason: verdict.reason };
+        }
+        await appendAudit(client, {
+          actorUserId: input.actorUserId,
+          action: "proposal.scan_override",
+          targetType: "proposal",
+          targetId: input.proposalId,
+          namespaceId: p.target_namespace_id,
+          after: { missingVerdict: verdict.reason, reason: input.overrideReason ?? null, severity: scan?.severity ?? null, findings: scan?.findings ?? [] },
+        });
+      }
+      // Override gate: high/critical scan findings require an explicit, logged decision.
+      if (verdict.complete && scan && requiresOverride(scan.severity as never)) {
         if (!input.override) {
           await client.query("rollback");
           return {
@@ -1036,6 +1075,7 @@ export async function performProposalAction(
         payload,
         actorUserId: input.actorUserId,
         via: "proposal_accept",
+        proposalId: input.proposalId,
       });
       materializedVersionId = result.versionId; // undefined for pointer (worker mirrors it)
       // §37.6: accepting over gate-tripping content findings acknowledges them for this version.
@@ -1254,6 +1294,8 @@ export interface MaterializeInput {
    *  publisher) and through which path — `granted_by` + the audit `via`. Defaults: submitter / accept. */
   actorUserId?: string | null;
   via?: GrantVia;
+  /** §49.3: the accepted proposal (its pre-scan digest rides into the mirror queue); null on direct publish. */
+  proposalId?: string | null;
 }
 export interface MaterializeResult {
   skillId: string;
@@ -1383,11 +1425,22 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
   const isPrerelease = channelOf(input.semver) !== "stable";
 
   if (isPointer) {
-    // Enqueue a mirror; the worker inserts the immutable version after cloning + scanning.
+    // Enqueue a mirror; the worker inserts the immutable version after cloning + scanning. §49.3:
+    // the pinned commit and the pre-scan's content digest ride along so the mirror can verify that
+    // what it packs is what was reviewed.
+    let prescanSha: string | null = null;
+    if (input.proposalId) {
+      const { rows: pre } = await client.query<{ content_sha256: string | null }>(
+        `select content_sha256 from scan_reports where subject_type = 'proposal' and subject_id = $1 and status = 'scanned' order by created_at desc limit 1`,
+        [input.proposalId],
+      );
+      prescanSha = pre[0]?.content_sha256 ?? null;
+    }
+    const commit = payload.pointer!.commit && /^[0-9a-f]{40}$/.test(payload.pointer!.commit) ? payload.pointer!.commit : null;
     await client.query(
-      `insert into pending_mirrors (skill_id, semver, external_url, external_ref, external_subdir, is_prerelease, usage_examples, what_changed, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (skill_id, semver) do nothing`,
-      [skillId, input.semver, payload.pointer!.url, payload.pointer!.ref, payload.pointer!.subdir?.trim() || null, isPrerelease, meta.usageExamples ?? null, whatChanged, input.submittedBy],
+      `insert into pending_mirrors (skill_id, semver, external_url, external_ref, external_subdir, is_prerelease, usage_examples, what_changed, created_by, external_commit, prescan_content_sha256)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) on conflict (skill_id, semver) do nothing`,
+      [skillId, input.semver, payload.pointer!.url, payload.pointer!.ref, payload.pointer!.subdir?.trim() || null, isPrerelease, meta.usageExamples ?? null, whatChanged, input.submittedBy, commit, prescanSha],
     );
     return { skillId, pendingMirror: true };
   }
@@ -1441,9 +1494,11 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
  */
 export type DirectPublishResult =
   | { ok: true; skillId: string; versionId?: string; pending?: boolean }
-  | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[]; routedReason: "content_risk" | "policy" }
+  | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[]; routedReason: "content_risk" | "policy" | "scan_pending" }
   | {
       ok: false; status: number; error: string; requiresOverride?: boolean; findings?: ScanFinding[]; severity?: string;
+      /** §49.2: the hosted artifact's scan verdict is not complete (e.g. no AV result yet). */
+      scanPending?: boolean; scanPendingReason?: ScanVerdictReason;
       /** §8 slug match found inside the publish transaction (a race the route's pre-check missed). */
       code?: typeof SLUG_EXISTS_CODE; matches?: Omit<SlugMatch, "skillId">[];
     };
@@ -1495,6 +1550,51 @@ export async function directPublish(
   const content = contentRiskFindings(check.findings);
   const trips = check.unreachable || contentRiskTripsGate(content);
   const overrideHolder = canReviewNamespace(input.access, ns.id);
+  // §49.2: a hosted (or Keep-current-files) publish needs a COMPLETE verdict on its artifact — with
+  // ClamAV configured, an engine result. Missing ⇒ a member is routed to review, an override holder
+  // confirms with a reason (audited below). Pointer publishes are covered by `check.unreachable`.
+  let missing: ScanVerdictReason | null = null;
+  if (!input.contentCheck && input.payload.artifactObjectKey) {
+    const { rows: gate } = await pool.query<{ status: string; findings: ScanFinding[] | null }>(
+      `select status, findings from scan_reports where subject_type = 'artifact' and subject_id = $1 order by created_at desc limit 1`,
+      [input.payload.artifactObjectKey],
+    );
+    const v = scanVerdict(gate[0] ? { status: gate[0].status, findings: Array.isArray(gate[0].findings) ? gate[0].findings : [] } : null, { avRequired: avRequired() });
+    if (!v.complete) missing = v.reason;
+  }
+  if (missing && !overrideHolder) {
+    let originRequestId: string | null = null;
+    if (input.originRequestId && /^[0-9a-f-]{36}$/i.test(input.originRequestId)) {
+      const open = (await pool.query(`select 1 from skill_requests where id = $1 and state = 'open'`, [input.originRequestId])).rowCount;
+      if (open) originRequestId = input.originRequestId;
+    }
+    const { id } = await createProposal(pool, {
+      submittedByUserId: input.actorUserId,
+      targetNamespaceId: ns.id,
+      targetSkillId: existing?.id ?? null,
+      proposedSemver: input.semver,
+      payload: input.payload,
+      originRequestId,
+      routedReason: "scan_pending",
+      routedRules: [`scan-${missing}`],
+      aiDraftModel: input.aiDraftModel ?? null,
+    });
+    return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "scan_pending" };
+  }
+  if (missing && !input.override) {
+    return {
+      ok: false,
+      status: 409,
+      error: `scan not complete: ${scanVerdictText(missing)} — publishing anyway requires an explicit override with a reason`,
+      requiresOverride: true,
+      scanPending: true,
+      scanPendingReason: missing,
+      findings: content,
+    };
+  }
+  if (missing && !(input.overrideReason ?? "").trim()) {
+    return { ok: false, status: 422, error: "publishing without a complete scan verdict needs a reason", requiresOverride: true, scanPending: true, scanPendingReason: missing };
+  }
   if (trips && !overrideHolder) {
     let originRequestId: string | null = null;
     if (input.originRequestId && /^[0-9a-f-]{36}$/i.test(input.originRequestId)) {
@@ -1588,6 +1688,17 @@ export async function directPublish(
       namespaceId: ns.id,
       after: { semver: input.semver, slug: input.payload.metadata.skillSlug, pending: result.pendingMirror ?? false, ...(input.aiDraftModel ? { aiDraftModel: input.aiDraftModel } : {}) },
     });
+    if (missing) {
+      // §49.2: an override holder published without a complete scan verdict.
+      await appendAudit(client, {
+        actorUserId: input.actorUserId,
+        action: "skill.publish_scan_override",
+        targetType: "skill",
+        targetId: result.skillId,
+        namespaceId: ns.id,
+        after: { semver: input.semver, reason: input.overrideReason ?? null, missingVerdict: missing },
+      });
+    }
     if (trips) {
       // §37.4: an override holder published over gate-tripping content findings.
       await appendAudit(client, {
@@ -1643,9 +1754,11 @@ export async function promoteToGlobal(
       id: string; namespace_id: string; slug: string; title: string; description: string;
       tool_harness: string; categories: string[]; deprecated_at: string | null;
       icon_sha256: string | null; icon_emoji: string | null; icon_source: "frontmatter" | "bundle" | "upload" | null;
+      visibility: "org" | "namespace"; shared_namespace_ids: string[];
     }>(
       `select s.id, s.namespace_id, s.slug, s.title, s.description, s.tool_harness, s.deprecated_at,
-              s.icon_sha256, s.icon_emoji, s.icon_source,
+              s.icon_sha256, s.icon_emoji, s.icon_source, s.visibility,
+              ${sharedNamespaceIdsSql("s")} as shared_namespace_ids,
               coalesce((select array_agg(c.name order by c.name)
                           from skill_categories sc join categories c on c.id = sc.category_id
                          where sc.skill_id = s.id), '{}') as categories
@@ -1654,7 +1767,10 @@ export async function promoteToGlobal(
       [input.sourceNamespaceSlug, input.sourceSkillSlug],
     )
   ).rows[0];
-  if (!skill) return { ok: false, status: 404, error: "skill not found" };
+  // §49.4: visibility before everything — an outsider gets the same 404 as for a missing skill.
+  if (!skill || !isSkillVisible(input.access, { namespaceId: skill.namespace_id, visibility: skill.visibility, sharedNamespaceIds: skill.shared_namespace_ids })) {
+    return { ok: false, status: 404, error: "skill not found" };
+  }
   if (input.sourceNamespaceSlug === "global") return { ok: false, status: 422, error: "skill is already global" };
   if (!canInitiatePromotion(input.access, skill.namespace_id)) {
     return { ok: false, status: 403, error: "only a member of the owning namespace may promote it" };
@@ -1902,6 +2018,8 @@ export interface ProposalDetail {
   aiDraftModel: string | null;
   revisions: ProposalRevisionView[];
   scanReport: { severity: string | null; status: string; findings: unknown; createdAt: string } | null;
+  /** §49.2: why accept would answer 409 scan_pending right now, or null when the verdict is complete. */
+  scanPendingReason: ScanVerdictReason | null;
   /** §41.3: the rules-only quality of the latest revision's report, computed on read; null until the quality scanner ran. */
   quality: { rulesScore: number; stars: number; findings: QualityFindingView[] } | null;
   /** §46.8: the AI pre-review of the latest revision — advisory, never read by the accept gate. */
@@ -2131,7 +2249,14 @@ export async function getProposalDetail(
     aiDraftModel: p.ai_draft_model,
     revisions,
     scanReport,
-    quality: scanReport && scanReport.status !== "pending" && scanReport.status !== "unreachable" ? proposalQuality(scanReport.findings) : null,
+    scanPendingReason: (() => {
+      const v = scanVerdict(
+        scanReport && scanReport.status !== "pending" ? { status: scanReport.status, findings: Array.isArray(scanReport.findings) ? (scanReport.findings as ScanFinding[]) : [] } : null,
+        { avRequired: avRequired() },
+      );
+      return v.complete ? null : v.reason;
+    })(),
+    quality: scanReport && scanReport.status !== "pending" && scanReport.status !== "unreachable" && scanReport.status !== "source_changed" ? proposalQuality(scanReport.findings) : null,
     aiPrereview: await proposalPrereview(
       pool,
       { id: p.id, state: p.state, targetNamespaceId: p.target_namespace_id, revision: latest?.revisionNo ?? null, scanFindings: scanReport?.findings ?? [] },

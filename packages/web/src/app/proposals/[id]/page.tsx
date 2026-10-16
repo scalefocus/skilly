@@ -79,6 +79,7 @@ interface Detail {
   id: string; state: string; targetNamespaceSlug: string; targetSkillId: string | null; proposedSemver: string;
   decisionReason: string | null; materializedVersionId: string | null; createdAt: string;
   revisions: Revision[]; scanReport: { severity: string | null; status: string; findings: Finding[]; createdAt: string } | null;
+  scanPendingReason?: string | null;
   /** §41.3: the rules-only quality of the latest revision, computed on read; null until the quality scanner ran. */
   quality?: { rulesScore: number; stars: number; findings: QualityFindingItem[] } | null;
   caps: { isReviewer: boolean; isSubmitter: boolean }; allowedActions: string[];
@@ -100,6 +101,14 @@ interface Detail {
   targetSkillCurrent: TargetSkillCurrent | null;
 }
 interface SubmitterCard { userId: string; displayName: string; email: string; avatar: string | null; role: string; priorSubmissions: number }
+
+/** §49.2: why the accept gate reads the verdict as missing. */
+const SCAN_PENDING_TEXT: Record<string, string> = {
+  pending: "the security scan has not run yet",
+  unreachable: "the pinned source could not be fetched for scanning",
+  changed: "the upstream ref moved since this was submitted — ask the proposer to resubmit",
+  av_missing: "the anti-virus engine has not returned a result yet",
+};
 
 const ACTION_LABEL: Record<string, string> = {
   start_review: "Start review",
@@ -351,10 +360,12 @@ function ProposalDetailInner() {
   const findings = data?.scanReport?.findings ?? [];
   const sev = data?.scanReport?.severity ?? null;
   const scanNeedsOverride = sev === "high" || sev === "critical";
+  // §49.2: a MISSING verdict (pending / unreachable / moved source / no AV result) blocks accept too.
+  const scanPendingReason: string | null = data?.scanPendingReason ?? null;
   // §47.7: enforced policy rules violated (or without a current verdict) need the same override.
   const policyTrips = data?.policy?.trips ?? [];
   const policyForbidden = policyTrips.some((t) => !t.canOverride);
-  const needsOverride = scanNeedsOverride || policyTrips.length > 0;
+  const needsOverride = scanNeedsOverride || policyTrips.length > 0 || scanPendingReason !== null;
   // Real issues (the "N findings" count) vs. the anti-virus engine's per-file output. ClamAV
   // records every file — including clean ones (severity `info`) — so reviewers can expand and see
   // exactly what it returned; only genuine detections (`malware`, critical) count as findings.
@@ -1046,6 +1057,8 @@ function ProposalDetailInner() {
             <Pill tone="muted">scan pending</Pill>
           ) : data.scanReport.status === "unreachable" ? (
             <Pill tone="warn">source unreachable</Pill>
+          ) : data.scanReport.status === "source_changed" ? (
+            <Pill tone="warn">source changed</Pill>
           ) : (
             <Pill tone={SEV_TONE[securitySev ?? "info"] ?? "muted"}>{securitySev ?? "clean"}</Pill>
           )}
@@ -1056,6 +1069,14 @@ function ProposalDetailInner() {
         )}
         {data.scanReport?.status === "unreachable" && (
           <p className="muted" style={{ fontSize: 13 }}>The pinned ref couldn’t be fetched for scanning (bad URL/ref, or the source was unavailable). It’s re-scanned automatically if the proposal’s ref changes.</p>
+        )}
+        {data.scanReport?.status === "source_changed" && (
+          <p className="muted" style={{ fontSize: 13 }}>The upstream ref no longer resolves to the commit pinned when this was submitted — what would be mirrored is not what was proposed. Ask the proposer to resubmit at the current ref.</p>
+        )}
+        {scanPendingReason && (
+          <p data-testid="scan-pending" style={{ fontSize: 13, color: "var(--danger)" }}>
+            <strong>Scan not complete:</strong> {SCAN_PENDING_TEXT[scanPendingReason] ?? scanPendingReason}. Accepting now needs the override below, with a reason — it is audit-logged.
+          </p>
         )}
         {issues.map((f, i) => (
           <div key={i} className="row" style={{ borderRadius: "var(--radius-sm)", border: "1px solid var(--line)", marginBottom: 8, background: "var(--surface-2)" }}>
@@ -1219,9 +1240,10 @@ function ProposalDetailInner() {
                 <input type="checkbox" checked={override} disabled={policyForbidden} onChange={(e) => setOverride(e.target.checked)} style={{ marginTop: 2 }} />
                 <span>
                   {scanNeedsOverride ? <>Override the <strong style={{ margin: "0 4px" }}>{sev}</strong> scan finding</> : null}
-                  {scanNeedsOverride && policyTrips.length > 0 ? " and " : null}
+                  {!scanNeedsOverride && scanPendingReason ? <>Accept without a complete scan verdict ({SCAN_PENDING_TEXT[scanPendingReason] ?? scanPendingReason})</> : null}
+                  {(scanNeedsOverride || scanPendingReason) && policyTrips.length > 0 ? " and " : null}
                   {policyTrips.length > 0 ? `override the policy check (${policyTrips.length} rule${policyTrips.length === 1 ? "" : "s"})` : null}
-                  {" "}and publish anyway (audit-logged){policyTrips.length > 0 ? " — the note above is the required reason" : ""}.
+                  {" "}and publish anyway (audit-logged){policyTrips.length > 0 || scanPendingReason ? " — the note above is the required reason" : ""}.
                 </span>
               </label>
               {policyTrips.length > 0 && <PolicyOverrideList trips={policyTrips} />}
@@ -1234,7 +1256,7 @@ function ProposalDetailInner() {
               <button
                 key={a}
                 className={`btn ${a === "accept" ? "btn-primary" : a === "reject" ? "btn-danger" : ""}`}
-                disabled={busy !== null || (a === "accept" && needsOverride && (!override || policyForbidden || (policyTrips.length > 0 && !note.trim())))}
+                disabled={busy !== null || (a === "accept" && needsOverride && (!override || policyForbidden || ((policyTrips.length > 0 || scanPendingReason !== null) && !note.trim())))}
                 onClick={() => act(a)}
               >
                 {busy === a ? "…" : ACTION_LABEL[a] ?? a}

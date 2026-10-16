@@ -27,7 +27,8 @@ async function prepare(ctx: Ctx) {
 
   const { ns, slug, namespaceId } = await ctx.params;
   const skill = await findSkill(ns, slug);
-  if (!skill || (skill.status === "active" && !isSkillVisible(access, skill))) {
+  // §49.4: visibility before the archived check — an outsider never sees the 409.
+  if (!skill || !isSkillVisible(access, skill)) {
     return { error: Response.json({ error: "not found" }, { status: 404 }) };
   }
   if (skill.status === "archived") return { error: Response.json({ error: "an archived skill's sharing can't change — restore it first" }, { status: 409 }) };

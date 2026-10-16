@@ -101,6 +101,7 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   if (payload.pointer) {
     const v = await verifyPointerSkill(payload.pointer.url, payload.pointer.ref, payload.pointer.subdir);
     if (!v.ok) return Response.json({ error: v.error }, { status: 422 });
+    payload = { ...payload, pointer: { ...payload.pointer, commit: v.commit } }; // §49.3 pin
   }
 
   // Duplicate detection (§8). A BRAND-NEW skill gets the full identity check; a new VERSION of an
@@ -153,7 +154,7 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   });
   if (!r.ok) {
     return Response.json(
-      { error: r.error, ...(r.requiresOverride ? { requiresOverride: true, contentRisk: true, severity: r.severity ?? null, findings: r.findings ?? [] } : {}), ...(r.code ? { code: r.code, matches: r.matches ?? [] } : {}) },
+      { error: r.error, ...(r.requiresOverride ? { requiresOverride: true, contentRisk: !r.scanPending, severity: r.severity ?? null, findings: r.findings ?? [] } : {}), ...(r.scanPending ? { scanPending: true, scanPendingReason: r.scanPendingReason ?? null } : {}), ...(r.code ? { code: r.code, matches: r.matches ?? [] } : {}) },
       { status: r.status },
     );
   }

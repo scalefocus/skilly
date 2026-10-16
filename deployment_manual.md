@@ -41,7 +41,7 @@ backends:
 | **worker** (`packages/worker`) | 4000 | SCIM 2.0 endpoint, Entra reconciliation, the **git smart server**, publish/scan/notify/pointer sweeps. Singleton (Postgres advisory-lock leader). |
 | **proxy** (Caddy, dev sample) | 8080 | Routes `/scim/*` and `*.git/...` → worker; everything else → web |
 | **Postgres** | 5432 | Metadata, FTS, append-only audit |
-| **MinIO / S3** | 9000 (API), 9001 (console) | Immutable skill artifact storage |
+| **MinIO / S3** | 9000 (API), 9001 (console, bound to `127.0.0.1` on the host only) | Immutable skill artifact storage |
 | **ClamAV** (optional) | 3310 | Malware scanning at ingest |
 
 Key routing rule (any proxy must honor it): **`/scim/*` and `*.git/...` go to the worker; all
@@ -83,6 +83,9 @@ POSTGRES_PASSWORD=change-me-strong
 SKILLY_APP_PASSWORD=change-me-strong-app
 NEXTAUTH_SECRET=<openssl rand -base64 32>
 MINIO_ROOT_PASSWORD=change-me-minio
+# bucket-scoped object-store account web + worker use (created by minio-init; NOT the root pair)
+S3_ACCESS_KEY=skilly-app
+S3_SECRET_KEY=change-me-s3-account
 SCIM_BEARER_TOKEN=<long random string>
 # Entra (fill after section 7.1)
 ENTRA_TENANT_ID=
@@ -100,17 +103,22 @@ docker compose -f deploy/docker-compose.yml up -d --build
 ```
 - The **migrate** service applies `db/migrations/*.sql` in order, then sets the least-privilege
   `skilly_app` DB password from `SKILLY_APP_PASSWORD`.
-- web and worker start once Postgres is healthy and migrations have completed.
+- The one-shot **minio-init** service creates the artifact bucket (`S3_BUCKET`, default
+  `skilly-artifacts`) and the bucket-scoped service account from `S3_ACCESS_KEY` / `S3_SECRET_KEY`.
+  It is idempotent: re-running `docker compose up` with a new `S3_SECRET_KEY` rotates the account.
+- web and worker start once Postgres is healthy, migrations have completed and minio-init has
+  finished.
 - The Caddy proxy listens on **http://localhost:8080**.
 
-### Step 3 — create the artifact bucket (one time)
-MinIO does not auto-create the bucket. Open the console at **http://localhost:9001**
-(login = `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`) and create a bucket named **`skilly-artifacts`**
-(or whatever you set `S3_BUCKET` to). CLI alternative:
-```bash
-docker run --rm --entrypoint /bin/sh minio/mc -c \
-  "mc alias set h http://host.docker.internal:9000 <MINIO_ROOT_USER> <MINIO_ROOT_PASSWORD> && mc mb -p h/skilly-artifacts"
-```
+> **Upgrading from a stack that predates `S3_ACCESS_KEY` / `S3_SECRET_KEY`:** add both values to
+> `deploy/.env` *before* the next `docker compose up` — compose refuses to start web, worker and
+> minio-init without them. The existing bucket and data are untouched.
+
+### Step 3 — check the artifact bucket (optional)
+The bucket is created automatically by minio-init (Step 2). To inspect it, open the MinIO console
+at **http://127.0.0.1:9001** — it is bound to the loopback interface only, so from another machine
+tunnel first (`ssh -L 9001:127.0.0.1:9001 <host>`). Login = `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
+(the root pair; web and worker use the scoped `S3_ACCESS_KEY` account instead).
 
 ### Step 4 — sign in
 Open **http://localhost:8080**. To use Entra SSO, complete [section 7](#7-microsoft-entra-id-integration)
@@ -201,8 +209,11 @@ admin. `SKILLY_DEV_AUTH` is **dev-only** and must never be enabled in production
 | `ENTRA_CLIENT_SECRET` | web, worker | for SSO | App client secret |
 | `SKILLY_BOOTSTRAP_ADMIN_GROUP` | web, worker | recommended | Entra **group object id** whose members are Platform Admins from first boot |
 | `SCIM_BEARER_TOKEN` | worker | for SCIM | Bearer token Entra presents to `/scim/v2` |
-| `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | web, worker | yes | Object storage connection + bucket |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | minio (compose) | yes | Bundled MinIO credentials |
+| `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | web, worker, minio-init (compose) | yes | Object storage connection + bucket. `S3_ACCESS_KEY` / `S3_SECRET_KEY` are a **bucket-scoped account** (compose's minio-init creates it), never the root pair |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | minio, minio-init (compose) | yes | Bundled MinIO root credentials — used only to bootstrap the bucket + scoped account |
+| `CLAMAV_HOST` / `CLAMAV_PORT` | web, worker | recommended | clamd address (compose: `clamav` / `3310`). Set on web too so hosted uploads are scanned at ingest |
+| `TRUST_PROXY` | web, worker | behind a proxy | Proxy hop count for the real client IP (install IPs + per-IP rate limits; on web the DCR limiter) |
+| `AI_ALLOW_PRIVATE_BASE_URL` | web, worker | no | `1` = allow an AI provider base URL on a private/on-network address (SSRF guard opt-in) |
 | `GIT_REPO_ROOT` | worker | yes | Filesystem path where skill git repos are synthesized (persist it!) |
 | `WORKER_PORT` | worker | no | Worker HTTP port (default 4000) |
 | `ONE_TIME_TOKEN_TTL_SECONDS` | web | no | Legacy/no-op — install tokens don't use it (kept for compatibility) |
@@ -418,7 +429,7 @@ The git smart server (worker) validates the token, enforces visibility, and logs
 | Signed in but **no access** / `/admin` hidden | Your user/group membership isn't synced yet. Run SCIM provisioning or enable Graph reconciliation (7.4), and make sure you're in the bootstrap group. |
 | SCIM **Test Connection** fails / 401 | `SCIM_BEARER_TOKEN` mismatch, or the tenant URL isn't reachable from Azure (localhost needs a public tunnel). Confirm the proxy routes `/scim/*` → worker. |
 | Graph reconciliation does nothing | Missing **admin consent** on `GroupMember.Read.All`, or `ENTRA_*` not set for the worker, or the group isn't role-mapped/bootstrap (only those are reconciled). |
-| Upload/publish fails with a storage error | The `S3_BUCKET` doesn't exist — create `skilly-artifacts` in MinIO (Step 3). |
+| Upload/publish fails with a storage error | The `S3_BUCKET` doesn't exist or `S3_ACCESS_KEY` / `S3_SECRET_KEY` don't match the scoped account — check `docker compose logs minio-init` and re-run `docker compose up -d minio-init` (idempotent). |
 | `git clone`/`npx skills add` prompts for a username | The repo is restricted and the URL has no/expired token. Generate a fresh install command or use a PAT. |
 | Migration `0001` fails with a socket error (manual) | Postgres first-boot init race — wait for `psql -c "select 1"` to succeed, then re-apply migrations. |
 | Web 500 with `MODULE_NOT_FOUND` / `Cannot find module './impl'` (Windows) | Microsoft Defender quarantined a Next.js internal. Add a Defender **exclusion** for the repo + `node_modules`, then `pnpm install --force` and restart. |

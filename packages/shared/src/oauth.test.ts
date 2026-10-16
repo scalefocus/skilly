@@ -55,6 +55,13 @@ test("redirect URI registration: https ok, loopback http ok, everything else ref
   assert.match(String(validateRedirectUri("")), /non-empty/);
 });
 
+test("redirect URI registration refuses script-capable and local schemes (§49.5)", () => {
+  for (const u of ["javascript:alert(1)", "JavaScript://x/%0aalert(1)", "data:text/html,<script>1</script>", "vbscript:msgbox", "file:///etc/passwd", "blob:https://x.example/uuid", "about:blank"]) {
+    assert.match(String(validateRedirectUri(u)), /not allowed/, u);
+  }
+  assert.equal(validateRedirectUri("myapp://oauth/callback"), null);
+});
+
 test("redirect matching is exact, except loopback ports", () => {
   const reg = ["https://app.example.com/cb", "http://127.0.0.1:1/callback"];
   assert.equal(redirectUriAllowed(reg, "https://app.example.com/cb"), true);

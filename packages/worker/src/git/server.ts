@@ -10,6 +10,7 @@ import {
   type ParsedGitRequest,
   type TokenPrincipal,
 } from "./authorize.js";
+import type { GitRefusalCode } from "./authorize.js";
 import type { Request } from "express";
 import type { MarketplaceScope } from "@skilly/shared";
 import { repoProvisioned, defaultRepoRoot } from "./repoStore.js";
@@ -73,25 +74,35 @@ export interface GitServerDeps extends GitAuthDeps {
    */
   logAccess(skillId: string, userId: string | null, isSystem: boolean, countInstall: boolean): Promise<void>;
   /**
-   * Record a clone refused because the install token's owning user is not status='active'
-   * (SKILLY_SPEC.md §23/§25): a system_event row — source='worker', status 401,
-   * error_code 'install_token_owner_inactive' — whose actor is the TOKEN OWNER (the requester is
-   * an anonymous machine). Fire-and-forget at the call site; a failure never changes the response.
+   * Record a refused git request (SKILLY_SPEC.md §23/§25/§49.8): a system_event row — source='worker',
+   * the refusal's status and error_code — whose actor is the TOKEN OWNER when the token row
+   * matched (the requester is an anonymous machine). Implementations throttle per
+   * (code, client, minute). Fire-and-forget at the call site; a failure never changes the response.
    */
-  recordOwnerInactiveRefusal(e: OwnerInactiveRefusal): Promise<void>;
+  recordGitRefusal(e: GitRefusalEvent): Promise<void>;
   repoRoot?: string;
 }
 
-export interface OwnerInactiveRefusal {
+export interface GitRefusalEvent {
+  code: GitRefusalCode;
+  status: 401 | 403 | 404;
   method: string;
   /** The matched git endpoint template, e.g. `/[ns]/[slug].git/info/refs` — never the query string. */
   route: string;
   /** Concrete path hit — never the query string. */
   path: string;
-  ownerUserId: string;
+  /** The token owner when the token row matched; null for an unknown token. */
+  ownerUserId: string | null;
+  /** The token ROW id when it matched — never the credential. */
+  tokenId: string | null;
+  /** The originating client address (per TRUST_PROXY) — the throttle key for unknown tokens. */
+  clientIp: string | null;
   namespaceSlug: string;
   skillSlug: string;
 }
+
+/** @deprecated kept for the owner-inactive call sites' type; superseded by GitRefusalEvent. */
+export type OwnerInactiveRefusal = GitRefusalEvent;
 
 /** The matched-template form of a git smart-HTTP request, for system_event.route (§25). */
 function gitRouteTemplate(parsed: ParsedGitRequest): string {
@@ -123,13 +134,17 @@ export function gitServer(deps: GitServerDeps, opts: GitServerOptions = {}): Rou
       const decision = await authorizeGitRequest(parsed, token, deps);
 
       if (!decision.allow) {
-        if (decision.ownerInactive) {
+        if (decision.refusal) {
           void deps
-            .recordOwnerInactiveRefusal({
+            .recordGitRefusal({
+              code: decision.refusal.code,
+              status: decision.status,
               method: req.method,
               route: gitRouteTemplate(parsed),
               path: url.pathname,
-              ownerUserId: decision.ownerInactive.ownerUserId,
+              ownerUserId: decision.refusal.ownerUserId ?? null,
+              tokenId: decision.refusal.tokenId ?? null,
+              clientIp: clientIp(req),
               namespaceSlug: parsed.namespaceSlug,
               skillSlug: parsed.skillSlug,
             })
