@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.36.1",
+    date: "2026-10-16",
+    summary:
+      "Security fixes from the October 2026 OWASP review. A new-version proposal, direct publish or MCP proposal can now target only a skill you can see — a restricted skill outside your namespaces answers as if it didn’t exist, so its files can no longer be pulled into a proposal through Keep current files. Bundle file names with control characters, backslashes or a leading slash are rejected at upload and refused again when the serving repo is built, closing an archive-name injection into served skills.",
+  },
+  {
     version: "2.36.0",
     date: "2026-10-15",
     summary:

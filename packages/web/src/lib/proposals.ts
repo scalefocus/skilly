@@ -30,6 +30,8 @@ import {
   normalizeHarness,
   isAllowedToolHarness,
   WHAT_CHANGED_MAX_LEN,
+  isSkillVisible,
+  sharedNamespaceIdsSql,
   TRANSITIONS,
   type EffectiveAccess,
   type ProposalAction,
@@ -176,6 +178,53 @@ export interface CreateProposalInput {
   aiDraftModel?: string | null;
 }
 
+/** The one not-found message for a new-version target the actor can't see OR that doesn't exist (§8). */
+export const TARGET_NOT_FOUND = "target skill not found";
+
+/**
+ * The target skill of a new-version submission, resolved AS THE ACTOR SEES IT (§8 *Target
+ * visibility gate*, invariant #3): `null` when the skill doesn't exist OR isn't visible to them —
+ * the two are indistinguishable to the caller by design (same 404 on `POST /api/proposals`; the
+ * absent-skill path on `POST /api/publish`).
+ */
+export async function findVisibleTargetSkill(
+  db: Pool | PoolClient,
+  access: EffectiveAccess,
+  namespaceId: string,
+  skillSlug: string,
+): Promise<{ id: string; status: "active" | "archived" } | null> {
+  const row = (
+    await db.query<{ id: string; status: "active" | "archived"; namespace_id: string; visibility: "org" | "namespace"; shared_namespace_ids: string[] }>(
+      `select s.id, s.status, s.namespace_id, s.visibility, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
+         from skills s where s.namespace_id = $1 and s.slug = $2`,
+      [namespaceId, skillSlug],
+    )
+  ).rows[0];
+  if (!row || !isSkillVisible(access, { namespaceId: row.namespace_id, visibility: row.visibility, sharedNamespaceIds: row.shared_namespace_ids })) return null;
+  return { id: row.id, status: row.status };
+}
+
+/**
+ * The target skill by id, or null when it doesn't exist or the actor can't see it (§8 *Target
+ * visibility gate*). The backstop inside `verifySubmissionPayload` and `resolveReuseSource`, so
+ * the helpers are safe whatever route reaches them.
+ */
+async function loadVisibleTarget(
+  db: Pool | PoolClient,
+  access: EffectiveAccess | undefined,
+  skillId: string,
+): Promise<{ namespace_id: string; visibility: "org" | "namespace" } | null> {
+  if (!access) return null; // fail closed: no actor, no target
+  const row = (
+    await db.query<{ namespace_id: string; visibility: "org" | "namespace"; shared_namespace_ids: string[] }>(
+      `select s.namespace_id, s.visibility, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids from skills s where s.id = $1`,
+      [skillId],
+    )
+  ).rows[0];
+  if (!row || !isSkillVisible(access, { namespaceId: row.namespace_id, visibility: row.visibility, sharedNamespaceIds: row.shared_namespace_ids })) return null;
+  return { namespace_id: row.namespace_id, visibility: row.visibility };
+}
+
 /**
  * Validate a submission payload at the API boundary (proposals + direct publish + reviewer
  * edits/resubmits):
@@ -212,8 +261,21 @@ export async function verifySubmissionPayload(
      * untouched stored value would block every re-version of a pre-closed-vocabulary skill.
      */
     targetSkillId?: string | null;
+    /**
+     * The actor's resolved access. REQUIRED whenever `targetSkillId` is set (§8 *Target visibility
+     * gate*, invariant #3): a target the actor can't see — or no access at all — fails closed with
+     * `TARGET_NOT_FOUND`, so no caller can validate (and then persist) a payload against a
+     * restricted skill the actor isn't allowed to know about.
+     */
+    access?: EffectiveAccess;
   } = {},
 ): Promise<string | null> {
+  // §8 Target visibility gate — first, before any other work touches the target.
+  let target: { namespace_id: string; visibility: "org" | "namespace" } | null = null;
+  if (opts.targetSkillId) {
+    target = await loadVisibleTarget(db, opts.access, opts.targetSkillId);
+    if (!target) return TARGET_NOT_FOUND;
+  }
   if (
     opts.namespaceSlug !== undefined &&
     payload.metadata?.visibility === "namespace" &&
@@ -237,9 +299,9 @@ export async function verifySubmissionPayload(
     if (!Array.isArray(raw) || raw.some((x) => typeof x !== "string")) return "sharedNamespaceIds must be a list of namespace ids";
     let owner: string | null = null;
     let visibility: "org" | "namespace" = payload.metadata.visibility;
-    if (opts.targetSkillId) {
-      const t = (await db.query<{ namespace_id: string; visibility: "org" | "namespace" }>(`select namespace_id, visibility from skills where id = $1`, [opts.targetSkillId])).rows[0];
-      if (t) { owner = t.namespace_id; visibility = t.visibility; }
+    if (target) {
+      owner = target.namespace_id;
+      visibility = target.visibility;
     } else if (opts.namespaceSlug !== undefined) {
       owner = (await db.query<{ id: string }>(`select id from namespaces where slug = $1`, [opts.namespaceSlug.trim().toLowerCase()])).rows[0]?.id ?? null;
     }
@@ -399,13 +461,17 @@ export interface ReuseSource {
  * reviewer approves exactly what they inspected even if other versions land mid-review. When
  * `metadata` is provided, also enforces the no-op guard (at least one field must differ).
  * Fails when there is no stable active version, or its artifact isn't in storage yet
- * (a pointer whose mirror is still pending).
+ * (a pointer whose mirror is still pending) — and, FIRST, when the actor can't see the target
+ * (§8 *Target visibility gate*, invariant #3): the snapshot is what would hand a restricted
+ * skill's bytes to an outsider's proposal, so the helper refuses it itself, whatever the route.
  */
 export async function resolveReuseSource(
   db: Pool | PoolClient,
+  access: EffectiveAccess,
   skillId: string,
   metadata?: ProposalMetadata,
 ): Promise<{ ok: true; reuse: ReuseSource } | { ok: false; error: string }> {
+  if (!(await loadVisibleTarget(db, access, skillId))) return { ok: false, error: TARGET_NOT_FOUND };
   const { rows } = await db.query<{
     id: string; semver: string; artifact_object_key: string | null; artifact_sha256: string | null;
     content_sha256: string | null; artifact_filename: string | null; usage_examples: string | null;

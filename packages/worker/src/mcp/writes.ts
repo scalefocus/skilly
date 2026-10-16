@@ -684,20 +684,29 @@ function validatePointerFields(p: { url: string; ref: string; subdir?: string | 
   return { ok: true, value: { url: p.url, ref: p.ref, subdir } };
 }
 
-/** Resolve the target: an existing skill (new version) or a brand-new one, with semver checks. */
+/**
+ * Resolve the target: an existing skill (new version) or a brand-new one, with semver checks.
+ * §8 *Target visibility gate* (invariant #3): an existing skill the actor can't see is treated
+ * exactly as absent — the new-skill path — so nothing about it is confirmed or carried into the
+ * proposal (its current metadata would otherwise surface on the submitter's own proposal view).
+ */
 async function resolveTarget(
   pool: Pool,
+  access: EffectiveAccess,
   namespaceId: string,
   skillSlug: string,
   proposedSemver: string,
 ): Promise<{ ok: true; targetSkillId: string | null; isNewVersion: boolean } | WriteFailure> {
   if (!parseSemver(proposedSemver)) return fail(`"${proposedSemver}" is not a valid semver (e.g. 1.0.0)`);
-  const { rows } = await pool.query<{ id: string; status: string }>(
-    `select id, status from skills where namespace_id = $1 and slug = $2`,
+  const { rows } = await pool.query<{ id: string; status: string; namespace_id: string; visibility: "org" | "namespace"; shared_namespace_ids: string[] }>(
+    `select s.id, s.status, s.namespace_id, s.visibility, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
+       from skills s where s.namespace_id = $1 and s.slug = $2`,
     [namespaceId, skillSlug],
   );
   const existing = rows[0];
-  if (!existing) return { ok: true, targetSkillId: null, isNewVersion: false };
+  if (!existing || !isSkillVisible(access, { namespaceId: existing.namespace_id, visibility: existing.visibility, sharedNamespaceIds: existing.shared_namespace_ids })) {
+    return { ok: true, targetSkillId: null, isNewVersion: false };
+  }
   if (existing.status === "archived") return fail("that skill is archived — restore it before proposing a new version");
   const { rows: vs } = await pool.query<{ semver: string }>(`select semver from skill_versions where skill_id = $1`, [existing.id]);
   if (vs.some((v) => v.semver === proposedSemver)) {
@@ -803,7 +812,7 @@ export async function createMcpProposal(
   clientName: string,
   scanSeverity?: string,
 ): Promise<ProposeResult | WriteFailure> {
-  const target = await resolveTarget(pool, namespace.id, payload.metadata.skillSlug, proposedSemver);
+  const target = await resolveTarget(pool, access, namespace.id, payload.metadata.skillSlug, proposedSemver);
   if (!target.ok) return target;
   // §8 slug match: a NEW skill can't take a slug a visible active skill already uses in ANOTHER
   // namespace — the agent must propose to that skill's namespace, which makes it a new version.

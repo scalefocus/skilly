@@ -33,7 +33,7 @@ function awardedKeys(fp: ReturnType<typeof fakePool>): string[] {
 
 test("MCP new-version proposal awards Encore alongside Homegrown (§31.11)", async () => {
   const fp = fakePool();
-  fp.on("select id, status from skills", [{ id: "skill-1", status: "active" }]);
+  fp.on("select s.id, s.status, s.namespace_id", [{ id: "skill-1", status: "active", namespace_id: "ns-1", visibility: "org", shared_namespace_ids: [] }]);
   fp.on("insert into proposals", [{ id: "p-1" }]);
   const r = await createMcpProposal(fp.pool, USER, ACCESS, NS, "1.1.0", payload("Faster and kinder."), "Test Client");
   assert.equal(r.ok, true, JSON.stringify(r));

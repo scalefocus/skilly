@@ -99,18 +99,19 @@ test("§42 sharing: grants, visibility, guards, maintainers, re-version sync, ma
 
   // ── 4. Payload validation: normalized for a restricted target, cleared for an org one ────
   const payload = { metadata: { ...meta, whatChanged: "w", sharedNamespaceIds: [C, B, C] } };
-  assert.equal(await verifySubmissionPayload(pool, aAdmin, payload, { targetSkillId: skillId, namespaceSlug: `${K}-a` }), null);
+  const asAAdmin = access([[A, "namespace_admin"]]);
+  assert.equal(await verifySubmissionPayload(pool, aAdmin, payload, { targetSkillId: skillId, namespaceSlug: `${K}-a`, access: asAAdmin }), null);
   assert.deepEqual(payload.metadata.sharedNamespaceIds, [B, C].sort(), "de-duplicated + sorted");
   const bad = { metadata: { ...meta, whatChanged: "w", sharedNamespaceIds: [A] } };
-  assert.match((await verifySubmissionPayload(pool, aAdmin, bad, { targetSkillId: skillId })) ?? "", /own namespace/);
+  assert.match((await verifySubmissionPayload(pool, aAdmin, bad, { targetSkillId: skillId, access: asAAdmin })) ?? "", /own namespace/);
   const orgNew = { metadata: { ...meta, skillSlug: `${K}-org`, visibility: "org" as const, sharedNamespaceIds: [B] } };
   assert.equal(await verifySubmissionPayload(pool, aAdmin, orgNew, { namespaceSlug: `${K}-a` }), null);
   assert.deepEqual(orgNew.metadata.sharedNamespaceIds, [], "an org skill carries no grants");
 
   // ── 5. The reuse no-op guard counts a grant diff as a real change ─────────────────────────
-  const same = await resolveReuseSource(pool, skillId, { ...meta, sharedNamespaceIds: [B] });
+  const same = await resolveReuseSource(pool, asAAdmin, skillId, { ...meta, sharedNamespaceIds: [B] });
   assert.equal(same.ok, false, "unchanged grants + metadata → nothing changed");
-  const widened = await resolveReuseSource(pool, skillId, { ...meta, sharedNamespaceIds: [B, C] });
+  const widened = await resolveReuseSource(pool, asAAdmin, skillId, { ...meta, sharedNamespaceIds: [B, C] });
   assert.equal(widened.ok, true, "'also share with Charlie' alone is a valid re-version");
 
   // ── 6. Maintainer eligibility via a grant, pruned on revoke ──────────────────────────────
