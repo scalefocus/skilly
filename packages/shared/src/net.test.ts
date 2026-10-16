@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validatePointerUrl, validateGitRef, validateSubdir, slugFromSubdir, isBlockedIp } from "./net.js";
+import { isLocalHostname, clientIpFromForwarded, trustProxyHops, isSameSiteFetch, validatePointerUrl, validateGitRef, validateSubdir, slugFromSubdir, isBlockedIp } from "./net.js";
 
 test("validatePointerUrl accepts public https hosts", () => {
   assert.equal(validatePointerUrl("https://github.com/acme/skill.git"), null);
@@ -104,4 +104,26 @@ test("slugFromSubdir takes the last path segment", () => {
   assert.equal(slugFromSubdir("frontend-design"), "frontend-design");
   assert.equal(slugFromSubdir("skills/web/frontend-design"), "frontend-design");
   assert.equal(slugFromSubdir("trailing/"), "trailing");
+});
+
+test("isLocalHostname names the local machine and internal zones", () => {
+  for (const h of ["localhost", "a.localhost", "printer.local", "db.internal"]) assert.equal(isLocalHostname(h), true, h);
+  for (const h of ["example.com", "localhost.example.com", "internal.example.com", "local.example"]) assert.equal(isLocalHostname(h), false, h);
+});
+
+test("clientIpFromForwarded keys on the trusted hop, never the client-chosen first entry (§49.9)", () => {
+  assert.equal(clientIpFromForwarded("1.1.1.1, 2.2.2.2, 3.3.3.3", 1), "3.3.3.3");
+  assert.equal(clientIpFromForwarded("1.1.1.1, 2.2.2.2, 3.3.3.3", 2), "2.2.2.2");
+  assert.equal(clientIpFromForwarded("1.1.1.1", 5), "1.1.1.1");
+  assert.equal(clientIpFromForwarded("1.1.1.1, 2.2.2.2", 0), null);
+  assert.equal(clientIpFromForwarded(null, 1), null);
+  assert.equal(trustProxyHops(undefined), 0);
+  assert.equal(trustProxyHops("true"), 1);
+  assert.equal(trustProxyHops("2"), 2);
+  assert.equal(trustProxyHops("loopback"), 0);
+});
+
+test("isSameSiteFetch: cross-site navigations are the only refusal", () => {
+  for (const v of [null, undefined, "", "same-origin", "same-site", "none", "Same-Origin"]) assert.equal(isSameSiteFetch(v), true, String(v));
+  assert.equal(isSameSiteFetch("cross-site"), false);
 });

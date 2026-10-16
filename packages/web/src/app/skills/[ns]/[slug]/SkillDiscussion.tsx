@@ -44,7 +44,7 @@ const THREAD_HASH = "#discussion-";
 interface VersionOpt {
   semver: string;
   channel: "stable" | "beta";
-  status: "active" | "yanked";
+  status: "active" | "yanked" | "quarantined";
 }
 interface DiscussionMessage {
   id: string;

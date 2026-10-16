@@ -512,7 +512,7 @@ test("revise: in-place revision, no state change, reviewers notified, staged bun
   });
   // Scan report keyed to the staged object — must be cleaned when the object is superseded.
   await pool.query(
-    `insert into scan_reports (subject_type, subject_id, scanner, status) values ('artifact', $1, 'test', 'ok')`,
+    `insert into scan_reports (subject_type, subject_id, scanner, status) values ('artifact', $1, 'test', 'scanned')`,
     [keyA],
   );
 
@@ -622,6 +622,8 @@ test("revision-pinned accept: stale revisionNo → 409, missing → 422, current
   )).rows[0]!.id;
 
   const payload = { ...mkPayload(submitter, `uploads/${submitter}/pin-a.bundle`), metadata: { skillSlug: "pin-skill", title: "Pin Skill", description: "d", toolHarness: "claude-code", visibility: "org" as const } };
+  // §49.2: the accept gate needs a complete verdict — the upload path would have written this.
+  await pool.query(`insert into scan_reports (subject_type, subject_id, scanner, status) values ('artifact', $1, 'test', 'scanned')`, [payload.artifactObjectKey]);
   const { id: proposalId } = await createProposal(pool, {
     submittedByUserId: submitter, targetNamespaceId: ns, proposedSemver: "1.0.0", payload,
   });

@@ -108,3 +108,47 @@ export function maxSeverity(findings: ScanFinding[]): Severity | null {
 export function requiresOverride(severity: Severity | null): boolean {
   return severity === "high" || severity === "critical";
 }
+
+// ── The gate verdict (§49.2) ───────────────────────────────────────────────────────────────
+
+/** Why a proposal's scan verdict is not complete. */
+export type ScanVerdictReason = "pending" | "unreachable" | "changed" | "av_missing";
+
+export interface GateReportLike {
+  /** `scanned` | `unreachable` | `source_changed` | … (scan_reports.status). */
+  status: string;
+  findings: ScanFinding[];
+}
+
+export type ScanVerdict = { complete: true } | { complete: false; reason: ScanVerdictReason };
+
+/** True when the report carries a real engine result (not the unavailable marker). */
+export function hasAvResult(findings: readonly ScanFinding[]): boolean {
+  return findings.some((f) => f.scanner === "clamav" && f.rule !== "scanner-unavailable");
+}
+
+/**
+ * Decide whether a gate report is a COMPLETE verdict the accept/direct-publish gate may act on.
+ * Missing report ⇒ `pending`; a pointer pre-scan that could not fetch ⇒ `unreachable`; one whose
+ * pinned commit moved ⇒ `changed`; and, when the AV engine is configured on this tier
+ * (`avRequired`), a report with no ClamAV result ⇒ `av_missing`. Anything else is complete and
+ * the severity-based override rule (`requiresOverride`) applies as before.
+ */
+export function scanVerdict(report: GateReportLike | null | undefined, opts: { avRequired: boolean }): ScanVerdict {
+  if (!report) return { complete: false, reason: "pending" };
+  if (report.status === "unreachable") return { complete: false, reason: "unreachable" };
+  if (report.status === "source_changed") return { complete: false, reason: "changed" };
+  if (report.status !== "scanned") return { complete: false, reason: "pending" };
+  if (opts.avRequired && !hasAvResult(report.findings)) return { complete: false, reason: "av_missing" };
+  return { complete: true };
+}
+
+/** User-facing wording for a missing verdict (review page, 409 bodies). */
+export function scanVerdictText(reason: ScanVerdictReason): string {
+  switch (reason) {
+    case "pending": return "the security scan has not run yet";
+    case "unreachable": return "the pinned source could not be fetched for scanning";
+    case "changed": return "the upstream ref moved since this was submitted — ask the proposer to resubmit";
+    case "av_missing": return "the anti-virus engine has not returned a result yet";
+  }
+}

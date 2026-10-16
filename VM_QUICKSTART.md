@@ -34,6 +34,7 @@ Edit `.env` and set, at minimum:
 |---|---|
 | `PUBLIC_BASE_URL` | External HTTPS URL, e.g. `https://skilly.acme.com` |
 | `POSTGRES_PASSWORD`, `SKILLY_APP_PASSWORD`, `MINIO_ROOT_PASSWORD` | Strong passwords |
+| `S3_ACCESS_KEY`, `S3_SECRET_KEY` | The bucket-scoped object-store account web + worker use (created automatically by the `minio-init` job; distinct from `MINIO_ROOT_*`) |
 | `NEXTAUTH_SECRET`, `SCIM_BEARER_TOKEN` | The generated values |
 | `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | From your Entra app registration |
 | `SKILLY_BOOTSTRAP_ADMIN_GROUP` | Entra group object id granted platform-admin on first login |
@@ -48,15 +49,16 @@ docker compose up --build -d
 docker compose ps          # all healthy; the "migrate" service should have exited 0
 ```
 
-## 5. Create the object-storage bucket (one-time)
+## 5. Object-storage bucket and account (automatic)
 
-```bash
-docker compose exec minio sh -c \
- 'mc alias set s3 http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb -p s3/skilly-artifacts'
-```
+The one-shot `minio-init` service creates the bucket (`S3_BUCKET`, default `skilly-artifacts`)
+and the bucket-scoped `S3_ACCESS_KEY` / `S3_SECRET_KEY` account on every `docker compose up`
+(idempotent; a new `S3_SECRET_KEY` rotates the account). Check it with
+`docker compose logs minio-init`. The MinIO console is bound to `127.0.0.1:9001` on the VM only —
+tunnel to it (`ssh -L 9001:127.0.0.1:9001 <VM>`) rather than exposing the port.
 
-Must match `S3_BUCKET` (default `skilly-artifacts`). Alternatively, create it in the
-MinIO console at `http://<VM>:9001`.
+> Upgrading an existing VM: add `S3_ACCESS_KEY` and `S3_SECRET_KEY` to `.env` **before** the next
+> `docker compose up`, or web/worker/minio-init refuse to start.
 
 ## 6. Verify
 
@@ -92,7 +94,7 @@ Migrations re-run in order; they are forward-only.
 - **Never** set `SKILLY_DEV_AUTH=1` in production — the app hard-fails on boot if you do.
 - ClamAV signature updates and pointer-skill mirroring require outbound network; an
   air-gapped VM needs adjustment.
-- **Bare-metal alternative (no Docker):** install Node 20+, pnpm 9, Postgres 16, and MinIO;
+- **Bare-metal alternative (no Docker):** install Node 22+, pnpm 9, Postgres 16, and MinIO;
   apply `db/migrations/*.sql` in order; `pnpm install && pnpm -r build`; then run
   `node packages/web/.next/standalone/server.js` (web) and
   `node packages/worker/dist/index.js` (worker) with the same environment variables,

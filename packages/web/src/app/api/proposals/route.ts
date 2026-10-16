@@ -124,6 +124,7 @@ export const POST = withSystemLog("/api/proposals", async function POST(req: Req
   if (payload.pointer) {
     const v = await verifyPointerSkill(payload.pointer.url, payload.pointer.ref, payload.pointer.subdir);
     if (!v.ok) return Response.json({ error: v.error }, { status: 422 });
+    payload = { ...payload, pointer: { ...payload.pointer, commit: v.commit } }; // §49.3 pin
   }
 
   // Duplicate detection (§8). NEW skill: full identity (cross-namespace same-slug pointer, or

@@ -1,14 +1,18 @@
 # skilly — v1 deployment topology (SKILLY_SPEC.md §13).
-# Six services: web, worker, postgres, minio, clamav, migrate.
+# Six core services: web, worker, postgres, minio, clamav, migrate — plus the one-shot init jobs
+# git-perms and minio-init (§49.12), and the dev-only proxy.
 # TLS terminates at your org reverse proxy in prod; a sample proxy is included for dev.
 #
 #   cp .env.example .env   # fill secrets
 #   docker compose up --build
+#
+# Every third-party image is pinned by tag + digest (§49.12). Bumps are reviewed changes —
+# see deploy/IMAGES.md for the current pins and the procedure.
 name: skilly
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-skilly}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
@@ -23,7 +27,7 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,21 +44,62 @@ services:
     restart: "no"
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: server /data --console-address ":9001"
     environment:
+      # Root credentials: used ONLY by this container and the one-shot minio-init job below.
+      # web/worker never see them — they authenticate with the bucket-scoped S3_ACCESS_KEY /
+      # S3_SECRET_KEY account that minio-init creates (SKILLY_SPEC.md §49.12).
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-skilly}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
     volumes:
       - ./data/minio:/data
     ports:
-      - "9001:9001" # console (dev only)
+      # Console: loopback only (§49.12) — never a host interface. Operators who need it from
+      # elsewhere tunnel to it (e.g. `ssh -L 9001:127.0.0.1:9001 <host>`).
+      - "127.0.0.1:9001:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+  minio-init:
+    # One-shot (SKILLY_SPEC.md §49.12): creates the artifact bucket and an IAM user whose only
+    # policy is limited to that bucket, from S3_ACCESS_KEY / S3_SECRET_KEY (.env, required — distinct
+    # from MINIO_ROOT_*). web and worker depend on this job completing and use ONLY that pair.
+    # Idempotent: `mc mb --ignore-existing`, `mc admin policy create` and `mc admin user add` all
+    # upsert (re-running with a new S3_SECRET_KEY rotates the account's secret), and the policy is
+    # attached only when it isn't already. Same depends_on-completed pattern as `migrate`.
+    # Compose interpolation note: `$$` = a literal `$` for the container's shell.
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-skilly}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set in .env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set in .env}
+      S3_BUCKET: ${S3_BUCKET:-skilly-artifacts}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$S3_BUCKET"
+        policy="skilly-bucket-$$S3_BUCKET"
+        printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::%s","arn:aws:s3:::%s/*"]}]}' "$$S3_BUCKET" "$$S3_BUCKET" > /tmp/skilly-bucket-policy.json
+        mc admin policy create local "$$policy" /tmp/skilly-bucket-policy.json
+        mc admin user add local "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"
+        # The mc image has no grep: match the attached-policy list with a shell pattern instead.
+        case "$$(mc admin user info local "$$S3_ACCESS_KEY" --json)" in
+          *"$$policy"*) echo "minio-init: policy $$policy already attached to $$S3_ACCESS_KEY" ;;
+          *) mc admin policy attach local "$$policy" --user "$$S3_ACCESS_KEY" ;;
+        esac
+        echo "minio-init: bucket $$S3_BUCKET and scoped account $$S3_ACCESS_KEY are ready"
+    restart: "no"
 
   git-perms:
     # The git repo root is a bind mount, which Docker creates ROOT-owned on the host. The worker
@@ -63,14 +108,14 @@ services:
     # fails with "EACCES: permission denied, mkdir '/data/git/global'", leaving skills stuck at
     # "repository not provisioned". This one-shot init (runs as root) makes the volume
     # uid-1000-writable BEFORE the worker starts. Same depends_on-completed pattern as `migrate`.
-    image: alpine:3
+    image: alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
     command: ["sh", "-c", "mkdir -p /data/git && chown -R 1000:1000 /data/git"]
     volumes:
       - ./data/git:/data/git
     restart: "no"
 
   clamav:
-    image: clamav/clamav:latest
+    image: clamav/clamav:1.5.4@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
     # Signature updates require outbound network (see air-gap assumption, §13/§17).
     volumes:
       - ./data/clamav:/var/lib/clamav
@@ -92,6 +137,8 @@ services:
         condition: service_completed_successfully
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://skilly_app:${SKILLY_APP_PASSWORD}@postgres:5432/${POSTGRES_DB:-skilly}
       NEXTAUTH_URL: ${PUBLIC_BASE_URL}
@@ -105,12 +152,20 @@ services:
       SKILLY_REGISTRY_URL: ${PUBLIC_BASE_URL}
       SKILLY_BOOTSTRAP_ADMIN_GROUP: ${SKILLY_BOOTSTRAP_ADMIN_GROUP}
       S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-skilly}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      # Bucket-scoped service account created by minio-init (§49.12) — NOT the MinIO root pair.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set in .env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set in .env}
       # MUST match the worker's S3_BUCKET (default skilly-artifacts) — web WRITES uploaded
       # artifacts here and the worker READS them to provision git repos; a mismatch makes the
       # publish sweep get NoSuchKey and the skill stays "repository not provisioned".
       S3_BUCKET: ${S3_BUCKET:-skilly-artifacts}
+      # ClamAV daemon address, same values as the worker's: hosted uploads are AV-scanned at
+      # ingest by web (§49.2). Unset = web reports "scanner unavailable" and the verdict gates.
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      # Real client IP behind the proxies — keys web's per-IP limits (the DCR limiter, §49.9).
+      # Same value as the worker's. Unset = every client shares the proxy's single bucket.
+      TRUST_PROXY: ${TRUST_PROXY:-}
       ONE_TIME_TOKEN_TTL_SECONDS: ${ONE_TIME_TOKEN_TTL_SECONDS:-300}
       # Content-Security-Policy posture (§22): enforce (default) | report-only | off.
       CSP_MODE: ${CSP_MODE:-enforce}
@@ -122,6 +177,8 @@ services:
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       # §40 AI integration: encrypts/decrypts the stored provider token (web + worker).
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
+      # §49.11 explicit opt-in for an AI provider on a private/on-network address (web + worker).
+      AI_ALLOW_PRIVATE_BASE_URL: ${AI_ALLOW_PRIVATE_BASE_URL:-}
       # §23 Show install URL: encrypts the recoverable copy of each install token (web + worker).
       INSTALL_TOKEN_ENC_KEY: ${INSTALL_TOKEN_ENC_KEY:-}
       SMTP_HOST: ${SMTP_HOST:-}
@@ -140,6 +197,8 @@ services:
         condition: service_completed_successfully
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       git-perms:
         condition: service_completed_successfully
       # ClamAV is advisory (the scan pipeline degrades gracefully to "engine unavailable"), so we
@@ -168,8 +227,9 @@ services:
       SCIM_RATE_WINDOW_MS: ${SCIM_RATE_WINDOW_MS:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-skilly}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      # Bucket-scoped service account created by minio-init (§49.12) — NOT the MinIO root pair.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set in .env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set in .env}
       S3_BUCKET: ${S3_BUCKET:-skilly-artifacts}
       # Notification delivery (all optional; in-app inbox always works). §12
       SMTP_HOST: ${SMTP_HOST:-}
@@ -184,6 +244,8 @@ services:
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       # §40 AI integration: encrypts/decrypts the stored provider token (web + worker).
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
+      # §49.11 explicit opt-in for an AI provider on a private/on-network address (web + worker).
+      AI_ALLOW_PRIVATE_BASE_URL: ${AI_ALLOW_PRIVATE_BASE_URL:-}
       # §23 Show install URL: seals the recoverable copy of MCP-minted install tokens (web + worker).
       INSTALL_TOKEN_ENC_KEY: ${INSTALL_TOKEN_ENC_KEY:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
@@ -201,7 +263,7 @@ services:
 
   proxy:
     # Dev-only sample reverse proxy. In production, terminate TLS at your org proxy.
-    image: caddy:2-alpine
+    image: caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     depends_on:
       - web
       - worker

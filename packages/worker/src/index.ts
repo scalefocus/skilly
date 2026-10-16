@@ -41,6 +41,7 @@ import { rollupRum, pruneRum } from "./rum.js";
 import { pruneAiUsage } from "@skilly/shared/ai";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
 import { sweepContentRisk } from "./scan/contentRisk.js";
+import { sweepAv } from "./scan/avSweep.js";
 import { sweepQuality } from "./scan/quality.js";
 import { sweepAiPrereview, pruneAiPrereviews } from "./scan/aiPrereview.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
@@ -363,6 +364,24 @@ async function leaderLoops(): Promise<void> {
   };
   void contentSweep();
   setInterval(contentSweep, Number(process.env.CONTENT_RISK_SWEEP_INTERVAL_MS ?? 600_000)); // 10 min
+
+  // AV sweep (§49.2): give every artifact report an engine result — the backfill after this ships, and
+  // the retry after an AV outage at ingest. Never overlaps itself; not awaited; no-op without CLAMAV_HOST.
+  let avSweepRunning = false;
+  const avSweep = async () => {
+    if (!isLeader || avSweepRunning) return;
+    avSweepRunning = true;
+    try {
+      const n = await sweepAv(pool, store);
+      if (n > 0) console.log(JSON.stringify({ level: "info", msg: "av sweep scanned artifacts", count: n }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "av sweep failed", err: String(err) }));
+    } finally {
+      avSweepRunning = false;
+    }
+  };
+  void avSweep();
+  setInterval(avSweep, Number(process.env.AV_SWEEP_INTERVAL_MS ?? 60_000)); // 1 min
 
   // Quality sweep (§41.6): score every published version at the current ruleset (the backfill
   // after this ships, and again after a ruleset bump or an admin rescore), then — with AI on —

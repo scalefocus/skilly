@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { secretScanner, heuristicScanner, runScanners, maxSeverity, requiresOverride, PURE_SCANNERS } from "./scan.js";
+import { secretScanner, heuristicScanner, runScanners, maxSeverity, requiresOverride, PURE_SCANNERS, scanVerdict, hasAvResult } from "./scan.js";
 import type { BundleEntry } from "./validate.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -52,4 +52,19 @@ test("maxSeverity picks highest", () => {
   const f: BundleEntry[] = [{ path: "a", bytes: enc("AKIAIOSFODNN7EXAMPLE password = \"longenoughsecret\"") }];
   const findings = secretScanner.scan(f) as { severity: string }[];
   assert.equal(maxSeverity(findings as never), "critical");
+});
+
+test("scanVerdict: complete vs pending / unreachable / changed / av_missing (§49.2)", () => {
+  const clean = { scanner: "clamav", severity: "info" as const, rule: "av-clean", message: "stream: OK", path: "SKILL.md" };
+  const unavailable = { scanner: "clamav", severity: "high" as const, rule: "scanner-unavailable", message: "down" };
+  assert.deepEqual(scanVerdict(null, { avRequired: false }), { complete: false, reason: "pending" });
+  assert.deepEqual(scanVerdict({ status: "unreachable", findings: [] }, { avRequired: false }), { complete: false, reason: "unreachable" });
+  assert.deepEqual(scanVerdict({ status: "source_changed", findings: [] }, { avRequired: false }), { complete: false, reason: "changed" });
+  assert.deepEqual(scanVerdict({ status: "pending", findings: [] }, { avRequired: false }), { complete: false, reason: "pending" });
+  assert.deepEqual(scanVerdict({ status: "scanned", findings: [] }, { avRequired: false }), { complete: true });
+  assert.deepEqual(scanVerdict({ status: "scanned", findings: [] }, { avRequired: true }), { complete: false, reason: "av_missing" });
+  assert.deepEqual(scanVerdict({ status: "scanned", findings: [unavailable] }, { avRequired: true }), { complete: false, reason: "av_missing" });
+  assert.deepEqual(scanVerdict({ status: "scanned", findings: [clean] }, { avRequired: true }), { complete: true });
+  assert.equal(hasAvResult([unavailable]), false);
+  assert.equal(hasAvResult([clean]), true);
 });

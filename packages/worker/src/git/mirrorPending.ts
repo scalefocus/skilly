@@ -3,7 +3,7 @@
 // version. The publish sweep then synthesizes the git tag. SKILLY_SPEC.md §6, §8.
 import type { Pool } from "pg";
 import type { ArtifactStore } from "../storage/objectStore.js";
-import { mirrorPointerVersion } from "./mirror.js";
+import { mirrorPointerVersion, MirrorRefusal } from "./mirror.js";
 import { sweepBatchSize } from "./publish.js";
 
 // A pointer that fails to mirror this many times is dead-lettered (deleted) instead of
@@ -22,11 +22,14 @@ interface PendingRow {
   created_by: string | null;
   skill_slug: string;
   attempts: number;
+  external_commit: string | null;
+  prescan_content_sha256: string | null;
 }
 
 export async function mirrorPendingVersions(pool: Pool, deps: { store: ArtifactStore }): Promise<number> {
   const { rows } = await pool.query<PendingRow>(
-    `select pm.id, pm.skill_id, pm.semver, pm.external_url, pm.external_ref, pm.external_subdir, pm.is_prerelease, pm.what_changed, pm.created_by, pm.attempts, s.slug as skill_slug
+    `select pm.id, pm.skill_id, pm.semver, pm.external_url, pm.external_ref, pm.external_subdir, pm.is_prerelease, pm.what_changed, pm.created_by, pm.attempts, s.slug as skill_slug,
+            pm.external_commit, pm.prescan_content_sha256
        from pending_mirrors pm join skills s on s.id = pm.skill_id
       where pm.attempts < $1
       order by pm.created_at asc
@@ -53,15 +56,22 @@ export async function mirrorPendingVersions(pool: Pool, deps: { store: ArtifactS
         createdBy: r.created_by,
         isPrerelease: r.is_prerelease,
         whatChanged: r.what_changed,
+        externalCommit: r.external_commit,
+        prescanContentSha256: r.prescan_content_sha256,
       });
       await pool.query(`delete from pending_mirrors where id = $1`, [r.id]);
       mirrored++;
     } catch (err) {
       // Record the attempt + error. Once attempts hit the cap the row stops being selected
       // (dead-lettered) instead of being re-cloned every sweep. Transient failures retry.
-      const msg = String(err);
-      await pool.query(`update pending_mirrors set attempts = attempts + 1, last_error = $2 where id = $1`, [r.id, msg]);
-      const parked = r.attempts + 1 >= MAX_MIRROR_ATTEMPTS;
+      const msg = err instanceof MirrorRefusal ? `${err.code}: ${err.message}` : String(err);
+      // §49.3: a moved ref or changed content is final — dead-letter at once, no retries.
+      const final = err instanceof MirrorRefusal;
+      await pool.query(
+        `update pending_mirrors set attempts = case when $3::boolean then greatest(attempts + 1, $4::int) else attempts + 1 end, last_error = $2 where id = $1`,
+        [r.id, msg, final, MAX_MIRROR_ATTEMPTS],
+      );
+      const parked = final || r.attempts + 1 >= MAX_MIRROR_ATTEMPTS;
       console.error(JSON.stringify({ level: parked ? "warn" : "error", msg: parked ? "mirror dead-lettered (max attempts)" : "mirror failed", pendingId: r.id, ref: r.external_ref, attempts: r.attempts + 1, err: msg }));
     }
   }

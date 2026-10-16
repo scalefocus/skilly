@@ -190,10 +190,25 @@ export function pgStore(pool: Pool): ScimStore {
   };
 }
 
+/** §49.7: a provisioning audit row — system actor, source `scim`, never directory attributes. */
+async function scimAudit(pool: Pool, action: string, targetType: "user" | "group", targetId: string, after: Record<string, unknown>): Promise<void> {
+  try {
+    await pool.query(
+      `insert into audit_log (actor_user_id, action, target_type, target_id, namespace_id, before, after, source, request_id)
+       values (null, $1, $2, $3, null, null, $4::jsonb, 'scim', null)`,
+      [action, targetType, targetId, JSON.stringify(after)],
+    );
+  } catch (err) {
+    console.error(JSON.stringify({ level: "warn", msg: "scim audit insert failed", action, err: String(err instanceof Error ? err.message : err) }));
+  }
+}
+
 export async function upsertUser(pool: Pool, u: ScimUser): Promise<{ id: string }> {
   // $8 = "this caller carries a directory profile". Only then may the three directory columns be
   // written (and then they are written unconditionally, NULLs included) — see ScimUser.directory.
   const dir = u.directory;
+  // §49.7: what existed before, so provisioning and status transitions can be audited.
+  const before = (await pool.query<{ id: string; status: string }>(`select id, status from users where entra_object_id = $1`, [u.externalId])).rows[0] ?? null;
   const { rows } = await pool.query<{ id: string }>(
     `insert into users (entra_object_id, email, display_name, status, job_title, office_location, department)
        values ($1, $2, $3, $4, $5, $6, $7)
@@ -222,7 +237,13 @@ export async function upsertUser(pool: Pool, u: ScimUser): Promise<{ id: string 
       dir !== undefined,
     ],
   );
-  return { id: rows[0]!.id };
+  const id = rows[0]!.id;
+  const status = u.active ? "active" : "inactive";
+  if (!before) await scimAudit(pool, "user.provisioned", "user", id, { externalId: u.externalId, email: u.email, status });
+  else if (before.status !== status && (status === "inactive" || before.status === "inactive")) {
+    await scimAudit(pool, status === "active" ? "user.reactivated" : "user.deactivated", "user", id, { externalId: u.externalId, via: "upsert" });
+  }
+  return { id };
 }
 
 /** Deprovision (leaver): mark inactive + revoke tokens. Skills are preserved. Reversible — Entra
@@ -231,13 +252,21 @@ export async function deprovisionUser(pool: Pool, externalId: string): Promise<v
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const { rows } = await client.query<{ id: string }>(
-      `update users set status = 'inactive', updated_at = now()
-         where entra_object_id = $1 returning id`,
+    const { rows } = await client.query<{ id: string; was: string }>(
+      `update users u set status = 'inactive', updated_at = now()
+         from (select id, status as was from users where entra_object_id = $1) prev
+        where u.id = prev.id returning u.id, prev.was`,
       [externalId],
     );
     const userId = rows[0]?.id;
     if (userId) {
+      if (rows[0]!.was !== "inactive") {
+        await client.query(
+          `insert into audit_log (actor_user_id, action, target_type, target_id, namespace_id, before, after, source, request_id)
+           values (null, 'user.deactivated', 'user', $1, null, null, $2::jsonb, 'scim', null)`,
+          [userId, JSON.stringify({ externalId, via: "patch" })],
+        );
+      }
       await client.query(`delete from tokens where user_id = $1`, [userId]);
       // §29: revoke every live MCP connection too, and expire its credentials immediately. An
       // install token is a durable artifact a reinstated user may want back; a live delegation to
@@ -340,34 +369,54 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
 }
 
 export async function upsertGroup(pool: Pool, g: ScimGroup): Promise<{ id: string }> {
-  const { rows } = await pool.query<{ id: string }>(
+  const { rows } = await pool.query<{ id: string; inserted: boolean }>(
     `insert into groups (entra_object_id, display_name)
        values ($1, $2)
      on conflict (entra_object_id) do update
        set display_name = excluded.display_name, updated_at = now()
-     returning id`,
+     returning id, (xmax = 0) as inserted`,
     [g.externalId, g.displayName],
   );
+  if (rows[0]!.inserted) await scimAudit(pool, "group.provisioned", "group", rows[0]!.id, { externalId: g.externalId, displayName: g.displayName });
   return { id: rows[0]!.id };
+}
+
+/** The roles a group confers right now (§49.7 `roleMapped`): what a membership change grants or revokes. */
+async function rolesOfGroup(pool: Pool, groupId: string): Promise<Array<{ namespaceId: string | null; role: string }>> {
+  const { rows } = await pool.query<{ namespace_id: string | null; role: string }>(
+    `select namespace_id, role from role_mappings where group_id = $1`,
+    [groupId],
+  );
+  return rows.map((r) => ({ namespaceId: r.namespace_id, role: r.role }));
 }
 
 /** Add a membership by Entra object ids (idempotent). */
 export async function addMembership(pool: Pool, groupExternalId: string, userExternalId: string): Promise<void> {
-  await pool.query(
+  const { rows } = await pool.query<{ group_id: string; user_id: string }>(
     `insert into group_memberships (group_id, user_id)
        select g.id, u.id from groups g, users u
         where g.entra_object_id = $1 and u.entra_object_id = $2
-     on conflict do nothing`,
+     on conflict do nothing
+     returning group_id, user_id`,
     [groupExternalId, userExternalId],
   );
+  const r = rows[0];
+  if (!r) return; // already a member (or unknown ids): nothing changed, nothing to audit
+  const roles = await rolesOfGroup(pool, r.group_id);
+  await scimAudit(pool, "group.membership_added", "user", r.user_id, { groupId: r.group_id, groupOid: groupExternalId, roleMapped: roles.length > 0, roles });
 }
 
 export async function removeMembership(pool: Pool, groupExternalId: string, userExternalId: string): Promise<void> {
-  await pool.query(
+  const { rows } = await pool.query<{ group_id: string; user_id: string }>(
     `delete from group_memberships gm
        using groups g, users u
       where gm.group_id = g.id and gm.user_id = u.id
-        and g.entra_object_id = $1 and u.entra_object_id = $2`,
+        and g.entra_object_id = $1 and u.entra_object_id = $2
+     returning gm.group_id, gm.user_id`,
     [groupExternalId, userExternalId],
   );
+  const r = rows[0];
+  if (!r) return;
+  const roles = await rolesOfGroup(pool, r.group_id);
+  await scimAudit(pool, "group.membership_removed", "user", r.user_id, { groupId: r.group_id, groupOid: groupExternalId, roleMapped: roles.length > 0, roles });
 }

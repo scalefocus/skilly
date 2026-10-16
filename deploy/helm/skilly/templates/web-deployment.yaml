@@ -70,6 +70,23 @@ spec:
               value: {{ .Values.config.bootstrapAdminGroup | quote }}
             - name: ONE_TIME_TOKEN_TTL_SECONDS
               value: {{ .Values.config.oneTimeTokenTtlSeconds | quote }}
+            {{- with .Values.web.trustProxy }}
+            # §49.9: keys the OAuth DCR per-IP rate limit on the real client behind the ingress.
+            - name: TRUST_PROXY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.clamav.enabled }}
+            # §49.2/§49.12: hosted uploads are AV-scanned by web too — same wiring as the worker.
+            - name: CLAMAV_HOST
+              value: {{ include "skilly.fullname" . }}-clamav
+            - name: CLAMAV_PORT
+              value: {{ .Values.clamav.port | default "3310" | quote }}
+            {{- end }}
+            {{- if .Values.ai.allowPrivateBaseUrl }}
+            # §49.11: explicit opt-in for an AI provider on a private/on-network address.
+            - name: AI_ALLOW_PRIVATE_BASE_URL
+              value: "1"
+            {{- end }}
             - name: S3_ENDPOINT
               value: {{ include "skilly.s3Endpoint" . | quote }}
             - name: S3_ACCESS_KEY

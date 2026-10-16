@@ -169,9 +169,10 @@ automatically. The dev reverse proxy (Caddy) listens on **http://localhost:8080*
 routes `/scim/*` and `*.git` smart-HTTP to the worker, everything else to the web app.
 
 Two one-time setup steps:
-- **Create the artifact bucket** in MinIO (console at http://localhost:9001, login =
-  `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`): create a bucket named `skilly-artifacts`
-  (or whatever you set `S3_BUCKET` to).
+- **The artifact bucket and the app's scoped MinIO account are created for you** by the one-shot
+  `minio-init` compose service from `S3_ACCESS_KEY` / `S3_SECRET_KEY` (bucket `skilly-artifacts`,
+  or whatever you set `S3_BUCKET` to). The MinIO console binds to `127.0.0.1:9001` only (login =
+  `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`).
 - **Sign-in** needs a real Entra app (see Deployment) **or** dev auth (below).
 
 ### Option B — fast dev loop (apps via pnpm, infra in Docker)
@@ -248,8 +249,9 @@ run while they're empty.
 | `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` | The Entra app registration used for OIDC sign-in **and** (worker) Graph group reconciliation. See step 2. |
 | `SKILLY_BOOTSTRAP_ADMIN_GROUP` | Entra **group object id** whose members are Platform Admins from first boot (before any role mapping exists). |
 | `SCIM_BEARER_TOKEN` ⛔ | Long random secret Entra presents to `/scim/v2` — e.g. `openssl rand -hex 32`. Paste the same value into the Enterprise App's provisioning *Secret Token*. |
-| `MINIO_ROOT_PASSWORD` ⛔ | Bundled MinIO root password (also the S3 secret key web + worker use). |
-| `MINIO_ROOT_USER` | Bundled MinIO root user (also the S3 access key). Default `skilly`. |
+| `MINIO_ROOT_PASSWORD` ⛔ | Bundled MinIO root password — used only by `minio-init` to create the bucket and the app's scoped account; web + worker never hold it. |
+| `MINIO_ROOT_USER` | Bundled MinIO root user. Default `skilly`. |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` ⛔ | The **bucket-scoped** account web + worker authenticate with (created by `minio-init`). Distinct from the root pair. |
 
 **Optional** — leave unset to keep the default / disable the feature.
 
@@ -271,11 +273,11 @@ run while they're empty.
 
 With no email or webhook configured, notifications still land in the in-app inbox.
 
-> **Not yet wired through `docker-compose.yml`:** `.env.example` also documents `TRUST_PROXY`
-> (worker — Express `trust proxy` value, e.g. `1`, so `/installed` records the real client IP
-> instead of the proxy's) and `SMTP_SECURE` (`1` for implicit TLS). The worker reads both, but
-> the compose file doesn't forward them yet — add them to the `worker.environment` block if you
-> need them.
+> `.env.example` also documents `TRUST_PROXY` (the number of reverse proxies in front of skilly,
+> e.g. `1` — passed to **both** web and worker so rate limits and `/installed` see the real client
+> address instead of the proxy's), `CLAMAV_HOST` / `CLAMAV_PORT` (set on both tiers so hosted
+> uploads are anti-virus scanned at upload), `AI_ALLOW_PRIVATE_BASE_URL=1` (only for an AI provider
+> on your private network) and `SMTP_SECURE` (`1` for implicit TLS).
 
 <details>
 <summary><b>Advanced: tuning knobs read by the apps (not in <code>.env.example</code>)</b></summary>

@@ -3,7 +3,7 @@
 // Admin (any) for yank/archive; PLATFORM ADMIN ONLY for permanent deletion and Official. All
 // actions audit-logged.
 import type { Pool } from "pg";
-import { canYankOrArchive, evictFromCollections, type EffectiveAccess } from "@skilly/shared";
+import { canYankOrArchive, evictFromCollections, isSkillVisible, type EffectiveAccess } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { findSkill } from "./catalog";
 import { getMaxFeaturedSkills } from "./settings";
@@ -16,7 +16,8 @@ export async function setVersionYanked(
   input: { access: EffectiveAccess; actorUserId: string; namespaceSlug: string; skillSlug: string; semver: string; yanked: boolean },
 ): Promise<Result> {
   const skill = await findSkill(input.namespaceSlug, input.skillSlug);
-  if (!skill) return { ok: false, status: 404, error: "skill not found" };
+  // §49.4: visibility before any capability answer — an outsider never learns the skill exists.
+  if (!skill || !isSkillVisible(input.access, skill)) return { ok: false, status: 404, error: "skill not found" };
   if (!canYankOrArchive(input.access, skill.namespaceId)) return { ok: false, status: 403, error: "not authorized to manage this namespace" };
 
   const status = input.yanked ? "yanked" : "active";
@@ -66,7 +67,8 @@ export async function setSkillArchived(
   input: { access: EffectiveAccess; actorUserId: string; namespaceSlug: string; skillSlug: string; archived: boolean },
 ): Promise<Result> {
   const skill = await findSkill(input.namespaceSlug, input.skillSlug);
-  if (!skill) return { ok: false, status: 404, error: "skill not found" };
+  // §49.4: visibility before any capability answer — an outsider never learns the skill exists.
+  if (!skill || !isSkillVisible(input.access, skill)) return { ok: false, status: 404, error: "skill not found" };
   if (!canYankOrArchive(input.access, skill.namespaceId)) return { ok: false, status: 403, error: "not authorized to manage this namespace" };
 
   const status = input.archived ? "archived" : "active";
@@ -113,7 +115,8 @@ export async function setSkillOfficial(
   input: { access: EffectiveAccess; actorUserId: string; namespaceSlug: string; skillSlug: string; official: boolean },
 ): Promise<Result> {
   const skill = await findSkill(input.namespaceSlug, input.skillSlug);
-  if (!skill) return { ok: false, status: 404, error: "skill not found" };
+  // §49.4: visibility before any capability answer — an outsider never learns the skill exists.
+  if (!skill || !isSkillVisible(input.access, skill)) return { ok: false, status: 404, error: "skill not found" };
   if (!input.access.isPlatformAdmin) return { ok: false, status: 403, error: "marking a skill Official is restricted to platform admins" };
 
   const wasOfficial = skill.official; // to notify only on a real transition to Official
@@ -157,7 +160,8 @@ export async function setSkillFeatured(
   input: { access: EffectiveAccess; actorUserId: string; namespaceSlug: string; skillSlug: string; featured: boolean },
 ): Promise<Result> {
   const skill = await findSkill(input.namespaceSlug, input.skillSlug);
-  if (!skill) return { ok: false, status: 404, error: "skill not found" };
+  // §49.4: visibility before any capability answer — an outsider never learns the skill exists.
+  if (!skill || !isSkillVisible(input.access, skill)) return { ok: false, status: 404, error: "skill not found" };
   if (!input.access.isPlatformAdmin) return { ok: false, status: 403, error: "featuring a skill is restricted to platform admins" };
 
   if (input.featured) {
@@ -211,7 +215,8 @@ export async function deleteSkill(
   input: { access: EffectiveAccess; actorUserId: string; namespaceSlug: string; skillSlug: string },
 ): Promise<Result> {
   const skill = await findSkill(input.namespaceSlug, input.skillSlug);
-  if (!skill) return { ok: false, status: 404, error: "skill not found" };
+  // §49.4: visibility before any capability answer — an outsider never learns the skill exists.
+  if (!skill || !isSkillVisible(input.access, skill)) return { ok: false, status: 404, error: "skill not found" };
   if (!input.access.isPlatformAdmin) return { ok: false, status: 403, error: "permanent deletion is restricted to platform admins" };
   if (skill.status !== "archived") return { ok: false, status: 409, error: "archive the skill before deleting it" };
 
@@ -309,4 +314,43 @@ export async function deleteSkill(
   } finally {
     client.release();
   }
+}
+
+/**
+ * §49.2: release a QUARANTINED version (a pointer mirror whose scan verdict was `critical`). Platform
+ * admin or owning-namespace admin, reason required, audited with the findings that quarantined it.
+ * The version becomes `active` and the publish sweep synthesizes it on its next pass.
+ */
+export async function releaseQuarantinedVersion(
+  pool: Pool,
+  input: { access: EffectiveAccess; actorUserId: string; namespaceSlug: string; skillSlug: string; semver: string; reason: string },
+): Promise<Result> {
+  const skill = await findSkill(input.namespaceSlug, input.skillSlug);
+  if (!skill || !isSkillVisible(input.access, skill)) return { ok: false, status: 404, error: "skill not found" };
+  if (!canYankOrArchive(input.access, skill.namespaceId)) return { ok: false, status: 403, error: "only a platform admin or an admin of the owning namespace can release a quarantined version" };
+  const reason = input.reason.trim();
+  if (!reason) return { ok: false, status: 422, error: "a reason is required to release a quarantined version" };
+  const { rows } = await pool.query<{ id: string; status: string; artifact_object_key: string | null }>(
+    `select id, status, artifact_object_key from skill_versions where skill_id = $1 and semver = $2`,
+    [skill.id, input.semver],
+  );
+  const v = rows[0];
+  if (!v) return { ok: false, status: 404, error: "version not found" };
+  if (v.status !== "quarantined") return { ok: false, status: 409, error: "this version is not quarantined" };
+  const { rows: rep } = await pool.query<{ findings: unknown }>(
+    `select findings from scan_reports where subject_type = 'artifact' and subject_id = $1 order by created_at desc limit 1`,
+    [v.artifact_object_key],
+  );
+  await pool.query(`update skill_versions set status = 'active' where id = $1`, [v.id]);
+  await refreshSkillQualityColumns(skill.id).catch((err) => console.error(JSON.stringify({ level: "warn", msg: "quality refresh failed", err: String(err) })));
+  await appendAudit(pool, {
+    actorUserId: input.actorUserId,
+    action: "skill.version_released",
+    targetType: "skill_version",
+    targetId: `${skill.id}@${input.semver}`,
+    namespaceId: skill.namespaceId,
+    before: { status: "quarantined" },
+    after: { status: "active", semver: input.semver, reason: reason.slice(0, 2000), findings: rep[0]?.findings ?? [] },
+  });
+  return { ok: true };
 }

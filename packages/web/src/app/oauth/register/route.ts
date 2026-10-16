@@ -7,14 +7,15 @@
 import { getMcpEnabled } from "../../../lib/settings";
 import { registerClient, publicBaseUrl } from "../../../lib/mcpOauth";
 import { enforceRateLimit } from "../../../lib/ratelimit";
-import { MCP_SCOPE } from "@skilly/shared";
+import { MCP_SCOPE, clientIpFromForwarded, trustProxyHops } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
 /** Best-effort client IP for the rate-limit key and the registration record. */
+// §49.9: the client address per TRUST_PROXY (the n-th hop from the right of X-Forwarded-For), never the
+// client-chosen first entry; with no trusted proxy every client shares one bucket (§22).
 function clientKey(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  return (xff ? xff.split(",")[0]!.trim() : null) ?? req.headers.get("x-real-ip") ?? "unknown";
+  return clientIpFromForwarded(req.headers.get("x-forwarded-for"), trustProxyHops(process.env.TRUST_PROXY)) ?? "shared";
 }
 
 export async function POST(req: Request) {

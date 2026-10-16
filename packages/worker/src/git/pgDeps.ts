@@ -6,6 +6,28 @@ import type { MarketplaceRef, SkillRef, TokenPrincipal } from "./authorize.js";
 import { M } from "../metrics.js";
 import { awardAchievement, tryAward } from "../achievements.js";
 
+
+/**
+ * Per-(code, client) one-minute throttle for refusal events (§49.8). `hit()` returns null while a
+ * window is open (the event is counted, not recorded) and, when a new window opens, how many
+ * hits the previous window suppressed. Bounded: entries older than the window are pruned.
+ */
+export function makeRefusalThrottle(windowMs = 60_000, now: () => number = Date.now) {
+  const windows = new Map<string, { until: number; suppressed: number }>();
+  return {
+    hit(key: string): number | null {
+      const t = now();
+      const w = windows.get(key);
+      if (w && w.until > t) { w.suppressed++; return null; }
+      if (windows.size > 10_000) for (const [k, v] of windows) if (v.until <= t) windows.delete(k);
+      const prev = w?.suppressed ?? 0;
+      windows.set(key, { until: t + windowMs, suppressed: 0 });
+      return prev;
+    },
+  };
+}
+const refusalThrottle = makeRefusalThrottle();
+
 export function pgGitDeps(pool: Pool): GitServerDeps {
   return {
     async findSkill(namespaceSlug, skillSlug): Promise<SkillRef | null> {
@@ -240,23 +262,39 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
       }
     },
 
-    async recordOwnerInactiveRefusal(e): Promise<void> {
-      // The §25 carve-out: the only 401 recorded to the system log, source='worker'. The actor
-      // snapshot is the TOKEN OWNER (denormalized via correlated subqueries, mirroring web's
-      // lib/systemLog.ts insert). Never the query string or the credential. SKILLY_SPEC.md §23/§25.
+    async recordGitRefusal(e): Promise<void> {
+      // §25/§49.8: every gateway refusal lands in the system log, source='worker'. The actor
+      // snapshot is the TOKEN OWNER when the row matched (denormalized via correlated subqueries,
+      // mirroring web's lib/systemLog.ts insert). Never the query string or the credential.
+      // Throttled to one row per (code, client, minute): an invalid-token flood keys on the
+      // client IP (the token is unknown by definition), everything else on the token row id.
+      const key = `${e.code}|${e.tokenId ?? e.clientIp ?? "?"}`;
+      const suppressed = refusalThrottle.hit(key);
+      M.gitRefusals.inc({ reason: e.code });
+      if (suppressed === null) return; // inside the window — counted, not recorded
+      const what: Record<string, string> = {
+        install_token_owner_inactive: "install token refused: owning user is inactive",
+        install_token_invalid: "install token refused: invalid or expired",
+        install_token_scope_mismatch: "install token refused: skill unknown or not the token's skill",
+        install_token_not_visible: "install token refused: owner can no longer see the skill",
+        git_push_denied: "push refused: the registry is read-only",
+      };
+      const more = suppressed > 0 ? ` (+${suppressed} more in the last minute)` : "";
       await pool.query(
         `insert into system_event
            (status, method, route, path, user_id, actor_name, actor_email, error_code, message, source)
-         values (401, $1, $2, $3, $4,
-                 (select display_name from users where id = $4),
-                 (select email from users where id = $4),
-                 'install_token_owner_inactive', $5, 'worker')`,
+         values ($1, $2, $3, $4, $5,
+                 (select display_name from users where id = $5),
+                 (select email from users where id = $5),
+                 $6, $7, 'worker')`,
         [
-          e.method,
+          e.status,
+          e.method.slice(0, 10),
           e.route.slice(0, 300),
           e.path.slice(0, 500),
           e.ownerUserId,
-          `install token refused: owning user is inactive (@${e.namespaceSlug}/${e.skillSlug})`.slice(0, 300),
+          e.code,
+          `${what[e.code] ?? e.code} (@${e.namespaceSlug}/${e.skillSlug})${more}`.slice(0, 300),
         ],
       );
     },

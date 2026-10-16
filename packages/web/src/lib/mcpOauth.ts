@@ -120,10 +120,12 @@ export interface AuthorizeRequest {
 
 export type AuthorizeCheck =
   | { ok: true; client: RegisteredClient; request: AuthorizeRequest }
-  /** Safe to redirect the error back to the client (the redirect_uri is verified). */
-  | { ok: false; redirect: string }
-  /** NOT safe to redirect — show the user an error page instead (RFC 6749 §4.1.2.1). */
-  | { ok: false; error: string };
+  /**
+   * §49.5: EVERY malformed request renders the error page — the endpoint never redirects before
+   * consent. (It used to redirect protocol errors to a registered redirect_uri, which made it an open
+   * redirector for any self-registered client.) `code` is the OAuth error code for the page.
+   */
+  | { ok: false; error: string; code?: string };
 
 /**
  * Validate an authorization request. When the client or redirect_uri can't be verified we must NOT
@@ -152,13 +154,8 @@ export async function checkAuthorizeRequest(params: URLSearchParams): Promise<Au
   }
 
   const state = params.get("state");
-  const err = (code: string, description: string): AuthorizeCheck => {
-    const u = new URL(redirectUri);
-    u.searchParams.set("error", code);
-    u.searchParams.set("error_description", description);
-    if (state) u.searchParams.set("state", state);
-    return { ok: false, redirect: u.toString() };
-  };
+  // §49.5: rendered, never redirected — RFC 6749 §4.1.2.1 permits either; rendering is the safe one.
+  const err = (code: string, description: string): AuthorizeCheck => ({ ok: false, error: `${description} (${code})`, code });
 
   if ((params.get("response_type") ?? "") !== "code") return err("unsupported_response_type", "only response_type=code is supported");
   const codeChallenge = params.get("code_challenge") ?? "";

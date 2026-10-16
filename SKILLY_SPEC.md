@@ -165,10 +165,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Ordinary **mutable** rows (editable/revocable) — **never** audit data. `ON DELETE CASCADE` on both FKs (user deprovision removes the vote; trigger recomputes the aggregate).
 
 ### `skill_versions`
-- `id`, `skill_id`, `semver`, `is_prerelease` (BOOLEAN — the stored column; `channel` = `beta` when true else `stable` is **derived in the app layer**, not a column), `status` (`active` | `yanked`), `usage_examples`, `what_changed` (nullable text — the per-version **"What changed"** note, §8/§10), `created_by`, `created_at`.
+- `id`, `skill_id`, `semver`, `is_prerelease` (BOOLEAN — the stored column; `channel` = `beta` when true else `stable` is **derived in the app layer**, not a column), `status` (`active` | `yanked` | `quarantined` — the last set only by the worker's mirror when a scan verdict is `critical`, §49.2), `usage_examples`, `what_changed` (nullable text — the per-version **"What changed"** note, §8/§10), `created_by`, `created_at`.
 - `git_published` (BOOLEAN — set true once the worker has synthesized this version's serving tag, §6 install-gating), `content_sha256` (nullable — packaging-independent content-set digest for duplicate detection, distinct from `artifact_sha256`; §8).
 - **Hosted:** `artifact_object_key` (immutable tarball in object store), `artifact_sha256`, `artifact_filename` (nullable — the original uploaded filename, e.g. `my-skill.skill`, so the detail-page download serves the bundle back with its original extension; §6/§10. Null for pre-0040 versions and Pointer mirrors).
-- **Pointer:** `external_ref` (pinned immutable ref — tag/commit/package version), `external_origin_url`, `external_subdir` (nullable — folder inside a multi-skill upstream repo where `SKILL.md` lives; null = repo root). All three are per-version and immutable with the ref (§6).
+- **Pointer:** `external_ref` (pinned immutable ref — tag/commit/package version), `external_origin_url`, `external_subdir` (nullable — folder inside a multi-skill upstream repo where `SKILL.md` lives; null = repo root). Plus `external_commit` (nullable — the upstream **commit SHA** the ref resolved to when the proposal was verified; null for registry-origin pointers and for versions mirrored before migration 0097; §49.3). All four are per-version and immutable with the ref (§6).
 - Immutable once published. `latest` = highest **stable** semver among `active` versions.
 - `usage_examples` (per-version, surfaced in the UI as a Markdown "Usage" block, §20) — frozen with the version (a change is a new version, invariant #2).
 - `what_changed` (per-version, **plain-text** "What changed" note — the human summary of what *this version changes*, distinct from `usage_examples` which is *how to use* the skill; §8/§10). **Required** on every new-**version** publish (proposal **and** direct publish), **hidden/omitted** on a skill's **first** version (new-skill proposal) and on **global promotion** (materializes a first version, §8). Frozen with the version (invariant #2). Not Markdown — stored raw, rendered escaped with newlines preserved, no markup/autolinking; capped at ~4,000 chars.
@@ -202,7 +202,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `audit_log` (append-only)
 - `id`, `actor_user_id` (nullable — null for SCIM/system actions, §5), `action`, `target_type`, `target_id`, `namespace_id`, `before` (json), `after` (json), `source` (`web` | `api` | `scim` | `worker`), `request_id`, `created_at`.
 - Tamper-evidence (migration 0008): `seq` (BIGSERIAL), `prev_hash`, `entry_hash` (each row's hash covers its content + the previous hash; verified via `verify_audit_chain()` / `GET /api/audit/verify`, §11). **Seq order = chain order** (migration 0056): the append trigger assigns `seq` *inside* the advisory lock that serializes the chain — previously the BIGSERIAL default was drawn before the lock, so two concurrent appends could invert seq vs chain order, and the verifier (which walks seq order) would flag the inverted pair as tampered **permanently**. 0056 also re-baselines existing chains (via the 0024 trim helper) to repair any inversions already recorded.
-- **Append-only is trigger-enforced, not purely grant-based.** Migration 0002 revoked UPDATE/DELETE from the app role, but migration 0024 **re-granted** them and replaced the guard with `audit_guard()`, which still rejects any UPDATE/DELETE *except* inside an explicit, audited admin **trim** transaction that opts in via `SET LOCAL skilly.allow_audit_trim = 'on'` (which then re-baselines the hash chain). So the invariant "audit rows are immutable on every normal path" holds, but the literal "DB role lacks UPDATE/DELETE" is no longer true (§11).
+- **Append-only is grant-enforced AND trigger-enforced.** Migration 0002 revoked UPDATE/DELETE from the app role; migration 0024 re-granted them for the admin trim and let `audit_guard()` yield to a session-settable GUC — which left any SQL executed under the app connection able to delete audit rows and re-baseline the chain (October 2026 OWASP review, V12). Migration **0096** closes that: UPDATE/DELETE are **revoked from `skilly_app` again**, the trim runs inside a `SECURITY DEFINER` function `trim_audit_log(actor, older_than)` owned by the migration role, and `audit_guard()` yields **only inside that function** (§49.6). So the literal "DB role lacks UPDATE/DELETE" is true again, and the single delete path is one the app cannot forge.
 
 ### `access_log` (separate, high-volume; restricted-skill fetches)
 - `id`, `actor_user_id`, `skill_version_id`, `skill_id` (nullable FK, `ON DELETE SET NULL` — links a fetch to its skill even when the exact version isn't resolved; powers install analytics, §21), `source`, `created_at`, `is_system` (BOOLEAN default false — the clone presented a **system installation** token, §23; distinguishes system clones from legacy anonymous/tokenless rows, both of which have `actor_user_id = NULL`).
@@ -638,7 +638,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   external clone; no direct-URL bypass — Pointer bytes are mirrored, not redirected.
 - Visibility scoping, audit, versioning (git tags), and scanning apply identically.
 - Pointer skills are **labeled "external"** in the catalog; scanned at mirror time; scan
-  results cached per pinned ref.
+  results cached per pinned ref **and commit** (§49.3).
 - **Mirror retries + dead-letter, with an admin retry.** The leader worker retries a failing
   mirror each sweep up to `MIRROR_MAX_ATTEMPTS` (default **5**), recording `attempts` + `last_error`
   on the `pending_mirrors` row; at the cap the row is **dead-lettered** (left in place, never
@@ -818,10 +818,10 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 
 ### Security scanning — pluggable pipeline
 - Default scanners: **(a) secret scanning**, **(b) ClamAV malware/AV**, **(c) static risk heuristics** (`curl | bash`, `rm -rf`, exfil/obfuscation patterns). Plus **(d) content risk** (§37): hidden Unicode, look-alike letters, override phrasing and credential theft, read as instructions to an agent. Plus **(e) quality lint** (§41): the deterministic SKILL.md authoring rules — its findings are always `info` severity, never raise a report's severity and never trip the override gate; they feed the quality rating, not the security verdict. **Not a scanner:** the **AI pre-review** (§46) is an advisory LLM judgement stored outside `scan_reports`; it never raises a report's severity and never trips the override gate — **except** the per-rule results of admin-written **policy rules** it judges in the same run (§47.7).
-- **Pre-accept, for both types** (so reviewers never approve blind): **Hosted** is scanned at upload (artifact-keyed report); **Pointer** is scanned by a worker loop that clones the proposal's pinned ref while it sits in review (proposal-keyed report, deduped per ref). Until that loop runs a pointer proposal reads as **`scan pending`** (not "not scanned"); a ref that can't be fetched reads **`source unreachable`**. Pointer versions are scanned again at mirror time on accept (artifact-keyed) and periodically refreshed.
+- **Pre-accept, for both types** (so reviewers never approve blind): **Hosted** is scanned at upload — the pure scanners **and ClamAV** when `CLAMAV_HOST` is configured on the web tier (artifact-keyed report; §49.2); **Pointer** is scanned by a worker loop that clones the proposal's pinned ref while it sits in review (proposal-keyed report, deduped per ref). Until that loop runs a pointer proposal reads as **`scan pending`** (not "not scanned"); a ref that can't be fetched reads **`source unreachable`**; a ref whose commit no longer matches the pinned one reads **`source changed`**. Since §49.2 **all three states block accept** (409 `scan_pending`) unless a reviewer overrides explicitly and audibly. Pointer versions are scanned again at mirror time on accept (artifact-keyed) and periodically refreshed.
 - Report attached to proposal, surfaced in review dashboard.
-- **Validation blocks; security findings are advisory** — a reviewer may publish over a finding, **explicitly and audit-logged**.
-- **AV transparency:** the ClamAV engine records **every file's result, including clean ones** (clean = an advisory `info`/`av-clean` entry that never raises severity or trips the override gate; a detection is a `critical` `malware` finding). The review page's Security scan section has an **expandable “Anti-virus (ClamAV)” panel** showing the exact per-file engine output even when nothing is flagged — or “not run” when no AV engine is configured (`CLAMAV_HOST` unset, or the hosted-upload path, which runs the pure scanners only).
+- **Validation blocks; security findings are advisory** — a reviewer may publish over a finding, **explicitly and audit-logged**. **Two exceptions (§49.2):** a *missing* verdict (scan pending / unreachable / changed, or no AV result while AV is configured) blocks accept until a reviewer overrides it, and a `critical` `malware` verdict **at mirror time** quarantines the mirrored version instead of activating it.
+- **AV transparency:** the ClamAV engine records **every file's result, including clean ones** (clean = an advisory `info`/`av-clean` entry that never raises severity or trips the override gate; a detection is a `critical` `malware` finding). The review page's Security scan section has an **expandable “Anti-virus (ClamAV)” panel** showing the exact per-file engine output even when nothing is flagged — or “not run” when no AV engine is configured (`CLAMAV_HOST` unset on that tier; since §49.2 the hosted-upload path runs ClamAV too, and the worker's AV sweep backfills any artifact report that lacks an engine result).
 - Interface is pluggable so orgs can wire Snyk/internal AV.
 
 ---
@@ -1183,7 +1183,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 
 ## 11. Audit logging
 
-- **Governance audit** (`audit_log`, append-only — enforced by the `audit_guard()` trigger; see the §3 note on the migration-0024 admin-trim carve-out, which is the only path that may UPDATE/DELETE and is itself audited):
+- **Governance audit** (`audit_log`, append-only — enforced by the `audit_guard()` trigger **and**, again since migration 0096, by the app role lacking UPDATE/DELETE; the only delete path is the `SECURITY DEFINER` trim function, §49.6, which is itself audited):
   - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
   - Catalog mutations (publish, new version, yank, archive, **deprecate / un-deprecate** (`skill.deprecated` / `skill.undeprecated`, §45 — payload: `successorSkillId` + `successorSlug` (nullable), `note`, and on an edit `previousSuccessorSkillId`; **no actor PII beyond the standard actor columns**), **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive, last-version yank or **deprecation**, §7), visibility change, namespace reassignment, **`skill.namespace_shared` / `skill.namespace_unshared`** (§42 — payload: the grantee `namespace_id` + slug, and `via` = `manage` | `proposal_accept` | `direct_publish` | `visibility_org` — a reviewer's edit of the list lands at accept, so it is audited as `proposal_accept` with the accepting reviewer as actor), plus the existing `skill.maintainer_removed` for maintainers pruned by an unshare).
   - **Scan overrides** (`proposal.scan_override`).
@@ -1192,7 +1192,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*; plus `parentId`, `tombstoned`, `tombstoneRemoved` — §24 *Replies to discussion comments*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15).
-  - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
+  - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **SCIM/reconcile provisioning events** (`user.provisioned`, `user.deactivated`, `user.reactivated`, `group.provisioned`, `group.deleted`, `group.membership_added`, `group.membership_removed` — source `scim`, system actor; §49.7), **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
   - **Skill quality (§41.10):** `skill.quality_reassess_requested` (actor; skill, version) and `job.quality_rescore_requested` (actor; row count). The sweep's own writes, AI calls and notifications are telemetry, **not audited**.
@@ -1254,7 +1254,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To **effective maintainers** (plus **platform admins** when a platform rule is violated): `skill.policy_flag` when a published version is first flagged against a policy rule revision (§47.8, **once per onset**), gated by `policy_notifications`.
   - To the **namespace admins** of the skill's namespace: `skill.ai_prereview_flagged` when an AI pre-review with a high or critical finding completes for a version **already published without a reviewer having seen it** — a direct publish, an accept while the run was pending, or a mirror-mismatch run (§46.10, **once per version**); minus the actor; gated by `ai_prereview_notifications`.
   - To **effective maintainers**: `skill.quality_low` when a version's quality assessment **settles at 2 stars or below** (§41.9, **once per assessment**), carrying the full list of findings and the AI recommendations; gated by `quality_notifications`.
-  - To the **admins of each namespace a restricted skill is shared with** (§42): `skill.shared` when the grant is created (who shared it, from which namespace, CTA → the skill), and `skill.shared_new_version` when a new version of a skill shared with their namespace is published — they can see the skill but do not govern it, so this is awareness, not a review-queue item. Both are per-recipient, **deduped** against a `skill.new_version` row the same person already receives as watcher/maintainer, delivered over the same channels as `skill.new_version`, and **not** sent to platform admins who merely inherit access. No per-type opt-out in v1.
+  - To the **admins of each namespace a restricted skill is shared with — and, since §49.10, the owning namespace's admins** (§42): `skill.shared` when the grant is created (who shared it, from which namespace, CTA → the skill), and `skill.shared_new_version` when a new version of a skill shared with their namespace is published — they can see the skill but do not govern it, so this is awareness, not a review-queue item. Both are per-recipient, **deduped** against a `skill.new_version` row the same person already receives as watcher/maintainer, delivered over the same channels as `skill.new_version`, and **not** sent to platform admins who merely inherit access. No per-type opt-out in v1.
   - To **watchers ∪ effective maintainers ∪ current installers** of a skill (§45.6): `skill.deprecated` when an admin deprecates it, or later **changes its successor** (a note-only edit does not re-fire; un-deprecating notifies nobody). *Current installer* = a user holding a **used, non-expired** personal `install` token on the skill (**inactive** installs are excluded — an expired credential is not a running installation), plus the **minting admin** of each active **system** install (`created_by_user_id`, when still present). Minus the actor; **one row per recipient** however many ways they qualify; visibility-filtered at insert, and the body names the successor **only for recipients who can see it**. Delivered over the same channels as `skill.new_version` (in-app + email/webhook), gated by the channel-level `email_notifications` toggle **only** — **no per-type opt-out** (it is actionable: something the recipient runs is being retired). Fired synchronously by the deprecation endpoint (web tier), like `skill.shared`.
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To the **people in a discussion thread** (§24 *Replies to discussion comments*): `skill.discussion_reply` when someone replies in a skill-discussion thread. Recipients are the root comment's author ∪ earlier repliers in that thread, minus the author, minus opt-outs, visibility-filtered at insert. It is **coalesced per thread per recipient until read** and gated by the same `discussion_notifications` toggle. For one message a person gets one row: `message.mention` beats `skill.discussion_reply`, which beats `skill.discussion`.
@@ -1448,6 +1448,8 @@ current or future type can ever leak JSON to a user.
 Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO**, **ClamAV**, **DB migrations** (run on startup) — plus, in `deploy/docker-compose.yml`, a one-shot **`git-perms`** init job (chowns the git volume) and a dev-only **`proxy`** (Caddy sample), for **eight** compose services total. TLS terminated at the **org reverse proxy** (the bundled `proxy` is for dev). **Helm/K8s** are now **shipped** (chart at `deploy/helm/skilly`, §16 Tier 4), not deferred.
 - **§29 routing (new, and it splits across both processes):** `/mcp`, `/oauth/token`, `/oauth/revoke` and both `/.well-known/oauth-*` paths route to the **worker** (beside `/scim` and `*.git`); `/oauth/authorize` and `/oauth/register` route to **web** (the authorize leg needs the Auth.js/Entra session, which only web has). The dev Caddy sample and the Helm Ingress rules (§16 #19) both gain this split. No new service and no new port — MCP rides the worker's existing Express app and is **not** gated on its leader lock.
 - **Ops paths are internal-only at the proxy:** the dev Caddy sample answers **`404`** for `/healthz`, `/readyz` and `/metrics` (exact paths, matched before every other route) and never forwards them to web or worker. Probes and scrapes reach the containers directly — compose/Kubernetes probes and Prometheus never go through the proxy — so nothing legitimate breaks, and the public edge loses an unauthenticated path that runs a DB query (`/readyz`). Out-of-band readiness checks use the container network instead: the Jenkins deploy smoke check (and `deployment_manual.md` §8) runs `docker compose exec -T web wget -qO- http://localhost:3000/readyz` (busybox `wget` ships in the `node:20-alpine` web image), and the worker's `/readyz` likewise through `docker compose exec -T worker node -e "fetch('http://localhost:4000/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"` (the `node:20-slim` worker image has no `curl`/`wget`). The Helm chart is **not** changed: its Ingress is controller-agnostic (`className: ""`), so operators block these paths at their own ingress/edge (§22 *Rate limiting (worker HTTP surfaces)*).
+
+- **Hardening shipped with §49 (October 2026 OWASP review, round 2):** runtime images move to **Node 22** (`node:22-alpine` / `node:22-slim`, `engines.node >= 22`) and every third-party image in compose and Helm (Postgres, MinIO, ClamAV, Caddy, Alpine, Node, `mc`) is **pinned by digest** and bumped through reviewed changes; the MinIO console port is bound to **`127.0.0.1:9001`** (never a host interface), and web/worker authenticate to MinIO with a **bucket-scoped service account** (`S3_ACCESS_KEY` / `S3_SECRET_KEY` are now distinct from `MINIO_ROOT_*` and created by a one-shot `minio-init` job — operators add the two new `.env` values); **`CLAMAV_HOST` is set on web as well as worker** so hosted uploads are AV-scanned (§49.2); the Caddy sample sets `X-Forwarded-Proto` / `X-Forwarded-Host` from its own `{scheme}` / `{host}` placeholders instead of forwarding the client's headers, and `TRUST_PROXY` is documented for **web** too (it keys the DCR rate limit, §49.9). `AI_ALLOW_PRIVATE_BASE_URL=1` is the explicit opt-in for an on-network AI provider (§49.11).
 
 ### Assumption to revisit
 - **Outbound network assumed available** (Pointer proxying + ClamAV signature updates). **Air-gapped operation would change both** — revisit if required.
@@ -1683,7 +1685,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/skills` — search/list (visibility-filtered, faceted); `q` runs the §34 engine and the response is `{ skills, matchMode }` (`"all" | "any"`, `null` without a query).
 - `GET /api/skills/featured` — the **Featured skills** home-page feed (§7): visibility-filtered, **live-published only**, most-recent-featured first, **not** sliced to the cap; an empty result ⇒ the section is omitted.
 - `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7) + `deprecation` / `replaces[]` / `canDeprecate` (§45.8).
-- `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once, and **never listed as an installation** on the Installed Skills page (§23).
+- `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once **and only for a same-site request** (a `Sec-Fetch-Site: cross-site` navigation is served but never counted — a GET must not be a cross-site state trigger, §49.9), and **never listed as an installation** on the Installed Skills page (§23).
 - `POST /api/skills/:ns/:slug/install` — mint a **reusable** skill-scoped install command (interactive); body `{ semver?, expiresAt?, system? }` — `system: true` mints a **system installation** (§23), **platform-admin only, re-verified server-side**; **409** for a not-yet-`git_published` version (§6/§23). *(Endpoint is `install`, not `install-url`; tokens are reusable, not one-time.)*
 - `PUT|DELETE /api/skills/:ns/:slug/rating` (§18). `POST /api/skills/:ns/:slug/versions/:semver/quality/reassess` + `GET /api/admin/jobs/quality` (§41.11); `GET /api/skills` accepts `sort=quality` and `?minQuality=`; skill payloads carry `quality` (§41.11). `GET|PUT|DELETE /api/skills/:ns/:slug/maintainers` + `GET .../maintainers/candidates?q=` (§19). `POST /api/skills/:ns/:slug/watch` (watch/follow).
 - `GET /api/skills/:ns/:slug/usage-series?range=<7d|30d|90d|all>` — aggregate installs+views over time (visibility-gated; §21).
@@ -1691,7 +1693,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `POST /api/skills/:ns/:slug/promote` — initiate promotion to global. `POST /api/skills/:ns/:slug/yank`, `.../archive`, `.../delete` (permanent; platform-admin, archived-only).
 - `POST /api/skills/:ns/:slug/feature { featured }` — Featured spotlight toggle (platform-admin, re-verified; **409** at the `max_featured_skills` cap; rejected for a non-installable/archived/**deprecated** skill), §7.
 - `PUT /api/skills/:ns/:slug/deprecation { successor: "<ns>/<slug>" | null, note: string | null }` / `DELETE /api/skills/:ns/:slug/deprecation` — deprecate (or edit the deprecation) / un-deprecate a skill (§45.8). Platform admin or owning-namespace admin; **403** visible-but-unauthorized, **404** invisible, **409** archived skill, **422** ineligible successor (`not_found` · `self` · `archived` · `deprecated` · `audience`) or an over-long note. `GET /api/skills/suggest?scope=successor&for=<ns>/<slug>` — the successor picker (eligible candidates only, §45.3).
-- `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>`; audited `skill.share_link_created`. **404** for a skill the caller cannot see.
+- `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>`; audited `skill.share_link_created`. **404** for a skill the caller cannot see — **archived or not**; the visibility check precedes every status check (§49.4).
 - `GET /api/skills/:ns/:slug/grants` — the skill's shared namespaces (§42): `{ grants: [{ namespaceId, slug, displayName, grantedAt, grantedBy }], canManage, canRevoke: namespaceId[] }` (`canRevoke` = the chips this caller may remove — every chip for a sharer, only their own namespace's chip for a receiving-namespace admin); visible to anyone who can see the skill (archived: owners only), **404** otherwise. `PUT|DELETE /api/skills/:ns/:slug/grants/:namespaceId` — add / revoke a grant, **idempotent**; authority per the §4 matrix (**403** when visible but unauthorized, **404** when invisible); **409** when the skill is `org`-visible, archived, or the target is the owning namespace or `global`; **422** for an unknown namespace. Audited (§11). `GET /api/namespaces/share-targets` — the share picker's directory: every namespace except `global` as `{ id, slug, displayName }`, any signed-in user (names only, never skills).
 
 **Proposals & publishing**
@@ -1946,6 +1948,13 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Worker:** the `skill.discussion_reply` renderer; MCP `post_skill_comment` `parentId` and
       nested `get_skill_discussion`.
     - **Minor** release (v2.29.0). **DONE.**
+39. **OWASP review, round 2 (§49):**
+    - **Data:** migration 0096 (`trim_audit_log()` definer + grants revoked), 0097 (`skill_versions.external_commit`, the `quarantined` status, `scan_reports.content_sha256`).
+    - **Shared:** the ClamAV client moves to `@skilly/shared/clamav` (server-only subpath); `isBlockedIp`/host checks reused by `normalizeAiBaseUrl`; `validateRedirectUri` scheme blocklist; the gate verdict helper `scanVerdict(report, avRequired)`.
+    - **Web:** AV at upload; the fail-closed accept/direct-publish gate (409 `scan_pending`, audited override); uniform 404 in share/grants/manage/promote; `/oauth/authorize` renders on malformed requests; `trimAuditLog` calls the definer; `skill.shared` to owning admins; same-site-only first-download; DCR limiter keyed per `TRUST_PROXY`.
+    - **Worker:** pre-scan + mirror verify the pinned commit and the pre-scan digest, quarantine on `critical`, AV sweep for artifact reports lacking an engine result, SHA-256 check before every synthesis, SCIM/reconcile audit rows, gateway refusal events + counter, token-before-catalog ordering.
+    - **Deploy:** Node 22, digest-pinned images, MinIO console on loopback + scoped service account via `minio-init`, `CLAMAV_HOST` on web, Caddy forwarded headers from placeholders.
+    - **Minor** release (v2.37.0).
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -2218,6 +2227,7 @@ responsibilities. Hardening that pins or clarifies invariants here:
   ingest (no control bytes, backslash, leading `/`, empty/`.`/`..` segments) and again by the
   worker's tree writer, and `git mktree` runs in `-z` mode — a file name can no longer inject tree
   records (symlinks/gitlinks) into a served repo (October 2026 OWASP review, V2).
+- **October 2026 OWASP review, round 2 (§49):** the scan gate **fails closed** and hosted uploads are AV-scanned; pointer versions are pinned to a **commit**, re-verified at mirror time, and a `critical` verdict **quarantines** instead of activating; every skill-addressed route and the git gateway answer **404 before any status/capability/token-scope response** for a skill the caller cannot see; `/oauth/authorize` **never redirects on a malformed request** and script-capable redirect schemes are refused; the audit trim runs in a **`SECURITY DEFINER`** function with the app role's UPDATE/DELETE revoked again; SCIM provisioning and gateway refusals are **audited/recorded**; the AI base URL is SSRF-checked; artifact bytes are **hash-verified before every synthesis**; deploy pins images and scopes the object-store account.
 - **Rate limiting (worker HTTP surfaces)**: the worker's HTTP surfaces are fronted by
   **`express-rate-limit`** middleware, **one limiter per surface** so that one surface's traffic
   never spends another's allowance. All of them are mounted in `buildServer()`
@@ -2625,7 +2635,8 @@ browser only** (MCP still never hands a credential back, §29).
   anonymous machine), and a short message naming `@ns/slug`. One event per refused request, no
   dedup (high-volume, trimmable telemetry per §25); fire-and-forget, a logging failure never
   changes the response. This is a deliberate **carve-out from §25's "401 is excluded" rule** and
-  the first `source='worker'` event.
+  the first `source='worker'` event. **§49.8 widens it:** every other refusal (invalid token, scope
+  mismatch, visibility lost, push denied) is recorded the same way, throttled per client and reason.
 - **System installations are exempt** from the owner-status gate — `user_id` is NULL, there is no
   owner to check, and `created_by_user_id` going inactive (or being erased) never invalidates the
   token: it is provenance only, no authority attaches (§23 System installations). Revocation of a
@@ -3708,8 +3719,10 @@ has **no** tamper-evident hash chain and **no** append-only trigger (cheap inser
   (constant noise from expired/anonymous polling) and `/api/*` **404**s are polling noise —
   with **one deliberate 401 carve-out**: the worker's git gateway records
   **`install_token_owner_inactive`** (a clone refused because the install token's owning user is
-  not `status='active'`, §23 Gateway) as a `source='worker'`, `status=401` event. It is the only
-  401 in the log and the first worker-sourced event; an ex-employee's token still being tried is a
+  not `status='active'`, §23 Gateway) as a `source='worker'`, `status=401` event. It was the only
+  401 in the log and the first worker-sourced event; **§49.8 adds the gateway's other refusals**
+  (`install_token_invalid`, `install_token_scope_mismatch`, `install_token_not_visible`,
+  `git_push_denied`), throttled to one event per client, reason and minute; an ex-employee's token still being tried is a
   signal worth surfacing, not polling noise. **§29 extends the same carve-out to the MCP server**
   (also `source='worker'`): `mcp_disabled` (503), `mcp_token_invalid`, `mcp_token_expired`,
   `mcp_refresh_reuse_detected`, `mcp_grant_revoked`, `mcp_client_blocked`, `mcp_rate_limited`,
@@ -4322,6 +4335,8 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
 - **Redirect URIs are exact-match**, registered up front. Loopback (`http://127.0.0.1:<any-port>`)
   is permitted with **port-agnostic** matching, as MCP desktop/CLI clients require; every other
   scheme must be `https` (custom app schemes allowed for native clients). No wildcards, ever.
+  **Script-capable and local schemes are refused at registration** — `javascript:`, `data:`,
+  `vbscript:`, `file:`, `blob:`, `about:` (§49.5).
 - **Consent screen** (in web, after sign-in) names the **client**, the **user**, what access is being
   granted in plain language ("read the catalog you can already see; create proposals, ratings and
   comments as you; mint install commands for skills you can access"), and that the grant is
@@ -4350,6 +4365,14 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   page rather than silently resolving to the first (or last) occurrence. This is checked **before**
   `client_id` and `redirect_uri` are read, so a duplicated `redirect_uri` can never be collapsed to
   the registered value and treated as verified.
+- **A malformed authorization request renders the error page — it never redirects.** Before
+  §49.5 a request with a registered `client_id` + exact `redirect_uri` but a bad `response_type`,
+  PKCE, `resource` or `scope` was answered by redirecting to that URI with `error=…`, which made
+  `/oauth/authorize` an open redirector for any self-registered client (anyone can register one,
+  and the redirect happened before sign-in). Now the only redirects the endpoint ever issues are
+  the post-consent approve/deny redirects for a request that validated completely and for a user
+  who signed in; RFC 6749 permits either answer for an invalid request, and rendering is the
+  conservative one. Clients see the same error codes on the page.
 - **Scope is a single opaque `mcp` scope**, bound to the caller's own RBAC. There are deliberately
   **no capability scopes** in v1: the boundary is the user's role, re-resolved per call, not a string
   in a token. *(Granular scopes are a future spec change, not an implementation detail.)*
@@ -8336,8 +8359,9 @@ page. It adds one gate the pipeline lacked: a direct publish that trips it goes 
   latest revision's scan report: the artifact-keyed report for a hosted (or Keep-current-files)
   proposal, and — **new** — the worker's proposal-keyed pre-scan report for a pointer proposal.
   Before this change the gate ignored the pointer pre-scan, so a pointer proposal's high findings
-  never required a server-enforced, audited override; they do now. A pending or unreachable
-  pre-scan still has nothing to gate on. Content-risk findings are in these reports, so a high one
+  never required a server-enforced, audited override; they do now. A pending, unreachable or
+  source-changed pre-scan **blocks accept** (409 `scan_pending`) until the worker writes a `scanned`
+  report or a reviewer overrides explicitly (§49.2). Content-risk findings are in these reports, so a high one
   requires the existing explicit, audited override (`proposal.scan_override`, whose `after` already
   carries the findings). On an accept over gate-tripping content findings, skilly also writes a
   `content_risk_acknowledgements` row for the version being created (`source = 'override'`, §37.6)
@@ -9186,6 +9210,10 @@ pattern), with the **status pill** as its header accessory.
   shown org-wide is a spec violation.
 - **Provider-side retention** is outside skilly's control; the egress notice names the provider and
   host so admins choose consciously.
+- **The base URL is SSRF-checked (§49.11):** `normalizeAiBaseUrl` refuses loopback, private,
+  link-local, metadata and `.local`/`.localhost`/`.internal` hosts (the shared `net.ts` classifier),
+  and the helper re-resolves the host before every call and refuses a blocked address, unless the
+  operator sets `AI_ALLOW_PRIVATE_BASE_URL=1` for an on-network provider.
 
 ### 40.11 Audit (§11)
 `ai.config_updated` (`before`/`after`: provider, base URL, model; `after.token_rotated: bool` —
@@ -9490,7 +9518,8 @@ governance.
 | Unshare (revoke a grantee) | the same three · **plus** an admin of the **receiving** namespace |
 
 - **Unilateral.** The receiving namespace does not accept or decline; its admins are **notified**
-  (`skill.shared`, §12) and may revoke. (An invite/accept handshake was considered and rejected for
+  (`skill.shared`, §12) and may revoke. Since §49.10 the **owning** namespace's admins get the same
+  notification (minus the actor), so a maintainer-initiated share is never silent to the data owner. (An invite/accept handshake was considered and rejected for
   v1 — it doubles the surface for a governance nuance the revoke right already covers.)
 - The grants card on the skill detail page (42.5) and the `PUT|DELETE …/grants/:namespaceId` API
   (§15) enforce this matrix server-side via `EffectiveAccess`; maintainership is checked against
@@ -9577,7 +9606,7 @@ events, differing only in `via`:
   viewers whose access comes only via a grant (§10).
 - **Namespace catalog view** (`?ns=`) and **namespace marketplaces** include shared skills (§10,
   §30); the Namespace administration page's per-row *Skills* action therefore shows them too.
-- **Notifications** (§12): `skill.shared` to the receiving namespace's admins at grant time;
+- **Notifications** (§12): `skill.shared` to the receiving namespace's admins **and the owning namespace's admins** (minus the actor) at grant time;
   `skill.shared_new_version` to the admins of every grantee namespace when a new version of the
   skill is published (deduped against their own `skill.new_version` rows).
 - **Audit** (§11): `skill.namespace_shared` / `skill.namespace_unshared` with `via`, the grantee
@@ -11416,3 +11445,344 @@ Inside the **Email notifications** card (§12), an **Email digests** subsection:
 - **Up to a week of delay** for awareness items in weekly mode. Intended; anything that needs a
   prompt response is immediate by default.
 - **One send hour for the whole org**, applied in each person's own zone.
+
+---
+
+## 49. Security hardening — October 2026 OWASP review, round 2
+
+A whole-codebase OWASP Top 10 review (October 2026) confirmed sixteen findings. The two High ones
+(proposal-target visibility, archive-name injection) shipped in v2.36.1 (§8 *Target visibility
+gate*, §6 *Safe entry paths*). This section specifies the remaining fourteen plus the hardening
+notes, as one release. Each subsection names the finding it closes (V-numbers from the review).
+
+### 49.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **The scan gate fails closed, AV included** (V5, V6). Accept and direct publish need a complete verdict; a missing one is a 409 the reviewer must override explicitly. The mirror **quarantines** a `critical` verdict instead of activating it. | "No findings" and "not scanned" used to look identical to a reviewer; the engine the deployment pays for never saw hosted bytes. |
+| 2 | **Pointer versions are pinned to a commit** (V7). The ref is resolved at verification, re-verified by the pre-scan and the mirror, and the mirror also compares its content digest with the pre-scan's. | A ref name is mutable upstream; what was reviewed must be what is served. |
+| 3 | **Visibility before everything** (V4, V9). Every skill-addressed route evaluates `isSkillVisible` on the loaded row before any status, capability or token-scope response; the git gateway resolves the token before it touches the catalog. | Invariant #3 restated as an ordering rule, so new routes cannot slip. |
+| 4 | **`/oauth/authorize` never redirects on a malformed request**; DCR stays open (V3). | Open DCR is safe because consent is the gate — but only if nothing happens before consent. |
+| 5 | **The audit trim becomes a `SECURITY DEFINER` function and the app role loses UPDATE/DELETE again** (V12). The trim feature stays. | Invariant #5 must hold at the database layer, not by convention in one TypeScript function. |
+| 6 | **SCIM/reconcile provisioning events are audited** (V14); **gateway refusals are recorded** (V15). | Roles come only from group membership; a privilege change with no provenance is an audit gap. |
+| 7 | **Maintainers keep the share right; owning-namespace admins are notified** (V16). | The data owner must learn of a widening; a request/approve handshake was declined again (§42.2). |
+| 8 | **Artifact bytes are hash-verified before every synthesis**; MinIO console on loopback, bucket-scoped object-store account, digest-pinned images, Node 22 (V8, V11, V13). | The row is immutable; the bytes it points at were not checked. |
+| 9 | **AI base URL is SSRF-checked** with an explicit operator opt-in for on-network providers (V10). | Same classifier as pointer ingest; admin trust is not a network boundary. |
+| 10 | **A first download counts only on a same-site request**; the DCR rate limit keys on the trusted proxy's client address (hardening notes). | A GET must not be a cross-site state trigger; a client-settable header is not a rate-limit key. |
+
+### 49.2 The scan gate fails closed (V5, V6)
+
+- **Hosted uploads are AV-scanned at upload.** `POST /api/uploads` (and the chunked finaliser)
+  and the MCP inline upload run the pure scanners **and ClamAV** when `CLAMAV_HOST` is set on the
+  tier doing the upload (web for `/api/uploads`, worker for MCP). The ClamAV client moves from the
+  worker to `@skilly/shared/clamav` (a server-only subpath, never imported by client components)
+  so both tiers run the same code. The artifact-keyed report therefore carries the per-file
+  `av-clean` / `malware` findings §6 describes from the moment the proposal exists.
+- **Engine unavailable ⇒ a `high` finding, not an `info`.** When ClamAV is configured but
+  unreachable, the scanner records `rule: scanner-unavailable` at severity **high** (was `info`).
+  The upload still succeeds — proposers are never blocked by an operator outage — but the report
+  now trips the override gate until the engine result arrives.
+- **AV sweep (worker, leader-only).** `avScanSweep` runs at boot and every **60 s**: up to **20**
+  artifact-keyed reports per pass whose latest report (a) carries `scanner-unavailable`, or (b) has
+  no ClamAV finding at all (every artifact scanned before this release, hosted or mirrored). It
+  reads the artifact, runs **only ClamAV**, and writes a **superseding report** exactly as the
+  content-risk sweep does (§37.5: prior findings carried verbatim, AV findings replaced, severity
+  recomputed, `status` kept). Unreadable artifacts are skipped for the process lifetime. A
+  `malware` finding on an **already published** version is an **onset**: audit
+  `skill.malware_detected` (system actor; skill, version, signature), a `skill.malware_detected`
+  notification to the skill's maintainers **and every platform admin**, and the version's content
+  status reads **flagged** (§37.7). There is **no automatic yank** of a published version (§37.5's
+  rule stands: a scanner never changes a published version's state; the alert is loud instead).
+  Reports that already carry an AV result and lack nothing are never re-scanned by this sweep.
+- **The complete-verdict rule.** For the accept-time gate (§37.4) and the direct-publish gate, a
+  proposal's current verdict is **complete** when its gate report exists with `status = 'scanned'`
+  **and**, when AV is configured on the web tier (`CLAMAV_HOST` set), contains at least one
+  `clamav` finding other than `scanner-unavailable`. Otherwise the verdict is **missing**, with a
+  reason: `pending` (no report yet — pointer pre-scan not run), `unreachable` (pointer source
+  could not be fetched), `changed` (§49.3: the pinned commit moved), or `av_missing` (hosted
+  report without an engine result).
+- **Accept with a missing verdict ⇒ `409 { scanPending: true, reason }`.** The reviewer UI shows
+  "Scan not complete: <reason>" with a **Retry scan** affordance for `av_missing`/`unreachable`
+  (queues the sweep) and the existing confirm-with-reason dialog as **Accept anyway**. Repeating
+  the action with `override: true` + reason accepts and is audited as `proposal.scan_override`
+  with `after.missingVerdict = reason` (no findings to list). Direct publish behaves as §37.4:
+  an authorised submitter gets the same 409 and dialog; one without override authority is routed
+  to review (`routed_reason = 'scan_pending'`, 202).
+- **High/critical findings keep today's gate** (`requiresOverride`) — this change adds the
+  *missing* case; it does not widen the finding-severity rule (§37.15 stands).
+- **Mirror quarantine.** `mirrorPointerVersion` runs the full pipeline as today. The outcome
+  decides the inserted status:
+  - `scanner-unavailable` ⇒ the mirror **fails this attempt** (`last_error = 'av unavailable'`),
+    so the `pending_mirrors` retry/dead-letter cycle (§6) handles an outage; nothing is inserted.
+  - `maxSeverity(findings) = 'critical'` ⇒ the version is inserted with **`status = 'quarantined'`**
+    and `git_published = false`. Audit `skill.version_quarantined` (system actor; skill, semver,
+    the finding rules). Notification `skill.version_quarantined` to the skill's maintainers, the
+    accepting reviewer and the owning namespace's admins.
+  - anything else ⇒ `active`, as today.
+- **`quarantined` semantics.** Never `latest`, never synthesized (the publish sweep selects
+  `status = 'active'` only), never served by the gateway (it has no tag), never installable,
+  excluded from catalog counts and search like a yanked version; visible on the detail page's
+  version list to the skill's owners and admins only, labelled *Quarantined — malware detected*
+  with the findings. Two exits, both platform-admin **or** owning-namespace-admin actions on the
+  version row: **Release** (`POST /api/skills/:ns/:slug/versions/:semver/release`, reason
+  required, audited `skill.version_released` with the reason and findings; the version becomes
+  `active` and the publish sweep synthesizes it) and **Yank** (the existing yank; a quarantined
+  version may go straight to `yanked`). The `skill_versions_guard()` pinned set is unchanged —
+  `status` was already mutable.
+- **Pre-scan statuses.** The proposal-keyed pre-scan report's `status` gains `source_changed`
+  (§49.3) beside `scanned` / `unreachable`.
+
+### 49.3 Pointer versions pin a commit (V7)
+
+- **Verification resolves the ref.** `verifyPointerSkill` (submit, resubmit, reviewer edit of a
+  pointer payload, direct pointer publish) already lists refs with `git ls-remote`; it now stores
+  the resolved **commit SHA** in the payload as `pointer.commit` (40 hex). A ref that resolves to
+  an annotated tag is peeled to the commit. Registry-origin pointers (skills-hub) have no commit:
+  `pointer.commit` is null and their pin remains the registry version (immutable by that
+  registry's contract) plus the digest check below.
+- **The review page shows the pin**: `pinned at <sha7>` beside the ref; the on-demand review fetch
+  (§8) checks out the ref and refuses to render if `HEAD ≠ pointer.commit` (banner: *The upstream
+  ref has moved since this was submitted — ask the proposer to resubmit*).
+- **The pre-scan verifies it.** The worker's pre-scan clones the ref; if `rev-parse HEAD` differs
+  from `pointer.commit` it writes a report with `status = 'source_changed'` (no findings) and the
+  gate reads `changed` (§49.2). The report is cached per `(ref, commit)` — `cached_for_ref`
+  becomes `<ref>@<commit>` — and records the **content digest** of the scanned tree in a new
+  `scan_reports.content_sha256` column.
+- **The mirror verifies both.** `mirrorPointerVersion` clones the ref and refuses with
+  `upstream_moved` when `HEAD ≠ external_commit`; it then compares `contentDigest(files)` with the
+  pre-scan report's `content_sha256` (when one exists for this proposal) and refuses with
+  `content_changed` on a mismatch — both refusals **dead-letter immediately** (no retries: the
+  input is wrong, not the network), and the detail page's mirror-failed notice names the reason.
+  The commit is stored in `skill_versions.external_commit` and joins the immutable pinned set of
+  `skill_versions_guard()`.
+- **Refresh** (§6 drift) compares the upstream ref's current commit with `external_commit` in
+  addition to the content comparison, so a moved tag is reported as drift even when its content
+  happens to match. Versions with a null `external_commit` (pre-0097) keep content-only drift.
+
+### 49.4 Visibility before everything (V4, V9)
+
+- **Rule.** A route or helper addressed by `:ns/:slug` loads the skill **with its grants** and
+  answers **404** when `!isSkillVisible(access, skill)` — **before** looking at `status`
+  (archived), the caller's capabilities (403), or any conflict (409). Archived restricted skills
+  are therefore 404 to outsiders on every route, never 409 or 403.
+- **Routes brought into line:** `POST …/share` (§33 mint; archived included), `PUT|DELETE
+  …/grants/:namespaceId` (archived ⇒ 404 for outsiders, then 409 for owners), `setVersionYanked`,
+  `setSkillArchived`, `setSkillOfficial`, `setSkillFeatured`, `deleteSkill` (`lib/manage.ts`) and
+  `promoteToGlobal`, whose 404/403 order now matches `install`.
+- **Git gateway ordering.** `authorizeSkill` resolves the token **first**: no token ⇒ 401
+  challenge; invalid/expired/owner-inactive ⇒ 401 (§23). Only then is the catalog consulted, and a
+  skill that does not exist, is archived, **or is not the one the token is scoped to** answers the
+  same **404 "skill not found"** (the scope mismatch was a 403 — an existence oracle for any token
+  holder). The `403 "not authorized for this namespace"` stays for the clone-time visibility
+  re-check (the holder knew the skill when they installed it), and the push-denied 403 stays first
+  (it reveals nothing). Marketplace repos keep their order — namespace slugs are not restricted.
+- **Test:** an invariant #3 suite probes every route family (catalog, readme, download, share,
+  grants, manage, promote, deprecation, proposals, git gateway `info/refs` with no / wrong /
+  foreign tokens, MCP) with an outsider against a restricted skill, **active and archived**,
+  asserting a uniform 404 body and status.
+
+### 49.5 OAuth authorize and DCR (V3)
+
+- **No redirect before consent.** `/oauth/authorize` validates the request fully; any failure —
+  including a known client with a byte-matching `redirect_uri` but a bad `response_type`, PKCE
+  challenge/method, `resource`, `scope` or `state` — renders the non-redirecting error page with
+  the OAuth error code and description. The only redirects the endpoint issues are the
+  post-consent approve/deny `303`s for a fully valid, user-approved request (§29).
+- **Redirect-URI schemes.** `validateRedirectUri` refuses `javascript:`, `data:`, `vbscript:`,
+  `file:`, `blob:` and `about:` at registration (422 `invalid_redirect_uri`); every other custom
+  scheme stays allowed for native clients. Existing registrations with such URIs are **deleted
+  by migration 0096** (none are expected).
+- **DCR stays open** (§29); the rate-limit key changes per §49.9.
+
+### 49.6 Audit trim as a `SECURITY DEFINER` function (V12)
+
+- **Migration 0096** creates `trim_audit_log(p_actor uuid, p_older_than interval) RETURNS integer`,
+  `SECURITY DEFINER`, owned by the migration role, `search_path` pinned to `pg_catalog, public`.
+  It: raises `audit_trim_floor` when `p_older_than < interval '1 year'`; inserts the
+  **`audit.trimmed`** row through the normal insert path (actor = `p_actor` with the snapshot
+  columns looked up from `users`; `after = { olderThan, cutoff, deletedCount }`, where the count is
+  computed first by a `SELECT count(*)`); sets `skilly.allow_audit_trim` with
+  `set_config(…, 'on', true)` (transaction-local); deletes rows older than the cutoff **except the
+  row it just wrote**; calls `rebaseline_audit_chain()`; returns the count.
+- **`audit_guard()` yields only inside that function:** the GUC check stays, **and** the guard
+  additionally requires one of: the call runs as the table owner inside a definer function
+  (`current_user <> session_user` **and** `current_user` is `audit_log`'s owner — a plain `SET
+  ROLE` cannot satisfy both), or the session itself is the table owner (migrations, CI and the
+  dev stack connect as the owner, which can disable the trigger anyway), or the `skilly_app` role
+  does not exist. Under the real `skilly_app` login any UPDATE/DELETE raises `audit_log is
+  append-only` even with the GUC set, and the grants refuse it first. The floor is compared as an
+  **instant** (`now() - p_older_than` against `now() - interval '1 year'`), because Postgres
+  normalises `interval '364 days' < interval '1 year'` to false. The function also takes the
+  chain's advisory lock so a concurrent append cannot chain onto a tail the rebaseline rewrites.
+- **Grants:** `REVOKE UPDATE, DELETE ON audit_log FROM skilly_app`; `GRANT EXECUTE ON FUNCTION
+  trim_audit_log TO skilly_app`; `rebaseline_audit_chain()` has EXECUTE revoked from `PUBLIC` and
+  `skilly_app` (only the definer calls it).
+- **`POST /api/audit/trim`** is unchanged in shape; `lib/audit.ts trimAuditLog` becomes a single
+  `select trim_audit_log($1, $2)`. A request under the one-year floor answers **422
+  `audit_trim_floor`** (the UI already offers no shorter choice).
+- **Verify (§11)** is unchanged: after a trim the chain re-verifies from the surviving head.
+
+### 49.7 SCIM and reconcile provisioning are audited (V14)
+
+- **New audit actions** (`source = 'scim'`, `actor_user_id = null`, `request_id` = the SCIM
+  request id when present): `user.provisioned` (target user; `after = { externalId, email }` —
+  the directory attributes are **not** copied), `user.deactivated` / `user.reactivated` (on an
+  `active` transition only, PATCH or PUT), `group.provisioned` (target group; `after = {
+  externalId, displayName }`), `group.deleted`, and `group.membership_added` /
+  `group.membership_removed` (target **user**, `namespace_id` null, `after = { groupId, groupOid,
+  roleMapped: bool, roles: [{ namespaceId | null, role }] }` — the roles that group confers at
+  that moment, so a privilege change reads as one even if the mapping is edited later).
+- **Both doors write them:** the SCIM store (`worker/src/scim/store.ts`) and the Graph reconcile
+  loop (`worker/src/reconcile/*`), which is Entra-origin too and keeps `source = 'scim'`.
+- **Volume:** an initial Entra sync of N users and M memberships writes N + M rows once. Accepted:
+  provisioning is the privilege source of truth; the audit viewer's category chips gain
+  **Identity** (`user.*`, `group.*`).
+- Unchanged: `user.erased`, role-mapping actions, `upsertUser` attribute-only updates (not
+  audited — directory profile churn is telemetry, not governance).
+
+### 49.8 Gateway refusals are recorded (V15)
+
+- Every git-gateway refusal writes a `system_event` row (`source = 'worker'`) with the same shape
+  as `install_token_owner_inactive` (§23): `error_code` ∈ `install_token_invalid` (401, a bad or
+  expired token — the anonymous first leg of git's auth handshake, which carries no token at all,
+  is normal protocol traffic and is not recorded), `install_token_scope_mismatch` (404 — the token names another skill; the
+  forensic subject is the **token owner**), `install_token_not_visible` (403, visibility
+  re-check), `git_push_denied` (403). The message names the route template and `@ns/slug`;
+  never the credential or query string.
+- **Throttle:** one event per `(error_code, client IP or token id, minute)`, counted in-process;
+  the event's message carries the suppressed count when > 1. `install_token_invalid` keys on the
+  client IP (the token is unknown by definition); the others key on the token row id.
+- **Metric:** `skilly_worker_git_refusals_total{reason}`.
+- **Alerting:** the worker's system-log alert job (§25) already notifies platform admins of new
+  recorded events; a burst of 401s now surfaces there. Web 401s stay excluded (§25).
+
+### 49.9 Two request-shape fixes (hardening notes)
+
+- **First download is same-site only.** `GET …/download` serves the bundle as today but records
+  the first download (`skill_downloads`, `install_count`, `install_counters`, the §31
+  achievement) only when the request's `Sec-Fetch-Site` header is absent or one of
+  `same-origin`, `same-site`, `none`. A `cross-site` navigation is served and not counted.
+- **DCR rate-limit key.** `/oauth/register` keyed on the first `X-Forwarded-For` entry, which a
+  client sets. It now uses the same rule as the worker: with `TRUST_PROXY = n` on the web tier,
+  the client is the n-th address from the right of `X-Forwarded-For`; unset, every client shares
+  one bucket (§22 *Rate limiting*, "unset = don't trust"). `TRUST_PROXY` is passed to web in
+  compose and Helm.
+
+### 49.10 Sharing notifies the owner (V16)
+
+- `skill.shared` is sent, at grant time, to the admins of the **owning** namespace as well as the
+  receiving namespace's admins, minus the actor and deduped per user. The owner-side copy reads
+  *"<actor> shared <skill> with <grantee namespace>"* and links to the skill's *Shared with* card,
+  where any owning-namespace admin may revoke (§42.2 already grants that). Digests (§48) treat it
+  as the same type. No new preference, no approval step.
+
+### 49.11 AI base URL is SSRF-checked (V10)
+
+- `normalizeAiBaseUrl` applies the §22 classifier: an IP literal that `isBlockedIp` rejects, or a
+  host ending in `.local`, `.localhost`, `.internal`, or equal to `localhost`, is refused with
+  `ai_base_url_private` (422 on save/test). `providerFetch` resolves the host (`dns.lookup`,
+  all addresses) before each call and refuses when any address is blocked (`AiError
+  ai_base_url_private`), the same DNS-rebinding defence as the mirror.
+- **Operator opt-in:** `AI_ALLOW_PRIVATE_BASE_URL=1` (web + worker) disables both checks for
+  deployments whose Open WebUI lives on the private network. The Administration card shows
+  *Private base URLs allowed by the operator* when set. The error-body excerpt (§40.5) is unchanged:
+  with private hosts refused it can no longer carry internal service output, and with the opt-in
+  the operator has accepted that.
+
+### 49.12 Artifact integrity and deploy hardening (V8, V11, V13)
+
+- **Hash check before every synthesis.** `publishPendingVersions`, the reprovision/self-heal sweep
+  and `pointerRefresh` compute `sha256(bytes)` of the object they read and compare it with
+  `skill_versions.artifact_sha256`; a mismatch **skips the version**, records a `system_event`
+  (`source = 'worker'`, status 500, `error_code = 'artifact_integrity_mismatch'`, skill + semver)
+  and audits `skill.artifact_integrity_failed` (system actor). The version stays unpublished
+  (`git_published = false`) and the detail page shows *Artifact integrity check failed — contact a
+  platform admin*. Nothing is overwritten or deleted automatically.
+- **Object store account.** Compose gains a one-shot **`minio-init`** service (the `mc` image,
+  digest-pinned) that creates the bucket and a **service account scoped to `skilly-artifacts`**
+  from `S3_ACCESS_KEY` / `S3_SECRET_KEY` (new required `.env` values, distinct from
+  `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`); web and worker use only the scoped pair. The Helm
+  chart documents the same split (`s3.accessKey` / `s3.secretKey` already exist; the README
+  stops suggesting the root pair). **Deployment action:** add the two values to `deploy/.env`
+  before the next `docker compose up`.
+- **MinIO console** binds to `127.0.0.1:9001`. Operators who need it remotely tunnel to it.
+- **Images:** `node:22-alpine` / `node:22-slim` for web and worker; `engines.node >= 22`; MinIO,
+  ClamAV, Caddy, Alpine, Node and `mc` pinned by **tag + digest** in compose and Helm values.
+  Bumps are reviewed changes (a `deploy/IMAGES.md` lists the pins and the bump procedure).
+- **Caddy sample:** `X-Forwarded-Proto {scheme}` and `X-Forwarded-Host {host}` — the client's
+  copies are dropped. `X-Real-IP` is unchanged.
+- **`CLAMAV_HOST`** (and `CLAMAV_PORT`) are set on **web** in compose and Helm (§49.2).
+
+### 49.13 Data model
+
+- **Migration 0096 — `audit_trim_definer`:** `trim_audit_log()`, the `audit_guard()` rewrite, the
+  grant changes (§49.6); deletes `oauth_clients` rows whose redirect URIs carry a refused scheme
+  (§49.5).
+- **Migration 0097 — `pointer_commit_quarantine`:** `skill_versions.external_commit text null`
+  (40-hex check; added to the guard's pinned set — null→value is refused too, so it is set at
+  insert or never), the `quarantined` value of the `version_status` enum, `scan_reports.content_sha256
+  text null`, `scan_reports.status` gains `source_changed` (free text), `proposals.routed_reason`
+  gains `scan_pending`, and **`pending_mirrors.external_commit` / `pending_mirrors.prescan_content_sha256`**
+  (the accept path copies the pin and the pre-scan digest into the queue row for the mirror's checks).
+- **Audit actions added:** `skill.malware_detected`, `skill.version_quarantined`,
+  `skill.version_released`, `skill.artifact_integrity_failed`, `user.provisioned`,
+  `user.deactivated`, `user.reactivated`, `group.provisioned`, `group.deleted`,
+  `group.membership_added`, `group.membership_removed`. `proposal.scan_override` gains
+  `after.missingVerdict`.
+- **Notification types added:** `skill.malware_detected`, `skill.version_quarantined`
+  (immediate, not digestible). `skill.shared` gains the owner-side recipients.
+- **System events added:** `install_token_invalid`, `install_token_scope_mismatch`,
+  `install_token_not_visible`, `git_push_denied`, `artifact_integrity_mismatch`.
+- **Env added:** `AI_ALLOW_PRIVATE_BASE_URL` (optional), `S3_ACCESS_KEY` / `S3_SECRET_KEY`
+  (compose, required), `CLAMAV_HOST` / `CLAMAV_PORT` and `TRUST_PROXY` on web.
+
+### 49.14 API changes
+
+- `POST /api/proposals/:id/action` (`accept`) and `POST /api/publish`: **409
+  `{ scanPending: true, reason }`** for a missing verdict; `override: true` + `reason` proceeds.
+  `POST /api/publish` may also answer **202 `{ routed: "review", proposalId }`** with
+  `routed_reason = 'scan_pending'`.
+- `POST /api/skills/:ns/:slug/versions/:semver/release` — platform admin or owning-namespace
+  admin; `{ reason }` required; 404 invisible, 403 unauthorized, 409 not quarantined.
+- `POST /api/skills/:ns/:slug/share`, `PUT|DELETE …/grants/:namespaceId`, yank / archive /
+  official / featured / delete / promote: **404 precedes every other status** for an invisible
+  skill, archived included.
+- `POST /api/audit/trim`: **422 `audit_trim_floor`** below one year.
+- `POST /oauth/register`: **422 `invalid_redirect_uri`** for a refused scheme. `GET
+  /oauth/authorize`: renders the error page for any malformed request.
+- `GET /api/skills/:ns/:slug` version rows gain `status: 'quarantined'` for owners/admins, with
+  `quarantine: { findings, detectedAt }`.
+- Git gateway: a token-scope mismatch answers **404** (was 403).
+
+### 49.15 Tests (ship with the code)
+
+- **Unit (shared):** `scanVerdict()` — complete / pending / unreachable / changed / av_missing,
+  with and without AV configured; `validateRedirectUri` scheme refusals; `normalizeAiBaseUrl`
+  private-host refusals and the opt-in; the `Sec-Fetch-Site` predicate; the proxy-hop key.
+- **Unit (worker):** `authorizeSkill` ordering table (no token / bad token / scope mismatch /
+  archived / invisible / ok) asserting status + reason; refusal throttling; pre-scan
+  `source_changed`; mirror `upstream_moved` / `content_changed` / quarantine / av-unavailable
+  retry; synthesis integrity mismatch.
+- **Integration (web + DB):** accept with no pre-scan ⇒ 409 `scan_pending`, with override ⇒
+  accepted + audit row carrying `missingVerdict`; hosted upload with ClamAV stubbed down ⇒ `high`
+  `scanner-unavailable` ⇒ gate; release endpoint authority matrix; uniform-404 suite (§49.4);
+  `trim_audit_log` floor + chain re-verify + a plain `DELETE` under `skilly_app` raising; SCIM
+  PATCH membership add/remove writing the audit pair with `roleMapped`; `skill.shared` owner-side
+  fan-out and dedupe; first-download not counted on `cross-site`.
+- **Integration (worker + DB):** AV sweep supersedes a report lacking an engine result and fires
+  the onset once; mirror quarantines a `critical` verdict and the publish sweep ignores it.
+- **e2e:** reviewer sees *Scan not complete* on a pointer proposal, retries, then accepts; a
+  quarantined version shows for an admin and releases.
+
+### 49.16 Accepted trade-offs and out of scope
+
+- **No automatic yank** when the backfill AV sweep finds malware in an already-published version:
+  the alert goes to maintainers and every platform admin; the decision stays human (§37.5).
+- **DCR remains open** (§29); approval-gated registration was declined to keep zero-touch MCP
+  client setup.
+- **Maintainers keep the share right**; a request/approve handshake was declined (§42.2).
+- **The email-based account relink at sign-in** (`lib/auth.ts`) is a tenant-policy question
+  (guest accounts, writable `mail`), reviewed separately; not changed here.
+- **Existing pointer versions** keep `external_commit = null`; no backfill (the upstream may be
+  gone). They are content-drift-checked as before.
+- **Digest pins** require a manual bump; no Renovate/Dependabot is introduced (Jenkins-only CI).

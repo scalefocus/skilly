@@ -95,11 +95,14 @@ async function notifyShared(client: PoolClient, skill: GrantSkill, granteeNamesp
          join namespaces tgt on tgt.id = $2::uuid
         where s.id = $1
      ), admins as (
+       -- §49.10: the RECEIVING namespace's admins (awareness) and the OWNING namespace's admins (the data
+       -- owner must learn of a widening, e.g. a maintainer-initiated share), minus the actor, deduped.
        select distinct u.id
          from role_mappings rm
          join group_memberships gm on gm.group_id = rm.group_id
          join users u on u.id = gm.user_id
-        where rm.namespace_id = $2::uuid and rm.role = 'namespace_admin' and u.status = 'active'
+        where rm.role = 'namespace_admin' and u.status = 'active'
+          and (rm.namespace_id = $2::uuid or rm.namespace_id = (select s.namespace_id from skills s where s.id = $1))
           and ($3::uuid is null or u.id <> $3::uuid)
      )
      insert into notifications (user_id, type, payload)

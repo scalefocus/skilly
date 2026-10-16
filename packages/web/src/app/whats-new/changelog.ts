@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.37.0",
+    date: "2026-10-16",
+    summary:
+      "The rest of the October 2026 OWASP review ships. Reviews now wait for a complete security scan — hosted uploads are anti-virus scanned too, a pointer skill is pinned to the exact commit it was reviewed at, and a mirror that fails the scan is quarantined until an admin releases it. Restricted skills answer “not found” everywhere, including the git gateway. Operators: add S3_ACCESS_KEY and S3_SECRET_KEY to .env (the MinIO console now binds to localhost) and move to the Node 22 images before the next compose up.",
+  },
+  {
     version: "2.36.1",
     date: "2026-10-16",
     summary:

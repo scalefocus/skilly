@@ -1,5 +1,6 @@
 # Next.js standalone build for skilly web. Self-hosted; never Vercel. (SKILLY_SPEC.md §2)
-FROM node:20-alpine AS base
+# Base images are pinned by tag + digest (SKILLY_SPEC.md §49.12); bump via deploy/IMAGES.md.
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS base
 RUN corepack enable
 WORKDIR /app
 
@@ -14,7 +15,7 @@ RUN pnpm --filter @skilly/shared build
 RUN pnpm --filter @skilly/web build
 
 # --- runtime (standalone output) ---
-FROM node:20-alpine AS runner
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 # git: used by the propose form's pointer ref pre-check (`git ls-remote`), hardened identically

@@ -76,7 +76,7 @@ test("push is always denied", async () => {
     "good-ns",
     deps(),
   );
-  assert.deepEqual(d, { allow: false, status: 403, reason: "registry is read-only (push denied)" });
+  assert.deepEqual(d, { allow: false, status: 403, reason: "registry is read-only (push denied)", refusal: { code: "git_push_denied" } });
 });
 
 test("org skill requires a token (no anonymous clones)", async () => {
@@ -121,7 +121,7 @@ test("namespace skill: outsider with valid token forbidden", async () => {
     "good-ns-outsider",
     deps(),
   );
-  assert.deepEqual(d, { allow: false, status: 403, reason: "not authorized for this namespace" });
+  assert.deepEqual(d, { allow: false, status: 403, reason: "not authorized for this namespace", refusal: { code: "install_token_not_visible", ownerUserId: "u2", tokenId: "t3" } });
 });
 
 test("namespace skill: SYSTEM token allowed without namespace access (deliberate admin grant)", async () => {
@@ -149,7 +149,7 @@ test("org skill: token of an inactive owner refused with the GENERIC invalid-tok
     allow: false,
     status: 401,
     reason: "invalid or expired token",
-    ownerInactive: { ownerUserId: "u-gone" },
+    refusal: { code: "install_token_owner_inactive", ownerUserId: "u-gone", tokenId: "t5" },
   });
 });
 
@@ -167,26 +167,43 @@ test("namespace skill: inactive owner refused before any namespace re-check", as
   if (!d.allow) {
     assert.equal(d.status, 401);
     assert.equal(d.reason, "invalid or expired token");
-    assert.deepEqual(d.ownerInactive, { ownerUserId: "u-gone" });
+    assert.deepEqual(d.refusal, { code: "install_token_owner_inactive", ownerUserId: "u-gone", tokenId: "t6" });
   }
 });
 
-test("token scoped to a different skill is forbidden", async () => {
+test("token scoped to a different skill answers the SAME 404 as an unknown skill (§49.4)", async () => {
   const d = await authorizeGitRequest(
     { namespaceSlug: "team-a", skillSlug: "ns-skill", marketplace: null, operation: "upload-pack", isServiceRpc: true },
     "good-org", // scoped to s1 (org-skill), presented against s2 (ns-skill)
     deps(),
   );
-  assert.deepEqual(d, { allow: false, status: 403, reason: "token is scoped to a different skill" });
+  assert.deepEqual(d, { allow: false, status: 404, reason: "skill not found", refusal: { code: "install_token_scope_mismatch", ownerUserId: "u1", tokenId: "t1" } });
 });
 
-test("unknown / archived skill is 404", async () => {
+test("unknown / archived skill is 404 for a valid token", async () => {
   const d = await authorizeGitRequest(
     { namespaceSlug: "team-a", skillSlug: "missing", marketplace: null, operation: "upload-pack", isServiceRpc: false },
     "good-ns",
     deps(),
   );
-  assert.deepEqual(d, { allow: false, status: 404, reason: "skill not found" });
+  assert.deepEqual(d, { allow: false, status: 404, reason: "skill not found", refusal: { code: "install_token_scope_mismatch", ownerUserId: "u1", tokenId: "t2" } });
+});
+
+test("§49.4 ordering: the catalog is never consulted before the token — no anonymous existence oracle", async () => {
+  // Unknown skill + no token ⇒ 401 (was 404), byte-identical to an existing skill + no token.
+  const anon = await authorizeGitRequest(
+    { namespaceSlug: "team-a", skillSlug: "missing", marketplace: null, operation: "upload-pack", isServiceRpc: false },
+    undefined,
+    deps({ async findSkill() { throw new Error("findSkill must not be called without a token"); } }),
+  );
+  assert.deepEqual(anon, { allow: false, status: 401, reason: "authentication required" });
+  // Unknown skill + bad token ⇒ the generic 401, recorded as install_token_invalid.
+  const bad = await authorizeGitRequest(
+    { namespaceSlug: "team-a", skillSlug: "missing", marketplace: null, operation: "upload-pack", isServiceRpc: false },
+    "nope",
+    deps({ async findSkill() { throw new Error("findSkill must not be called for an invalid token"); } }),
+  );
+  assert.deepEqual(bad, { allow: false, status: 401, reason: "invalid or expired token", refusal: { code: "install_token_invalid" } });
 });
 
 // ---------------------------------------------------------------------------
@@ -215,7 +232,7 @@ test("push to a marketplace is denied like any other repo", async () => {
     "mkt-ns",
     deps(),
   );
-  assert.deepEqual(d, { allow: false, status: 403, reason: "registry is read-only (push denied)" });
+  assert.deepEqual(d, { allow: false, status: 403, reason: "registry is read-only (push denied)", refusal: { code: "git_push_denied" } });
 });
 
 test("a disabled or unknown marketplace is a 404 — never a 403 that confirms it exists", async () => {
@@ -270,7 +287,7 @@ test("install and marketplace tokens are not interchangeable", async () => {
     "mkt-public",
     deps(),
   );
-  assert.deepEqual(mktAtSkill, { allow: false, status: 403, reason: "token is scoped to a different skill" });
+  assert.deepEqual(mktAtSkill, { allow: false, status: 404, reason: "skill not found", refusal: { code: "install_token_scope_mismatch", ownerUserId: "u2", tokenId: "m1" } }); // §49.4: never a 403 that confirms the skill exists
 });
 
 // §42: a member of a namespace the restricted skill is SHARED with clones it with their own
@@ -290,5 +307,5 @@ test("namespace skill shared with another namespace: grantee member allowed, ref
     async findSkill() { return { ...nsSkill, sharedNamespaceIds: [] }; },
     resolveAccess: granteeAccess,
   }));
-  assert.deepEqual(revoked, { allow: false, status: 403, reason: "not authorized for this namespace" });
+  assert.deepEqual(revoked, { allow: false, status: 403, reason: "not authorized for this namespace", refusal: { code: "install_token_not_visible", ownerUserId: "u2", tokenId: "t3" } });
 });

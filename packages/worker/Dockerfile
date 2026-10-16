@@ -1,5 +1,6 @@
 # skilly worker: SCIM endpoints + reconciliation + scan pipeline. (SKILLY_SPEC.md §2)
-FROM node:20-alpine AS base
+# Base images are pinned by tag + digest (SKILLY_SPEC.md §49.12); bump via deploy/IMAGES.md.
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS base
 RUN corepack enable
 WORKDIR /app
 
@@ -12,9 +13,9 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @skilly/shared build
 RUN pnpm --filter @skilly/worker build
 
-FROM node:20-slim AS runner
+FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS runner
 # `git` is required for the smart-HTTP server (git http-backend / upload-pack).
-# IMPORTANT: node:20-alpine does NOT ship git-http-backend in any package — switch to
+# IMPORTANT: node:22-alpine does NOT ship git-http-backend in any package — switch to
 # Debian slim where `apt-get install git` includes /usr/lib/git-core/git-http-backend.
 # SKILLY_SPEC.md §9.
 # `ca-certificates` is a Recommends of git (not a hard dep), so --no-install-recommends drops it —

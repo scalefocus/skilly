@@ -13,6 +13,7 @@ import { fetchPointerFiles } from "./mirror.js";
 import { extractBundle } from "./bundle.js";
 import { runScanPipeline } from "../scan/pipeline.js";
 import { getMaxBundleBytes } from "../settings.js";
+import { verifyArtifactIntegrity } from "./integrity.js";
 
 /** Order-independent content digest over a file set (ignores archive framing + file mode). */
 function contentDigest(files: { path: string; bytes: Buffer | Uint8Array }[]): string {
@@ -32,6 +33,9 @@ interface PointerVersionRow {
   external_ref: string;
   external_subdir: string | null;
   artifact_object_key: string | null;
+  artifact_sha256: string | null;
+  /** §49.3: the commit pinned at mirror time (null for registry origins / pre-0097 rows). */
+  external_commit: string | null;
   skill_id: string;
   namespace_id: string;
   ns_slug: string;
@@ -57,6 +61,7 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
 
   const { rows } = await pool.query<PointerVersionRow>(
     `select sv.id, sv.semver, sv.external_origin_url, sv.external_ref, sv.external_subdir, sv.artifact_object_key,
+            sv.artifact_sha256, sv.external_commit,
             sv.skill_id, s.namespace_id, n.slug as ns_slug, s.slug as skill_slug
        from skill_versions sv
        join skills s on s.id = sv.skill_id
@@ -80,15 +85,23 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
   for (const row of rows) {
     checked++;
     try {
-      const { files } = await fetchPointerFiles(row.external_origin_url, row.external_ref, row.external_subdir, row.skill_slug, cap);
+      const { files, commit } = await fetchPointerFiles(row.external_origin_url, row.external_ref, row.external_subdir, row.skill_slug, cap);
       const findings: ScanFinding[] = await runScanPipeline(files);
 
-      // Drift: compare freshly-cloned content to the artifact stored at mirror time.
+      // Drift: compare freshly-cloned content to the artifact stored at mirror time — and, when a
+      // commit was pinned (§49.3), the ref's current commit to that pin: a moved tag is drift even when
+      // its content happens to match.
       let drifted = false;
+      if (row.external_commit && commit && commit !== row.external_commit) drifted = true;
       if (row.artifact_object_key) {
         try {
-          const storedFiles = await extractBundle(await store.get(row.artifact_object_key), cap);
-          drifted = contentDigest(files) !== contentDigest(storedFiles);
+          const stored = await store.get(row.artifact_object_key);
+          // §49.12: a stored artifact that no longer matches its hash is recorded, and not treated as
+          // the baseline for the comparison.
+          if (await verifyArtifactIntegrity(pool, { versionId: row.id, skillId: row.skill_id, semver: row.semver, artifactKey: row.artifact_object_key, expectedSha256: row.artifact_sha256, namespaceId: row.namespace_id, nsSlug: row.ns_slug, skillSlug: row.skill_slug }, stored, "worker:pointer-refresh")) {
+            const storedFiles = await extractBundle(stored, cap);
+            if (contentDigest(files) !== contentDigest(storedFiles)) drifted = true;
+          }
         } catch {
           /* stored artifact unavailable — skip the comparison, still record the rescan */
         }

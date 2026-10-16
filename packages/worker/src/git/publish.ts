@@ -13,6 +13,7 @@ import { ensureMain, loadDeprecationState } from "./mainRef.js";
 import { extractBundle } from "./bundle.js";
 import type { SkillFile } from "./synth.js";
 import { fillSearchText } from "../searchIndex.js";
+import { verifyArtifactIntegrity } from "./integrity.js";
 
 /**
  * Ensure SKILL.md frontmatter contains `name: <skillSlug>`.
@@ -64,6 +65,8 @@ interface PendingRow {
   skill_id: string;
   semver: string;
   artifact_object_key: string;
+  /** Recorded at ingest; re-verified before every synthesis (§49.12). Null on legacy rows. */
+  artifact_sha256: string | null;
   ns_slug: string;
   skill_slug: string;
 }
@@ -76,7 +79,7 @@ interface PendingPublishRow extends PendingRow {
 
 export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Promise<number> {
   const { rows } = await pool.query<PendingPublishRow>(
-    `select sv.id, sv.skill_id, sv.semver, sv.artifact_object_key,
+    `select sv.id, sv.skill_id, sv.semver, sv.artifact_object_key, sv.artifact_sha256,
             n.slug as ns_slug, s.slug as skill_slug,
             sv.created_by, s.namespace_id, s.visibility
        from skill_versions sv
@@ -105,6 +108,8 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
     let files: SkillFile[] | null = null;
     try {
       const targz = await deps.store.get(row.artifact_object_key);
+      // §49.12: the bytes must still be the bytes the version recorded; a mismatch stays unpublished.
+      if (!(await verifyArtifactIntegrity(pool, { versionId: row.id, skillId: row.skill_id, semver: row.semver, artifactKey: row.artifact_object_key, expectedSha256: row.artifact_sha256, namespaceId: row.namespace_id, nsSlug: row.ns_slug, skillSlug: row.skill_slug }, targz, "worker:publish"))) continue;
       // Inject `name: <slug>` into SKILL.md frontmatter if missing — Claude Code skills only carry
       // `description`, but the vercel-labs/skills CLI (and our own validateBundle) require `name`.
       files = ensureSkillName(await extractBundle(targz, cap), row.skill_slug);
@@ -246,7 +251,7 @@ const unhealable = new Set<string>();
 
 export async function reprovisionMissingRepos(pool: Pool, deps: PublishDeps): Promise<number> {
   const { rows } = await pool.query<PendingRow>(
-    `select sv.id, sv.skill_id, sv.semver, sv.artifact_object_key,
+    `select sv.id, sv.skill_id, sv.semver, sv.artifact_object_key, sv.artifact_sha256,
             n.slug as ns_slug, s.slug as skill_slug
        from skill_versions sv
        join skills s on s.id = sv.skill_id
@@ -284,7 +289,12 @@ export async function reprovisionMissingRepos(pool: Pool, deps: PublishDeps): Pr
       if (unhealable.has(row.id)) continue; // already determined we can't recover this one
       const isLatestStable = latestStable === row.semver;
       try {
-        const files = await extractBundle(await deps.store.get(row.artifact_object_key), cap);
+        const bytes = await deps.store.get(row.artifact_object_key);
+        if (!(await verifyArtifactIntegrity(pool, { versionId: row.id, skillId: row.skill_id, semver: row.semver, artifactKey: row.artifact_object_key, expectedSha256: row.artifact_sha256, nsSlug: row.ns_slug, skillSlug: row.skill_slug }, bytes, "worker:reprovision"))) {
+          unhealable.add(row.id); // tampered bytes are never re-synthesized; a human intervenes (§49.12)
+          continue;
+        }
+        const files = await extractBundle(bytes, cap);
         const validation = validateBundle(files, { skillSlug: row.skill_slug, maxBytes: cap });
         if (!validation.ok) {
           unhealable.add(row.id); // a malformed stored bundle won't fix itself; stop retrying

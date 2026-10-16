@@ -57,7 +57,7 @@ new-feature marker needs exactly one teaser in `packages/web/src/app/whats-new/u
 ships the feature **deletes its marker and its teaser**, and its changelog entry announces it.
 
 ## Commands / dev workflow
-Node ≥ 20, pnpm 9.15.x (pinned via `packageManager`). Workspace packages:
+Node ≥ 22, pnpm 9.15.x (pinned via `packageManager`). Workspace packages:
 `@skilly/shared`, `@skilly/web`, `@skilly/worker`. Shell commands below are
 **bash syntax** — on this Windows machine run them in Git Bash (or adapt for PowerShell).
 

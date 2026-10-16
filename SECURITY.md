@@ -50,7 +50,8 @@ A three-surface audit (web API/auth; worker/git/SCIM; shared/DB/deploy) was perf
 ## Operator responsibilities (not solvable in code)
 
 - **Provide real secrets.** Set strong, unique values for `NEXTAUTH_SECRET`, `SCIM_BEARER_TOKEN`, DB and S3 passwords (Helm now refuses `change-me*`). Prefer `secrets.existingSecret`.
-- **Use a scoped object-store account.** The sample compose/Helm wire the **MinIO root** credentials into the app; in production, provision a service account limited to the `skilly-artifacts` bucket and inject those instead (audit M-6).
+- **Use a scoped object-store account.** Compose now does this by default (§49.12): the one-shot `minio-init` job creates a service account limited to the `skilly-artifacts` bucket from `S3_ACCESS_KEY` / `S3_SECRET_KEY` (required `.env` values, distinct from `MINIO_ROOT_*`), and web/worker receive only that pair. The Helm chart's bundled-MinIO wiring is evaluation grade (it reuses `secrets.s3SecretKey` as the root password) — in production point `minio.external.accessKey` / `secrets.s3SecretKey` at a bucket-scoped account (audit M-6).
+- **MinIO console stays private.** Compose binds the console to `127.0.0.1:9001` only; reach it through an SSH tunnel, never by exposing the port on a host interface.
 - **Restrict `/metrics`.** Set `METRICS_TOKEN` (now required in production) and/or scrape it only on an internal port; don't expose it through the public ingress.
 - **Pin egress for the worker.** The in-process DNS-resolution + redirect checks narrow SSRF, but a TOCTOU window remains between our resolution and git's; for high-assurance deployments, route worker egress through an allowlisted forward proxy or network egress policy (audit H-2/F1).
 - **Set the `skilly_app` DB password via the deploy step.** `db/migrations/0002` creates the role with a placeholder that `migrate.sh` / the Helm migrate-job overwrites — ensure that step runs (audit M-9).
