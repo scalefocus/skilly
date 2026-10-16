@@ -133,6 +133,10 @@ const CORE_API = [
   // the errors compile, so rum.spec's 10–15 s assertions ran out on both attempts.
   "/api/admin/rum/summary",
   "/api/admin/rum/errors",
+  // The Survey results card on /admin/rum (§36). Cold, it compiled 20–50 s in three of five CI
+  // passes; survey.spec's admin test waits 20 s for the funnel and, being serial, took the rest of
+  // the file down with it.
+  "/api/admin/survey/summary",
   "/api/admin/rum/routes/%2Fcatalog/users",
   "/api/admin/users/online",
   "/api/admin/users/active-series",
