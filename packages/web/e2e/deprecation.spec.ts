@@ -95,12 +95,12 @@ test.describe("skill deprecation with a successor (@global/lint-fixer → @globa
       const asked = page.waitForResponse(isMint);
       await panel.getByTestId("install-latest-generate").click();
       expect((await asked).status()).toBe(409);
-      const dialog = page.getByTestId("already-installed-dialog");
-      await expect(dialog).toBeVisible();
+      const prompt = page.getByTestId("already-installed-dialog");
+      await expect(prompt).toBeVisible();
       const mint = page.waitForResponse((r) => isMint(r) && r.status() === 200);
       await page.getByTestId("already-installed-anyway").click();
       const minted = (await (await mint).json()) as { command: string; semver: string | null };
-      await expect(dialog).toHaveCount(0);
+      await expect(prompt).toHaveCount(0);
       expect(minted.semver).toBeNull();
       expect(minted.command).toMatch(/npx skills add .*\/global\/pdf-tools\.git/);
       await expect(panel.getByText(/npx skills add/)).toBeVisible();
