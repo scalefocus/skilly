@@ -10,6 +10,7 @@
 //
 // The git-side hint (the `main` commit) needs the worker's publish sweep against real repos, which
 // this dev-server suite has no git repos for; it is covered by packages/worker/src/git/mainRef.test.ts.
+import type { Response } from "@playwright/test";
 import { test, expect, devSignIn, type Page } from "./fixtures";
 import { awaitApi, gotoLoaded } from "./helpers/ready";
 
@@ -87,9 +88,19 @@ test.describe("skill deprecation with a successor (@global/lint-fixer → @globa
       await row.getByTestId("install-latest").click();
       const panel = row.getByTestId("install-latest-panel");
       await expect(panel).toBeVisible();
-      const mint = page.waitForResponse((r) => r.url().includes("/api/skills/global/pdf-tools/install") && r.request().method() === "POST");
+      // The dev user already holds a seeded pdf-tools install, so the first mint (onExisting "ask")
+      // answers 409 already_installed and the already-installed prompt (§23) opens; "Install anyway"
+      // re-posts with "keep" and that second POST is the real mint.
+      const isMint = (r: Response) => r.url().includes("/api/skills/global/pdf-tools/install") && r.request().method() === "POST";
+      const asked = page.waitForResponse(isMint);
       await panel.getByTestId("install-latest-generate").click();
+      expect((await asked).status()).toBe(409);
+      const dialog = page.getByTestId("already-installed-dialog");
+      await expect(dialog).toBeVisible();
+      const mint = page.waitForResponse((r) => isMint(r) && r.status() === 200);
+      await page.getByTestId("already-installed-anyway").click();
       const minted = (await (await mint).json()) as { command: string; semver: string | null };
+      await expect(dialog).toHaveCount(0);
       expect(minted.semver).toBeNull();
       expect(minted.command).toMatch(/npx skills add .*\/global\/pdf-tools\.git/);
       await expect(panel.getByText(/npx skills add/)).toBeVisible();
