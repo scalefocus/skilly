@@ -13,7 +13,8 @@ import type { PoolClient } from "pg";
 import type { EffectiveAccess } from "@skilly/shared";
 import {
   materializeVersion, resolveReuseSource, verifySubmissionPayload, applyReuseToPayload,
-  createProposal, performProposalAction, reviseFileFreezeError, type RevisionPayload,
+  createProposal, performProposalAction, reviseFileFreezeError, findVisibleTargetSkill, TARGET_NOT_FOUND,
+  type RevisionPayload, type ProposalMetadata,
 } from "./proposals";
 import type { ArtifactStore } from "./objectStore";
 import { pool } from "./db";
@@ -314,12 +315,12 @@ test("keep current files: resolveReuseSource snapshots latest stable + no-op gua
     });
 
     // No-op: identical metadata + identical usage → rejected.
-    const noop = await resolveReuseSource(client, first.skillId, { ...meta });
+    const noop = await resolveReuseSource(client, platformAdmin, first.skillId, { ...meta });
     assert.equal(noop.ok, false, "no-op reuse rejected");
     assert.match((noop as { error: string }).error, /nothing changed/i);
 
     // A changed title passes, and the snapshot pins the latest STABLE version's artifact.
-    const ok = await resolveReuseSource(client, first.skillId, { ...meta, title: "Renamed Skill" });
+    const ok = await resolveReuseSource(client, platformAdmin, first.skillId, { ...meta, title: "Renamed Skill" });
     assert.equal(ok.ok, true, "changed title passes the guard");
     const reuse = (ok as Extract<Awaited<ReturnType<typeof resolveReuseSource>>, { ok: true }>).reuse;
     assert.equal(reuse.fromSemver, "1.0.0", "latest STABLE reused (prerelease skipped)");
@@ -372,7 +373,7 @@ test("keep current files: pointer reuse carries external provenance, no mirror (
       [skillId, submitter],
     );
 
-    const r = await resolveReuseSource(client, skillId, {
+    const r = await resolveReuseSource(client, platformAdmin, skillId, {
       skillSlug: "preuse-skill", title: "Pointer Skill RENAMED", description: "d", toolHarness: "generic",
       visibility: "org", categories: [], usageExamples: null,
     });
@@ -423,7 +424,7 @@ test("keep current files: no stable version → reuse unavailable (§8)", { skip
        values ($1, '1.0.0-beta.1', true, 'active', 'uploads/x/ns1.bundle', 'n1', $2)`,
       [skillId, submitter],
     );
-    const r = await resolveReuseSource(client, skillId);
+    const r = await resolveReuseSource(client, platformAdmin, skillId);
     assert.equal(r.ok, false, "no stable → reuse unavailable");
     assert.match((r as { error: string }).error, /no published stable version/i);
     await client.query("rollback");
@@ -741,7 +742,7 @@ test("tool/harness carve-out: unchanged legacy value passes, changed must be clo
     const base = { skillSlug: "legacy-skill", title: "Legacy", description: "d", visibility: "org" as const, whatChanged: "note" };
 
     // Unchanged legacy value + targetSkillId → passes (the §8 carve-out).
-    const unchanged = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "claude-desktop" } }, { targetSkillId: skillId });
+    const unchanged = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "claude-desktop" } }, { targetSkillId: skillId, access: platformAdmin });
     assert.equal(unchanged, null, "unchanged legacy harness passes");
 
     // Same value WITHOUT a target skill (new-skill proposal) → rejected.
@@ -749,9 +750,9 @@ test("tool/harness carve-out: unchanged legacy value passes, changed must be clo
     assert.match(newSkill ?? "", /tool\/harness/, "legacy value rejected on a new skill");
 
     // A CHANGED value must be in the closed list.
-    const changed = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "totally-made-up" } }, { targetSkillId: skillId });
+    const changed = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "totally-made-up" } }, { targetSkillId: skillId, access: platformAdmin });
     assert.match(changed ?? "", /tool\/harness/, "changed non-list value rejected");
-    const closed = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "cursor" } }, { targetSkillId: skillId });
+    const closed = await verifySubmissionPayload(client, "someone", { metadata: { ...base, toolHarness: "cursor" } }, { targetSkillId: skillId, access: platformAdmin });
     assert.equal(closed, null, "changed closed-list value passes");
 
     await client.query("rollback");
@@ -793,11 +794,57 @@ test("what changed note: null on a first version, persisted on a new version, ex
 
     // Reuse no-op guard: changing ONLY the note (all skill metadata + usage identical to the
     // latest stable) is still a no-op — the note is not a satisfying field (§8).
-    const noop = await resolveReuseSource(client, first.skillId, {
+    const noop = await resolveReuseSource(client, platformAdmin, first.skillId, {
       skillSlug: "wc-skill", title: "WC", description: "d", toolHarness: "claude-code",
       visibility: "org", categories: [], usageExamples: "u", whatChanged: "a brand new note, but nothing else changed",
     });
     assert.equal(noop.ok, false, "note-only change is still a reuse no-op");
+
+    await client.query("rollback");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+test("target visibility gate: an outsider can't target a restricted skill; a §42 grant makes it visible (§8, invariant #3)", { skip: !enabled }, async () => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const { ns: owner, user: submitter } = await seed(client, "tvg");
+    const grantee = (await client.query<{ id: string }>(
+      `insert into namespaces (slug, display_name, require_review) values ('tvg-grantee', 'Grantee', true)
+       on conflict (slug) do update set display_name = excluded.display_name returning id`,
+    )).rows[0]!.id;
+    const meta: ProposalMetadata = {
+      skillSlug: "tvg-skill", title: "Restricted", description: "d", toolHarness: "generic",
+      visibility: "namespace", categories: [], usageExamples: "u",
+    };
+    const first = await materializeVersion(client, {
+      targetNamespaceId: owner, targetSkillId: null, semver: "1.0.0", submittedBy: submitter,
+      payload: { metadata: meta, artifactObjectKey: "uploads/x/tvg.bundle", artifactSha256: "s1", contentSha256: "c1" },
+    });
+    const outsider: EffectiveAccess = { isPlatformAdmin: false, namespaceRoles: new Map([[grantee, "namespace_member"]]) };
+    const member: EffectiveAccess = { isPlatformAdmin: false, namespaceRoles: new Map([[owner, "namespace_member"]]) };
+    const newVersion = () => ({ metadata: { ...meta, title: "Renamed", whatChanged: "renamed" } });
+
+    // Before the grant: the route lookup resolves the target as nonexistent (→ 404), and both
+    // helpers refuse it with the very same not-found — including when no access is supplied.
+    assert.equal(await findVisibleTargetSkill(client, outsider, owner, "tvg-skill"), null, "route lookup → 404");
+    assert.deepEqual(await resolveReuseSource(client, outsider, first.skillId, newVersion().metadata), { ok: false, error: TARGET_NOT_FOUND });
+    assert.equal(await verifySubmissionPayload(client, submitter, newVersion(), { targetSkillId: first.skillId, access: outsider }), TARGET_NOT_FOUND);
+    assert.equal(await verifySubmissionPayload(client, submitter, newVersion(), { targetSkillId: first.skillId }), TARGET_NOT_FOUND, "fails closed without access");
+    // Control: a member of the owning namespace sees it.
+    assert.equal((await findVisibleTargetSkill(client, member, owner, "tvg-skill"))?.id, first.skillId);
+
+    // After a §42 grant to the outsider's namespace: found, snapshot allowed, payload accepted (→ 201).
+    await client.query(`insert into skill_namespace_grants (skill_id, namespace_id, granted_by) values ($1, $2, $3)`, [first.skillId, grantee, submitter]);
+    assert.equal((await findVisibleTargetSkill(client, outsider, owner, "tvg-skill"))?.id, first.skillId, "route lookup → found");
+    const granted = await resolveReuseSource(client, outsider, first.skillId, newVersion().metadata);
+    assert.equal(granted.ok, true, JSON.stringify(granted));
+    assert.equal(await verifySubmissionPayload(client, submitter, newVersion(), { targetSkillId: first.skillId, access: outsider }), null);
 
     await client.query("rollback");
   } catch (e) {

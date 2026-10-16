@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { pool } from "../../../lib/db";
-import { createProposal, listReviewQueue, listMySubmissions, hasReviewScope, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, type RevisionPayload } from "../../../lib/proposals";
+import { createProposal, listReviewQueue, listMySubmissions, hasReviewScope, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, findVisibleTargetSkill, TARGET_NOT_FOUND, type RevisionPayload } from "../../../lib/proposals";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { getProposalsOpen, getDuplicateEnforcement } from "../../../lib/settings";
 import { findDuplicateSkill, newSkillSlugClash } from "../../../lib/duplicate";
@@ -70,8 +70,11 @@ export const POST = withSystemLog("/api/proposals", async function POST(req: Req
 
   let targetSkillId: string | null = null;
   if (body.targetSkillSlug) {
-    const s = (await pool.query<{ id: string }>(`select id from skills where namespace_id = $1 and slug = $2`, [ns.id, body.targetSkillSlug])).rows[0];
-    if (!s) return Response.json({ error: "target skill not found" }, { status: 404 });
+    // §8 Target visibility gate (invariant #3): a target the caller can't see answers exactly like
+    // a nonexistent one — the same 404 — so a restricted skill is never snapshotted into (or
+    // confirmed by) an outsider's proposal. The helpers below re-check on their own.
+    const s = await findVisibleTargetSkill(pool, access, ns.id, body.targetSkillSlug);
+    if (!s) return Response.json({ error: TARGET_NOT_FOUND }, { status: 404 });
     targetSkillId = s.id;
   } else if (body.metadata?.skillSlug) {
     const clash = await newSkillSlugClash(access, ns.id, body.metadata.skillSlug);
@@ -101,6 +104,7 @@ export const POST = withSystemLog("/api/proposals", async function POST(req: Req
   const payloadErr = await verifySubmissionPayload(pool, access.userId, payload, {
     namespaceSlug: body.namespaceSlug,
     targetSkillId,
+    access,
   });
   if (payloadErr) return Response.json({ error: payloadErr }, { status: 422 });
 
@@ -109,7 +113,7 @@ export const POST = withSystemLog("/api/proposals", async function POST(req: Req
   // The reused bytes were already verified/scanned when first published, so the pointer
   // verification and duplicate checks below are skipped for reuse.
   if (reuse) {
-    const r = await resolveReuseSource(pool, targetSkillId!, payload.metadata);
+    const r = await resolveReuseSource(pool, access, targetSkillId!, payload.metadata);
     if (!r.ok) return Response.json({ error: r.error }, { status: 422 });
     payload = applyReuseToPayload(payload, r.reuse);
   }

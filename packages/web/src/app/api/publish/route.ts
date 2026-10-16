@@ -2,7 +2,7 @@
 // namespaces. Hosted (uploaded artifact) or pointer (external ref). SKILLY_SPEC.md §4.
 import { currentAccess } from "../../../lib/guard";
 import { pool } from "../../../lib/db";
-import { directPublish, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, type RevisionPayload, type DirectPublishContentCheck } from "../../../lib/proposals";
+import { directPublish, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, findVisibleTargetSkill, type RevisionPayload, type DirectPublishContentCheck } from "../../../lib/proposals";
 import { fetchPointerContentForCheck } from "../../../lib/pointerFetch";
 import { getMaxBundleBytes } from "../../../lib/settings";
 import { runScanners, PURE_SCANNERS, bundleContentCap, canDirectPublish } from "@skilly/shared";
@@ -47,17 +47,18 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   if (limited) return limited;
 
   const b = (await req.json()) as Body;
+  const ns = (await pool.query<{ id: string; require_review: boolean }>(`select id, require_review from namespaces where slug = $1`, [b.namespaceSlug])).rows[0];
   // Target skill (new-version publish) — also gates keep-current-files (§8), which only makes
-  // sense when re-versioning an existing skill.
-  const existing = (
-    await pool.query<{ id: string }>(`select s.id from skills s join namespaces n on n.id = s.namespace_id where n.slug = $1 and s.slug = $2`, [b.namespaceSlug, b.metadata?.skillSlug])
-  ).rows[0];
+  // sense when re-versioning an existing skill. Resolved AS THE CALLER SEES IT (§8 Target
+  // visibility gate, invariant #3): an existing skill they can't see is treated exactly like an
+  // absent one, so the request then meets the ordinary new-skill authorization (directPublish's
+  // 403 for a non-member) and no status code distinguishes "hidden" from "nonexistent".
+  const existing = ns && b.metadata?.skillSlug ? await findVisibleTargetSkill(pool, access, ns.id, b.metadata.skillSlug) : null;
   // Slug match (§8): a NEW skill whose slug a visible active skill already uses — in any namespace —
   // must be a new version of it instead. Always hard (independent of the duplicate setting).
   // Only for a caller who may publish here at all — anyone else gets directPublish's 403, so this
   // can't become a probe for slugs in a namespace they can't publish into.
   if (!existing && b.metadata?.skillSlug) {
-    const ns = (await pool.query<{ id: string; require_review: boolean }>(`select id, require_review from namespaces where slug = $1`, [b.namespaceSlug])).rows[0];
     if (ns && canDirectPublish(access, ns.id, ns.require_review)) {
       const clash = await newSkillSlugClash(access, ns.id, b.metadata.skillSlug);
       if (clash) return clash;
@@ -82,6 +83,7 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   const payloadErr = await verifySubmissionPayload(pool, access.userId, payload, {
     namespaceSlug: b.namespaceSlug,
     targetSkillId: existing?.id ?? null,
+    access,
   });
   if (payloadErr) return Response.json({ error: payloadErr }, { status: 422 });
 
@@ -89,7 +91,7 @@ export const POST = withSystemLog("/api/publish", async function POST(req: Reque
   // The reused bytes were already verified/scanned when first published, so the pointer
   // verification and duplicate checks below are skipped for reuse.
   if (reuse) {
-    const r = await resolveReuseSource(pool, existing!.id, payload.metadata);
+    const r = await resolveReuseSource(pool, access, existing!.id, payload.metadata);
     if (!r.ok) return Response.json({ error: r.error }, { status: 422 });
     payload = applyReuseToPayload(payload, r.reuse);
   }

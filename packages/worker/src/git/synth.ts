@@ -4,7 +4,7 @@
 // (no working tree). SKILLY_SPEC.md §6 ("serving architecture"), §7 (version=tag).
 import { spawn } from "node:child_process";
 import { mkdir, access } from "node:fs/promises";
-import { versionTag } from "@skilly/shared";
+import { versionTag, isSafeRelativePath } from "@skilly/shared";
 
 export interface SkillFile {
   /** repo-relative path, e.g. "SKILL.md" or "scripts/run.sh" */
@@ -69,13 +69,16 @@ async function writeBlob(gitDir: string, bytes: Uint8Array): Promise<string> {
 }
 
 async function mkTree(gitDir: string, node: TreeNode): Promise<string> {
-  const lines: string[] = [];
-  for (const [name, f] of node.files) lines.push(`${f.mode} blob ${f.sha}\t${name}`);
+  // `mktree -z`: NUL-terminated records, so no entry name can end a record early and inject a
+  // further entry (a 120000 symlink / 160000 gitlink the extractors never saw). Names are also
+  // vetted by writeTree before they get here. SKILLY_SPEC.md §6 *Tree synthesis*, §22.
+  const records: string[] = [];
+  for (const [name, f] of node.files) records.push(`${f.mode} blob ${f.sha}\t${name}`);
   for (const [name, dir] of node.dirs) {
     const ts = await mkTree(gitDir, dir);
-    lines.push(`040000 tree ${ts}\t${name}`);
+    records.push(`040000 tree ${ts}\t${name}`);
   }
-  const out = await runGit(["mktree"], { gitDir, input: Buffer.from(lines.join("\n") + "\n") });
+  const out = await runGit(["mktree", "-z"], { gitDir, input: Buffer.from(records.map((r) => r + "\0").join("")) });
   return out.trim();
 }
 
@@ -87,6 +90,10 @@ async function mkTree(gitDir: string, node: TreeNode): Promise<string> {
 export async function writeTree(gitDir: string, files: readonly SkillFile[]): Promise<string> {
   const root = emptyNode();
   for (const f of files) {
+    // §6 *Safe entry paths* — re-checked here so the worker is safe however the bytes arrived
+    // (upload, pointer mirror, MCP inline upload, reprovision of a stored artifact). Throwing
+    // dead-letters the version / fails the sweep loudly instead of serving a crafted tree.
+    if (!isSafeRelativePath(f.path)) throw new Error(`unsafe path in bundle: ${JSON.stringify(f.path)}`);
     const segments = f.path.split("/").filter(Boolean);
     let node = root;
     for (let i = 0; i < segments.length - 1; i++) {

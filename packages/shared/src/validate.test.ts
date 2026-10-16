@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateBundle, parseFrontmatter, type BundleEntry } from "./validate.js";
+import { validateBundle, parseFrontmatter, isSafeRelativePath, type BundleEntry } from "./validate.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const skillMd = (name: string, desc = "d") => enc(`---\nname: ${name}\ndescription: ${desc}\n---\n# x\n`);
@@ -58,4 +58,35 @@ test("disallowed binary + traversal + size", () => {
   assert.ok(r.errors.some((e) => /disallowed file type/.test(e)));
   assert.ok(r.errors.some((e) => /unsafe path/.test(e)));
   assert.ok(r.errors.some((e) => /size limit/.test(e)));
+});
+
+test("entry names that could inject git tree records are unsafe paths (§6 safe entry paths, §22)", () => {
+  // The exact V2 shape: a newline ends the `git mktree` record and the rest reads as a 120000
+  // symlink entry — refused at ingest, long before the worker ever writes a tree.
+  const injected = "notes.md\n120000 blob e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\tscripts";
+  const r = validateBundle(
+    [
+      { path: "SKILL.md", bytes: skillMd("pdf") },
+      { path: injected, bytes: enc("x") },
+      { path: "docs\\notes.md", bytes: enc("x") },
+      { path: "a\tb.md", bytes: enc("x") },
+      { path: "/abs.md", bytes: enc("x") },
+      { path: "./rel.md", bytes: enc("x") },
+      { path: "a//b.md", bytes: enc("x") },
+    ],
+    { skillSlug: "pdf" },
+  );
+  assert.equal(r.ok, false);
+  const unsafe = r.errors.filter((e) => /^unsafe path/.test(e));
+  assert.equal(unsafe.length, 6, unsafe.join(" | "));
+  assert.ok(unsafe.some((e) => e.includes("\\n120000")), "the control character is shown escaped, not raw");
+});
+
+test("isSafeRelativePath: plain nested names pass; control bytes, backslash, leading slash and dot segments fail", () => {
+  for (const ok of ["SKILL.md", "scripts/run.sh", "docs/read me.md", "a.b/c-d_e.txt", "ünïcödé/файл.md"]) {
+    assert.equal(isSafeRelativePath(ok), true, ok);
+  }
+  for (const bad of ["", "/x", "a\\b", "a\nb", "a\rb", "a\tb", "a\0b", "a\x7fb", ".", "..", "a/..", "a/./b", "a//b", "a/"]) {
+    assert.equal(isSafeRelativePath(bad), false, JSON.stringify(bad));
+  }
 });

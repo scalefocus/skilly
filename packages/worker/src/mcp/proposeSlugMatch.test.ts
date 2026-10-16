@@ -42,9 +42,31 @@ test("the slug lookup is visibility-filtered with the caller's namespaces (invar
 
 test("a new version of a skill in the target namespace skips the cross-namespace check", async () => {
   const fp = fakePool();
-  fp.on("select id, status from skills", [{ id: "skill-1", status: "active" }]);
+  fp.on("select s.id, s.status, s.namespace_id", [{ id: "skill-1", status: "active", namespace_id: "ns-1", visibility: "org", shared_namespace_ids: [] }]);
   fp.on("insert into proposals", [{ id: "p-2" }]);
   const r = await createMcpProposal(fp.pool, USER, MEMBER, NS, "1.1.0", payload("pdf-tools", "Better parsing."), "Test Client");
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(fp.matching(SLUG_QUERY).length, 0);
+});
+
+test("a restricted skill the caller can't see is treated as absent — the new-skill path (§8 target visibility gate)", async () => {
+  const fp = fakePool();
+  const OUTSIDER = { isPlatformAdmin: false, namespaceRoles: new Map() };
+  fp.on("select s.id, s.status, s.namespace_id", [{ id: "skill-1", status: "active", namespace_id: "ns-1", visibility: "namespace", shared_namespace_ids: ["ns-9"] }]);
+  fp.on("insert into proposals", [{ id: "p-3" }]);
+  const r = await createMcpProposal(fp.pool, USER, OUTSIDER, NS, "1.1.0", payload("pdf-tools"), "Test Client");
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal((r as { newSkill: boolean }).newSkill, true, "nothing about the hidden skill is confirmed");
+  const ins = fp.matching("insert into proposals")[0]!;
+  assert.equal(ins.params[1], null, "no target_skill_id — the hidden skill is never carried into the proposal");
+  assert.equal(fp.matching(SLUG_QUERY).length, 1, "the ordinary new-skill slug check runs, visibility-filtered");
+});
+
+test("a member of the owning namespace still targets the restricted skill as a new version", async () => {
+  const fp = fakePool();
+  fp.on("select s.id, s.status, s.namespace_id", [{ id: "skill-1", status: "active", namespace_id: "ns-1", visibility: "namespace", shared_namespace_ids: [] }]);
+  fp.on("insert into proposals", [{ id: "p-4" }]);
+  const r = await createMcpProposal(fp.pool, USER, MEMBER, NS, "1.1.0", payload("pdf-tools", "Better parsing."), "Test Client");
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(fp.matching("insert into proposals")[0]!.params[1], "skill-1");
 });

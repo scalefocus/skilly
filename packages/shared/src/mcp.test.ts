@@ -84,6 +84,7 @@ test("bundle path safety", () => {
   assert.equal(isSafeBundlePath("a//b"), false);
   assert.equal(isSafeBundlePath("a\\b"), false);
   assert.equal(isSafeBundlePath("a\0b"), false);
+  assert.equal(isSafeBundlePath("a\nb"), false, "control bytes are refused (shared safe-path rule)");
   assert.equal(isSafeBundlePath(""), false);
   assert.equal(isSafeBundlePath("x".repeat(513)), false);
 });
