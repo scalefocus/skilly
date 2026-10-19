@@ -307,6 +307,26 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
 
   // §41.9: a version's quality assessment settled at 2 stars or below. The full findings list and
   // the AI recommendations ride along so the maintainer can act without opening the page.
+  // §50.7 a skill the recipient maintains entered the top N hyped skills.
+  if (n.type === "skill.hyped" && typeof p.skillSlug === "string") {
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
+    const path = `/skills/${p.namespaceSlug}/${p.skillSlug}`;
+    const name = typeof p.skillTitle === "string" && p.skillTitle ? p.skillTitle : slug;
+    const topN = typeof p.topN === "number" ? p.topN : null;
+    const rank = typeof p.rank === "number" ? p.rank : null;
+    const count = typeof p.hypeCount === "number" ? p.hypeCount : null;
+    const sentence =
+      `"${name}" entered the ${topN != null ? `top ${topN}` : "top"} hyped skills` +
+      (rank != null ? ` at #${rank}` : "") +
+      (count != null ? `, with ${count} ${count === 1 ? "hype" : "hypes"} in the last 7 days.` : ".");
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${sentence} ${cta("See who's hyping it", path)}`,
+      webhook: { event: n.type, title: s, skill: slug, rank, score: p.score ?? null, hypeCount: count, topN, url: abs(path) },
+    };
+  }
+
   if (n.type === "skill.quality_low" && typeof p.skillSlug === "string") {
     const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;
     const path = `/skills/${p.namespaceSlug}/${p.skillSlug}#quality`;

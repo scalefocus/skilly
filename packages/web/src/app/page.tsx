@@ -19,6 +19,10 @@ export default function Overview() {
   // (or none visible to this viewer) ⇒ the section is omitted entirely.
   const { data: featured } = useApi<{ skills: CatalogEntry[] }>(authed ? "/api/skills/featured" : null);
   const featuredSkills = featured?.skills ?? [];
+  // Hyped skills (§50.6): the current top N as of the last sweep, above Featured. Empty (or hype
+  // switched off) ⇒ the section is omitted entirely, like Featured.
+  const { data: hypedData } = useApi<{ skills: CatalogEntry[] }>(authed ? "/api/skills/hyped" : null);
+  const hypedSkills = hypedData?.skills ?? [];
   const skills = data?.skills ?? [];
   const hosted = skills.filter((s) => s.type === "hosted").length;
   const pointer = skills.filter((s) => s.type === "pointer").length;
@@ -50,6 +54,20 @@ export default function Overview() {
           <div className="stat"><div className="stat-num">{formatCount(hosted)}</div><div className="stat-label">Hosted</div></div>
           <div className="stat"><div className="stat-num">{formatCount(pointer)}</div><div className="stat-label">External</div></div>
           <div className="stat"><div className="stat-num">{formatCount(stats?.totalInstalls ?? 0)}</div><div className="stat-label">Total installs</div></div>
+        </section>
+      )}
+
+      {authed && hypedSkills.length > 0 && (
+        <section className="reveal" style={{ animationDelay: "100ms", marginBottom: 44 }} data-testid="hyped-section">
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 18 }}>
+            <h2 style={{ fontFamily: "var(--font-display)", fontSize: 24 }}>Hyped skills</h2>
+            <Link href="/leaderboard?tab=hyped" className="btn-ghost mono" style={{ fontSize: 12 }}>see the board →</Link>
+          </div>
+          <div className="card-grid">
+            {hypedSkills.map((s, i) => (
+              <SkillCard key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} index={i} />
+            ))}
+          </div>
         </section>
       )}
 

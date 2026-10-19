@@ -161,6 +161,8 @@ const CORE_API = [
   "/api/skills/facets",
   "/api/skills/suggest",
   "/api/skills/featured",
+  // §50.6 the home page's Hyped section loads on every visit, like Featured.
+  "/api/skills/hyped",
   "/api/collections",
   "/api/collections/suggest",
   // /skills/[ns]/[slug]

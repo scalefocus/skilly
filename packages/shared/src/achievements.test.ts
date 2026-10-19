@@ -18,8 +18,8 @@ import {
   habitKeysFor,
 } from "./achievements.js";
 
-test("catalog: 24 badges, unique keys, every field populated, known groups", () => {
-  assert.equal(ACHIEVEMENTS.length, 24);
+test("catalog: 26 badges, unique keys, every field populated, known groups", () => {
+  assert.equal(ACHIEVEMENTS.length, 26);
   assert.equal(new Set(ACHIEVEMENT_KEYS).size, ACHIEVEMENTS.length);
   for (const a of ACHIEVEMENTS) {
     assert.match(a.key, /^[a-z][a-z0-9_]*$/, a.key); // `…_10` count-tier keys allowed (§31.1, §35.8)
@@ -114,15 +114,15 @@ test("habitKeysFor: both, one, or none", () => {
 
 test("ACHIEVEMENT_TOTAL is the catalog size — the level's denominator", () => {
   assert.equal(ACHIEVEMENT_TOTAL, ACHIEVEMENTS.length);
-  assert.equal(ACHIEVEMENT_TOTAL, 24);
+  assert.equal(ACHIEVEMENT_TOTAL, 26);
 });
 
 test("levelLabel / levelAriaLabel: the level is the count, Hero is the stamp", () => {
-  assert.equal(levelLabel(0, false), "Level 0 — 0 of 24");
-  assert.equal(levelLabel(7, false), "Level 7 — 7 of 24");
-  assert.equal(levelLabel(24, true), "Hero — 24 of 24");
-  assert.equal(levelAriaLabel(7, false), "Level 7 of 24");
-  assert.equal(levelAriaLabel(24, true), "Hero — 24 of 24");
+  assert.equal(levelLabel(0, false), "Level 0 — 0 of 26");
+  assert.equal(levelLabel(7, false), "Level 7 — 7 of 26");
+  assert.equal(levelLabel(26, true), "Hero — 26 of 26");
+  assert.equal(levelAriaLabel(7, false), "Level 7 of 26");
+  assert.equal(levelAriaLabel(26, true), "Hero — 26 of 26");
 });
 
 test("a grown catalog never demotes a Hero (§31.10 'never demote')", () => {

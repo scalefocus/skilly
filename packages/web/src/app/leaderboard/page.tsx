@@ -1,6 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { HypedBoard } from "./HypedBoard";
 import { useApi, EmptyState, ScrollToTop, formatCount } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
@@ -22,6 +24,34 @@ interface Entry {
   /** Collections holding at least 3 eligible skills (§38.8). */
   collections: number;
   followable: boolean;
+}
+
+// §50.6 two tabs: People (the contributor board, unchanged) and Hyped skills. `?tab=hyped` opens
+// the second (the home page's "see the board" link). The Hyped tab is hidden while hype is off.
+function LeaderboardTabs() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const tab = params.get("tab") === "hyped" ? "hyped" : "people";
+  const { data: me } = useApi<{ hypeEnabled?: boolean }>("/api/me");
+  const hypeOn = me?.hypeEnabled !== false;
+  const showHyped = hypeOn && tab === "hyped";
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <ScrollToTop />
+      <div className="page-head reveal">
+        <div className="eyebrow">Community</div>
+        <h1 className="page-title">Leaderboard.</h1>
+        {!showHyped && <p className="page-sub">Top contributors by total installs of the skills they’ve proposed.</p>}
+      </div>
+      {hypeOn && (
+        <div className="sort-toggle" role="tablist" aria-label="Leaderboard" style={{ marginBottom: 16 }}>
+          <button type="button" role="tab" aria-selected={!showHyped} className={`sort-opt${!showHyped ? " sort-on" : ""}`} onClick={() => router.replace("/leaderboard")}>People</button>
+          <button type="button" role="tab" aria-selected={showHyped} className={`sort-opt${showHyped ? " sort-on" : ""}`} onClick={() => router.replace("/leaderboard?tab=hyped")}>Hyped skills</button>
+        </div>
+      )}
+      {showHyped ? <HypedBoard /> : <Leaderboard />}
+    </div>
+  );
 }
 
 function Leaderboard() {
@@ -52,14 +82,7 @@ function Leaderboard() {
   };
 
   return (
-    <div style={{ maxWidth: 760 }}>
-      <ScrollToTop />
-      <div className="page-head reveal">
-        <div className="eyebrow">Community</div>
-        <h1 className="page-title">Leaderboard.</h1>
-        <p className="page-sub">Top contributors by total installs of the skills they’ve proposed.</p>
-      </div>
-
+    <div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
         <div className="sort-toggle" role="group" aria-label="Rank by">
           <button type="button" className={`sort-opt${sort === "installs" ? " sort-on" : ""}`} onClick={() => setSort("installs")}>Installs</button>
@@ -143,7 +166,9 @@ function Leaderboard() {
 export default function LeaderboardPage() {
   return (
     <RequireAuth>
-      <Leaderboard />
+      <Suspense fallback={<div className="skeleton" style={{ height: 240, borderRadius: "var(--radius)" }} />}>
+        <LeaderboardTabs />
+      </Suspense>
     </RequireAuth>
   );
 }

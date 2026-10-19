@@ -37,6 +37,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: "first_new_version", name: "Sequel", blurb: "You published a follow-up version of a skill.", howToEarn: "Publish a new version of a skill that already has one.", glyph: "🎬", group: "Contribute" },
   { key: "first_version_proposal", name: "Encore", blurb: "The crowd wanted more, so you proposed it.", howToEarn: "Propose a new version from a skill's page.", glyph: "🎤", group: "Contribute" },
   { key: "first_collection", name: "Mixtape", blurb: "You put skills together for someone else to pick up.", howToEarn: "Add a skill to a new collection with Add to collection on its page.", glyph: "📼", group: "Contribute" },
+  { key: "hype_train", name: "Hype Train", blurb: "A skill you maintain made the top of the Hyped skills board.", howToEarn: "Maintain a new skill people get excited about — when it enters the top hyped skills, you're aboard.", glyph: "🚂", group: "Contribute" },
   { key: "maintainer_added", name: "Adopted", blurb: "Someone trusted you with a skill they created.", howToEarn: "Be added as a maintainer of a skill you did not propose.", glyph: "🤝", group: "Contribute" },
   // Talk
   { key: "first_message", name: "Icebreaker", blurb: "You said something. It counts.", howToEarn: "Send a message — a direct chat, a review thread, a request or skill discussion.", glyph: "🧊", group: "Talk" },
@@ -47,6 +48,7 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: "first_watch", name: "Stalker, but Nicely", blurb: "You are keeping an eye on a skill.", howToEarn: "Watch a skill to be told about new versions.", glyph: "👀", group: "Explore" },
   { key: "first_follow", name: "Right Behind You", blurb: "You followed someone. They will never know.", howToEarn: "Follow a colleague from the leaderboard, a hover card or their achievements.", glyph: "👣", group: "Explore" },
   { key: "first_rating", name: "Critic", blurb: "You told the org what a skill is worth.", howToEarn: "Rate a skill on its page.", glyph: "⭐", group: "Explore" },
+  { key: "talent_scout", name: "Talent Scout", blurb: "You hyped a skill before everyone else noticed it.", howToEarn: "Hype a new skill that goes on to enter the top hyped skills within a week.", glyph: "🔭", group: "Explore" },
   { key: "onboarded", name: "Read the Manual", blurb: "You actually read Quick start. Respect.", howToEarn: "Complete the Quick start guide.", glyph: "📖", group: "Explore" },
   // Habits
   { key: "night_shift", name: "Night Shift", blurb: "Skilly at an hour when sensible people sleep.", howToEarn: "Do anything badge-worthy between midnight and 5 am, your time.", glyph: "🦉", group: "Habits" },

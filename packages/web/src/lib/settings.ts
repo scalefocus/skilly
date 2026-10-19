@@ -581,6 +581,11 @@ export async function setUserAiPrereviewNotifications(userId: string, enabled: b
   await pool.query(`update users set ai_prereview_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
+/** §50.7: the hype-milestone opt-out (maintainers) — row-level like the quality toggle. */
+export async function setUserHypeNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set hype_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
 export async function setUserDiscussionNotifications(userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set discussion_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }

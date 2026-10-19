@@ -12,6 +12,7 @@ import { SystemBannerCard } from "./SystemBannerCard";
 import { McpCard } from "./McpCard";
 import { AiCard } from "./AiCard";
 import { SearchCard } from "./SearchCard";
+import { HypeCard } from "./HypeCard";
 import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
 import { QualityLine } from "./QualityLine";
 import { PlatformPolicyRulesCard, PolicyFlagsAdminCard } from "./PolicyCards";
@@ -42,7 +43,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
   "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
-  "achievements", "search", "contentrisk", "policyrules", "policy",
+  "achievements", "hype", "search", "contentrisk", "policyrules", "policy",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -707,6 +708,9 @@ export default function AdminPage() {
 
       {/* Achievements (§31) — the dormant-not-destructive on/off */}
       <AchievementsSettings enabled={data.settings.achievementsEnabled} busy={busy} call={call} open={cards.open.achievements} onToggle={() => cards.toggle("achievements")} />
+
+      {/* Hype (§50.8) — the switch, the budget, the two eligibility thresholds and the top N */}
+      <HypeCard open={cards.open.hype} onToggle={() => cards.toggle("hype")} />
 
       <EmailCard open={cards.open.email} onToggle={() => cards.toggle("email")} />
 

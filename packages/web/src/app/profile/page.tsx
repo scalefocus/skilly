@@ -31,6 +31,9 @@ interface Me {
   policyNotifications: boolean;
   aiPrereviewNotifications?: boolean;
   administersNamespace?: boolean;
+  /** §50.7 hype milestones on skills they maintain, and whether hype is on at all (§50.8). */
+  hypeNotifications?: boolean;
+  hypeEnabled?: boolean;
   directoryHidden: boolean;
   achievementsHidden: boolean;
   achievementsEnabled: boolean;
@@ -311,7 +314,7 @@ function MaintainerNotificationsPref() {
   const [busy, setBusy] = useState(false);
   if (!data) return <div className="skeleton" style={{ height: 120, borderRadius: "var(--radius)" }} />;
 
-  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications", enabled: boolean) => {
+  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications", enabled: boolean) => {
     setBusy(true);
     try {
       await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: enabled }) });
@@ -319,12 +322,16 @@ function MaintainerNotificationsPref() {
     } finally { setBusy(false); }
   };
 
-  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications"; label: string; offHint: string; value: boolean }[] = [
+  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications"; label: string; offHint: string; value: boolean }[] = [
     { field: "driftNotifications", label: "Upstream drift", offHint: "You won't be alerted when an external skill's pinned source changes.", value: data.driftNotifications },
     { field: "newVersionNotifications", label: "New versions", offHint: "You won't be alerted when a skill you maintain publishes a version. Skills you watch still notify you.", value: data.newVersionNotifications },
     { field: "contentRiskNotifications", label: "Content check flags", offHint: "You won't be alerted when the content check flags a published version of a skill you maintain.", value: data.contentRiskNotifications },
     { field: "qualityNotifications", label: "Low quality scores", offHint: "You won't be alerted when a published version of a skill you maintain scores 2 stars or below on the quality check.", value: data.qualityNotifications },
     { field: "policyNotifications", label: "Policy flags", offHint: "You won't be alerted when the policy check flags a published version of a skill you maintain.", value: data.policyNotifications },
+    // §50.7 — hidden while hype is switched off platform-wide (§50.8).
+    ...(data.hypeEnabled !== false
+      ? [{ field: "hypeNotifications" as const, label: "Hype milestones", offHint: "You won't be told when a skill you maintain enters the top hyped skills.", value: data.hypeNotifications ?? true }]
+      : []),
     { field: "discussionNotifications", label: "Discussion comments, replies and @mentions", offHint: "You won't be alerted about new comments on skills you maintain or watch, replies in threads you're part of, or when someone @mentions you.", value: data.discussionNotifications },
     // §46.10 — only namespace admins receive it, so only they see the toggle.
     ...(data.administersNamespace
