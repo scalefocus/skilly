@@ -31,6 +31,7 @@ import { reportFeatureUse } from "../../../../lib/surveyClient";
 import { AlreadyInstalledDialog } from "../../../../components/AlreadyInstalledDialog";
 import { requestInstall, type ExistingInstall, type MintedInstall, type OnExisting } from "../../../../lib/installMint";
 import { installedHighlightHref } from "../../../../lib/installedFilter";
+import { HypeButton, HypedPill, HypeCount, HyperStrip, type HyperChip } from "../../../../components/Hype";
 
 // recharts is heavy (d3) and owner-only — code-split it out of the route's initial bundle.
 // ssr:false since the chart measures the DOM; a skeleton holds its height while it loads.
@@ -185,6 +186,12 @@ interface Detail {
   createdAt: string; updatedAt: string;
   official: boolean; officialAt: string | null; officialByName: string | null; canMarkOfficial: boolean;
   featured: boolean; canFeature: boolean;
+  /** §50.6 the hype block — null when hype is off or the skill is hard-ineligible (nothing renders). */
+  hype?: {
+    eligible: boolean; open: boolean; isMaintainer: boolean; hypedByMe: boolean; myHypeExpiresAt: string | null;
+    canHype: boolean; budget: number; remaining: number; nextAt: string | null;
+    score: number; hypeCount: number; isTop: boolean; hypers: HyperChip[]; hyperTotal: number;
+  } | null;
   canManage: boolean; canDelete: boolean; canPromote: boolean; isGlobal: boolean; canRetryMirror: boolean;
   discussionCount: number;
   /** §37.7: the displayed version's content-check status (no findings), or null with no version. */
@@ -395,6 +402,8 @@ export default function SkillDetail() {
       <div className="meta" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <span className="ns" style={{ fontSize: 15 }}>@{data.namespaceSlug}</span>
         <OfficialBadge official={data.official} />
+        {/* §50.6 in the current top N hyped skills (as of the last sweep). */}
+        {data.hype?.isTop && <HypedPill />}
         {data.latest && <span className="chip chip-accent">v{data.latest}</span>}
         {data.visibility === "namespace" ? <Pill tone="warn">restricted</Pill> : <Pill tone="ok">org-wide</Pill>}
         {data.archived && <Pill tone="danger">archived</Pill>}
@@ -434,6 +443,20 @@ export default function SkillDetail() {
             {data.watching ? "★ Watching" : "☆ Watch"}
           </button>
         )}
+        {/* §50.6 Hype: the button while the skill is open to new hypes (never for its maintainers);
+            otherwise just the count when it still has in-window hypes. */}
+        {data.hype && (data.hype.open && !data.hype.isMaintainer ? (
+          <HypeButton
+            ns={ns}
+            slug={slug}
+            state={data.hype}
+            count={data.hype.hypeCount}
+            onHyped={reload}
+            onError={(text) => setMsg({ kind: "err", text })}
+          />
+        ) : (
+          <HypeCount count={data.hype.hypeCount} />
+        ))}
         {data.latest && (data.pointer ? (
           // Pointer skills: split-button download with a format choice — .skill (default,
           // re-packed from the mirrored tarball) or .tar.gz (the stored mirror verbatim). §6, §10.
@@ -813,6 +836,17 @@ export default function SkillDetail() {
       {data.latest && <QualityCard detail={data.qualityDetail} base={base} ns={ns} slug={slug} onChanged={reload} />}
 
       <MaintainersPanel ns={ns} slug={slug} />
+
+      {/* §50.6 "Hyped by": the in-window hypers, newest first — 12, then "+N" expands the list. */}
+      {data.hype && data.hype.hypeCount > 0 && (
+        <div className="card card-pad" style={{ marginTop: 20 }} data-testid="hyped-by">
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, marginBottom: 4 }}>Hyped by</h2>
+          <p className="muted" style={{ fontSize: 13.5, marginBottom: 14 }}>
+            {data.hype.hypeCount} {data.hype.hypeCount === 1 ? "person" : "people"} hyped this skill in the last 7 days · {data.hype.score} {data.hype.score === 1 ? "point" : "points"}.
+          </p>
+          <HyperStrip ns={ns} slug={slug} hypers={data.hype.hypers} total={data.hype.hyperTotal} />
+        </div>
+      )}
 
       {data.visibility === "namespace" && <SharedWithPanel ns={ns} slug={slug} ownerNamespaceSlug={data.namespaceSlug} />}
 

@@ -164,6 +164,11 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `user_id`, `skill_id` (composite PK — one live rating per user per skill), `stars` (smallint 1–5), `rated_semver` (the version the rater was on — provenance, not an aggregation key), `created_at`, `updated_at`.
 - Ordinary **mutable** rows (editable/revocable) — **never** audit data. `ON DELETE CASCADE` on both FKs (user deprovision removes the vote; trigger recomputes the aggregate).
 
+### `skill_hypes` / `skill_hype_top` (migration 0098, detailed in §50)
+- `skill_hypes`: `id`, `skill_id`, `user_id` (both FK, `ON DELETE CASCADE`), `points` (smallint 1–3, frozen at insert — the §50.4 early-hype bonus), `created_at`. Ordinary **mutable, personal** rows (never audited); deleted on GDPR erasure (§4), kept on deprovision. No unique key — "one hype per skill per trailing 7 days" is a window rule enforced in the route (§50.2).
+- `skill_hype_top`: `skill_id` (PK), `entered_at`, `left_at` (nullable — `NULL` ⇒ currently in the top N), `notified_at`. The worker sweep's memory of the current *Hyped* set (§50.5); written only by the sweep.
+- `users.hype_notifications` (`BOOLEAN NOT NULL DEFAULT true`) — the seventh maintainer notification preference (§12 / §50.3).
+
 ### `skill_versions`
 - `id`, `skill_id`, `semver`, `is_prerelease` (BOOLEAN — the stored column; `channel` = `beta` when true else `stable` is **derived in the app layer**, not a column), `status` (`active` | `yanked` | `quarantined` — the last set only by the worker's mirror when a scan verdict is `critical`, §49.2), `usage_examples`, `what_changed` (nullable text — the per-version **"What changed"** note, §8/§10), `created_by`, `created_at`.
 - `git_published` (BOOLEAN — set true once the worker has synthesized this version's serving tag, §6 install-gating), `content_sha256` (nullable — packaging-independent content-set digest for duplicate detection, distinct from `artifact_sha256`; §8).
@@ -269,7 +274,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -449,7 +454,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Delete user info (GDPR erasure)
 - The **Administration** page has a **"Delete User Info"** section (platform-admins only), after **Maintenance** and directly before **Namespaces** (Currently online, which used to follow it, now lives on the Monitoring page — §4 *Currently online*). Two header-style typeahead pickers (≥3 chars, debounced, the selection stays in the box with an ✕ to clear): **"Find a user to delete"** and an optional **"Replace maintainer to"**. **Both pickers** render each result (and the selected chip) as a card with the user's **avatar bubble**, name, email, and an **Enabled / Disabled** status chip (active vs. inactive `status`) — so an admin can see at a glance whether the account is already disabled. A right-side **Delete** button enables once a delete-target is selected; clicking it opens a **typed-to-confirm** panel (type the user's display name) summarizing the effects + transfer target + skill count — including, when a transfer target is set, that the user's leaderboard install credits move to the target (§21).
 - **Erasure is anonymize-in-place (a tombstone), not a row delete** — a hard `DELETE FROM users` is impossible (`messages.author_id`, `proposals.submitted_by`, `proposal_revisions.author` are `NOT NULL` with no `ON DELETE`; `audit_log` is append-only). The `users` row is **kept and scrubbed**: `display_name = '<their email> - Deleted'` (the former email is **retained inside the display label** so deleted authors stay identifiable in message/proposal threads — e.g. `alice@corp.com - Deleted`; falls back to `Deleted User` if the row had no email), `email = ''`, `avatar = null`, **`job_title = null`, `office_location = null`, `department = null`** (directory profile — personal data, scrubbed exactly like the avatar, §28), **`directory_hidden = false`** (the preference is meaningless once the fields are gone; reset so a re-provisioned account starts at the default), `entra_object_id = null` (**detached** from Entra), `status = 'inactive'`, `erased_at = now()`. *(Trade-off: this favours traceability over strict anonymization — the structured `email` column is cleared, but the former email survives in the human label.)*
-- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), **`skill_collections`** with their items (§38.10 — never transferred), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
+- **Deleted (personal data):** `group_memberships` (also strips implicit namespace-admin/maintainer status), `skill_ratings` (aggregate recomputes), **`skill_hypes`** (§50 — scores drop), `skill_watches`, **`user_follows` in both directions** (where the user is the follower **or** the followee; the scrub also resets `allow_follows = true`, §35.9), `notifications`, **`user_achievements`** (§31 — and the scrub also resets `achievements_hidden = false`, `time_zone = null` and `hero_at = null`, §31.10), **`skill_collections`** with their items (§38.10 — never transferred), `tokens` (their install keys — **system installations are exempt** (§23): they have no `user_id`, so the sweep never matches them; if the erased user minted any, `created_by_user_id` stays and renders the tombstone label), and the user's explicit `skill_maintainers` rows.
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. Likewise **`ai_usage.user_id` → NULL** (§40.3), keeping AI usage totals intact. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
@@ -565,7 +570,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   (maps `accountEnabled → status` on upsert), and any other drift. The PATCH path keeps
   hard-deleting tokens (defense in depth); the gate is what guarantees an inactive user's minted
   URLs stop serving even when deletion didn't happen.
-- **Permanent removal — `DELETE /Users/:id`:** runs the **full GDPR erasure** (the same as the admin "Delete User Info" flow, §4) **without a maintainer transfer** — scrub + detach the row (`entra_object_id → null`, so a later re-provision yields a fresh account), delete the user's personal data (group memberships, ratings, watches, follows in both directions (§35.9), notifications, tokens, explicit maintainerships), and de-identify messages/proposals/reviews to "`<email> - Deleted`". **Idempotent** (no-op if already erased) and still returns **204**. Records a `user.erased` audit row with a **null actor** and **`source = 'scim'`**. The worker's `eraseUserByExternalId` mirrors web's `lib/eraseUser.ts` (kept in sync).
+- **Permanent removal — `DELETE /Users/:id`:** runs the **full GDPR erasure** (the same as the admin "Delete User Info" flow, §4) **without a maintainer transfer** — scrub + detach the row (`entra_object_id → null`, so a later re-provision yields a fresh account), delete the user's personal data (group memberships, ratings, **hypes (§50)**, watches, follows in both directions (§35.9), notifications, tokens, explicit maintainerships), and de-identify messages/proposals/reviews to "`<email> - Deleted`". **Idempotent** (no-op if already erased) and still returns **204**. Records a `user.erased` audit row with a **null actor** and **`source = 'scim'`**. The worker's `eraseUserByExternalId` mirrors web's `lib/eraseUser.ts` (kept in sync).
 - **Authored skills remain** (owned by the namespace, not the individual).
 - **Audit log preserves identity** (provenance survives personnel changes; immutable per invariant #5 — deliberately exempt from erasure, §4).
 
@@ -900,7 +905,8 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     (click to remove). Hidden on archived / not-yet-installable skills and for everyone who is not a
     platform admin.
   - **Home page:** a **"Featured skills"** card section placed **immediately below the stats row**
-    (and **above the "installing is one command" explainer**). **Authenticated users only**
+    (and **above the "installing is one command" explainer**) — since §50, the **"Hyped skills"**
+    section, when it renders, sits **between the stats row and Featured** (§50.6). **Authenticated users only**
     (signed-out visitors never see it). Cards are **visibility-filtered per viewer** (invariant #3),
     ordered **most-recently-featured first**, and include **only skills with a live published
     version**. The section **renders every currently-Featured skill the viewer may see** — it is
@@ -1260,6 +1266,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To the **people in a discussion thread** (§24 *Replies to discussion comments*): `skill.discussion_reply` when someone replies in a skill-discussion thread. Recipients are the root comment's author ∪ earlier repliers in that thread, minus the author, minus opt-outs, visibility-filtered at insert. It is **coalesced per thread per recipient until read** and gated by the same `discussion_notifications` toggle. For one message a person gets one row: `message.mention` beats `skill.discussion_reply`, which beats `skill.discussion`.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
+  - To **effective maintainers** (minus `hype_notifications` opt-outs): `skill.hyped` when the worker's hype sweep sees their skill **enter the top N hyped skills** (§50.7, **at most once per skill per 7 days**); digestible by default (§48.3).
   - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only** (the one exception: a digest-mode recipient gets them in the email digest, §48), have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
@@ -1333,7 +1340,7 @@ current or future type can ever leak JSON to a user.
 
 ### Maintainer notification preferences (per-type opt-outs)
 
-- **Six per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
+- **Seven per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
   `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
@@ -1354,6 +1361,9 @@ current or future type can ever leak JSON to a user.
   (`users.ai_prereview_notifications`, `BOOLEAN NOT NULL DEFAULT true`, migration 0090, §46.10),
   shown only to users who administer at least one namespace; `PATCH /api/me` also accepts
   `aiPrereviewNotifications`.
+  The seventh is **"Hype milestones on skills I maintain"** (`users.hype_notifications`,
+  `BOOLEAN NOT NULL DEFAULT true`, migration 0098, §50.7); `PATCH /api/me` also accepts
+  `hypeNotifications`. Hidden while `hype_enabled` is off (§50.8).
   Toggling is **silent** (not audited), matching the other profile prefs.
 - **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
   filtered out of the recipient set **at insert time** in the worker (the publish sweep's
@@ -1691,6 +1701,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/skills/:ns/:slug/usage-series?range=<7d|30d|90d|all>` — aggregate installs+views over time (visibility-gated; §21).
 - `GET /api/skills/:ns/:slug/versions/:semver/changes` — the published version's **file changes vs its immediate predecessor** (§10): `{ available, baselineSemver, added, modified, removed, unchanged, files[] }`, or `{ available: false, reason }` when there's no predecessor / no stored artifact yet. `?path=<file>` returns that file's unified line diff (or a `binary` / `tooLarge` marker). Gated by the **skill's own visibility** (invariant #3; archived → owners only, §7), rate-limited like `download`, cached by `(skill, semver)` — the reviewer counterpart is `GET /api/proposals/:id/changes` (§8).
 - `POST /api/skills/:ns/:slug/promote` — initiate promotion to global. `POST /api/skills/:ns/:slug/yank`, `.../archive`, `.../delete` (permanent; platform-admin, archived-only).
+- `POST /api/skills/:ns/:slug/hype` — place a hype (**201**; **404** invisible / feature off; **409** `{ reason }`), `GET /api/skills/:ns/:slug/hypers` — the in-window hyper list, `GET /api/leaderboard/hyped` — the Hyped-skills board, §50.10.
 - `POST /api/skills/:ns/:slug/feature { featured }` — Featured spotlight toggle (platform-admin, re-verified; **409** at the `max_featured_skills` cap; rejected for a non-installable/archived/**deprecated** skill), §7.
 - `PUT /api/skills/:ns/:slug/deprecation { successor: "<ns>/<slug>" | null, note: string | null }` / `DELETE /api/skills/:ns/:slug/deprecation` — deprecate (or edit the deprecation) / un-deprecate a skill (§45.8). Platform admin or owning-namespace admin; **403** visible-but-unauthorized, **404** invisible, **409** archived skill, **422** ineligible successor (`not_found` · `self` · `archived` · `deprecated` · `audience`) or an over-long note. `GET /api/skills/suggest?scope=successor&for=<ns>/<slug>` — the successor picker (eligible candidates only, §45.3).
 - `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>`; audited `skill.share_link_created`. **404** for a skill the caller cannot see — **archived or not**; the visibility check precedes every status check (§49.4).
@@ -2099,6 +2110,8 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
   - **Skills** links to the catalog scoped to the skills that person **maintains** — `/catalog?maintainer=<userId>&by=<name>` for another person (the catalog shows a dismissible "Skills maintained by &lt;name&gt;" banner), or `/catalog?mine=1` for **your own** row (reuses the "My Skills" filter). This does **not** break invariant #3: the catalog independently visibility-filters to what the *viewer* may see (`searchSkills`), so it only ever lists skills the viewer could already browse — the leaderboard itself still reveals no skill identities. On arrival the maintainer view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) and shows everything by that maintainer the viewer can see.
   - **Requests** links to the Requested-skills page scoped to the requests that person **posted** — `/requests?requester=<userId>&by=<name>` for another person (the page shows a dismissible "Requested by &lt;name&gt;" banner, §26), or `/requests?mine=1` for **your own** row (reuses the "Mine" toggle). Requests have no namespace and are org-visible, so there is no visibility concern; the link is shown even when the person's requested count is 0 (consistent with **Skills**, which shows at 0 adopted).
   - **Reach out** opens a 1:1 direct chat (`POST /api/messages/direct` → `skilly:open-conversation`), the same mechanism as the skill-detail maintainer list and the admin online-users list. It is **hidden on the viewer's own row** (you can't message yourself).
+
+- **Hyped skills tab (§50).** Since §50 the `/leaderboard` page has two tabs: **People** (this board, unchanged) and **Hyped skills** — a board of *skills*, not people, ranked by the §50.4 hype score over a fixed trailing 7-day window and capped by the same `LEADERBOARD_LIMIT`. It names skills, which this board never does, and may do so only because every hype-eligible skill is `org`-visible by construction (§50.1 decision 2).
 
 ### Leader badges
 
@@ -5597,6 +5610,8 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | `first_rating` | **Critic** | Rated a first skill (`skill_ratings`, §18). | Explore |
 | `first_collection` | **Mixtape** | Created a first skill collection (§38.8). Deleting it never revokes the badge. | Contribute |
 | `onboarded` | **Read the Manual** | Completed Quick start (`users.onboarded_at`, §23). | Explore |
+| `hype_train` | **Hype Train** | A skill the user is an **effective maintainer** of enters the **top N hyped skills** (§50.9; awarded by the hype sweep). | Contribute |
+| `talent_scout` | **Talent Scout** | A skill the user **hyped in the last 7 days** enters the top N hyped skills — they picked a winner (§50.9; awarded by the hype sweep). | Explore |
 | `night_shift` | **Night Shift** | Any achievement event (below) at **00:00–04:59 in the user's own timezone** (§31.3). | Habits |
 | `weekend_warrior` | **Weekend Warrior** | Any achievement event on a **Saturday or Sunday in the user's own timezone** (§31.3). | Habits |
 
@@ -5630,7 +5645,7 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 - **`users.hero_at`** (TIMESTAMPTZ NULL, migration 0072) — the permanent **Hero** high-water
   stamp behind the level (§31.10). Set once, never cleared.
 - **`platform_settings.achievements_enabled`** (default `true`) — the §31.7 platform toggle.
-- **Awarding is inline in the write path, never a sweep.** A single helper,
+- **Awarding is inline in the write path, never a sweep** *(one documented exception: `hype_train` / `talent_scout` are awarded by the §50.5 hype sweep, because their event — a skill entering the top N under a rolling window — has no write path of its own; the sweep still calls the same helper)*. A single helper,
   `awardAchievement(db, userId, key, opts)` in `lib/achievements.ts` (web) — `INSERT … ON CONFLICT DO
   NOTHING RETURNING` — is called from each hook point. **Where the triggering write already runs
   in a transaction** (request creation, both fulfilment paths, proposal creation, version
@@ -11253,7 +11268,7 @@ all read it, so they can never disagree.
 | Tier | Types | Admin can change? |
 |---|---|---|
 | **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.revise`, `proposal.resubmit` — the review queue | No |
-| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, and the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`) | Yes — each can be switched off |
+| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), and the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`) | Yes — each can be switched off |
 | **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled` | Yes — each can be switched on |
 | **Never emailed** | `system.error`, `achievement.earned` | No (not candidates) |
 
@@ -11786,3 +11801,305 @@ notes, as one release. Each subsection names the finding it closes (V-numbers fr
 - **Existing pointer versions** keep `external_commit = null`; no backfill (the upstream may be
   gone). They are content-drift-checked as before.
 - **Digest pins** require a manual bump; no Renovate/Dependabot is introduced (Jenkins-only CI).
+
+---
+
+## 50. Hype — a weekly boost for new and small skills
+
+Ratings (§18) and install counts reward skills that already have an audience; a skill published
+last week by someone outside the usual circles has neither, and nothing in the catalog lifts it.
+**Hype** is a deliberately scarce, time-boxed signal — modelled on YouTube's *Hype* — that any
+signed-in user can spend on a **new, little-installed skill** to push it onto a short **Hyped
+skills** board, the home page, and into its maintainers' notifications. It is a discovery
+mechanism, **not** a quality signal: it never touches ratings, search ranking, `latest`, install
+gating, review, scanning or visibility.
+
+### 50.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | Hype is **skill-level**, like ratings and Featured — never per version. | The thing being promoted is "this skill exists"; versions are an implementation detail to a browser of the catalog. |
+| 2 | Only **`org`-visible** skills are hype-eligible. | A board that names skills must be identical for every viewer (invariant #3). Filtering it per viewer would make ranks and counts differ by who is looking, which is both confusing and a side channel. |
+| 3 | Eligibility = **young** (`skills.created_at` within `hype_recency_days`) **and** **small** (`skills.install_count` below `hype_install_threshold`), both platform settings. | The YouTube analogue is "recent upload from a small creator". Both thresholds are policy, so admins own them. |
+| 4 | Every user gets a **rolling budget** of `hype_budget` hypes per trailing 7 days; **one hype per skill per trailing 7 days**; **no undo**; **no carry-over**. | Scarcity is what makes the signal mean anything. Undo invites last-minute reshuffling. |
+| 5 | **Early-hype bonus**, frozen per row: the points a hype earns depend on how many in-window hypes the skill already has at that moment (§50.4). | Rewards the people who found the skill first, which is the behaviour the feature exists to encourage. Freezing the points keeps the ledger append-only and the score a plain `SUM`. |
+| 6 | **Rolling 7-day window, no calendar reset.** A skill's score is the sum of the frozen points of its hypes from the last 7 days; a hype's effect simply ages out. | A hard weekly reset makes Sunday hypes worthless and Monday hypes gold. Rolling keeps every hour equal. |
+| 7 | A skill's **effective maintainers (§19) cannot hype it.** | Same self-credit rule as install credits and request fulfilment. |
+| 8 | **Hard** ineligibility (archived, deprecated, no installable version, visibility no longer `org`) **drops the skill from every hype surface at once**; **soft** ineligibility (outgrew the age or install thresholds) only **closes it to new hypes** — existing hypes keep counting until they age out. | Outgrowing the thresholds is the feature *working*; punishing it would be perverse. Hard states are governance decisions and win immediately. In both cases spent hypes are **not refunded**. |
+| 9 | **Individual hypers are public** to anyone who can see the skill (which, by decision 2, is everyone signed in). | The user asked for it: hyping is an endorsement people put their name to, like a rating is not. |
+| 10 | The **top N** (`hype_top_n`, platform setting) are *Hyped*: they get a marker, the home-page section and the maintainer notification. The board itself lists up to 100. | A short, admin-tunable spotlight on top of a longer, honest ranking. |
+| 11 | Entry into the top N is detected by a **worker sweep every 3 hours**, which is also where the two achievements are awarded. | Under a rolling window there is no "end of week" to award at. A sweep is the only place that sees a skill *enter*; three hours is the user's chosen cadence — it also bounds how often the maintainer notification can be evaluated. |
+| 12 | Hypes are ordinary **mutable, personal rows** — never in `audit_log`. The platform settings are audited like every setting. | Same posture as ratings, watches, follows and achievements (§11). |
+| 13 | **No MCP tool, no API beyond the UI's own routes, no paid hypes, no per-user hype-history page, no undo.** | v1 scope. §29's rule: fold before adding surface. |
+
+### 50.2 Eligibility — who may hype what
+A **hype attempt** `POST /api/skills/:ns/:slug/hype` is accepted only when **every** condition holds,
+re-verified server-side inside one transaction; the UI hides or disables the button on the same
+rules so a user is never surprised by a refusal:
+
+- **Feature on:** `hype_enabled` (§50.8) is `true`. Off ⇒ `404` on the route (the feature does not
+  exist), every hype surface hidden.
+- **Skill visible to the caller:** the shared visibility predicate (invariant #7); an invisible skill
+  returns the same `404` as search. (By decision 2 only `org` skills are eligible, so for an eligible
+  skill this is always true — the check still runs so the route can never be a probe.)
+- **Hard eligibility** (`isHypeEligible`, `@skilly/shared/hype`): `visibility = 'org'`,
+  `status = 'active'`, `deprecated_at IS NULL`, and **≥ 1 installable version** (the same
+  `latestInstallable` rule Featured uses, §7).
+- **Soft eligibility** (new hypes only): `skills.created_at ≥ now() − hype_recency_days` **and**
+  `skills.install_count < hype_install_threshold`. A skill row exists only once its first version
+  materialises (§8), so `created_at` *is* first publication.
+- **Not a maintainer:** the caller is not an **effective maintainer** of the skill (explicit
+  `skill_maintainers` ∪ the owning namespace's admins, §19). Platform admins **may** hype (they are
+  not maintainers by role); they get no special budget.
+- **Not already hyped:** the caller has no `skill_hypes` row on this skill with
+  `created_at > now() − 7 days`.
+- **Budget left:** the caller's `skill_hypes` rows with `created_at > now() − 7 days` number fewer
+  than `hype_budget`. The budget is **rolling**: a hype spent on Tuesday 14:00 frees again the
+  following Tuesday at 14:00 — there is no reset day. Lowering `hype_budget` never deletes hypes;
+  a user over the new budget simply cannot hype until enough rows age out.
+
+**Concurrency.** The route takes a **per-user Postgres advisory lock** (`pg_advisory_xact_lock(hashtext('hype:' || user_id))`)
+for the transaction, so two tabs cannot double-spend a budget or double-hype a skill. The
+per-skill tier count (§50.4) is read inside the same transaction; a race between two different
+users on the same skill can at worst award the same tier twice, which is accepted (the tiers are
+coarse by design).
+
+**Refusals** are `409` with a stable `reason`: `not_eligible` (hard or soft), `self_hype`,
+`already_hyped` (payload carries `nextAt`, when that row ages out), `budget_exhausted` (payload
+carries `nextAt`, when the caller's oldest in-window hype ages out). The UI never reaches these in
+the normal path — it renders the same state from the skill payload — but a stale page must get a
+sensible message, so each reason has copy (§50.6).
+
+### 50.3 Data model (migration 0098)
+
+#### `skill_hypes`
+- `id` (bigserial PK), `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `user_id` (FK → `users`,
+  `ON DELETE CASCADE`), `points` (smallint, `CHECK (points BETWEEN 1 AND 3)` — frozen at insert,
+  §50.4), `created_at` (timestamptz, default `now()`).
+- Indexes: `(skill_id, created_at DESC)` (score, hypers list, tier count) and
+  `(user_id, created_at DESC)` (budget, already-hyped check).
+- **No unique constraint**: "one per skill per 7 days" is a window rule, not a key, and is
+  enforced in the route under the advisory lock. Once a hype is older than 7 days it is **inert
+  history** — it counts for nothing and is never shown, but it is **not deleted** (it is still the
+  user's record and a possible later lever; a retention sweep is out of scope).
+- Ordinary **mutable, personal** rows (never audited). **GDPR erasure (§4, both the admin and SCIM
+  paths) deletes the user's rows** — scores drop accordingly, like `install_credits` do. **Deprovision**
+  (`status = 'inactive'`) keeps them; the hyper strip then simply renders that person's bubble like
+  any other inactive user. Deleting a skill cascades.
+
+#### `skill_hype_top`
+The sweep's memory of **which skills are currently in the top N**, so it can tell *entering* from
+*staying*.
+- `skill_id` (PK, FK → `skills`, `ON DELETE CASCADE`), `entered_at` (timestamptz, not null),
+  `left_at` (timestamptz, nullable — `NULL` ⇒ currently in the top N), `notified_at` (timestamptz,
+  nullable — when maintainers were last told, the once-per-7-days dedup for `skill.hyped`).
+- One row per skill that has **ever** been in the top N; it is rewritten in place on re-entry.
+  Written **only by the worker sweep** (§50.5); the web tier reads it for the *Hyped* marker.
+
+#### `users.hype_notifications`
+`BOOLEAN NOT NULL DEFAULT true` — the seventh maintainer notification preference (§12), *"Hype
+milestones on skills I maintain"*. `GET /api/me` returns it; `PATCH /api/me { hypeNotifications }`
+updates it. Silent (not audited), like the other six.
+
+#### `platform_settings` keys
+`hype_enabled`, `hype_budget`, `hype_recency_days`, `hype_install_threshold`, `hype_top_n` —
+§50.8 has the ranges and defaults. Absent ⇒ default (no seed row needed).
+
+### 50.4 Scoring — the early-hype bonus
+Points are decided **when the hype is placed** and **frozen on the row**:
+
+| In-window hypes the skill already has | Points for this hype |
+|---|---|
+| 0 – 4 | **3** |
+| 5 – 14 | **2** |
+| 15 + | **1** |
+
+- *In-window* = `skill_hypes` rows on the skill with `created_at > now() − 7 days`, counted inside
+  the hype transaction (§50.2). The tiers are a **code constant** in `@skilly/shared/hype`
+  (`HYPE_TIERS`), deliberately **not** an admin setting — three numbers an admin could tune would
+  need explaining on every surface that shows points.
+- **Score** of a skill = `SUM(points)` over its in-window hypes. **Hype count** = the number of those
+  rows. Both are computed at read time from the window (no denormalised counter on `skills`: the
+  window moves every second, so a counter would always be stale; the board is cached instead,
+  §50.6).
+- Later hypes **never re-score** earlier ones, and a hype ageing out subtracts exactly its own frozen
+  points. Changing `HYPE_TIERS` in code affects only future hypes.
+
+### 50.5 The board, the top N and the sweep
+- **Board query** (`lib/hype.ts`, `GET /api/leaderboard/hyped`): every **hard-eligible** skill
+  (§50.2) with **≥ 1 in-window hype**, ordered by **score desc, hype count desc, earliest in-window
+  hype asc, namespace slug then skill slug asc** (byte order, `COLLATE "C"`, so the SQL and the
+  shared `compareHypeRows` agree) — the last two make the order total and deterministic. Capped at
+  **`LEADERBOARD_LIMIT` (100)**, the same fixed constant as the people board (§21): not
+  caller-supplied. Rows carry `rank`, the skill's public summary (`ns`, `slug`, `title`, `icon`,
+  §33), `score`, `hypeCount`, the first **12 hypers** (`userId`, `displayName`, `avatar` — newest
+  first) plus `hyperTotal`, `isTop` (**Hyped as of the last sweep** — an open `skill_hype_top` row,
+  not the live rank; see *Top N* below), `open` (soft eligibility), and the viewer's own state for the
+  row (`canHype`, `hypedByMe`, `isMaintainer`). **Cached 60 s server-side**, viewer-independent except
+  the per-viewer flags, which are overlaid after the cache read. The response also carries the
+  viewer's `budget` (`budget`, `used`, `remaining`, `nextAt`) and `topN`.
+- **Top N** = the first `hype_top_n` rows of that order. A skill is **Hyped** while it is in the top
+  N **as of the last sweep** (`skill_hype_top.left_at IS NULL`), not as of the live query — so the
+  marker, the home section and the notification all agree with each other and change at most once
+  per sweep. The board itself is live (cached 60 s) and may briefly show a skill at rank 3 without
+  the marker; accepted.
+- **The sweep** (`hypeSweep`, worker, **leader-only**, **every 3 hours**, plus once at worker
+  start; skipped entirely while `hype_enabled` is off):
+  1. Run the board query (uncached) and take the top N → `incoming`.
+  2. For each skill in `incoming` **without** an open `skill_hype_top` row (`left_at IS NULL`):
+     upsert the row (`entered_at = now()`, `left_at = NULL`) — this is an **entry**.
+  3. For each open row **not** in `incoming`: set `left_at = now()` — an **exit**. Hard-ineligible
+     skills fall out here naturally (the board query excludes them).
+  4. For each **entry**: if `notified_at IS NULL OR notified_at < now() − 7 days`, insert
+     `skill.hyped` for the skill's effective maintainers minus `hype_notifications` opt-outs
+     (§50.7) and stamp `notified_at`; award `hype_train` to every effective maintainer and
+     `talent_scout` to every user holding an in-window hype on the skill (§50.9). The awards and
+     the notification join one transaction per entry.
+  5. Everything runs under a Postgres **advisory lock** so an overlapping manual run can never
+     double-process (`SELECT pg_try_advisory_lock`; the second caller skips).
+- **Why the sweep, when §31.2 says awards are inline and never a sweep:** the awarding *event* here
+  (a skill crossing into the top N under a rolling window) has no write path of its own — it is
+  only observable by looking at the whole board. This is the one documented exception; the inline
+  helper `awardAchievement` is still what the sweep calls.
+
+### 50.6 Surfaces
+- **Leaderboard page (`/leaderboard`).** A **tab row** above the existing controls: **People**
+  (the current board, unchanged) and **Hyped skills** (`/leaderboard?tab=hyped`, the target of the
+  home section's *see the board* link). The tab row is hidden while `hype_enabled` is off. The Hyped-skills tab has **no window or sort
+  toggles** (the window is the fixed trailing 7 days; the order is the board order). Each row:
+  rank, skill icon + title (link to the detail page), **score** (points) and **hype count**, a
+  **hyper strip** — up to 12 `UserBubble`s (so §28 hover cards and §21 leader badges come for
+  free) newest first, then a **"+N"** chip that expands the row to the full list (fetched on
+  demand from `GET /api/skills/:ns/:slug/hypers`) — and a **Hype** button on the right when the
+  viewer `canHype`, otherwise the same states as the detail page (hidden for the skill's maintainers
+  and for a skill closed to new hypes). Rows with `isTop` carry a
+  **🔥 Hyped** pill after the title. Empty board ⇒ *"Nobody has hyped a skill in the last 7 days.
+  Found something new? Hype it."* with a link to the catalog. A line under the
+  tab header shows the viewer's budget: *"You have 2 of 3 hypes left · next frees in 3 days"*.
+- **Home page.** A **"Hyped skills"** card section **immediately below the stats row**, i.e.
+  **above "Featured skills"**, which moves down one slot (its own rules in §7 are otherwise
+  unchanged). Authenticated users only. It shows the **current top N** (`skill_hype_top.left_at IS
+  NULL`, ordered by the board order) as the same skill cards the Featured section uses, each with a
+  **🔥 Hyped** pill and the hype count. **Omitted entirely** when no skill is in the top N (same
+  no-empty-state rule as Featured). A skill that is both Hyped and Featured appears in **both**
+  sections. No visibility filter is needed (every row is `org`-visible by decision 2), but the
+  section is still **built from visibility-filtered results** like every home feed, so the
+  invariant holds even if a future change widens eligibility.
+- **Skill detail page.** In the action-button row, a **Hype** button with a live count
+  (*"🔥 Hype · 7"*). States, decided from the detail payload's `hype` block (`eligible`, `open`,
+  `isMaintainer`, `hypedByMe`, `myHypeExpiresAt`, `canHype`, `budget`, `remaining`, `nextAt`,
+  `score`, `hypeCount`, `isTop`, and the first 12 `hypers` plus `hyperTotal`; the whole block is
+  `null` while hype is off or the skill is hard-ineligible):
+  - eligible + `canHype` → enabled, *"Hype"*; click posts, then the button becomes *"✓ Hyped"*
+    (disabled) and the count increments optimistically;
+  - `hypedByMe` → *"✓ Hyped"*, disabled, title *"You hyped this skill — you can again in N days"*;
+  - budget exhausted → *"Hype"* disabled, title *"No hypes left · next frees <date>"* (viewer's
+    timezone, shared formatter);
+  - maintainer → hidden (no "you can't hype your own skill" nag; the hyper strip still shows);
+  - soft-ineligible (outgrown) with existing in-window hypes → count shown, button hidden;
+  - hard-ineligible, zero in-window hypes, or `hype_enabled` off → nothing renders.
+  Below the maintainers list, a **"Hyped by"** row: the hyper strip exactly as on the board (12 +
+  "+N" expanding inline). Hidden when there are no in-window hypes. `isTop` adds the **🔥 Hyped**
+  pill to the page header, beside the Official pill when present.
+- **Catalog cards and list rows.** A small **🔥 N** count on cards whose skill has ≥ 1 in-window
+  hype, and the **🔥 Hyped** pill on `isTop` skills. Nothing on skills with zero hypes. **No sort
+  or filter** by hype (decision: discovery via the board, not via search ranking).
+- **Refusal copy** (the `409` reasons, shown as an inline toast when a stale page submits):
+  `not_eligible` → *"This skill is no longer open to hypes."*; `self_hype` → *"You maintain this
+  skill, so you can't hype it."*; `already_hyped` → *"You already hyped this skill this week."*;
+  `budget_exhausted` → *"You're out of hypes until <date>."*
+
+### 50.7 Notification — `skill.hyped`
+- **To** the skill's **effective maintainers** (§19), minus `hype_notifications` opt-outs
+  (**row-level**, filtered at insert like the other maintainer pings, §12). **Fires** from the
+  sweep on **entry** into the top N, **at most once per skill per 7 days** (`skill_hype_top.notified_at`).
+  A skill that bounces in and out within a week notifies once.
+- **Payload:** `skillId`, `namespaceSlug`, `skillSlug`, `skillTitle`, `rank`, `score`, `hypeCount`,
+  `topN` (the `namespaceSlug`/`skillSlug` pair every skill-level notification carries, so the inbox
+  link and the §48 digest grouping work unchanged; the digest line reads *"entered the top N hyped
+  skills"*).
+- **Digest tier (§48.3):** **digestible by default**.
+
+  | Type | Label | Body sentence | CTA → link |
+  |---|---|---|---|
+  | `skill.hyped` | Your skill is being hyped | "{title}" entered the top {topN} hyped skills at #{rank}, with {hypeCount} hypes in the last 7 days. | See who's hyping it → `/skills/<ns>/<slug>` |
+
+- Hypers receive **no notification** — their reward is the `talent_scout` badge (and its
+  `achievement.earned` toast), nothing else.
+
+### 50.8 Administration — the Hype card
+A collapsible **"Hype"** card on the Administration page (platform admins only, card id `hype`,
+collapsed by default, the shared collapsible-card mechanism, §4), placed **after Achievements**.
+Five settings, each saved through the existing `PATCH /api/admin/settings` and **audited as
+`settings.updated`** like every other setting:
+
+| Key | Control | Range | Default | Effect of a change |
+|---|---|---|---|---|
+| `hype_enabled` | shared `Switch` | — | `true` | **Off:** every hype surface disappears (button, strips, pills, home section, leaderboard tab, profile toggle), `POST …/hype` and `GET /api/leaderboard/hyped` return `404`, the sweep skips. **Existing rows are kept** (dormant-not-destructive, the §29/§31 stance); switching back on resumes with whatever is still in-window. |
+| `hype_budget` | number | 1 – 10 | `3` | Applies to the next hype attempt; never deletes rows. |
+| `hype_recency_days` | number | 7 – 365 | `90` | Applies to the next hype attempt (soft rule, §50.2). |
+| `hype_install_threshold` | number | 1 – 10 000 | `25` | Applies to the next hype attempt (soft rule). |
+| `hype_top_n` | number | 1 – 20 | `5` | Applies at the **next sweep**: lowering it makes the sweep record exits for the skills now outside the top N; raising it records entries (and notifies/awards) for the skills that move in. |
+
+The card header's live summary reads e.g. `on · 3 / week · ≤ 90 d · < 25 installs · top 5`.
+Out-of-range values are rejected **422** by the shared validator (`@skilly/shared/hype`), which the
+card and the route both use.
+
+### 50.9 Achievements (§31 extension)
+Two new one-time badges in the §31.1 catalog, awarded by the sweep (§50.5), never revoked:
+
+| Key | Name | Earned when (the event) | Group |
+|---|---|---|---|
+| `hype_train` | **Hype Train** | A skill the user is an **effective maintainer** of (at sweep time) **enters the top N** hyped skills. | Contribute |
+| `talent_scout` | **Talent Scout** | A skill the user **hyped within the last 7 days** enters the top N — they picked a winner. | Explore |
+
+Both store no skill identity (§31.2 unchanged). The `achievement.earned` row and toast follow the
+usual §31.4 rules, and `follow.achievement` (§35.6) fans out as for any badge. While
+`hype_enabled` is off the sweep does not run, so nothing is awarded. While `achievements_enabled` is
+off the awards still record silently (the §31.7 dormant-not-destructive rule), with no notification
+or toast. The sweep awards **without the Habits evaluation** (§31.3): the person did nothing at that
+hour, the sweep did, so these awards never earn Night Shift or Weekend Warrior.
+
+### 50.10 API surface
+- `POST /api/skills/:ns/:slug/hype` — place a hype. **201** `{ points, score, hypeCount, remaining,
+  nextAt }`; **404** invisible / feature off; **409** `{ reason, nextAt? }` (§50.2). Rate-limited
+  under the existing per-user write bucket (§22).
+- `GET /api/skills/:ns/:slug/hypers` — the full in-window hyper list, newest first
+  (`{ userId, displayName, avatar, createdAt }[]`), visibility-checked like the skill itself.
+- `GET /api/leaderboard/hyped` — the board (§50.5) with the viewer's `budget` and `topN`, any
+  signed-in user; **404** while hype is off.
+- `GET /api/skills/hyped` — the home page's Hyped section (§50.6): the current top N as catalog cards,
+  built through the visibility-filtered catalog query; empty while off or before the first sweep.
+- `GET /api/skills/:ns/:slug` gains a `hype` block (§50.6); every catalog listing gains
+  `hype: { count, top } | null` per skill (one batched query per page — no per-card query; `null`
+  for a skill with no in-window hypes that is not Hyped, and for every skill while hype is off).
+- `GET /api/me` / `PATCH /api/me` — `hypeNotifications`, and `hypeEnabled` (read-only; the profile
+  and the leaderboard hide their hype controls while it is false).
+- `GET/PATCH /api/admin/settings` — the five keys as `hypeEnabled`, `hypeBudget`, `hypeRecencyDays`,
+  `hypeInstallThreshold`, `hypeTopN`; all present fields are validated before any is written (422).
+
+### 50.11 Testing
+- **Unit (`@skilly/shared/hype`):** `HYPE_TIERS` boundaries (4→3 pts, 5→2, 14→2, 15→1); the
+  settings validator's ranges and defaults; `isHypeEligible` on every hard state and both soft
+  thresholds; the deterministic board comparator including the slug tie-break.
+- **Integration (web, dbtest):** budget enforcement under the rolling window (a 6-day-old hype
+  counts, an 8-day-old one does not); one-per-skill-per-window; self-hype refusal for an explicit
+  maintainer and for a namespace admin; concurrency (two parallel posts, one succeeds); a
+  `namespace`-visibility skill returns the same 404 from `…/hype` and `…/hypers` as from search;
+  score and count age out exactly; erasure deletes the user's hypes and the score drops; the board
+  honours `LEADERBOARD_LIMIT` and the full order.
+- **Integration (worker, dbtest):** the sweep records entries and exits, notifies once per 7 days,
+  honours `hype_notifications`, awards `hype_train` to every effective maintainer and
+  `talent_scout` to every in-window hyper exactly once, skips while `hype_enabled` is off, and
+  re-evaluates on a lowered/raised `hype_top_n`.
+- **e2e** (`hype.spec.ts`): sign in, hype an eligible skill from its detail page, see the
+  "✓ Hyped" state and the "Hyped by" strip, see it on the Hyped-skills tab with its points, the
+  disabled button and the budget line; the admin card saves the top N and the header summary
+  updates. The exhausted-budget and maintainer states need more fixture skills and users than the
+  seeded dev stack has, so the integration tests above own them.
+
+### 50.12 Out of scope (deferred)
+- Undo / refund, budget carry-over, paid or weighted hypes, per-user hype history page.
+- Hype for `namespace`-visibility skills (would require a per-viewer board).
+- Any hype signal in search ranking, `related` skills (§10) or recommendations.
+- MCP exposure (§29) and the email digest's own "hyped skills" block (§48).
+- Retention / pruning of aged-out `skill_hypes` rows.

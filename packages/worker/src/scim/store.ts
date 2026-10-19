@@ -318,7 +318,7 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // status; explicit maintainerships are removed — no transfer on the SCIM path). install_credits
     // goes too — leaderboard attribution is erased (credits-only; shared clone events untouched).
     // Mirrors web's lib/eraseUser.ts. SKILLY_SPEC.md §21/§4.
-    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens", "user_achievements"]) {
+    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_hypes", "skill_watches", "notifications", "tokens", "user_achievements"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [userId]);
     }
     // RUM samples (§32.3): anonymise in place — rows stay for the aggregates, the person goes.

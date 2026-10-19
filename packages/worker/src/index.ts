@@ -46,6 +46,7 @@ import { sweepQuality } from "./scan/quality.js";
 import { sweepAiPrereview, pruneAiPrereviews } from "./scan/aiPrereview.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
 import { sweepSearchIndex, reindexSearchLanguage } from "./searchIndex.js";
+import { sweepHype, HYPE_SWEEP_INTERVAL_MS } from "./hype.js";
 import { mcpRouter } from "./mcp/server.js";
 import { mcpOAuthRouter, mcpHousekeeping } from "./mcp/oauthRouter.js";
 import { metrics, METRICS_CONTENT_TYPE, constantTimeEqual } from "@skilly/shared";
@@ -345,6 +346,23 @@ async function leaderLoops(): Promise<void> {
   };
   await backfill();
   setInterval(backfill, Number(process.env.CONTENT_BACKFILL_INTERVAL_MS ?? 3_600_000)); // 1h
+
+  // Hype sweep (§50.5): recompute the Hyped-skills board, record entries into / exits from the top
+  // N, notify maintainers on entry (once per skill per 7 days) and award the two badges. Every 3
+  // hours plus once at start; skips while hype_enabled is off; never overlaps itself (advisory lock).
+  const hypeSweep = async () => {
+    if (!isLeader) return;
+    try {
+      const r = await sweepHype(pool);
+      if (r.entries.length > 0 || r.exits.length > 0) {
+        console.log(JSON.stringify({ level: "info", msg: "hype sweep", entries: r.entries.length, exits: r.exits.length, notified: r.notified }));
+      }
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "hype sweep failed", err: String(err) }));
+    }
+  };
+  void hypeSweep();
+  setInterval(hypeSweep, Number(process.env.HYPE_SWEEP_INTERVAL_MS ?? HYPE_SWEEP_INTERVAL_MS)); // 3h
 
   // Content-risk re-scan (§37.5): check every published version at the current ruleset — the
   // backfill after this ships, and again after any ruleset bump. Batched; never overlaps itself;

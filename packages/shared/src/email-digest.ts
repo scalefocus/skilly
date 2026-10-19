@@ -27,6 +27,7 @@ export const DIGEST_DEFAULT_TYPES = [
   "skill.shared_new_version",
   "skill.marked_official",
   "skill.quality_low",
+  "skill.hyped",
   "follow.new_skill",
   "follow.new_version",
   "follow.achievement",
@@ -399,7 +400,13 @@ export function renderDigest(rows: readonly DigestRow[], opts: RenderDigestOptio
       const stars = quality[quality.length - 1]!.payload.stars;
       parts.push(typeof stars === "number" ? `scored ${formatStars(stars)} ★` : "low quality score");
     }
-    const handled = new Set(["skill.new_version", "skill.shared_new_version", "skill.discussion", "skill.marked_official", "skill.shared", "skill.quality_low"]);
+    // §50.7 one phrase however many times the skill re-entered the top N in the period.
+    const hyped = rs.filter((r) => r.type === "skill.hyped");
+    if (hyped.length) {
+      const topN = hyped[hyped.length - 1]!.payload.topN;
+      parts.push(typeof topN === "number" ? `entered the top ${topN} hyped skills` : "entered the top hyped skills");
+    }
+    const handled = new Set(["skill.new_version", "skill.shared_new_version", "skill.discussion", "skill.marked_official", "skill.shared", "skill.quality_low", "skill.hyped"]);
     for (const r of rs) if (!handled.has(r.type)) parts.push(safe(sentence(r)));
     const onlyComments = rs.every((r) => r.type === "skill.discussion");
     const path = `/skills/${key}${onlyComments ? "#discussion" : ""}`;

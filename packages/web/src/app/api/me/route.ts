@@ -17,6 +17,7 @@ import {
   setUserQualityNotifications,
   setUserPolicyNotifications,
   setUserAiPrereviewNotifications,
+  setUserHypeNotifications,
   setUserDirectoryHidden,
   setUserAchievementsHidden,
   setUserAllowFollows,
@@ -28,6 +29,7 @@ import { validateTimeZone } from "@skilly/shared/achievements";
 import { getOpenSurvey, selfSurveyStatus, setUserSurveysEnabled } from "../../../lib/survey";
 import { bugReportsEnabled } from "@skilly/shared/survey";
 import { setUserEmailDigest } from "../../../lib/emailDigest";
+import { getHypeSettings } from "../../../lib/hype";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +66,7 @@ export async function GET() {
             quality_notifications: boolean;
             policy_notifications: boolean;
             ai_prereview_notifications: boolean;
+            hype_notifications: boolean;
             directory_hidden: boolean;
             achievements_hidden: boolean;
             allow_follows: boolean;
@@ -74,7 +77,7 @@ export async function GET() {
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, email_digest, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, email_digest, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, hype_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -82,6 +85,8 @@ export async function GET() {
       : Promise.resolve(undefined),
     getPlatformSettings(pool),
   ]);
+  // §50.8 the profile hides the hype toggle while the feature is off.
+  const hypeEnabled = (await getHypeSettings(pool)).enabled;
   const systemDateFormat = settings.dateFormat;
   const dfo = prefs?.date_format;
   const dateFormatOverride = dfo === "eu" || dfo === "us" ? dfo : null;
@@ -135,6 +140,9 @@ export async function GET() {
     // namespace admins (the notification's only recipients).
     aiPrereviewNotifications: prefs?.ai_prereview_notifications ?? true,
     administersNamespace: [...access.namespaceRoles.values()].includes("namespace_admin"),
+    // §50.7 hype milestones on skills they maintain (row-level), and whether hype is on at all.
+    hypeNotifications: prefs?.hype_notifications ?? true,
+    hypeEnabled,
     // §28 directory opt-out: hide job title / office / department from other people's hover cards.
     directoryHidden: prefs?.directory_hidden ?? false,
     // §31 achievements opt-out: hide earned badges from other people (the hall + hover card).
@@ -202,6 +210,7 @@ export async function PATCH(req: Request) {
     qualityNotifications?: boolean;
     policyNotifications?: boolean;
     aiPrereviewNotifications?: boolean;
+    hypeNotifications?: boolean;
     directoryHidden?: boolean;
     achievementsHidden?: boolean;
     allowFollows?: boolean;
@@ -246,6 +255,9 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.policyNotifications === "boolean") {
     await setUserPolicyNotifications(access.userId, body.policyNotifications);
+  }
+  if (typeof body.hypeNotifications === "boolean") {
+    await setUserHypeNotifications(access.userId, body.hypeNotifications);
   }
   if (typeof body.aiPrereviewNotifications === "boolean") {
     await setUserAiPrereviewNotifications(access.userId, body.aiPrereviewNotifications);

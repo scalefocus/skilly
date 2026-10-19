@@ -209,6 +209,14 @@ export default function NotificationsPage() {
                       view request →
                     </Link>
                   )}
+                  {/* §50.7 a skill they maintain entered the top N hyped skills. */}
+                  {n.type === "skill.hyped" && (
+                    <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-hyped">
+                      Entered the top {typeof n.payload.topN === "number" ? n.payload.topN : ""} hyped skills
+                      {typeof n.payload.rank === "number" ? ` at #${n.payload.rank}` : ""}
+                      {typeof n.payload.hypeCount === "number" ? `, with ${n.payload.hypeCount} ${n.payload.hypeCount === 1 ? "hype" : "hypes"} in the last 7 days.` : "."}
+                    </p>
+                  )}
                   {n.type === "skill.deprecated" && (
                     <p style={{ fontSize: 13.5, margin: "8px 0 0" }}>
                       {skillName} is deprecated{succNs && succSlug ? <> — use <strong>{succTitle}</strong> instead.</> : "."}
