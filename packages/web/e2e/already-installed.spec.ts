@@ -9,7 +9,7 @@
 // test-only key); against a reused server started without it, that one step is skipped.
 import { Pool } from "pg";
 import { test, expect, devSignIn } from "./fixtures";
-import { gotoLoaded } from "./helpers/ready";
+import { clickAndAwait, gotoLoaded } from "./helpers/ready";
 
 const dbUrl = process.env.DATABASE_URL;
 const DEV_OID = "dev-admin-oid";
@@ -51,8 +51,10 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     const cmd = card.locator(".code-cmd");
     const dialog = page.getByTestId("already-installed-dialog");
 
-    // Nothing installed yet → a plain mint, no prompt. Then `npx skills` claims it.
-    await installBtn.click();
+    // Nothing installed yet → a plain mint, no prompt. Then `npx skills` claims it. The first mint
+    // of a pass may still compile the route (26 s on the CI agent): wait for the response, not
+    // the 15 s expect.
+    await clickAndAwait(page, () => installBtn.click(), /\/api\/skills\/global\/web-scraper\/install$/, { method: "POST" });
     await expect(cmd).toContainText("web-scraper.git");
     await expect(dialog).toHaveCount(0);
     await claim();
@@ -151,8 +153,11 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
 
   test("several installs of one skill share one collapsible card (summary, children, Behind chip, highlight)", async ({ page }) => {
     await devSignIn(page);
-    // Web Scraper holds one latest install from the first test. Add a pinned one, then make the
-    // latest-tracking install BEHIND (last served 1.0.0 < latest 1.2.0) and the pinned one current.
+    // Web Scraper holds one latest install from the first test. Add a pinned one, then stamp the
+    // latest-tracking install as last served 1.0.0 and the pinned one as its own 1.2.0. The seeded
+    // web-scraper has exactly one active version (1.2.0), so 1.0.0 is not an older version but one
+    // that is no longer active at all: that install is WITHDRAWN (§23), the pinned one current. The
+    // card's badge shows the worst state, and the Behind-latest chip keeps withdrawn installs too.
     const mint = async (semver: string | null) => {
       const r = await page.request.post("/api/skills/global/web-scraper/install", { data: { semver, expiresAt: null, onExisting: "keep" } });
       expect(r.ok(), await r.text()).toBeTruthy();
@@ -175,7 +180,8 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(card.getByTestId("install-card-count")).toHaveText("2 installations");
     await expect(card.getByTestId("install-card-versions")).toHaveText("latest · pinned v1.2.0");
-    await expect(card.locator(".installed-card-head").getByText("Behind", { exact: true })).toBeVisible();
+    await expect(card.locator(".installed-card-head").getByText("Withdrawn", { exact: true })).toBeVisible();
+    await expect(card.locator(".installed-card-head").getByText("Behind", { exact: true })).toHaveCount(0);
     await expect(card.locator(".installed-card-head").getByText("2 active", { exact: true })).toBeVisible();
     await expect(card.locator(".installed-card-head")).toContainText("last installed");
     await expect(children).toHaveCount(0);

@@ -12,7 +12,7 @@
 // created fixture (`e2e-share-target`); the skill itself is deleted in `finally`.
 import { test, expect, devSignIn } from "./fixtures";
 import { createHostedProposal, deleteSkillFully } from "./helpers/skills";
-import { acceptNextDialog, gotoLoaded } from "./helpers/ready";
+import { acceptNextDialog, clickAndAwait, gotoLoaded } from "./helpers/ready";
 import type { Page } from "@playwright/test";
 
 const TARGET_SLUG = "e2e-share-target";
@@ -71,9 +71,15 @@ test.describe("§42 namespace sharing", () => {
       await expect(card).toBeVisible({ timeout: 30_000 });
       await expect(card.getByText(TARGET_NAME)).toBeVisible();
 
-      // ── Revoke via the chip's × (confirm dialog). ──
+      // ── Revoke via the chip's × (confirm dialog). The DELETE may still compile its route (20 s
+      // on the CI agent): wait for the response, then for the card's reload to drop the chip. ──
       const confirmed = acceptNextDialog(page);
-      await card.getByRole("button", { name: `stop sharing with ${TARGET_NAME}` }).click();
+      await clickAndAwait(
+        page,
+        () => card.getByRole("button", { name: `stop sharing with ${TARGET_NAME}` }).click(),
+        `/api/skills/team-a/${slug}/grants/${targetId}`,
+        { method: "DELETE" },
+      );
       await confirmed;
       await expect(card.getByText(TARGET_NAME)).toHaveCount(0, { timeout: 15_000 });
       await expect.poll(() => grantIds(page, slug), { timeout: 15_000 }).toEqual([]);

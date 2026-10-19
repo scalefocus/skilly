@@ -90,7 +90,7 @@ const PAGES = [
 // signed-in page) and what the most-visited pages (/admin, /catalog, a skill page, /propose,
 // /proposals/[id], /profile) fetch as they load. Cold, these compiled one after another on the
 // first spec to open such a page: on the CI agent 10–37 s each, and /admin alone fires ~15, so its
-// cards were still loading two minutes in and the specs' 45 s response waits ran out. Warming ~70
+// cards were still loading two minutes in and the specs' 45 s response waits ran out. Warming ~85
 // keeps the pinned graph far below the full sweep's (~159). Keep in sync when the shell or one of
 // these pages starts loading a new endpoint. POST-only routes answer GET with 405 and compile all the same.
 const CORE_API = [
@@ -177,6 +177,23 @@ const CORE_API = [
   "/api/skills/global/pdf-tools/discussion/00000000-0000-0000-0000-000000000000",
   "/api/skills/global/pdf-tools/related",
   "/api/skills/global/pdf-tools/usage-series",
+  // The skill page's Install panel and its Shared with card (§23, §42). Cold on the CI agent, the
+  // mint compiled 26 s while already-installed.spec waited 15 s for the command, and the revoke
+  // compiled 20 s while namespace-sharing.spec waited 15 s for the chip to go. The mint is
+  // POST-only and the per-namespace grant PUT/DELETE-only: a GET 405s and compiles all the same.
+  "/api/skills/global/pdf-tools/install",
+  "/api/skills/global/pdf-tools/grants",
+  "/api/skills/global/pdf-tools/grants/00000000-0000-0000-0000-000000000000",
+  // Every spec with a skill fixture tears it down through these two (helpers/skills.ts
+  // deleteSkillFully). POST-only; cold they compiled 27–30 s and 16–19 s once per pass, holding
+  // every other request behind them for that long.
+  "/api/skills/global/pdf-tools/archive",
+  "/api/skills/global/pdf-tools/delete",
+  // /installed: the list, and the Show install URL reveal. Cold, the list compiled 16 s under
+  // already-installed.spec's 20 s wait for the highlighted row and the reveal 14 s under its 15 s
+  // wait for the command.
+  "/api/installs",
+  "/api/installs/00000000-0000-0000-0000-000000000000/command",
   // /propose
   "/api/categories",
   "/api/namespaces",
