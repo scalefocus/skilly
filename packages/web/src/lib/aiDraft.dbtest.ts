@@ -21,6 +21,10 @@ import type { AddressInfo } from "node:net";
 import AdmZip from "adm-zip";
 import type { EffectiveAccess } from "@skilly/shared";
 
+// The stub provider listens on loopback, which §49.11 refuses by default: opt in exactly as an
+// operator with an on-network provider would (the check reads the env per call).
+process.env.AI_ALLOW_PRIVATE_BASE_URL = "1";
+
 const enabled = process.env.SKILLY_DB_E2E === "1";
 const GOOD = "sk-dbtest-draft-token-1234";
 const AI_KEY_B64 = Buffer.alloc(32, 7).toString("base64");

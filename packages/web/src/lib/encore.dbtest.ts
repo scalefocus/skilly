@@ -104,6 +104,15 @@ function hosted(key: string, slug: string, file: string, whatChanged?: string): 
   };
 }
 
+/** §49.2: the fail-closed gate needs a complete verdict — stand in for the upload path's artifact report. */
+async function scanned(p: RevisionPayload): Promise<RevisionPayload> {
+  await pool.query(
+    `insert into scan_reports (subject_type, subject_id, scanner, findings, severity, status) values ('artifact', $1, 'test', '[]'::jsonb, 'info', 'scanned')`,
+    [p.artifactObjectKey],
+  );
+  return p;
+}
+
 const held = async (userId: string, key = ENCORE) =>
   (await pool.query(`select 1 from user_achievements where user_id = $1 and key = $2`, [userId, key])).rowCount === 1;
 const encoreNotifs = async (userId: string) =>
@@ -125,7 +134,7 @@ test("Encore: web proposals — new version awards once; new skill, revise, acce
     // A brand-new skill: Homegrown, but no Encore.
     const { id: firstId } = await createProposal(pool, {
       submittedByUserId: proposer, targetNamespaceId: w.ns, proposedSemver: "1.0.0",
-      payload: hosted("enc-prop", "enc-skill", "v1"),
+      payload: await scanned(hosted("enc-prop", "enc-skill", "v1")),
     });
     assert.equal(await held(proposer), false, "a new-skill proposal is not a new version");
     assert.equal(await held(proposer, "first_hosted_proposal"), true);
@@ -137,7 +146,7 @@ test("Encore: web proposals — new version awards once; new skill, revise, acce
     // A new version of it: Encore, with exactly one notification.
     const { id: nvId } = await createProposal(pool, {
       submittedByUserId: proposer, targetNamespaceId: w.ns, targetSkillId: skillId, proposedSemver: "1.1.0",
-      payload: hosted("enc-prop", "enc-skill", "v2", "Better."),
+      payload: await scanned(hosted("enc-prop", "enc-skill", "v2", "Better.")),
     });
     assert.equal(await held(proposer), true, "a new-version proposal earns Encore");
     assert.equal(await encoreNotifs(proposer), 1);
@@ -146,7 +155,7 @@ test("Encore: web proposals — new version awards once; new skill, revise, acce
     await pool.query(`delete from user_achievements where user_id = $1 and key = $2`, [proposer, ENCORE]);
     const revised = await performProposalAction(pool, {
       proposalId: nvId, action: "revise", actorUserId: proposer, access: noAccess,
-      newPayload: hosted("enc-prop", "enc-skill", "v2", "Better still."),
+      newPayload: await scanned(hosted("enc-prop", "enc-skill", "v2", "Better still.")),
     }, store);
     assert.equal(revised.ok, true, JSON.stringify(revised));
     assert.equal(await held(proposer), false, "revise never awards Encore");
@@ -158,7 +167,7 @@ test("Encore: web proposals — new version awards once; new skill, revise, acce
     assert.equal(await held(proposer, "first_new_version"), true, "Sequel still lands on publish");
 
     // A global (re-)promotion targets an existing skill but copies a version: no Encore.
-    const promoted = { ...hosted("enc-prop", "enc-skill", "v2"), promotedFromSkillVersionId: await versionIdOf(skillId, "1.1.0") };
+    const promoted = { ...(await scanned(hosted("enc-prop", "enc-skill", "v2"))), promotedFromSkillVersionId: await versionIdOf(skillId, "1.1.0") };
     await createProposal(pool, {
       submittedByUserId: promoter, targetNamespaceId: w.ns, targetSkillId: skillId, proposedSemver: "1.2.0", payload: promoted,
     });
@@ -174,18 +183,18 @@ test("Encore: direct publish — a new version awards it, a new skill does not, 
     const member = await w.user("member");
     const routed = await w.user("routed");
 
-    const first = await directPublish(pool, { access: w.memberAccess, actorUserId: member, namespaceSlug: w.nsSlug, semver: "1.0.0", payload: hosted("enc-direct", "enc-d", "v1") });
+    const first = await directPublish(pool, { access: w.memberAccess, actorUserId: member, namespaceSlug: w.nsSlug, semver: "1.0.0", payload: await scanned(hosted("enc-direct", "enc-d", "v1")) });
     assert.ok(first.ok && !("routed" in first), JSON.stringify(first));
     assert.equal(await held(member), false, "a new skill is not a new version");
 
-    const second = await directPublish(pool, { access: w.memberAccess, actorUserId: member, namespaceSlug: w.nsSlug, semver: "1.0.1", payload: hosted("enc-direct", "enc-d", "v2", "Fixes.") });
+    const second = await directPublish(pool, { access: w.memberAccess, actorUserId: member, namespaceSlug: w.nsSlug, semver: "1.0.1", payload: await scanned(hosted("enc-direct", "enc-d", "v2", "Fixes.")) });
     assert.ok(second.ok && !("routed" in second), JSON.stringify(second));
     assert.equal(await held(member), true, "a direct publish of a new version earns Encore");
     assert.equal(await held(member, "first_new_version"), true, "and Sequel, in the same publish");
     assert.equal(await encoreNotifs(member), 1);
 
     // A member's flagged publish is routed to review (§37.4) — still a submission of a new version.
-    const flagged = hosted("enc-direct", "enc-d", "v3", "Risky.");
+    const flagged = await scanned(hosted("enc-direct", "enc-d", "v3", "Risky."));
     const findings: ScanFinding[] = [
       { scanner: "content-risk", severity: "info", rule: "cr-scanned", message: "", ruleset: CONTENT_RULESET_VERSION },
       { scanner: "content-risk", severity: "high", rule: "cr-hidden-unicode", message: "hidden character", path: "SKILL.md", line: 1, excerpt: "x", ruleset: CONTENT_RULESET_VERSION },
@@ -212,7 +221,7 @@ test("Encore: migration 0085 backfills from both sources, earliest wins, exclusi
     const erased = await w.user("erased"); // a direct publish, then erased
 
     const pub = async (who: string, semver: string, file: string) => {
-      const r = await directPublish(pool, { access: w.memberAccess, actorUserId: who, namespaceSlug: w.nsSlug, semver, payload: hosted("enc-bf", "enc-bf", file, semver === "1.0.0" ? undefined : "Changes.") });
+      const r = await directPublish(pool, { access: w.memberAccess, actorUserId: who, namespaceSlug: w.nsSlug, semver, payload: await scanned(hosted("enc-bf", "enc-bf", file, semver === "1.0.0" ? undefined : "Changes.")) });
       assert.ok(r.ok && !("routed" in r), JSON.stringify(r));
     };
     await pub(owner, "1.0.0", "a");
@@ -222,14 +231,14 @@ test("Encore: migration 0085 backfills from both sources, earliest wins, exclusi
 
     const { id: oldProposal } = await createProposal(pool, {
       submittedByUserId: proposer, targetNamespaceId: w.ns, targetSkillId: skillId, proposedSemver: "1.0.3",
-      payload: hosted("enc-bf", "enc-bf", "d", "Old idea."),
+      payload: await scanned(hosted("enc-bf", "enc-bf", "d", "Old idea.")),
     });
     await pool.query(`update proposals set created_at = '2024-03-01T10:00:00Z' where id = $1`, [oldProposal]);
     await pub(proposer, "1.0.4", "e");
 
     const { id: promo } = await createProposal(pool, {
       submittedByUserId: promoter, targetNamespaceId: w.ns, targetSkillId: skillId, proposedSemver: "1.0.5",
-      payload: { ...hosted("enc-bf", "enc-bf", "f"), promotedFromSkillVersionId: await versionIdOf(skillId, "1.0.1") },
+      payload: { ...(await scanned(hosted("enc-bf", "enc-bf", "f"))), promotedFromSkillVersionId: await versionIdOf(skillId, "1.0.1") },
     });
     await performProposalAction(pool, { proposalId: promo, action: "start_review", actorUserId: owner, access: platformAdmin }, store);
     const accepted = await performProposalAction(pool, { proposalId: promo, action: "accept", actorUserId: owner, access: platformAdmin, expectedRevisionNo: 1 }, store);

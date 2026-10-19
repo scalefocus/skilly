@@ -132,6 +132,7 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
       if (pointerChanged && ptr) {
         const v = await verifyPointerSkill(ptr.url, ptr.ref, ptr.subdir);
         if (!v.ok) return Response.json({ error: v.error }, { status: 422 });
+        np.pointer = { ...ptr, commit: v.commit }; // §49.3 pin
       }
       const dup = await findDuplicateSkill(
         access,
@@ -169,7 +170,7 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     // Pass the override gate's signal through (§6, §37.4) so a client can tell "needs the override"
     // apart from a stale-revision 409.
     return Response.json(
-      { error: result.error, ...(result.requiresOverride ? { requiresOverride: true, severity: result.severity ?? null } : {}), ...(result.policy ? { policy: result.policy } : {}), ...(result.code ? { code: result.code, matches: result.matches ?? [] } : {}) },
+      { error: result.error, ...(result.requiresOverride ? { requiresOverride: true, severity: result.severity ?? null } : {}), ...(result.scanPending ? { scanPending: true, scanPendingReason: result.scanPendingReason ?? null } : {}), ...(result.policy ? { policy: result.policy } : {}), ...(result.code ? { code: result.code, matches: result.matches ?? [] } : {}) },
       { status: result.status },
     );
   }

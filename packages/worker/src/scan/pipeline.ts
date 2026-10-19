@@ -3,16 +3,15 @@
 // so unit tests / hermetic runs stay fast and offline. SKILLY_SPEC.md §6.
 import { PURE_SCANNERS, runScanners, countContentRiskFindings, type Scanner, type ScanFinding, type BundleEntry } from "@skilly/shared";
 import { M } from "../metrics.js";
-import { clamavScanner } from "./clamav.js";
+import { clamavScannerFromEnv } from "@skilly/shared/clamav";
 
 export type { Scanner, ScanFinding, BundleEntry };
 
 /** Default scanner set, ClamAV added when configured via env. */
 export function defaultScanners(): Scanner[] {
   const scanners: Scanner[] = [...PURE_SCANNERS];
-  if (process.env.CLAMAV_HOST) {
-    scanners.push(clamavScanner({ host: process.env.CLAMAV_HOST, port: Number(process.env.CLAMAV_PORT ?? 3310) }));
-  }
+  const av = clamavScannerFromEnv();
+  if (av) scanners.push(av);
   return scanners;
 }
 

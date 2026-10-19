@@ -10,6 +10,8 @@ export const M = {
   notificationsDelivered: metrics.counter("skilly_notifications_delivered_total", "Notifications delivered"),
   notificationsFailed: metrics.counter("skilly_notifications_failed_total", "Notification delivery failures"),
   gitClones: metrics.counter("skilly_git_clones_total", "Authenticated git fetches served"),
+  // §49.8 gateway refusals, by reason (install_token_invalid|install_token_scope_mismatch|…).
+  gitRefusals: metrics.counter("skilly_worker_git_refusals_total", "Git gateway requests refused, by reason"),
   // §22 worker rate limiting, by surface (git_ip|git_token|scim|other).
   workerRateLimited: metrics.counter("skilly_worker_rate_limited_total", "Worker requests refused by a rate limiter, by surface"),
   reconcile: metrics.counter("skilly_reconcile_runs_total", "Entra reconciliation sweeps"),

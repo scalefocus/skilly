@@ -123,6 +123,14 @@
       "types": "./dist/ai.d.ts",
       "default": "./dist/ai.js"
     },
+    "./ai-egress": {
+      "types": "./dist/ai-egress.d.ts",
+      "default": "./dist/ai-egress.js"
+    },
+    "./clamav": {
+      "types": "./dist/clamav.d.ts",
+      "default": "./dist/clamav.js"
+    },
     "./ai-name": {
       "types": "./dist/ai-name.d.ts",
       "default": "./dist/ai-name.js"

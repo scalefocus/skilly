@@ -1,7 +1,15 @@
 # Reverse proxy (SKILLY_SPEC.md §13).
 # Production: TLS terminates at the org reverse proxy; this Caddy instance handles
-# internal routing on port 8080.  It forwards X-Forwarded-Proto and X-Forwarded-Host
+# internal routing on port 8080.  It sets X-Forwarded-Proto and X-Forwarded-Host
 # so Next.js (15+) and NextAuth can reconstruct the correct public URL.
+#
+# §49.12: the forwarded headers are set from Caddy's OWN placeholders ({scheme} = the scheme of
+# the request Caddy received, {host} = its Host header) — the client's incoming
+# X-Forwarded-Proto / X-Forwarded-Host copies are NOT forwarded, so a caller cannot spoof the
+# public origin that web/worker reconstruct (OIDC callbacks, install URLs, OAuth metadata).
+# When an org edge proxy sits in front of this Caddy, that edge is the one that terminates TLS
+# and it must set these headers for its own hop; this sample is dev-only (SECURITY.md).
+# X-Real-IP stays {remote_host} (the peer that connected to Caddy).
 :8080 {
 	# Baseline security headers on every proxied response (defense-in-depth, SKILLY_SPEC.md §22).
 	# The web app and worker already set these at the app tier; plain `header` = set/replace (not
@@ -24,8 +32,8 @@
 	# SCIM provisioning endpoint -> worker (keep /scim prefix; worker mounts at /scim/v2)
 	handle /scim/* {
 		reverse_proxy worker:4000 {
-			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
-			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host  {host}
 			header_up X-Real-IP         {remote_host}
 		}
 	}
@@ -39,29 +47,29 @@
 	# lists in sync with the Helm ingress.
 	handle /mcp* {
 		reverse_proxy worker:4000 {
-			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
-			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host  {host}
 			header_up X-Real-IP         {remote_host}
 		}
 	}
 	handle /oauth/token* {
 		reverse_proxy worker:4000 {
-			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
-			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host  {host}
 			header_up X-Real-IP         {remote_host}
 		}
 	}
 	handle /oauth/revoke* {
 		reverse_proxy worker:4000 {
-			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
-			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host  {host}
 			header_up X-Real-IP         {remote_host}
 		}
 	}
 	handle /.well-known/oauth-* {
 		reverse_proxy worker:4000 {
-			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
-			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host  {host}
 			header_up X-Real-IP         {remote_host}
 		}
 	}
@@ -72,18 +80,19 @@
 	@git path_regexp git ^/[^/]+/[^/]+\.git(/.*)?$
 	handle @git {
 		reverse_proxy worker:4000 {
-			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
-			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host  {host}
 			header_up X-Real-IP         {remote_host}
 		}
 	}
 	# everything else -> web app (UI + API)
 	handle {
 		reverse_proxy web:3000 {
-			# Pass the original protocol/host so NextAuth builds correct callback URLs.
-			# The org proxy terminates TLS and must set X-Forwarded-Proto: https upstream.
-			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
-			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			# Scheme/host of the request as Caddy saw it, so NextAuth builds correct callback URLs.
+			# Behind an org TLS-terminating proxy, point PUBLIC_BASE_URL at that proxy and let it set
+			# X-Forwarded-Proto: https for its own hop (see the header note at the top of this file).
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host  {host}
 			header_up X-Real-IP         {remote_host}
 		}
 	}

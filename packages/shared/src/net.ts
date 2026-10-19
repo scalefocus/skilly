@@ -46,6 +46,15 @@ export function isBlockedIp(ipRaw: string): boolean {
   return false; // not an IP literal → a hostname; resolution-time check happens in the worker
 }
 
+/**
+ * A hostname that names the local machine or an internal zone (`localhost`, `*.localhost`,
+ * `*.local`, `*.internal`). Shared by the pointer URL validator and the AI base-URL check
+ * (§49.11). Expects a lower-cased host with brackets and the FQDN-root dot already stripped.
+ */
+export function isLocalHostname(host: string): boolean {
+  return host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal");
+}
+
 /** Returns an error string if the pointer URL is unsafe, or null if it's acceptable. */
 export function validatePointerUrl(raw: string): string | null {
   let u: URL;
@@ -60,7 +69,7 @@ export function validatePointerUrl(raw: string): string | null {
   // Strip brackets and a single trailing FQDN-root dot (so "localhost." / "x.internal." can't
   // evade the suffix checks below).
   const host = u.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
+  if (isLocalHostname(host)) {
     return "pointer URL must not target a local/internal host";
   }
   // Require a fully-qualified host (a dot for IPv4/DNS, or a colon for IPv6) — blocks bare
@@ -112,4 +121,38 @@ export function validateSubdir(raw: string): string | null {
 export function slugFromSubdir(subdir: string): string {
   const segs = subdir.split("/").filter(Boolean);
   return segs[segs.length - 1] ?? "";
+}
+
+/**
+ * The client address a rate limiter may key on, derived from `X-Forwarded-For` the way Express's
+ * `trust proxy = <n>` does (§22 *Rate limiting*, §49.9): with `n` trusted hops the client is the
+ * n-th address from the RIGHT; with none trusted (unset / 0) every client shares one bucket, so the
+ * header is ignored. The FIRST entry is never used — it is whatever the client chose to send.
+ */
+export function clientIpFromForwarded(xff: string | null | undefined, trustProxyHops: number): string | null {
+  const hops = Number.isFinite(trustProxyHops) ? Math.floor(trustProxyHops) : 0;
+  if (hops <= 0 || !xff) return null;
+  const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  const idx = parts.length - hops;
+  return parts[idx < 0 ? 0 : idx] ?? null;
+}
+
+/** Parse a `TRUST_PROXY`-style value into a hop count (`true` = 1, a number = itself, else 0). */
+export function trustProxyHops(raw: string | undefined): number {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (!v || v === "false" || v === "0") return 0;
+  if (v === "true") return 1;
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Whether a request is a same-site one for the purpose of a state-changing GET (§49.9): the
+ * `Sec-Fetch-Site` header is absent (old client), `same-origin`, `same-site` or `none` (typed URL /
+ * bookmark). A `cross-site` navigation is served but must not trigger side effects.
+ */
+export function isSameSiteFetch(secFetchSite: string | null | undefined): boolean {
+  const v = (secFetchSite ?? "").trim().toLowerCase();
+  return v === "" || v === "same-origin" || v === "same-site" || v === "none";
 }

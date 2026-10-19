@@ -8,6 +8,7 @@
 // audit payload, a system_event or an error message; it is only ever sent to the stored base URL.
 // SKILLY_SPEC.md §40.
 import { decryptToken, encryptToken, parseEmailTokenKey } from "./email-crypto.js";
+import { isBlockedIp, isLocalHostname } from "./net.js";
 import {
   AI_CALL_TIMEOUT_DEFAULT_MS,
   AI_CALL_TIMEOUT_MAX_MS,
@@ -106,6 +107,7 @@ export const AI_FEATURES: readonly AiFeature[] = [
 export const AI_TEST_FEATURE = "test";
 
 export type AiErrorCode =
+  | "ai_base_url_private"
   | "ai_not_configured"
   | "ai_disabled"
   | "ai_key_missing"
@@ -143,7 +145,11 @@ export const AI_MAX_TOKENS_LIMIT = 8192;
  * Normalize an admin-entered base URL (§40.2): absolute http(s), ≤ 500 chars, no userinfo /
  * query / fragment, trailing slashes stripped. Blank = the Anthropic default; Open WebUI requires one.
  */
-export function normalizeAiBaseUrl(provider: AiProvider, raw: string | null | undefined): { ok: true; url: string } | { ok: false; error: string } {
+export function normalizeAiBaseUrl(
+  provider: AiProvider,
+  raw: string | null | undefined,
+  opts: { allowPrivate?: boolean } = {},
+): { ok: true; url: string } | { ok: false; error: string; code?: "ai_base_url_private" } {
   const s = (raw ?? "").trim();
   if (!s) {
     if (provider === "anthropic") return { ok: true, url: ANTHROPIC_DEFAULT_BASE_URL };
@@ -159,6 +165,14 @@ export function normalizeAiBaseUrl(provider: AiProvider, raw: string | null | un
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return { ok: false, error: "the base URL must start with http:// or https://" };
   if (u.username || u.password) return { ok: false, error: "the base URL must not contain credentials" };
+  // §49.11: never a private, loopback, link-local, metadata or local-zone host — unless the
+  // operator has explicitly allowed on-network providers (AI_ALLOW_PRIVATE_BASE_URL=1).
+  if (!opts.allowPrivate) {
+    const host = u.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
+    if (isLocalHostname(host) || isBlockedIp(host)) {
+      return { ok: false, code: "ai_base_url_private", error: "the base URL must not point at a private, loopback or local host (an operator can allow on-network providers with AI_ALLOW_PRIVATE_BASE_URL=1)" };
+    }
+  }
   let path = u.pathname.replace(/\/+$/, "");
   // §40.2: skilly appends `/api/...` for Open WebUI itself, so a pasted `https://host/api` would
   // double it — strip one final `/api` segment (a deeper prefix like `/openwebui` is kept).
@@ -370,11 +384,16 @@ async function readCapped(res: Response, max: number): Promise<string> {
  * token elsewhere), the body is capped at 1 MB, and every failure is an AiError whose message is
  * already sanitized (token-redacted, one line).
  */
+/** Per-call egress check (§49.11): throws an AiError when the host must not be reached. */
+export type AiHostGuard = (hostname: string) => Promise<void>;
+
 export async function providerFetch(
   spec: AiRequestSpec,
-  opts: { timeoutMs: number; token: string; fetchImpl?: typeof fetch; signal?: AbortSignal },
+  opts: { timeoutMs: number; token: string; fetchImpl?: typeof fetch; signal?: AbortSignal; hostGuard?: AiHostGuard },
 ): Promise<unknown> {
   const f = opts.fetchImpl ?? fetch;
+  // §49.11: re-resolve the provider host before every call (DNS-rebinding defence).
+  if (opts.hostGuard) await opts.hostGuard(new URL(spec.url).hostname);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
   const cancelled = () => opts.signal?.aborted === true;
@@ -452,7 +471,7 @@ export interface AiTestResult {
 /** §40.5: a minimal completion, 20 s timeout, no retry. Pass = a 2xx with a parseable response. */
 export async function runAiTest(
   c: AiConnection & { model: string },
-  opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  opts: { fetchImpl?: typeof fetch; timeoutMs?: number; hostGuard?: AiHostGuard } = {},
 ): Promise<AiTestResult> {
   const started = Date.now();
   const spec = buildCompletionRequest(c, {
@@ -462,7 +481,7 @@ export async function runAiTest(
     maxTokens: AI_TEST_MAX_TOKENS,
   });
   try {
-    const body = await providerFetch(spec, { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl });
+    const body = await providerFetch(spec, { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl, hostGuard: opts.hostGuard });
     const parsed = parseCompletionResponse(c.provider, body);
     return { ok: true, latencyMs: Date.now() - started, model: parsed.model ?? c.model, error: null, errorCode: null, httpStatus: null };
   } catch (err) {
@@ -472,8 +491,8 @@ export async function runAiTest(
 }
 
 /** The provider's model ids (§40.2); throws AiError on failure. */
-export async function listAiModels(c: AiConnection, opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<string[]> {
-  const body = await providerFetch(buildModelsRequest(c), { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl });
+export async function listAiModels(c: AiConnection, opts: { fetchImpl?: typeof fetch; timeoutMs?: number; hostGuard?: AiHostGuard } = {}): Promise<string[]> {
+  const body = await providerFetch(buildModelsRequest(c), { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl, hostGuard: opts.hostGuard });
   return parseModelsResponse(body);
 }
 
@@ -651,6 +670,8 @@ export interface AiEnv {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** §49.11 per-call egress guard (see `@skilly/shared/ai-egress`); absent = no DNS re-check. */
+  hostGuard?: AiHostGuard;
 }
 
 export interface AiCompleteOptions {
@@ -742,7 +763,7 @@ export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Pr
   let json: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const body = await providerFetch(spec, { timeoutMs, token, fetchImpl: env.fetchImpl, signal: o.signal });
+      const body = await providerFetch(spec, { timeoutMs, token, fetchImpl: env.fetchImpl, signal: o.signal, hostGuard: env.hostGuard });
       parsed = parseCompletionResponse(row.provider, body);
       failure = null;
       break;

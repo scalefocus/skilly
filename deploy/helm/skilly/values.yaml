@@ -20,6 +20,10 @@ publicBaseUrl: "https://skilly.example.com"
 web:
   replicas: 2
   resources: {}
+  # Express-style `trust proxy` for web (TRUST_PROXY): the number of proxies in front of web, so
+  # the OAuth dynamic-client-registration per-IP rate limit (§49.9) keys on the real client.
+  # "" = don't trust X-Forwarded-For (every DCR caller shares the ingress controller's bucket).
+  trustProxy: ""
   autoscaling:
     enabled: true
     minReplicas: 2
@@ -78,6 +82,12 @@ secrets:
   # §23 Show install URL: encrypts the recoverable copy of each install token (32 bytes base64,
   # `openssl rand -base64 32`). Empty = installs mint as before and can't be re-shown later.
   installTokenEncKey: ""
+  # Secret key of the object-store account web + worker use. §49.12: this MUST be a
+  # bucket-scoped account (s3:* on the artifact bucket only), never an object-store root/admin
+  # pair. With the bundled MinIO (minio.enabled=true) the chart's evaluation-grade wiring reuses
+  # this value as the MinIO root password — acceptable for evaluation only; for production point
+  # the app at a scoped account (see NOTES step 2) or use an external store (minio.enabled=false)
+  # with minio.external.accessKey + this key belonging to that scoped account.
   s3SecretKey: "change-me-minio"
 
 # ── Non-secret config ────────────────────────────────────────────────────────
@@ -94,6 +104,14 @@ config:
     from: "skilly@example.com"
   webhookUrl: ""
 
+# ── AI integration (§40 / §49.11) ─────────────────────────────────────────────
+ai:
+  # The AI provider base URL an admin saves is refused when it resolves to a private / loopback /
+  # link-local address (SSRF guard). true = render AI_ALLOW_PRIVATE_BASE_URL=1 on web + worker —
+  # set it ONLY for a provider that genuinely lives on your own network (e.g. a self-hosted
+  # Open WebUI); leave false for any public provider.
+  allowPrivateBaseUrl: false
+
 # ── Migrations ────────────────────────────────────────────────────────────────
 # The migrate Job applies the SQL files from a ConfigMap. Create it once from the repo:
 #   kubectl -n <ns> create configmap skilly-migrations --from-file=db/migrations
@@ -101,9 +119,11 @@ migrations:
   existingConfigMap: "skilly-migrations"
 
 # ── Bundled stateful dependencies (disable to use managed services) ───────────
+# Images are pinned by tag + digest (§49.12); bumps are reviewed changes — see deploy/IMAGES.md
+# for the current pins and the bump procedure. Keep them in sync with deploy/docker-compose.yml.
 postgres:
   enabled: true
-  image: postgres:16-alpine
+  image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
   user: skilly          # owner role (migrations run as this; app connects as skilly_app)
   database: skilly
   storage:
@@ -115,7 +135,9 @@ postgres:
 
 minio:
   enabled: true
-  image: minio/minio:latest
+  image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+  # Root user of the bundled MinIO. The app's S3 credentials should be a bucket-scoped account,
+  # not this root pair (§49.12) — see secrets.s3SecretKey and NOTES step 2.
   rootUser: skilly
   bucket: skilly-artifacts
   storage:
@@ -123,9 +145,11 @@ minio:
     storageClass: ""
   external:
     endpoint: ""       # used when enabled=false (e.g. https://s3.amazonaws.com)
-    accessKey: ""
+    accessKey: ""      # a BUCKET-SCOPED account's access key (its secret = secrets.s3SecretKey)
     bucket: ""
 
 clamav:
   enabled: true
-  image: clamav/clamav:latest
+  image: clamav/clamav:1.5.4@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
+  # clamd port; web + worker get CLAMAV_HOST/CLAMAV_PORT only when enabled (§49.2/§49.12).
+  port: "3310"

@@ -60,6 +60,7 @@ import { s3ArtifactStore } from "../storage/objectStore.js";
 import { extractBundle } from "../git/bundle.js";
 import { getMaxBundleBytesSetting } from "./settings.js";
 import { M } from "../metrics.js";
+import { defaultScanners } from "../scan/pipeline.js";
 import { awardAchievement, tryAward } from "../achievements.js";
 
 export type WriteFailure = { ok: false; error: string };
@@ -740,7 +741,9 @@ async function ingestHostedBundle(
   const validation = validateBundle(files, { skillSlug, maxBytes: contentCap });
   if (!validation.ok) return fail(`invalid bundle: ${validation.errors.join("; ")}`);
 
-  const findings = await runScanners(files, PURE_SCANNERS);
+  // §49.2: the worker's full scanner set, ClamAV included when CLAMAV_HOST is set — the MCP door
+  // runs the same engines as POST /api/uploads.
+  const findings = await runScanners(files, defaultScanners());
   countContentRiskFindings(M.contentRiskFindings, findings); // §37.13
   const severity = maxSeverity(findings) ?? "info";
   const contentSha256 = contentDigest(files);

@@ -50,7 +50,7 @@ const SERIES_RANGES: { key: SeriesRange; label: string }[] = [
 const toSeriesRange = (s: string): SeriesRange => (s === "7d" || s === "90d" || s === "all" ? s : "30d");
 interface SkillSeries { range: SeriesRange; bucket: "day" | "week" | "month"; points: { date: string; views: number; installs: number }[] }
 
-interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked"; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null; quality?: QualitySummaryView | null }
+interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked" | "quarantined"; quarantine?: { rules: string[]; detectedAt: string } | null; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null; quality?: QualitySummaryView | null }
 interface RatingView { avg: number; count: number; distribution: number[]; mine: number | null }
 interface MaintainerView { userId: string; displayName: string; email: string; avatar: string | null; source: "admin" | "explicit"; followable?: boolean }
 
@@ -98,8 +98,8 @@ function CollapsibleMarkdown({ source, collapsedHeight = 240 }: { source: string
  *  auto-computed file changes vs this version's immediate PREDECESSOR (§10): the note is the
  *  author's claim, the file list is the mechanical truth. The changes are fetched only once the
  *  row is expanded (the component mounts then), so the page load pays nothing for them. */
-function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canManage, busy, onYank, formattedDate, pointer }: {
-  v: VersionView; base: string; predecessor: string | null; downloadHref: string; downloadTitle: string; canManage: boolean; busy: boolean; onYank: () => void; formattedDate: string; pointer: boolean;
+function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canManage, busy, onYank, onRelease, formattedDate, pointer }: {
+  v: VersionView; base: string; predecessor: string | null; downloadHref: string; downloadTitle: string; canManage: boolean; busy: boolean; onYank: () => void; onRelease: () => void; formattedDate: string; pointer: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const expandable = !!v.whatChanged || !!predecessor;
@@ -110,6 +110,10 @@ function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canMana
           <span className="mono" style={{ fontWeight: 500 }}>v{v.semver}</span>
           {v.channel === "beta" ? <Pill tone="warn">beta</Pill> : <Pill tone="ok">stable</Pill>}
           {v.status === "yanked" && <Pill tone="danger">yanked</Pill>}
+          {/* §49.2: a mirrored version whose scan verdict was critical — never served until released. */}
+          {v.status === "quarantined" && (
+            <span title={`Quarantined — ${(v.quarantine?.rules ?? []).join(", ") || "critical scan finding"}`}><Pill tone="danger">quarantined — malware detected</Pill></span>
+          )}
           {/* §41.7: each version's own system quality, or a pending marker. */}
           {v.quality ? (
             <span className="version-quality" title={`Quality ${v.quality.stars} / 5 (${v.quality.score})`} data-testid="version-quality"><QualityStars stars={v.quality.stars} size={12} /></span>
@@ -127,6 +131,11 @@ function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canMana
         <div className="version-actions">
           {v.status === "active" && (
             <a className="btn btn-sm" href={downloadHref} title={downloadTitle}>↓ .{v.downloadExt}</a>
+          )}
+          {canManage && v.status === "quarantined" && (
+            <button className="btn btn-sm" disabled={busy} onClick={onRelease} title="release this quarantined version (a reason is required; audit-logged)" data-testid="release-version">
+              release
+            </button>
           )}
           {canManage && (
             <button className="btn btn-sm" disabled={busy} onClick={onYank} title={v.status === "yanked" ? "restore this version" : "yank this version"}>
@@ -837,6 +846,10 @@ export default function SkillDetail() {
               canManage={data.canManage}
               busy={busy}
               onYank={() => act("yank", { semver: v.semver, yanked: v.status !== "yanked" }, v.status === "yanked" ? "Version restored." : "Version yanked.")}
+              onRelease={() => {
+                const reason = window.prompt(`Release v${v.semver} from quarantine? The anti-virus engine flagged it. Enter the reason (required; recorded in the audit log):`)?.trim();
+                if (reason) void act(`versions/${encodeURIComponent(v.semver)}/release`, { reason }, "Version released — it will be published on the next sweep.");
+              }}
               formattedDate={fmt.date(v.createdAt)}
               pointer={!!data.pointer}
             />

@@ -7,6 +7,7 @@
 // `skill.shared_new_version` — except one who already got `skill.new_version` as a watcher (dedupe)
 // and the publisher themself; A's admins get only their usual `skill.new_version`; an admin of a
 // namespace the skill is NOT shared with hears nothing.
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
@@ -63,8 +64,9 @@ test("§42: a shared skill's new version notifies the grantee namespace's admins
     await pool.query(`insert into skill_watches (skill_id, user_id) values ($1, $2)`, [skill, bWatcher]);
     await pool.query(
       `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by, git_published)
-       values ($1, '1.0.0', false, 'active', $2, 'x', $3, false)`,
-      [skill, `${K}-key`, bPublisher],
+       values ($1, '1.0.0', false, 'active', $2, $4, $3, false)`,
+      // the publish sweep re-hashes the stored bytes (artifact integrity), so record the real hash
+      [skill, `${K}-key`, bPublisher, createHash("sha256").update(mem.get(`${K}-key`)!).digest("hex")],
     );
 
     await publishPendingVersions(pool, { store, repoRoot: join(work, "repos") });

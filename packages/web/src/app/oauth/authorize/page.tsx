@@ -69,8 +69,7 @@ export default async function AuthorizePage({
 
   const check = await checkAuthorizeRequest(params);
   if (!check.ok) {
-    // A verified redirect_uri gets the protocol error; an unverifiable one gets a page.
-    if ("redirect" in check) redirect(check.redirect);
+    // §49.5: every malformed request gets the page — this endpoint never redirects before consent.
     return <ErrorCard message={check.error} />;
   }
 

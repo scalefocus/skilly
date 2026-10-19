@@ -14,6 +14,7 @@ import { fmtSize } from "./uploadError";
 import { validateBundle, runScanners, PURE_SCANNERS, maxSeverity, contentDigest, bundleContentCap, parseFrontmatter, countContentRiskFindings, type EffectiveAccess } from "@skilly/shared";
 import { M } from "./metrics";
 import { resolveBundleIcon } from "@skilly/shared/icon";
+import { clamavScannerFromEnv } from "@skilly/shared/clamav";
 import { ingestIcon, iconUrl } from "./icons";
 
 /**
@@ -52,8 +53,11 @@ export async function processBundleUpload(
     return Response.json({ error: "invalid bundle", details: validation.errors }, { status: 422 });
   }
 
-  // ADVISORY scan (pre-accept; reviewer-visible).
-  const findings = await runScanners(files, PURE_SCANNERS);
+  // ADVISORY scan (pre-accept; reviewer-visible) — the pure scanners AND ClamAV when CLAMAV_HOST is
+  // set on this tier (§49.2). An unreachable engine records a HIGH `scanner-unavailable` finding
+  // (the upload still succeeds; the gate holds until the worker's AV sweep supersedes it).
+  const av = clamavScannerFromEnv();
+  const findings = await runScanners(files, av ? [...PURE_SCANNERS, av] : PURE_SCANNERS);
   countContentRiskFindings(M.contentRiskFindings, findings); // §37.13
   const severity = maxSeverity(findings) ?? "info";
 

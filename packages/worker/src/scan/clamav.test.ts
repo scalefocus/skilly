@@ -63,7 +63,7 @@ test("flags an infected file, passes a clean one", async () => {
   assert.equal(clean.severity, "info");
 });
 
-test("reports advisory 'scanner-unavailable' when clamd is unreachable", async () => {
+test("reports a HIGH 'scanner-unavailable' when clamd is unreachable (§49.2)", async () => {
   // Port chosen after closing a throwaway server -> nothing listening -> ECONNREFUSED.
   const tmp = net.createServer();
   const p: number = await new Promise((r) => tmp.listen(0, "127.0.0.1", () => r((tmp.address() as AddressInfo).port)));
@@ -71,5 +71,16 @@ test("reports advisory 'scanner-unavailable' when clamd is unreachable", async (
   const findings = await clamavScanner({ host: "127.0.0.1", port: p, timeoutMs: 2000 }).scan([{ path: "a", bytes: enc("x") }]);
   assert.equal(findings.length, 1);
   assert.equal(findings[0]!.rule, "scanner-unavailable");
-  assert.equal(findings[0]!.severity, "info");
+  assert.equal(findings[0]!.severity, "high"); // §49.2: an engine outage trips the gate until the AV sweep supersedes it
+});
+
+test("parseResponse is linear on adversarial replies and keeps its semantics (code-scanning alert 31)", () => {
+  assert.deepEqual(parseResponse("stream: Eicar-Test-Signature FOUND\0"), { infected: true, signature: "Eicar-Test-Signature" });
+  assert.deepEqual(parseResponse("stream: OK\0"), { infected: false });
+  assert.deepEqual(parseResponse("stream: FOUND"), { infected: false }, "an empty signature is not a detection");
+  assert.deepEqual(parseResponse("stream: Win.Test.FOUNDER FOUND"), { infected: true, signature: "Win.Test.FOUNDER" });
+  const started = Date.now();
+  parseResponse("stream:" + " ".repeat(200_000));
+  parseResponse("stream:a" + " ".repeat(200_000));
+  assert.ok(Date.now() - started < 200, "200k spaces must not backtrack");
 });
