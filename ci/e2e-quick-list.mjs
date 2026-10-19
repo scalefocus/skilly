@@ -41,7 +41,22 @@ if (listing.status !== 0) {
   console.error("could not list the e2e suite");
   process.exit(1);
 }
-const report = JSON.parse(listing.stdout.slice(listing.stdout.indexOf("{")));
+// pnpm writes its own notices to stdout ahead of the report, and one of them may itself open with a
+// brace (an agent on an older Node gets `WARN Unsupported engine: wanted: {"node":">=22"} ...`), so
+// the report is the first `{` from which the rest of stdout parses as one JSON document.
+const parseReport = (stdout) => {
+  for (let at = stdout.indexOf("{"); at !== -1; at = stdout.indexOf("{", at + 1)) {
+    try {
+      return JSON.parse(stdout.slice(at));
+    } catch {
+      // not the report's opening brace — keep looking
+    }
+  }
+  console.error(stdout, listing.stderr);
+  console.error("could not find the Playwright JSON report in the listing output");
+  process.exit(1);
+};
+const report = parseReport(listing.stdout);
 
 // Flatten the report into { file, titles, count } per test, titles = describe titles + test title.
 const tests = [];
