@@ -17,6 +17,10 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+// The stub provider listens on loopback, which §49.11 refuses by default: opt in exactly as an
+// operator with an on-network provider would (the check reads the env per call).
+process.env.AI_ALLOW_PRIVATE_BASE_URL = "1";
+
 const enabled = process.env.SKILLY_DB_E2E === "1";
 
 const GOOD = "sk-dbtest-good-token-1234";
