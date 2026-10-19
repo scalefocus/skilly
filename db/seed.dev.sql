@@ -98,8 +98,12 @@ ON CONFLICT DO NOTHING;
 -- (packages/worker/scripts/seed-bundles.mjs) after seeding: it uploads a minimal valid SKILL.md
 -- bundle for each key, and the worker's publish sweep then synthesizes the git repo/tags. Marking
 -- them published here (the old behavior) left them stuck as "repository not provisioned".
+-- artifact_sha256 is NULL on purpose: the bytes don't exist yet, so there is nothing honest to
+-- record, and the row is immutable once inserted (seed-bundles can't fill it in later). The publish
+-- sweep's integrity check (§49.12) skips rows with no recorded hash; a placeholder like 'sha-1.0.0'
+-- would be re-hashed against the uploaded bundle, mismatch, and leave every version unpublished.
 INSERT INTO skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, git_published, created_by)
-  SELECT s.id, v.semver, v.pre, 'active', 'k-'||s.slug||'-'||v.semver, 'sha-'||v.semver, false,
+  SELECT s.id, v.semver, v.pre, 'active', 'k-'||s.slug||'-'||v.semver, NULL, false,
          (SELECT id FROM users WHERE entra_object_id='dev-admin-oid')
     FROM skills s JOIN namespaces n ON n.id=s.namespace_id
     JOIN (VALUES ('pdf-tools','1.0.0',false),('pdf-tools','1.1.0',false),('pdf-tools','1.2.0-beta.1',true),
