@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import { create } from "tar";
 import AdmZip from "adm-zip";
 import { publishPendingVersions } from "../git/publish.js";
@@ -23,6 +24,8 @@ import { synthesizeVersion } from "../git/synth.js";
 import { mirrorPointerVersion } from "../git/mirror.js";
 import { mirrorPendingVersions } from "../git/mirrorPending.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
+
+const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
 const exec = promisify(execFile);
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -81,9 +84,10 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     )).rows[0]!.id;
     await pool.query(
       `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by, git_published)
-       values ($1,'1.0.0',false,'active','k-e2e','deadbeef',$2,false)
+       values ($1,'1.0.0',false,'active','k-e2e',$3,$2,false)
        on conflict (skill_id, semver) do nothing`,
-      [hosted, user],
+      // §49.12: the publish sweep re-hashes the stored bytes, so the recorded hash must be real.
+      [hosted, user, sha256(mem.get("k-e2e")!)],
     );
 
     // Pointer skill + mirrored version.
@@ -134,9 +138,9 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     )).rows[0]!.id;
     await pool.query(
       `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by, git_published)
-       values ($1,'1.0.0',false,'active','k-zip','feedface',$2,false)
+       values ($1,'1.0.0',false,'active','k-zip',$3,$2,false)
        on conflict (skill_id, semver) do nothing`,
-      [zipped, user],
+      [zipped, user, sha256(mem.get("k-zip")!)],
     );
 
     // A watcher follows the hosted skill — publishing should notify them (watch/follow, §12).

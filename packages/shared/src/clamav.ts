@@ -33,11 +33,25 @@ export function frameInstream(bytes: Uint8Array): Buffer {
   return Buffer.concat([Buffer.from("zINSTREAM\0"), len, Buffer.from(bytes), Buffer.from([0, 0, 0, 0])]);
 }
 
-/** Parse a clamd stream reply. Pure. */
+/**
+ * Parse a clamd stream reply (`stream: OK` or `stream: <signature> FOUND`). Pure.
+ *
+ * Linear string scanning, no regex: the reply is daemon-supplied input, and the former
+ * `/stream:\s*(.+?)\s+FOUND/` backtracked quadratically on `stream:` followed by many spaces
+ * (CodeQL js/polynomial-redos, code-scanning alert 31). Same semantics: the signature is the
+ * non-empty text between `stream:` and the first `FOUND` that is preceded by whitespace.
+ */
 export function parseResponse(text: string): { infected: boolean; signature?: string } {
-  const t = text.replace(/\0/g, "").trim();
-  const m = /stream:\s*(.+?)\s+FOUND/.exec(t);
-  if (m) return { infected: true, signature: m[1]!.trim() };
+  const t = text.split("\0").join("").trim();
+  const start = t.indexOf("stream:");
+  if (start < 0) return { infected: false };
+  const rest = t.slice(start + "stream:".length);
+  for (let at = rest.indexOf("FOUND"); at > 0; at = rest.indexOf("FOUND", at + 1)) {
+    const before = rest.charCodeAt(at - 1);
+    if (before !== 32 && before !== 9 && before !== 10 && before !== 13) continue;
+    const signature = rest.slice(0, at).trim();
+    if (signature) return { infected: true, signature };
+  }
   return { infected: false };
 }
 
