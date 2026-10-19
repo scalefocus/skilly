@@ -43,6 +43,8 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "skill.shared_new_version": { title: "New version of a skill shared with your namespace", tone: "ok" },
   // §45.6 — a skill you watch, maintain or have installed was deprecated (use X instead).
   "skill.deprecated": { title: "Skill deprecated", tone: "warn" },
+  // §50.7 — a skill you maintain entered the top N hyped skills.
+  "skill.hyped": { title: "Your skill is being hyped", tone: "ok" },
   "message.new": { title: "New message", tone: "warn" },
   "message.mention": { title: "You were mentioned", tone: "warn" },
   "system.error": { title: "System log events", tone: "danger" },

@@ -114,8 +114,8 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // reinstated user might want back — a live delegation to a third-party MCP client must never
     // survive the person leaving. oauth_tokens cascade with the grant.
     // `user_achievements` (§31) is personal data like watches and ratings; a re-provisioned account
-    // starts with an empty shelf.
-    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_watches", "notifications", "tokens", "oauth_grants", "user_achievements"]) {
+    // starts with an empty shelf. `skill_hypes` (§50) too — the hyped skills' scores drop with them.
+    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_hypes", "skill_watches", "notifications", "tokens", "oauth_grants", "user_achievements"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [targetUserId]);
     }
     // RUM samples (§32.3) are anonymised IN PLACE, not deleted: the rows stay so per-route

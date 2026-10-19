@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.38.0",
+    date: "2026-10-19",
+    summary:
+      "Hype: spend up to 3 hypes a week on new, little-installed skills to push them up the new Hyped skills tab of the Leaderboard — early hypes count for more. The top 5 get a 🔥 Hyped pill, a section above Featured on the Overview, and their maintainers are told. Platform admins tune it in the new Hype card.",
+  },
+  {
     version: "2.37.0",
     date: "2026-10-16",
     summary:

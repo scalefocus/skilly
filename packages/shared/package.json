@@ -146,6 +146,10 @@
     "./policy": {
       "types": "./dist/policy.d.ts",
       "default": "./dist/policy.js"
+    },
+    "./hype": {
+      "types": "./dist/hype.d.ts",
+      "default": "./dist/hype.js"
     }
   },
   "scripts": {

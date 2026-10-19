@@ -11,6 +11,7 @@ export function qualitySummary(score: number | null | undefined, mode: QualityMo
 }
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
+import { hypeCardStats, topHypedSkillIds, type HypeCardStat } from "./hype";
 
 /** The `icon` shape every catalog/detail/suggest payload exposes (§33). */
 export interface SkillIconView { url: string | null; emoji: string | null }
@@ -173,6 +174,8 @@ export interface CatalogEntry {
   sharedFrom?: string | null;
   /** §45: null unless deprecated; the successor is named only when the caller can see it. */
   deprecation?: DeprecationLite | null;
+  /** §50.6: the in-window hype count and the Hyped flag — null when the skill has neither. */
+  hype?: HypeCardStat | null;
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
@@ -212,6 +215,8 @@ export interface CatalogSearchOpts {
   collectionId?: string | null;
   /** §38.5 the union of one person's collections (`?collectionsBy=`). */
   collectionsByUserId?: string | null;
+  /** §50.6 exactly these skills (the home page's Hyped section); still visibility-filtered. */
+  skillIds?: string[] | null;
 }
 
 /** Visibility-filtered catalog listing — see searchCatalog. */
@@ -327,6 +332,11 @@ export async function searchCatalog(
     );
     where.push(collectionEligibleSql("s"));
   }
+  // §50.6 an explicit id set (the Hyped home section). The visibility predicate above still applies.
+  if (opts.skillIds) {
+    params.push(opts.skillIds);
+    where.push(`s.id = any($${params.length}::uuid[])`);
+  }
   // Free text (§34): the shared engine, resolved AFTER every filter above so its any-word fallback
   // probe sees exactly the rows this listing can show. The same call backs the header dropdown and
   // the worker's MCP search_skills, so the three surfaces match and rank identically.
@@ -413,7 +423,22 @@ export async function searchCatalog(
       deprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
     };
   });
+  // §50.6 the hype count / Hyped pill: one batched query for the whole page, never per card.
+  const hype = await hypeCardStats(skills.map((x) => x.skillId!));
+  for (const x of skills) x.hype = hype.get(x.skillId!) ?? null;
   return { skills, matchMode: engine?.matchMode ?? null };
+}
+
+/**
+ * The homepage "Hyped skills" feed (§50.6): the current top N as of the last sweep, in board order,
+ * built from visibility-filtered results like every home feed. Empty ⇒ the caller hides the section.
+ */
+export async function listHypedSkills(access: EffectiveAccess): Promise<CatalogEntry[]> {
+  const ids = await topHypedSkillIds();
+  if (ids.length === 0) return [];
+  const rank = new Map(ids.map((id, i) => [id, i]));
+  const skills = await searchSkills(access, { skillIds: ids, limit: 100 });
+  return skills.sort((a, b) => (rank.get(a.skillId!) ?? 0) - (rank.get(b.skillId!) ?? 0));
 }
 
 /**

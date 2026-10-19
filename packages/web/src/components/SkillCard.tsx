@@ -6,6 +6,7 @@ import { useDateFmt } from "./DateFormat";
 import { plainText, descTooltip } from "../lib/cardText";
 import { SkillIcon } from "./SkillIcon";
 import { QualityBadge, type QualitySummaryView } from "./QualityBadge";
+import { HypedPill, HypeCount } from "./Hype";
 
 export interface CatalogEntry {
   namespaceSlug: string;
@@ -42,6 +43,8 @@ export interface CatalogEntry {
   sharedFrom?: string | null;
   /** §45: present when the skill is deprecated; the successor only when this viewer can see it. */
   deprecation?: { note: string | null; successor: { namespaceSlug: string; skillSlug: string; title: string } | null } | null;
+  /** §50.6 the in-window hype count and the Hyped flag; null/absent when the skill has neither. */
+  hype?: { count: number; top: boolean } | null;
 }
 
 /** §45.5 the `deprecated` pill — its tooltip / accessible name carries the full sentence. */
@@ -114,6 +117,7 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
       <div className="meta skill-card-top">
         <span className="ns" title={`@${s.namespaceSlug}`}>@{s.namespaceSlug}</span>
         <OfficialBadge official={s.official} />
+        {s.hype?.top && <HypedPill />}
         {s.latest && <span className="chip chip-accent">v{s.latest}</span>}
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
         {s.visibility === "namespace" && (s.sharedFrom
@@ -139,6 +143,7 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
         <RatingBadge s={s} withCount />
         <QualityBadge quality={s.quality} />
         <span style={{ marginLeft: "auto", display: "inline-flex", gap: 10, alignItems: "center" }}>
+          <HypeCount count={s.hype?.count ?? 0} />
           <WatchBadge s={s} />
           <span className="muted mono" style={{ fontSize: 11 }}>{formatCount(s.installCount)} installs</span>
         </span>
@@ -170,6 +175,7 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
       <p className="desc muted skill-row-desc">{plainText(s.description)}</p>
       <div className="skill-row-meta">
         <OfficialBadge official={s.official} />
+        {s.hype?.top && <HypedPill />}
         {s.latest && <span className="chip chip-accent">v{s.latest}</span>}
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
         {s.visibility === "namespace" && <Pill tone="warn">{s.sharedFrom ? "shared" : "restricted"}</Pill>}
@@ -180,6 +186,7 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
         <span className="skill-row-stats">
           <RatingBadge s={s} />
           <QualityBadge quality={s.quality} />
+          <HypeCount count={s.hype?.count ?? 0} />
           <WatchBadge s={s} />
           <span className="muted mono" style={{ fontSize: 11, minWidth: 72, textAlign: "right" }}>{formatCount(s.installCount)} installs</span>
         </span>

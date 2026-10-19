@@ -16,6 +16,7 @@ import { qualitySummary } from "../../../../../lib/catalog";
 import { aiDraftAvailability } from "../../../../../lib/qualityDraft";
 import { listGrants, isExplicitMaintainer } from "../../../../../lib/grants";
 import { deprecationDetail, listReplaces } from "../../../../../lib/deprecation";
+import { hypeDetail } from "../../../../../lib/hype";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, canShareSkill, seesViaGrantOnly, resolveLatest } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
@@ -88,6 +89,9 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   );
   const publishing = latest != null && latestInstallable == null;
   const deprecated = skill.deprecatedAt != null;
+  // §50.6 the hype block — null when the feature is off or the skill is hard-ineligible (archived
+  // skills are hard-ineligible, so an owner inspecting one sees no hype UI).
+  const hype = archived ? null : await hypeDetail(skill.id, access.userId ?? null);
   const canDeprecate = !archived && canYankOrArchive(access, skill.namespaceId);
   return Response.json({
     // §38.3 the Add-to-collection popup addresses the skill by id; `collectible` gates the button
@@ -141,6 +145,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     deprecation: deprecationDetail(access, skill, canDeprecate),
     replaces,
     canDeprecate,
+    hype,
     // capability flags for the UI
     canManage: canYankOrArchive(access, skill.namespaceId), // yank / archive / restore
     // Permanent deletion is platform-admin only and only for archived skills (§7).

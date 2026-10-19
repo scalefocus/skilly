@@ -536,6 +536,22 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
   border-color: color-mix(in oklab, var(--ok) 38%, transparent);
   font-weight: 600;
 }
+/* "Hyped" pill (§50.6) — a skill in the current top N hyped skills. The warm --warn hue so it
+   reads as heat, distinct from Official's green and the cyan version accent; theme-adapts. */
+.chip-hype {
+  background: color-mix(in oklab, var(--warn) 16%, var(--surface-2));
+  color: color-mix(in oklab, var(--warn) 80%, var(--ink));
+  border-color: color-mix(in oklab, var(--warn) 38%, transparent);
+  font-weight: 600;
+}
+/* The hyper strip (§50.6): overlapping avatar bubbles, then a "+N" chip that expands the list. */
+.hype-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.hype-strip-more {
+  font-family: var(--font-mono); font-size: 11px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted);
+}
+.hype-strip-more:hover { color: var(--ink); }
+.hype-count { font-family: var(--font-mono); font-size: 11px; color: color-mix(in oklab, var(--warn) 80%, var(--ink)); white-space: nowrap; }
 /* "new" badge — skills the viewer hasn't seen before (appeared since their last catalog visit;
    server-computed per user, NOT a global 30-day window). Pinned FLUSH to the card edge and
    framed like the detail-page version-action buttons: no outer border, bordered only on the
