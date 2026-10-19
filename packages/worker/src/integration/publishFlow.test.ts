@@ -20,7 +20,7 @@ import { publishPendingVersions } from "../git/publish.js";
 import { withdrawYankedVersions } from "../git/withdraw.js";
 import { refreshPointerVersions } from "../git/pointerRefresh.js";
 import { repoPath } from "../git/repoStore.js";
-import { synthesizeVersion } from "../git/synth.js";
+import { synthesizeVersion, writeTree } from "../git/synth.js";
 import { mirrorPointerVersion } from "../git/mirror.js";
 import { mirrorPendingVersions } from "../git/mirrorPending.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
@@ -275,15 +275,20 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
         [uid],
       )).rows[0]!.n;
 
-    // Simulate upstream tampering: make the stored mirror artifact diverge from the clone.
-    const origArtifact = mem.get(mirrored.artifactKey)!;
-    const dsrc = join(work, "dsrc");
-    await mkdir(dsrc, { recursive: true });
-    await writeFile(join(dsrc, "SKILL.md"), "---\nname: ptr\ndescription: mirrored\n---\n# tampered\n");
-    const dtgz = join(work, "d.tgz");
-    await create({ gzip: true, file: dtgz, cwd: dsrc }, ["."]);
-    const tampered = await readFile(dtgz);
-    mem.set(mirrored.artifactKey, tampered);
+    // Simulate upstream drift: move the pinned tag to a new commit with different content. (This
+    // used to overwrite the STORED mirror artifact instead — under §49.12 that is an integrity
+    // mismatch the refresh records and refuses to use as a baseline, not drift.)
+    const gitEnv = { ...cloneEnv, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@org", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@org" };
+    const upstreamTag = async (commit: string) => exec("git", ["--git-dir", externalRepo, "update-ref", "refs/tags/v1.0.0", commit], { env: gitEnv });
+    const origCommit = (await exec("git", ["--git-dir", externalRepo, "rev-parse", "refs/tags/v1.0.0^{commit}"], { env: gitEnv })).stdout.trim();
+    const movedTree = await writeTree(externalRepo, [{ path: "SKILL.md", bytes: enc("---\nname: ptr\ndescription: mirrored\n---\n# tampered\n") }]);
+    const movedCommit = (await exec("git", ["--git-dir", externalRepo, "commit-tree", movedTree, "-m", "moved upstream"], { env: gitEnv })).stdout.trim();
+    assert.equal(
+      (await pool.query<{ c: string | null }>(`select external_commit as c from skill_versions where id = $1`, [mirrored.versionId])).rows[0]!.c,
+      origCommit,
+      "the mirror pinned the commit the tag resolved to (§49.3)",
+    );
+    await upstreamTag(movedCommit);
 
     const drift1 = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
     assert.ok(drift1.drift >= 1, "drift detected once stored artifact and upstream diverge");
@@ -296,12 +301,23 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     assert.equal(await driftCount(nsAdmin), 1, "no re-notification while the same drift persists");
 
     // Recovery re-arms: a clean pass, then a fresh divergence is a NEW onset and pings again.
-    mem.set(mirrored.artifactKey, origArtifact);
+    await upstreamTag(origCommit);
     const cleanPass = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
-    assert.equal(cleanPass.drift, 0, "restored artifact matches upstream again");
-    mem.set(mirrored.artifactKey, tampered);
+    assert.equal(cleanPass.drift, 0, "upstream back at the pinned commit matches the mirror again");
+    await upstreamTag(movedCommit);
     await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
     assert.equal(await driftCount(nsAdmin), 2, "a new drift onset after recovery pings again");
+    await upstreamTag(origCommit);
+
+    // §49.12: a tampered STORED artifact is an integrity mismatch, never drift — recorded, not published.
+    const origArtifact = mem.get(mirrored.artifactKey)!;
+    mem.set(mirrored.artifactKey, Buffer.concat([origArtifact, Buffer.from([0])]));
+    const tamperedPass = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
+    assert.equal(tamperedPass.drift, 0, "a stored-bytes mismatch is not reported as upstream drift");
+    assert.ok(
+      (await pool.query(`select 1 from system_event where error_code = 'artifact_integrity_mismatch' and path = $1`, [`/${mirrored.artifactKey}`])).rowCount,
+      "the integrity mismatch is recorded to the system log",
+    );
     mem.set(mirrored.artifactKey, origArtifact);
 
     // Yank withdrawal (§7): yanking a version drops its tag so it stops cloning.
