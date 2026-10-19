@@ -133,9 +133,29 @@ const CORE_API = [
   // the errors compile, so rum.spec's 10–15 s assertions ran out on both attempts.
   "/api/admin/rum/summary",
   "/api/admin/rum/errors",
+  // The Survey results card on /admin/rum (§36). Cold, it compiled 20–50 s in three of five CI
+  // passes; survey.spec's admin test waits 20 s for the funnel and, being serial, took the rest of
+  // the file down with it.
+  "/api/admin/survey/summary",
+  // ...and its comments feed (the admin test waits 15 s for a seeded comment) and the per-response
+  // delete. Cold, comments compiled for >16 s on the CI agent and the serial file went down again.
+  "/api/admin/survey/comments",
+  "/api/admin/survey/responses/00000000-0000-0000-0000-000000000000",
+  // The survey card itself (survey.spec, every signed-in page): start/close/responses/bug. Cold,
+  // close and responses compiled 15-17 s each mid-test.
+  "/api/me/survey/start",
+  "/api/me/survey/close",
+  "/api/me/survey/responses",
+  "/api/me/survey/bug",
   "/api/admin/rum/routes/%2Fcatalog/users",
   "/api/admin/users/online",
   "/api/admin/users/active-series",
+  // /leaderboard, /usage and the home page: each gates its content (and, on /leaderboard, the
+  // feature-use report the survey spec waits on) on one data call. Cold, leaderboard held every
+  // request behind it for ~20 s, usage compiled 20 s and stats 18 s on the CI agent.
+  "/api/leaderboard",
+  "/api/usage",
+  "/api/stats",
   // /catalog + the header search
   "/api/skills",
   "/api/skills/facets",

@@ -38,6 +38,24 @@ const DISALLOWED_EXT = new Set([
   "exe", "dll", "so", "dylib", "bin", "o", "a", "class", "jar", "msi", "apk", "dmg", "deb", "rpm",
 ]);
 
+/**
+ * The ONE safe-relative-path rule for bundle entry names (SKILLY_SPEC.md §6 *Safe entry paths*,
+ * §22): non-empty; no control bytes (0x00–0x1f, 0x7f — so no newline, tab or NUL); no backslash;
+ * no leading `/`; no empty, `.` or `..` segment. Applied by `validateBundle` at every ingest, by the
+ * worker's git tree writer (`writeTree`), and — plus a length cap — by the MCP resource path reader
+ * (`isSafeBundlePath`). A name that fails it could otherwise terminate a `git mktree` record early
+ * and inject a symlink/gitlink entry into a served repo.
+ */
+export function isSafeRelativePath(path: string): boolean {
+  if (typeof path !== "string" || path === "") return false;
+  if (path.startsWith("/") || path.includes("\\")) return false;
+  for (let i = 0; i < path.length; i++) {
+    const c = path.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return !path.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
+}
+
 /** Extract `name` and `description` from a SKILL.md YAML frontmatter block (minimal parse). */
 export function parseFrontmatter(md: string): Record<string, string> {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md);
@@ -76,7 +94,8 @@ export function validateBundle(files: BundleEntry[], opts: ValidateOptions): Val
     total += f.bytes.byteLength;
     const ext = f.path.includes(".") ? f.path.split(".").pop()!.toLowerCase() : "";
     if (DISALLOWED_EXT.has(ext)) errors.push(`disallowed file type: ${f.path}`);
-    if (f.path.includes("..")) errors.push(`unsafe path: ${f.path}`);
+    // §6 *Safe entry paths*: the shared predicate, plus the historical "no `..` anywhere" rule.
+    if (f.path.includes("..") || !isSafeRelativePath(f.path)) errors.push(`unsafe path: ${JSON.stringify(f.path)}`);
   }
   if (total > maxBytes) errors.push(`bundle exceeds size limit (${total} > ${maxBytes} bytes)`);
 

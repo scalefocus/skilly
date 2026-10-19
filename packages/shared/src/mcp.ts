@@ -7,6 +7,7 @@
 //      agent and turn every list call into a filtered catalog scan. Discovery is `search_skills`.
 //   2. The tool inventory is a CEILING of 25 (raised from 24 by §38.9). A 26th tool is a spec
 //      change, not an implementation detail; the first response to pressure is to fold, not add.
+import { isSafeRelativePath } from "./validate.js";
 
 /** Protocol revision we implement (Streamable HTTP; the deprecated HTTP+SSE transport is not). */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -166,13 +167,12 @@ export function parseSkillResourceUri(uri: string): SkillResourceRef | null {
 }
 
 /**
- * A bundle-relative path we're willing to read: no absolute paths, no `..` segment, no NUL, no
- * backslash, bounded length. Traversal is refused at the edge so no reader has to be careful.
+ * A bundle-relative path we're willing to read: the shared safe-path rule (`isSafeRelativePath`,
+ * §6 — no absolute paths, no `.`/`..`/empty segment, no control bytes, no backslash) plus a length
+ * bound. Traversal is refused at the edge so no reader has to be careful.
  */
 export function isSafeBundlePath(path: string): boolean {
-  if (typeof path !== "string" || path === "" || path.length > 512) return false;
-  if (path.startsWith("/") || path.includes("\\") || path.includes("\0")) return false;
-  return !path.split("/").some((seg) => seg === "" || seg === "." || seg === "..");
+  return typeof path === "string" && path.length <= 512 && isSafeRelativePath(path);
 }
 
 /** The templates advertised by `resources/list`. Nothing is ever enumerated. */

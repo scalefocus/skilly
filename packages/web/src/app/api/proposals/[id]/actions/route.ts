@@ -96,10 +96,13 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     if (reuse) {
       body.newPayload = { ...body.newPayload, artifactObjectKey: undefined, artifactSha256: undefined, contentSha256: undefined, artifactFilename: undefined, pointer: undefined };
     }
+    // §8 Target visibility gate: re-evaluated against THIS actor now (proposer revise/resubmit or
+    // reviewer edit) — a submitter whose grant lapsed mid-review can't switch to Keep current files.
     const payloadErr = await verifySubmissionPayload(pool, access.userId, body.newPayload, {
       preapprovedArtifactKey: existingKey,
       namespaceSlug: prev?.ns_slug,
       targetSkillId: prev?.target_skill_id ?? null,
+      access,
     });
     if (payloadErr) return Response.json({ error: payloadErr }, { status: 422 });
 
@@ -107,7 +110,7 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
       // Re-snapshot against the THEN-latest stable version + the §8 no-op guard. The reused
       // bytes were already gated when first published, so the changed-content gates below are
       // skipped (artifact/pointer fields were stripped above, so both `changed` flags are false).
-      const r = await resolveReuseSource(pool, prev!.target_skill_id!, body.newPayload.metadata);
+      const r = await resolveReuseSource(pool, access, prev!.target_skill_id!, body.newPayload.metadata);
       if (!r.ok) return Response.json({ error: r.error }, { status: 422 });
       body.newPayload = applyReuseToPayload(body.newPayload, r.reuse);
     } else if (body.newPayload.reuse && (body.action === "resubmit" || isRevise) && (body.newPayload.artifactObjectKey !== existingKey || body.newPayload.pointer)) {

@@ -100,7 +100,7 @@ test("verifySubmissionPayload: rejects an icon the caller didn't upload; accepts
       targetNamespaceId: ns, targetSkillId: null, semver: "1.0.0", submittedBy: user,
       payload: { metadata: { ...payload.metadata, iconSha256: sha } },
     });
-    const carried = await verifySubmissionPayload(client, other, { metadata: { ...payload.metadata, iconSha256: sha, whatChanged: "carried the icon forward" } }, { targetSkillId: created.skillId });
+    const carried = await verifySubmissionPayload(client, other, { metadata: { ...payload.metadata, iconSha256: sha, whatChanged: "carried the icon forward" } }, { targetSkillId: created.skillId, access: { isPlatformAdmin: false, namespaceRoles: new Map() } });
     assert.equal(carried, null);
   } finally {
     await client.query("rollback");

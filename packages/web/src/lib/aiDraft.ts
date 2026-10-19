@@ -109,7 +109,7 @@ async function loadSkillMd(access: EffectiveAccess, source: DraftSource, deps: D
   if (!skill || skill.status === "archived" || !isSkillVisible(access, skill)) {
     return { ok: false, outcome: outcome(404, { error: "not found" }, "source_rejected") };
   }
-  const reuse = await resolveReuseSource(pool, skill.id);
+  const reuse = await resolveReuseSource(pool, access, skill.id);
   if (!reuse.ok) return { ok: false, outcome: outcome(422, { error: "draft_source_failed", message: reuse.error }, "source_rejected") };
   let entries: BundleEntry[];
   try {

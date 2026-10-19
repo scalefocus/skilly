@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { synthesizeVersion, listTags, pointMainAtTag } from "./synth.js";
+import { synthesizeVersion, listTags, pointMainAtTag, writeTree } from "./synth.js";
 import { repoProvisioned, repoPath } from "./repoStore.js";
 
 const exec = promisify(execFile);
@@ -139,4 +139,35 @@ test("self-heal helpers: listTags + pointMainAtTag repair a tags-but-no-main rep
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("writeTree refuses entry names that could inject tree records; mktree runs NUL-terminated (§6 safe entry paths, §22)", async () => {
+  const gitDir = join(workDir, "inject.git");
+  await exec("git", ["init", "--bare", "-q", gitDir]);
+  const emptyBlob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+  // The V2 shape: with newline-delimited mktree input this would have produced a 120000 symlink
+  // entry `scripts` that both archive extractors' symlink filters never saw.
+  const injected = `notes.md\n120000 blob ${emptyBlob}\tscripts`;
+  await assert.rejects(
+    writeTree(gitDir, [{ path: "SKILL.md", bytes: enc("x") }, { path: injected, bytes: enc("y") }]),
+    /unsafe path in bundle/,
+  );
+  await assert.rejects(
+    writeTree(gitDir, [{ path: "SKILL.md", bytes: enc("x") }, { path: "docs\\notes.md", bytes: enc("y") }]),
+    /unsafe path in bundle/,
+  );
+  await assert.rejects(writeTree(gitDir, [{ path: "../SKILL.md", bytes: enc("x") }]), /unsafe path in bundle/);
+
+  // Ordinary names — including a space, which the old line protocol also tolerated — still build
+  // a tree of blobs and subtrees only.
+  const sha = await writeTree(gitDir, [
+    { path: "SKILL.md", bytes: enc("x") },
+    { path: "docs/read me.md", bytes: enc("y") },
+    { path: "scripts/run.sh", bytes: enc("z"), mode: "100755" },
+  ]);
+  const ls = (await exec("git", ["--git-dir", gitDir, "ls-tree", "-r", sha])).stdout;
+  assert.match(ls, /100644 blob [0-9a-f]{40}\tSKILL\.md/);
+  assert.match(ls, /100644 blob [0-9a-f]{40}\tdocs\/read me\.md/);
+  assert.match(ls, /100755 blob [0-9a-f]{40}\tscripts\/run\.sh/);
+  assert.doesNotMatch(ls, /120000|160000/);
 });
