@@ -106,10 +106,14 @@ export default defineConfig({
     // the board through the UI would see a board computed before its own fixture for up to 60s.
     // INSTALL_TOKEN_ENC_KEY: a TEST-ONLY key so minted installs keep a recoverable copy and the §23
     // "Show install URL" step of already-installed.spec.ts runs (the caller's own key wins if set).
+    // AI_ALLOW_PRIVATE_BASE_URL=1: the AI specs (ai-draft, ai-quality-draft) run a stub provider on
+    // 127.0.0.1 inside the test process; the §49.11 egress guard refuses loopback base URLs (422
+    // ai_base_url_private) unless the operator opts in, which is exactly what this stack is.
     env: {
       SKILLY_DEV_KEEP_ROUTES: "1",
       LEADERBOARD_CACHE_TTL_MS: "0",
       INSTALL_TOKEN_ENC_KEY: process.env.INSTALL_TOKEN_ENC_KEY ?? "c2tpbGx5LWUyZS1pbnN0YWxsLXRva2VuLWtleS0zMmI=",
+      AI_ALLOW_PRIVATE_BASE_URL: "1",
       NODE_OPTIONS: devServerNodeOptions,
       ...(stackShard ? { SKILLY_NEXT_DIST_DIR: `.next-e2e-${stackShard.current}` } : {}),
     },

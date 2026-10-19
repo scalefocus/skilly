@@ -114,7 +114,7 @@ test.describe("MCP connect flow (§29)", () => {
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
   });
 
-  test("a missing PKCE challenge is refused as a protocol error back to the client", async ({ page }) => {
+  test("a missing PKCE challenge renders the error page and never redirects to the client", async ({ page }) => {
     await devSignIn(page);
     const client = await registerClient(page, "No PKCE Client");
     const p = new URLSearchParams({
@@ -123,10 +123,16 @@ test.describe("MCP connect flow (§29)", () => {
       redirect_uri: REDIRECT,
       state: "s",
     });
-    // The redirect_uri IS verified here, so the error goes back to the client the normal way.
+    // §49.5: even with a registered client and a byte-matching redirect_uri, a malformed request
+    // (here: no code_challenge) gets the non-redirecting error page. Redirecting with error=… made
+    // the endpoint an open redirector for any self-registered client, so: no Location header at all.
     const res = await page.request.get(`/oauth/authorize?${p.toString()}`, { maxRedirects: 0 });
-    expect([302, 303, 307]).toContain(res.status());
-    expect(res.headers().location).toContain("error=invalid_request");
+    expect(res.status()).toBe(200);
+    expect(res.headers().location).toBeUndefined();
+    await page.goto(`/oauth/authorize?${p.toString()}`);
+    await expect(page.getByText(/PKCE is required/)).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe("/oauth/authorize");
+    await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
   });
 
   test("approving mints a code and lists the connection; revoking removes it", async ({ page }) => {
