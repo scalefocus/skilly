@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.2",
+    date: "2026-10-20",
+    summary:
+      "Under the hood: Skilly is now built with Turbopack, the newer Next.js bundler, for production, for development and for the automated browser tests. Nothing changes in how Skilly looks or works. Production builds finish faster, and the browser-test server needs far less memory, so long test runs should no longer slow down or crash partway through.",
+  },
+  {
     version: "2.39.1",
     date: "2026-10-20",
     summary:

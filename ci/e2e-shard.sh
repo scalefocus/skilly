@@ -165,12 +165,14 @@ rm -rf "packages/web/e2e/results/shard-${E2E_SHARD}" "packages/web/e2e/test-resu
 
 # Every run — quick sample or full suite — warms the pages plus the core API routes (the app
 # shell's and the busiest pages'); the other API routes compile on first use (e2e/global-setup.ts).
-# Warming every route pins all ~190 in one webpack compiler: a fully warmed dev server measured
-# ~9.7 GB private memory under an 8 GB heap ceiling and ~29-31 min of warm-up, and on the 16 GB
-# agent the kernel OOM-killed it — mid-warm-up on a quick run, and ~90 s into the tests on a full
-# run, which then failed every later test ECONNREFUSED. Pages alone was too little: the shell's and
-# /admin's routes then compiled 10-37 s each inside the first specs. E2E_WARM=all is still there to
-# ask for, on an agent with the RAM for it.
+# Under webpack, warming every route kept all ~190 compiled in one compiler: a fully warmed dev
+# server measured ~9.7 GB private memory under an 8 GB heap ceiling and ~29-31 min of warm-up, and on
+# the 16 GB agent the kernel OOM-killed it — mid-warm-up on a quick run, and ~90 s into the tests on
+# a full run, which then failed every later test ECONNREFUSED. Pages alone was too little: the
+# shell's and /admin's routes then compiled 10-37 s each inside the first specs. The dev server now
+# runs Turbopack, which keeps warmed routes in its disk cache rather than in memory
+# (next.config.mjs, SKILLY_E2E_DEV_SERVER), so E2E_WARM=all may well fit this agent now; core stays
+# the default until a CI run has measured it.
 E2E_WARM="${E2E_WARM:-core}"
 echo "[${TAG}] route warm-up scope: ${E2E_WARM}"
 
@@ -181,11 +183,13 @@ echo "[${TAG}] route warm-up scope: ${E2E_WARM}"
 oom_kills() { awk '/^oom_kill / { n = $2 } END { print n + 0 }' /proc/vmstat 2>/dev/null || echo 0; }
 
 # Run the slice as E2E_PASSES passes, one after another on this same stack, each its own Playwright
-# invocation and so its own fresh `next dev` (CI=1). SKILLY_DEV_KEEP_ROUTES pins every route a
-# server compiles for as long as it lives, so one server driving the whole suite only grows: even
-# with the core warm-up it was OOM-killed ~60 tests (~40 min) into a full run on the 16 GB agent,
-# and every test after that failed ECONNREFUSED. A fresh server per pass drops that graph; a pass
-# repeats only the warm-up, against the build folder's webpack cache. playwright.config.ts maps
+# invocation and so its own fresh `next dev` (CI=1). Under webpack, every route a server compiled
+# stayed in its memory for as long as it lived, so one server driving the whole suite only grew:
+# even with the core warm-up it was OOM-killed ~60 tests (~40 min) into a full run on the 16 GB
+# agent, and every test after that failed ECONNREFUSED. A fresh server per pass dropped that graph.
+# Turbopack's eviction (SKILLY_E2E_DEV_SERVER) should make one server last the whole slice; keep
+# the passes until a CI run has shown it. A pass repeats only the warm-up, which restores routes
+# from the build folder's Turbopack disk cache instead of compiling them. playwright.config.ts maps
 # pass p of P to a finer Playwright shard, so the passes in order cover exactly this shard's slice
 # and the database sees the tests in the same order one long run would. Every pass runs even when
 # an earlier one fails, so a red run still reports all of its failures.
@@ -205,7 +209,7 @@ while [ "${p}" -le "${E2E_PASSES}" ]; do
   OOM_BEFORE="$(oom_kills)"
   set +e
   SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid \
-  SKILLY_DEV_KEEP_ROUTES=1 LEADERBOARD_CACHE_TTL_MS=0 E2E_WARM="${E2E_WARM}" \
+  SKILLY_E2E_DEV_SERVER=1 LEADERBOARD_CACHE_TTL_MS=0 E2E_WARM="${E2E_WARM}" \
   E2E_PASS="${p}" E2E_PASS_TOTAL="${E2E_PASSES}" \
   DATABASE_URL="${CI_E2E_DATABASE_URL}" \
   NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}" \
@@ -224,9 +228,9 @@ while [ "${p}" -le "${E2E_PASSES}" ]; do
       "A killed dev server fails every later test of the pass with ECONNREFUSED. With several shards:" \
       "lower E2E_SHARDS, or raise E2E_MIN_HEAP_MB / E2E_SHARD_OVERHEAD_MB so ci/e2e-shard-plan.sh fits" \
       "fewer. Otherwise raise E2E_PASSES (${E2E_PASSES} here) so each dev server drives fewer tests: the" \
-      "heap ceiling (${E2E_HEAP_MB:-unset} MB here) does not bound it, because most of its memory is the" \
-      "pinned route graph (warm-up scope here: ${E2E_WARM}; the routes the tests compile on first use" \
-      "stay pinned too), and that graph grows with every test the server drives." >&2
+      "heap ceiling (${E2E_HEAP_MB:-unset} MB here) does not bound it, because most of its memory is" \
+      "Turbopack's native memory outside the V8 heap (warm-up scope here: ${E2E_WARM}), and that can grow" \
+      "with every route the tests compile." >&2
   fi
   p=$((p + 1))
 done

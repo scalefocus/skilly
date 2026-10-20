@@ -19,13 +19,14 @@ import { defineConfig, devices } from "@playwright/test";
 import { totalmem } from "node:os";
 
 // Heap ceiling for the auto-started dev server. `next dev` defaults to half the machine's RAM and
-// restarts itself at 80% of that, i.e. at 40% of RAM. With ~180 routes pinned (SKILLY_DEV_KEEP_ROUTES)
-// the webpack dev compiler crossed that line twice per CI run, and each restart discarded the
-// warm-up, so next.config.mjs switches the restart off for the same opt-in. Do NOT answer that by
-// raising the ceiling: V8 defers full collections while far below it, so a ceiling near RAM fills
-// with garbage until the kernel OOM-kills the server (a 10.8 GB ceiling on a 16 GB CI agent did,
-// mid-warm-up). Half of RAM, capped at 8 GB — the same cap ci/e2e-shard-plan.sh applies in Jenkins.
-// Next honours an explicit --max-old-space-size and skips its own default; a caller's own wins.
+// restarts itself at 80% of that, i.e. at 40% of RAM. Under webpack, with ~180 routes kept compiled,
+// the dev compiler crossed that line twice per CI run and each restart discarded the warm-up.
+// Turbopack keeps its compiled output outside the JS heap (and, for this server, on disk:
+// next.config.mjs), so the heap now stays far below the line. If it ever grows again, do NOT answer
+// that by raising the ceiling: V8 defers full collections while far below it, so a ceiling near RAM
+// fills with garbage until the kernel OOM-kills the server (a 10.8 GB ceiling on a 16 GB CI agent
+// did, mid-warm-up). Half of RAM, capped at 8 GB — the same cap ci/e2e-shard-plan.sh applies in
+// Jenkins. Next honours an explicit --max-old-space-size and skips its own default; a caller's own wins.
 const callerNodeOptions = process.env.NODE_OPTIONS ?? "";
 const devServerHeapMb = Math.min(Math.floor((totalmem() / 1024 / 1024) * 0.5), 8192);
 const devServerNodeOptions = /--max[-_]old[-_]space[-_]size/.test(callerNodeOptions)
@@ -44,10 +45,11 @@ const port = new URL(baseURL).port || "3000";
 // the whole suite, exactly as before.
 //
 // Passes (E2E_PASS of E2E_PASS_TOTAL, ci/e2e-shard.sh): a stack's slice run as several Playwright
-// invocations one after another, each starting a fresh dev server, because one server's pinned
-// route graph grows until the kernel OOM-kills it. Pass p of P on stack shard s of S is Playwright
-// shard (s-1)*P+p of S*P, so a stack's passes together cover exactly its contiguous slice. Passes
-// share the stack's build folder (its webpack cache carries over), not its result folders.
+// invocations one after another, each starting a fresh dev server, because under webpack one
+// server's compiled route graph grew until the kernel OOM-killed it. Pass p of P on stack shard s of
+// S is Playwright shard (s-1)*P+p of S*P, so a stack's passes together cover exactly its contiguous
+// slice. Passes share the stack's build folder (Turbopack's disk cache carries over), not its result
+// folders.
 function sliceOf(index: string | undefined, total: string | undefined) {
   const i = Number(index ?? 0);
   const n = Number(total ?? 0);
@@ -70,13 +72,13 @@ export default defineConfig({
   // Warm every route once before the first spec (see global-setup.ts): `next dev` compiles a
   // route on first hit, and paying that inside a spec's own budget was the suite's main flake.
   globalSetup: "./global-setup.ts",
-  // `next dev` (webpack) compiles each route on first hit; that compile can be slow, so give CI a
-  // generous per-test budget. Locally (warm dev server) the tighter default is fine.
+  // `next dev` compiles each route on first hit; that compile can be slow, so give CI a generous
+  // per-test budget. Locally (warm dev server) the tighter default is fine.
   timeout: process.env.CI ? 90_000 : 30_000,
   fullyParallel: true,
   shard,
   outputDir: shard ? `test-results/${shardDir}` : "test-results",
-  // In CI, serialize: the webpack dev compiler is a shared bottleneck, and many workers all
+  // In CI, serialize: the dev server's compiler is a shared bottleneck, and many workers all
   // triggering first-compiles at once thrash it into navigation timeouts. One worker lets each
   // route compile once and stay cached for the rest of the run — slower but reliable. Locally
   // Playwright's default (parallel) is used against an already-warm dev server.
@@ -99,15 +101,17 @@ export default defineConfig({
   // the developer already has running. `next dev` must run — a production build refuses
   // SKILLY_DEV_AUTH=1 (instrumentation.ts), and dev auth is what the suite signs in with.
   webServer: {
-    command: `pnpm --filter @skilly/web exec next dev --webpack -p ${port}`,
-    // Keep every route the warm-up compiles alive for the whole run (next.config.mjs).
+    command: `pnpm --filter @skilly/web exec next dev --turbopack -p ${port}`,
+    // SKILLY_E2E_DEV_SERVER=1: Turbopack's "full" memory eviction (next.config.mjs). Every route
+    // the warm-up compiles stays in the build folder's disk cache and comes back from it, not from
+    // a recompile, when a spec first requests it.
     // LEADERBOARD_CACHE_TTL_MS=0: the shared per-(window,sort) board cache (lib/leaderboard.ts) is
     // primed by /api/leaders on EVERY page load, so a spec that creates a request and then reads
     // the board through the UI would see a board computed before its own fixture for up to 60s.
     // INSTALL_TOKEN_ENC_KEY: a TEST-ONLY key so minted installs keep a recoverable copy and the §23
     // "Show install URL" step of already-installed.spec.ts runs (the caller's own key wins if set).
     env: {
-      SKILLY_DEV_KEEP_ROUTES: "1",
+      SKILLY_E2E_DEV_SERVER: "1",
       LEADERBOARD_CACHE_TTL_MS: "0",
       INSTALL_TOKEN_ENC_KEY: process.env.INSTALL_TOKEN_ENC_KEY ?? "c2tpbGx5LWUyZS1pbnN0YWxsLXRva2VuLWtleS0zMmI=",
       NODE_OPTIONS: devServerNodeOptions,

@@ -5,8 +5,8 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev --webpack -p 3000",
-    "build": "next build --webpack",
+    "dev": "next dev --turbopack -p 3000",
+    "build": "next build --turbopack",
     "start": "node .next/standalone/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "next lint",

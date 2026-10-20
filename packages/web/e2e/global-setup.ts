@@ -1,9 +1,9 @@
 // Playwright globalSetup: warm every route the suite touches BEFORE the first spec runs.
 //
-// `next dev` (webpack) compiles a route on its first request, and on a loaded CI agent that
-// compile is where most of the suite's wall-clock — and most of its flakes — used to go. Measured
-// on the CI-mirror stack: `/api/users/suggest` 24.7s and `/api/users/[id]/card` 12.6s on first
-// hit, ~200ms after. A spec paying that inside its own budget fails; the next spec to touch the
+// `next dev` compiles a route on its first request, and on a loaded CI agent that compile is where
+// most of the suite's wall-clock — and most of its flakes — used to go. Measured on the CI-mirror
+// stack under webpack: `/api/users/suggest` 24.7s and `/api/users/[id]/card` 12.6s on first hit,
+// ~200ms after. A spec paying that inside its own budget fails; the next spec to touch the
 // same route passes with identical code — the signature of the "first test in the file fails,
 // second passes" pattern the CI runs showed. Paying every compile up front, once, means each
 // spec meets an already-built route and only the app's real work is on its clock.
@@ -16,26 +16,26 @@
 //      effect (auth, the email OAuth hop, exports, erase) are skipped.
 // Client bundles are NOT pre-hydrated here — see the note at the end for why that was removed.
 //
-// E2E_WARM=pages stops after layer 1. Every warmed route stays pinned in the one webpack compiler,
-// and each new compile re-seals the whole pinned graph, so the full warm-up is slow AND heavy:
-// measured locally, ~31 min and ~9.7 GB private memory with an 8 GB heap ceiling (the heap cap
-// does not bound it), against ~3 min and ~4.3 GB after the pages alone. A run that executes only a
-// slice of the suite (a single spec) does not need every API route pinned; the routes its specs
-// hit compile on first use against that much smaller graph. E2E_WARM=core is pages plus CORE_API
-// (below), the routes almost every spec meets: on the CI agent a cold compile took 10–37 s and
-// held up every request behind it, which pages-only could not absorb. ci/e2e-shard.sh sets core
-// for the quick run, which a fully warmed server got OOM-killed during.
+// E2E_WARM=pages stops after layer 1. Under webpack every warmed route stayed pinned in the one
+// compiler, and each new compile re-sealed the whole pinned graph, so the full warm-up was slow AND
+// heavy: measured locally, ~31 min and ~9.7 GB private memory with an 8 GB heap ceiling (the heap
+// cap did not bound it), against ~3 min and ~4.3 GB after the pages alone. Turbopack compiles each
+// route on its own and keeps the output in its disk cache, so the full sweep is now far cheaper.
+// E2E_WARM=core is pages plus CORE_API (below), the routes almost every spec meets: on the CI agent
+// a cold compile took 10–37 s and held up every request behind it, which pages-only could not
+// absorb. ci/e2e-shard.sh sets core for every Jenkins run, during which a fully warmed webpack server
+// got OOM-killed.
 //
 // Every scope also stamps the dev user onboarded. A fresh stack's dev user has never seen Quick
 // start, so the first-login gate (AppShell, §8) sends the first page that learns this to
 // /quick-start, mid-spec. A full run used to clear it by luck of order (achievements.spec runs
 // second); a sampled run carried it into whatever spec came first.
 //
-// This only holds if the dev server KEEPS what it compiled: by default `next dev` retains 5
-// on-demand entries and disposes the rest after 60s idle, which undid this warm-up within a
-// minute (routes were observed re-compiling mid-run). The server must run with
-// SKILLY_DEV_KEEP_ROUTES=1 (next.config.mjs → onDemandEntries); the Playwright webServer and both
-// CI e2e stages set it.
+// This only holds if the dev server KEEPS what it compiled. Webpack's `next dev` disposed idle
+// entries after 60s, which undid this warm-up within a minute. Turbopack writes every compiled route
+// to the build folder's disk cache; with SKILLY_E2E_DEV_SERVER=1 (next.config.mjs → "full" memory
+// eviction) it then drops that output from memory, and a spec's first request restores it from disk
+// instead of compiling it. The Playwright webServer and both CI e2e stages set it.
 //
 // Best-effort by design: a route that fails here is logged, not fatal — the spec that owns it
 // reports the failure with a real assertion and a real error context. Playwright starts the
