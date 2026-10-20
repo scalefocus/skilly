@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.1",
+    date: "2026-10-20",
+    summary:
+      "The notification type filters on the Notifications page now fold away behind a Type row, collapsed by default, so your inbox starts right at the top. Expand it to pick types; your browser remembers whether you left it open. If you collapse it while types are selected, it shows how many are selected with a clear button.",
+  },
+  {
     version: "2.39.0",
     date: "2026-10-20",
     summary:

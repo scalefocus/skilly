@@ -2,7 +2,7 @@
 // of these is the DIVERGENCE: an auto-expanded row must not leave a trace in the stored preference.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { initialFacetRowOpen, storedFacetRowOpen } from "./facetRow";
+import { initialFacetRowOpen, storedFacetRowOpen, storedFlagOpen } from "./facetRow";
 
 test("collapsed by default: nothing stored, no active filter", () => {
   assert.equal(initialFacetRowOpen(undefined, null), false);
@@ -34,4 +34,12 @@ test("junk in localStorage reads as collapsed, never as open", () => {
 
 test("an empty-string filter value is not an active filter", () => {
   assert.equal(initialFacetRowOpen(undefined, ""), false);
+});
+
+// §12 the notifications Type row stores its choice under its own key as "1"/"0".
+test("own-key flag: only \"1\" is open — absent, collapse-written and junk values read as collapsed", () => {
+  assert.equal(storedFlagOpen("1"), true);
+  for (const v of [null, undefined, "0", "", "true", "open", " 1", "1 "]) {
+    assert.equal(storedFlagOpen(v), false, `value: ${JSON.stringify(v)}`);
+  }
 });

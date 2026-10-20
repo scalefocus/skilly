@@ -2,7 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { EmptyState, LoadMoreSentinel, Pill, ScrollToTop } from "../../components/ui";
+import { CollapsibleFacetRow } from "../../components/CollapsibleFacetRow";
 import { useDateFmt } from "../../components/DateFormat";
+import { PREF_NOTIFICATIONS_TYPES_OPEN, readPref, writePref } from "../../lib/prefs";
+import { storedFlagOpen } from "../../lib/facetRow";
 import { NOTIFICATION_LABELS } from "@skilly/shared/notifications";
 import { followNotificationContent } from "@skilly/shared/follows";
 
@@ -40,6 +43,20 @@ export default function NotificationsPage() {
       return next;
     });
   const typesQs = [...typeFilter].sort().join(",");
+  // The Type row is collapsible and starts collapsed; only the user's open/closed choice is
+  // remembered per browser (§12), never the selection. It renders once that choice is read (no
+  // localStorage during SSR), so a remembered-open row paints open instead of sliding open.
+  const [typesOpen, setTypesOpen] = useState(false);
+  const [typesPrefLoaded, setTypesPrefLoaded] = useState(false);
+  useEffect(() => {
+    setTypesOpen(storedFlagOpen(readPref(PREF_NOTIFICATIONS_TYPES_OPEN, "0")));
+    setTypesPrefLoaded(true);
+  }, []);
+  const toggleTypesOpen = () => {
+    const next = !typesOpen;
+    setTypesOpen(next);
+    writePref(PREF_NOTIFICATIONS_TYPES_OPEN, next ? "1" : "0");
+  };
 
   const loadPage = useCallback(async (offset: number) => {
     setLoading(true);
@@ -98,25 +115,47 @@ export default function NotificationsPage() {
         <p className="page-sub">Outcomes of your proposals and reviews — opening this page marks them read. Delivery by email/webhook is configured by your operator.</p>
       </div>
 
-      {/* Multi-select event-type toggles: pick any combination, or clear to see everything. */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap", alignItems: "center" }}>
-        {Object.entries(NOTIFICATION_LABELS).map(([type, meta]) => (
-          <button
-            key={type}
-            type="button"
-            className={`facet${typeFilter.has(type) ? " facet-on" : ""}`}
-            aria-pressed={typeFilter.has(type)}
-            onClick={() => toggleType(type)}
+      {/* Multi-select event-type toggles: pick any combination, or clear to see everything. One
+          chip per notification type wraps to many lines, so the row collapses (§12). Collapsed
+          with a selection, the summary keeps the filtered inbox explained and clearable. */}
+      {typesPrefLoaded && (
+        <div style={{ marginBottom: 18 }}>
+          <CollapsibleFacetRow
+            id="notification-types"
+            label="Type"
+            count={Object.keys(NOTIFICATION_LABELS).length}
+            open={typesOpen}
+            onToggle={toggleTypesOpen}
+            collapsedSummary={
+              typeFilter.size > 0 ? (
+                <>
+                  <span className="mono muted" data-testid="notification-types-selected">{typeFilter.size} selected ·</span>
+                  <button type="button" className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => setTypeFilter(new Set())}>
+                    ✕ clear
+                  </button>
+                </>
+              ) : null
+            }
           >
-            {meta.title}
-          </button>
-        ))}
-        {typeFilter.size > 0 && (
-          <button className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => setTypeFilter(new Set())}>
-            ✕ clear
-          </button>
-        )}
-      </div>
+            {Object.entries(NOTIFICATION_LABELS).map(([type, meta]) => (
+              <button
+                key={type}
+                type="button"
+                className={`facet${typeFilter.has(type) ? " facet-on" : ""}`}
+                aria-pressed={typeFilter.has(type)}
+                onClick={() => toggleType(type)}
+              >
+                {meta.title}
+              </button>
+            ))}
+            {typeFilter.size > 0 && (
+              <button type="button" className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => setTypeFilter(new Set())}>
+                ✕ clear
+              </button>
+            )}
+          </CollapsibleFacetRow>
+        </div>
+      )}
 
       {loading && items.length === 0 ? (
         <div className="skeleton" style={{ height: 180, borderRadius: "var(--radius)" }} />

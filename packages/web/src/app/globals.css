@@ -887,6 +887,11 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
    nested .facet-row-label, so a labelled row and a collapsible one align identically. */
 .facet-row-label { padding: 6px 0 0; white-space: nowrap; }
 .facet-row-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; min-width: 0; }
+/* The collapsible row's second column: the chip block plus, while collapsed, the optional summary
+   (the §12 inbox's "<k> selected · ✕ clear"). min-width:0 pins it to its column, as the chip
+   block alone was before. */
+.facet-row-body { min-width: 0; }
+.facet-row-summary { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 22px; font-size: 12px; }
 .facet-row-toggle {
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   background: none; border: 0; padding: 6px 0 0; cursor: pointer; color: inherit; text-align: left;

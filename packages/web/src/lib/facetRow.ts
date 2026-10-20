@@ -20,3 +20,12 @@ export function initialFacetRowOpen(storedOpen: unknown, activeValue: string | n
 export function storedFacetRowOpen(storedOpen: unknown): boolean {
   return typeof storedOpen === "boolean" ? storedOpen : false;
 }
+
+/**
+ * A row whose open/closed choice is its own localStorage key rather than a field of a page's prefs
+ * object (the §12 notifications Type row): exactly "1" is open; anything else — absent, junk, or
+ * the "0" a collapse writes — reads as collapsed, the default.
+ */
+export function storedFlagOpen(raw: string | null | undefined): boolean {
+  return raw === "1";
+}
