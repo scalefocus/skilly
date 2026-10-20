@@ -91,7 +91,7 @@ function HallInner() {
       ) : (
         <section className="card card-pad reveal">
           {/* No footer total: the header's level bar already carries the N of M count (§31.5). */}
-          <AchievementGrid earned={data.earned} showLocked={isSelf} spotlight={spotlight} recentFirst={!isSelf} />
+          <AchievementGrid earned={data.earned} showLocked={isSelf} spotlight={spotlight} recentFirst={!isSelf} unavailable={isSelf ? data.unavailable : []} />
         </section>
       )}
     </div>

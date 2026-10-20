@@ -1,6 +1,6 @@
 // Postgres-backed implementation of the git server's dependencies. SKILLY_SPEC.md §9.
 import type { Pool } from "pg";
-import { resolveAccess, hashToken, resolveLatest, PUBLIC_SCOPE, sharedNamespaceIdsSql, namespaceMarketplaceSkillSql, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
+import { resolveAccess, hashToken, resolveLatest, isForwardUpdate, PUBLIC_SCOPE, sharedNamespaceIdsSql, namespaceMarketplaceSkillSql, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
 import type { GitServerDeps } from "./server.js";
 import type { MarketplaceRef, SkillRef, TokenPrincipal } from "./authorize.js";
 import { M } from "../metrics.js";
@@ -192,12 +192,21 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
         [skillId],
       );
       const latest = resolveLatest(rows.map((r) => r.semver));
-      await pool.query(
+      // The RETURNING subquery sees the pre-update snapshot, so `prev` is what the install last served.
+      const { rows: stamped } = await pool.query<{ prev: string | null; next: string | null; user_id: string | null; is_system: boolean }>(
         `update tokens
             set last_served_semver = coalesce(pinned_semver, $2), last_cloned_at = now()
-          where id = $1 and type = 'install'`,
+          where id = $1 and type = 'install'
+          returning (select t0.last_served_semver from tokens t0 where t0.id = $1) as prev,
+                    last_served_semver as next, user_id, is_system`,
         [tokenId, latest],
       );
+      // §31.12 Fresh Coat — the installation moved forward to a higher stable version. Best-effort;
+      // logAccess already registered this clone as a Habits event, so none is evaluated here.
+      const s = stamped[0];
+      if (s?.user_id && !s.is_system && isForwardUpdate(s.prev, s.next)) {
+        await tryAward(pool, s.user_id, "first_update", { noHabits: true });
+      }
     },
 
     async markMarketplaceUsed(tokenId, userAgent, clientIp): Promise<boolean> {

@@ -1966,6 +1966,19 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Worker:** pre-scan + mirror verify the pinned commit and the pre-scan digest, quarantine on `critical`, AV sweep for artifact reports lacking an engine result, SHA-256 check before every synthesis, SCIM/reconcile audit rows, gateway refusal events + counter, token-before-catalog ordering.
     - **Deploy:** Node 22, digest-pinned images, MinIO console on loopback + scoped service account via `minio-init`, `CLAMAV_HOST` on web, Caddy forwarded headers from placeholders.
     - **Minor** release (v2.37.0).
+40. **Five badges for recent features + the "not available here" tile (§31.12):**
+    - **Shared:** five catalog entries (*Fresh Coat*, *Glow Up*, *Robot Sidekick*, *Word of Mouth*,
+      *Hype Squad* — 26 → 31); `achievementCopy` (`{name}` → AI display name);
+      `unavailableAchievements(held, flags)`; the `first_update` forward-move predicate.
+    - **Data:** migration 0099 — backfill of `first_hype`, `first_share`, `first_icon`,
+      `first_ai_draft` and the `hero_at` stamp rule; no schema change.
+    - **Web:** award hooks in the hype route (transactional), the share mint, proposal creation /
+      `directPublish()` (icon, transactional), the §43 draft route and the §44 run; `unavailable` on
+      the self achievements response; the profile card / own hall render the unavailable tile; badge
+      copy substitutes the AI display name; the deferred Habits backfill reads the new sources.
+    - **Worker:** the `/info/refs` stamp reports the previous `last_served_semver` and awards
+      `first_update`. (MCP proposals carry no icon fields, so the worker has no Glow Up hook.)
+    - **Minor** release (v2.39.0).
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -2714,7 +2727,9 @@ works for both protocol versions).
   `npx skills add` command (or `npx skills update`, which re-clones the locked source) — `main`
   moved, the token did not. A **pinned** install needs a **new** install command for the new tag
   (a fresh mint; the old pinned token is a separate installation until uninstalled). The UI and
-  the MCP response say which of the two applies to each behind row.
+  the MCP response say which of the two applies to each behind row. The first re-clone that moves
+  an installation **forward** to a higher stable version earns **Fresh Coat** (`first_update`,
+  §31.12.3).
 
 ### Installed Skills page (`/installed`)
 - Reached from the bottom-left account menu, **above Profile**; **owner-scoped** (personal view;
@@ -5589,6 +5604,7 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | Key | Name | Earned when (the event) | Group |
 |---|---|---|---|
 | `first_install` | **Hello, Skill** | First skill **adopted** — a first row in the `skill_installs` ledger (git clone, first download or first MCP `SKILL.md` read; three doors, one fact — §21). Minting an unused install token earns nothing. | Consume |
+| `first_update` | **Fresh Coat** | A clone on one of the user's **existing installations** served a **higher stable version** than that installation last recorded — re-running the install command or `npx skills update` on an install that had fallen behind (§39). First clones, *unknown* installs and pinned installs (which cannot move) earn nothing. See §31.12. | Consume |
 | `first_marketplace` | **Bulk Buyer** | First **git fetch** served with a personal `marketplace` token (§30.7's `/info/refs` credit path). Minting the key alone earns nothing. | Consume |
 | `first_mcp` | **Ghost in the Machine** | First **MCP tool call** made under one of the user's grants (§29). Completing consent alone earns nothing. | Consume |
 | `triple_threat` | **Three Doors Down** | Holds all three of `first_install`, `first_marketplace`, `first_mcp`. Awarded by whichever of the three completes the set. | Consume |
@@ -5597,19 +5613,23 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | `first_fulfilment` | **Genie** | Fulfilled **someone else's** request (either path; no self-fulfilment credit, matching §26's leaderboard rule). | Contribute |
 | `first_hosted_proposal` | **Homegrown** | Submitted a first proposal whose artifact type is **hosted** (web form or MCP `propose_*` tool alike). | Contribute |
 | `first_pointer_proposal` | **Finger Pointer** | Submitted a first proposal whose artifact type is **pointer**. | Contribute |
+| `first_icon` | **Glow Up** | **Submitted** (proposal or direct publish, new skill or new version) with an icon **the user chose** — an uploaded image or a picked emoji that differs from the skill's current one, or a hosted bundle carrying its own icon (§33). Keeping the current icon, a pointer's upstream icon and *Keep current files* earn nothing. See §31.12. | Contribute |
 | `first_published` | **Shipped It** | A version the user submitted was **published** (review acceptance, or direct publish in a no-review namespace). | Contribute |
 | `first_new_version` | **Sequel** | A version the user submitted was published to a skill that **already had a published version**. | Contribute |
 | `first_version_proposal` | **Encore** | **Put forward** a first new version of an **existing** skill (`target_skill_id` set): a new-version proposal created on the web or over MCP, **or** a direct publish of a new version in a no-review namespace (§8). Awarded on submission, not on acceptance — a later reject or delete never revokes it. Any skill counts, including one the user maintains. See §31.11. | Contribute |
+| `first_ai_draft` | **Robot Sidekick** | An AI draft **came back** for the user, through either door: a successful *Draft with {name}* on the propose form (§43), or a *Draft improvements with {name}* run that returned at least one AI-drafted file (§44). Awarded on the draft, not on submitting it. See §31.12. | Contribute |
 | `maintainer_added` | **Adopted** | Added as an **explicit maintainer** of a skill whose original proposer — the creator of the skill's **earliest version** — is **not** the user (§19). A brand-new skill's own submitter is never "adopted". | Contribute |
 | `first_message` | **Icebreaker** | Sent a first message in **any** messaging context (direct, proposal review, request discussion, skill discussion — §24). | Talk |
 | `first_reply` | **Conversationalist** | Posted in a conversation whose **first message was authored by someone else**. | Talk |
 | `first_mention` | **Name Dropper** | A message of theirs carried a first `@person` or `#skill` mention (`message_mentions`, §24). | Talk |
+| `first_share` | **Word of Mouth** | Minted a first **signed share link** with a skill page's *Share* button (§33.6) — any skill the user can see, their own included. See §31.12. | Talk |
 | `first_watch` | **Stalker, but Nicely** | Watched a first skill (`skill_watches`). | Explore |
 | `first_follow` | **Right Behind You** | Followed a first person (`user_follows`, §35.8). | Explore |
 | `followers_10` | **Cult Following** | Reached 10 active followers (§35.8). The one count-tier badge. | Talk |
 | `first_rating` | **Critic** | Rated a first skill (`skill_ratings`, §18). | Explore |
 | `first_collection` | **Mixtape** | Created a first skill collection (§38.8). Deleting it never revokes the badge. | Contribute |
 | `onboarded` | **Read the Manual** | Completed Quick start (`users.onboarded_at`, §23). | Explore |
+| `first_hype` | **Hype Squad** | Placed a first **hype** the server accepted (§50.2) — the act itself, whatever the skill does next. Refused attempts earn nothing. See §31.12. | Explore |
 | `hype_train` | **Hype Train** | A skill the user is an **effective maintainer** of enters the **top N hyped skills** (§50.9; awarded by the hype sweep). | Contribute |
 | `talent_scout` | **Talent Scout** | A skill the user **hyped in the last 7 days** enters the top N hyped skills — they picked a winner (§50.9; awarded by the hype sweep). | Explore |
 | `night_shift` | **Night Shift** | Any achievement event (below) at **00:00–04:59 in the user's own timezone** (§31.3). | Habits |
@@ -5624,6 +5644,18 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
   them, which defeats "collect them all". **No count tiers** in v1 (no "10 installs"), **with one
   exception: `followers_10`** (§35.8), the one badge a person cannot earn by exploring alone. The
   `key` scheme leaves room for `installs_10`-style keys later without touching existing rows.
+  A badge with **one role-gated door and one open door** is not role-gated: `first_ai_draft`'s
+  improvements door (§44) is maintainers-only, but its propose-form door (§43) is open to every
+  proposer (§31.12).
+- **No badges for anonymous actions.** Answering the feedback survey or filing a bug report (§36)
+  never earns a badge: a `user_achievements` row, its `earned_at` and the `follow.achievement`
+  fan-out would tie a person to a response whose storage deliberately holds no user and no time of
+  day (§36.12). **No badges for changing a preference** either (e.g. the email digest mode, §48) —
+  flipping a setting is not exploring a feature.
+- **Switch-gated badges stay in the catalog.** A badge whose feature a platform switch can turn off
+  (hype, AI, MCP, marketplaces) is never removed or excluded from the level total; while the
+  feature is unavailable to the owner, its **locked** tile says so instead of showing the how-to
+  hint (§31.12.4).
 - **MCP-originated actions count** exactly like web ones — a proposal submitted through the MCP
   `propose_*` tools is a proposal (§29 attribution) and earns `first_hosted_proposal` /
   `first_pointer_proposal` (and `first_version_proposal` when it targets an existing skill); an
@@ -5683,7 +5715,11 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
   someone else); message insert (`first_message`; `first_reply` when the conversation's earliest
   message has another author; `first_mention` when the message wrote any `message_mentions` row);
   watch insert (`first_watch`); rating insert (`first_rating`); `POST /api/me/onboarded`
-  (`onboarded`). **Every one of these hook points is also a Habits event** (§31.3), whether or not
+  (`onboarded`); and the five §31.12 hooks — an accepted hype (`first_hype`, in the hype
+  transaction), a share-link mint (`first_share`), proposal creation / `directPublish()` with a
+  chosen icon (`first_icon`, in that transaction), a successful §43 draft or §44 run
+  (`first_ai_draft`), and the gateway's `/info/refs` stamp when an installation moves forward
+  (`first_update`, worker). **Every one of these hook points is also a Habits event** (§31.3), whether or not
   it awards its own key — a tenth install at 02:00 still earns Night Shift.
 - **Failure isolation.** The helper never throws into its caller's success path: a failure
   inside awarding rolls the transaction back exactly like any other failure would (it *is* in the
@@ -5711,7 +5747,8 @@ The server never guesses a timezone. The browser reports it:
   known yet — §31.6). Instead, the **first time** a user's `time_zone` transitions from `null` to
   a value (the `PATCH` above), the server runs the user's **history once** through the same
   night/weekend rules — the same source queries the migration uses for the other keys (installs,
-  requests, proposals, versions, messages, watches, ratings, maintainer additions, MCP grants) —
+  requests, proposals, versions, messages, watches, ratings, maintainer additions, MCP grants, and
+  since §31.12 hypes, share-link mints and AI drafts) —
   and awards whichever apply with `earned_at` = the earliest qualifying event. This runs inline
   in the `PATCH` (a handful of indexed per-user queries) and, being a backfill, sends **no
   notification**. A later zone change (travel, relocation) does **not** re-run history — the
@@ -5727,7 +5764,9 @@ The server never guesses a timezone. The browser reports it:
   **CTA → `/profile#achievements`** (the user's own Achievements card, §31.5), so the notification
   itself is the way into the hall. One row per badge, never coalesced (a user earns each at most
   once). **In-app only** — it never rides the email or webhook channels, regardless of
-  `email_notifications`; there is no per-type opt-out (one-time, ≤ 20 rows per lifetime).
+  `email_notifications`; there is no per-type opt-out (one-time, at most one row per catalog key
+  per lifetime). Badge copy containing the `{name}` token (§31.12.5) is rendered with the AI
+  display name read **when the row is created** (§40.14).
 - **Toast.** The existing notification poll surfaces any **unread** `achievement.earned` row it has
   not toasted yet in this browser session (tracked by notification id in `sessionStorage`) as a
   small celebratory toast — glyph, *"Badge earned — Hello, Skill"*, the same level
@@ -5754,7 +5793,10 @@ the preference cards:
   Talk / Explore / Habits). **Earned** badges show the glyph in a coloured circle (the leader-badge
   visual language, §21), the name, and *"Earned &lt;date&gt;"* via `useDateFmt()`. **Locked**
   badges are greyed with the same glyph and show the `howToEarn` hint — this is the exploration
-  nudge, so it is never hidden from the owner.
+  nudge, so it is never hidden from the owner. **Exception — the "not available here" tile
+  (§31.12.4):** a locked badge whose feature is switched off for the owner keeps its greyed glyph
+  and name, but its hint reads *"Not available here yet — your administrator decides whether it's
+  switched on."* Earned badges are never marked this way.
 - **Share** copies the hall URL to the clipboard with the shared copy-toast (*"✓ Copied"*, §23/§29).
   Every badge tile also has its own small share affordance that copies the URL with
   **`?badge=<key>`** (spotlight, below).
@@ -5816,7 +5858,8 @@ around the bubble itself (§31.10) — one number, never which badges earned it.
 ### 31.10 Level (the badge count, worn on the bubble)
 
 A **level** is nothing more than *how many of the catalog's badges a user has earned* — one number
-from 0 to the catalog size (24 today, after §35.8 added two, §38.8 one and §31.11 one). It introduces no new event, no new award rule and no new
+from 0 to the catalog size (31 today, after §35.8 added two, §38.8 one, §31.11 one, §50.9 two
+and §31.12 five). It introduces no new event, no new award rule and no new
 disclosure: everything it shows, the §31.5 achievements count already showed. What it adds is
 **reach** — the number travels with the avatar, so progress is legible at a glance instead of only
 on a page someone has to go and open.
@@ -5931,7 +5974,9 @@ migration 0041's credit backfill.
 
 **Later catalog additions** carry their own backfill in the migration that ships them, under the
 same rules (non-erased users, original timestamp, no notifications, idempotent):
-`first_version_proposal` → **migration 0085** (§31.11).
+`first_version_proposal` → **migration 0085** (§31.11); `first_hype`, `first_share`, `first_icon`,
+`first_ai_draft` → **migration 0099** (§31.12.7; `first_update` has no provable history and is
+not backfilled).
 
 ### 31.7 Lifecycle, privacy, governance
 
@@ -5963,7 +6008,9 @@ same rules (non-erased users, original timestamp, no notifications, idempotent):
 ### 31.8 API surface
 
 - `GET /api/users/:id/achievements` → `{ userId, displayName, avatar, hidden, earned: [{ key,
-  earnedAt }], total, heroAt, followable }` (`followable`, §35.4) — any signed-in user; `total` = catalog size; for a hidden
+  earnedAt }], total, heroAt, followable, unavailable }` (`followable`, §35.4; `unavailable`, §31.12.4 —
+  the locked keys whose feature is switched off for the caller, computed **only when `:id` is the
+  caller**, `[]` otherwise) — any signed-in user; `total` = catalog size; for a hidden
   non-self target
   `hidden: true, earned: []`; **404** for unknown / erased / inactive; **404-shaped disabled
   notice** (`{ disabled: true }` with 200, mirroring `/api/mcp`'s pattern) when the toggle is off.
@@ -5991,6 +6038,8 @@ E2e: earn `first_watch` from the skill page → toast (with its level line) → 
 card shows it earned with the rest locked and the level bar advanced → Share copies the hall URL
 → a second user opens the hall and sees only the earned badge → owner hides achievements → the
 second user sees the private line and no ring on that person's bubble.
+
+The five §31.12 badges and the "not available here" tile carry their own test list (§31.12.9).
 
 **Levels (§31.10).** Unit: level = badge count; the ring's omitted-at-0 rule and its floored stroke
 across the bubble sizes in use (20–52px); the Hero predicate (`hero_at` set, never a live
@@ -6068,6 +6117,214 @@ invite.
     sources with the earlier timestamp, skips erased users, writes no notifications, and stamps
     `hero_at` for a user it completes.
   - *E2e:* none new — the existing achievements e2e covers the toast/bell/card path for any key.
+
+### 31.12 Five badges for recent features, and the "not available here" tile
+
+Since the catalog was last extended, several features any user can try shipped with **no
+entry-level badge**: hyping a skill (§50 — *Talent Scout* and *Hype Train* reward what happens
+*after* a hype, nothing rewards the act), signed share links and skill icons (§33), bringing an
+installation up to date (§39) and the two AI drafting features (§43/§44). This section adds one
+"you tried it" badge for each, growing the catalog **from 26 to 31**. It also gives every badge
+gated by a platform switch an honest locked tile.
+
+#### 31.12.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | Five new keys: `first_hype`, `first_share`, `first_icon`, `first_update`, `first_ai_draft`. | One per recent, user-reachable feature without a badge of its own. |
+| 2 | **One** AI badge with **two doors**: the propose-form draft (§43) **or** an improvements run (§44). | §44 is maintainers-and-platform-admins only; a badge earnable only there would be role-gated (§31.1). The §43 door keeps it open to every proposer — "three doors, one fact", like *Hello, Skill*. |
+| 3 | Every new badge rewards **trying** the feature, not its outcome: a hype accepted, a link minted, a submission carrying a chosen icon, a draft returned, an installation moved forward. | §31's stance. Outcomes already have their badges (*Talent Scout*, *Hype Train*, *Shipped It*). |
+| 4 | **No badge for anonymous actions** — the feedback survey and bug reports (§36). | A badge row, its `earned_at` and the follower fan-out would re-identify a response stored with no user and no time of day (§36.12). |
+| 5 | **No badge** for a preference change (email digests, §48), for role-gated features (namespace sharing §42, deprecation §45, AI pre-review §46, policy rules §47), or for threaded discussion replies (§24). | A setting is not exploration; role-gated badges break "collect them all"; *Conversationalist* already rewards replying where someone else started. |
+| 6 | The catalog stays **static**. A **locked** badge whose feature is switched off for the owner shows *"Not available here yet"* instead of its how-to hint (§31.12.4) — for **every** switch-gated badge, the existing hype, MCP and marketplace badges included. Level total and Hero rule unchanged. | Keeps §31.10's arithmetic and Hero permanence. An un-actionable hint is a small lie. **Accepted cost:** on a platform that never enables a gated feature, no new user can reach Hero. |
+| 7 | **Backfill where history proves it** (migration 0099); `first_update` is **not** backfilled. | §31.6's rule. The gateway keeps only the latest served version, so no earlier "move forward" is provable. |
+| 8 | The AI badge's copy names the AI by its **display name** (`{name}`), never the literal "AI". | §40.14: every end-user surface that names the AI uses the admin-set name. |
+
+#### 31.12.2 The catalog entries
+
+| Key | Name | Glyph | Group — placed | `blurb` | `howToEarn` |
+|---|---|---|---|---|---|
+| `first_update` | **Fresh Coat** | 🖌️ | Consume — after `first_install` | You brought an old install up to date. | Re-run the install command, or `npx skills update`, on an install that's behind latest. |
+| `first_icon` | **Glow Up** | ✨ | Contribute — after `first_pointer_proposal` | Your skill got a face. | Propose a skill or a new version with an icon: upload an image, pick an emoji, or ship one in the bundle. |
+| `first_ai_draft` | **Robot Sidekick** | 🤖 | Contribute — after `first_version_proposal` | You let {name} write the first draft. | Use Draft with {name} on the propose form, or Draft improvements with {name} on a skill you maintain. |
+| `first_share` | **Word of Mouth** | 🔗 | Talk — after `first_mention` | You sent a skill out into the world, preview card and all. | Use Share on a skill's page and paste the link into Teams, Slack or Outlook. |
+| `first_hype` | **Hype Squad** | 🙌 | Explore — directly before `talent_scout` | You put your name behind someone else's new skill. | Hype a new skill from its page. You get a few hypes a week. |
+
+Placement is catalog (= display) order (§31.5). No glyph is shared with an existing badge.
+`triple_threat`'s three parts are unchanged — *Fresh Coat* is not a fourth door.
+
+#### 31.12.3 Qualifying events and hook points
+Every hook below is also a **Habits event** (§31.3) — the person acted at that hour — and follows
+§31.2's rules: transactional where the triggering write already runs in a transaction, best-effort
+`tryAward` straight after a bare write, idempotent on the PK.
+
+- **`first_hype` — Hype Squad.** `POST /api/skills/:ns/:slug/hype` **accepts** the hype (§50.2):
+  the award joins the hype's own transaction, under its per-user advisory lock. A `409` refusal
+  (`not_eligible`, `self_hype`, `already_hyped`, `budget_exhausted`) and the `404` while hype is off
+  award nothing. Platform admins hyping (allowed, §50.2) earn it like anyone. Never revoked: a skill
+  that later turns ineligible, is deleted, or a hype that ages out leaves the badge in place.
+- **`first_share` — Word of Mouth.** `POST /api/skills/:ns/:slug/share` mints a link (§33.6):
+  best-effort after the mint and its `skill.share_link_created` audit row. A `404` (skill not
+  visible) awards nothing. Any skill the caller can see counts — restricted, archived or their own
+  (§31.1 self-actions rule); the badge stores no skill (invariant #3 unchanged).
+- **`first_icon` — Glow Up.** Awarded at **creation** of a submission, in its transaction:
+  `createProposal()` (web, including a content-risk-routed direct publish) and `directPublish()` —
+  new skill or new version alike. MCP proposals never send icon fields (§33.4), so they never earn
+  it. It counts when the submission sets an icon **the user chose**:
+  1. a payload `iconSha256` that differs from the target skill's current `icon_sha256` (any hash
+     for a new skill) — the ownership check already guarantees the caller uploaded it (§33.3);
+  2. a payload `iconEmoji` that differs from the target skill's current `icon_emoji` (any emoji
+     for a new skill);
+  3. a **hosted bundle uploaded for this submission** that carries its own icon — a frontmatter
+     `icon:` (file path or emoji) or a root `icon.png`, as the upload response's `bundleIcon` /
+     frontmatter emoji reports it (§33.3). The propose form sends it as the payload's `iconSha256`
+     / `iconEmoji`, so it is judged by rules 1–2: a bundle that re-ships the skill's current icon
+     does not count.
+
+  One shared predicate, `submissionChoosesIcon(meta, current)` in `@skilly/shared/achievements`,
+  makes the call from the payload and the target's icon **before** the submission syncs it.
+
+  **Does not count:** a new version that sends back the current icon unchanged; a removal; a
+  *Keep current files* reuse (the reused artifact's icon is not new); a **pointer** proposal's
+  upstream icon (the proposer did not author it); a revise or resubmit (creation only, as for
+  Encore); a reviewer edit (reviewers can remove, not upload, §33.4); promote-to-global (it copies
+  the icon). Awarded on submission, so a later reject never revokes it.
+- **`first_ai_draft` — Robot Sidekick.** Two doors:
+  1. **§43 propose-form draft** — `POST /api/propose/ai-draft` returns a **usable draft** to the
+     caller (a `200` carrying the drafted fields). Best-effort after the response is built (nothing
+     is persisted by §43, so there is no transaction to join). A failure, a timeout, a rate-limit
+     refusal or an unusable reply awards nothing. Whether the proposer then keeps or submits the
+     text is irrelevant (decision 3). §43's "no AI marker" decision is unaffected: the badge
+     records only that the person *once* used the feature, never on which proposal.
+  2. **§44 improvements run** — a `POST /api/skills/:ns/:slug/quality/draft` run that **ends**
+     (complete, capped or cancelled — wherever `skill.ai_draft_generated` is written) with **at
+     least one file the AI drafted** as `modified` or `deleted`. Files deleted **deterministically**
+     (OS junk, FS-004 — no AI call) do not count on their own. Best-effort, after the audit row.
+
+  Both doors exist only while `aiAvailable()` (§40.7) is true, so the badge can be earned only
+  then. A badge earned before the integration is switched off is kept.
+- **`first_update` — Fresh Coat.** The worker's `/info/refs` stamp of an **`install`** token
+  (§23 *Installed-version freshness*): the stamp statement also reports the token's **previous**
+  `last_served_semver`, and the badge is awarded (best-effort, worker mirror of the helper, §31.2)
+  to the token's `user_id` when **all** hold:
+  - the previous `last_served_semver` was **not NULL** (a first clone, or a pre-0083 *unknown*
+    install, has nothing to move from);
+  - the newly served semver is **not NULL**, is a **stable** version, and is **greater** than the
+    previous one by semver order (the shared `@skilly/shared/semver` comparator);
+  - the token belongs to a user (system installations earn nothing, §31.1) and is **not**
+    `marketplace` (marketplaces have their own cursor, §39.2).
+
+  In practice only a **latest-tracking** install can move: a pinned token always re-stamps its own
+  `pinned_semver`, and updating a pinned install means minting a **new** installation for the new
+  tag, which is a first clone. A HEAD request never stamps, so never awards. An aborted clone that
+  still registered the stamp may award (the stamp's accepted approximation, §23).
+
+#### 31.12.4 Switched-off features — the "not available here" tile
+- **Which keys are switch-gated, and when each is unavailable to the owner:**
+
+  | Key(s) | Unavailable while |
+  |---|---|
+  | `first_hype`, `talent_scout`, `hype_train` | `hype_enabled` is off (§50.8) |
+  | `first_ai_draft` | `aiAvailable()` is false — not configured, disabled, or the token does not decrypt (§40.7) |
+  | `first_mcp` | `mcp_enabled` is off (§29) |
+  | `first_marketplace` | no marketplace is reachable by the owner — the set `GET /api/marketplaces/directory` would list for them is empty (public marketplace off **and** no namespace marketplace open to them, §30) |
+  | `triple_threat` | any of its three parts that the owner does **not** already hold is unavailable |
+
+  Every other key is always available.
+- **Only locked tiles, only for the owner.** The marker applies to a badge the owner has **not**
+  earned, on the surfaces that show locked badges at all: the profile card and the owner's own
+  hall (§31.5). Earned badges never carry it, and other people never see locked tiles. The level
+  bar, ring, hover-card count, Hero rule and `total` are **untouched** — the denominator stays the
+  full catalog (decision 6).
+- **Copy.** The tile keeps its greyed glyph and name; the `howToEarn` hint is replaced by *"Not
+  available here yet — your administrator decides whether it's switched on."* One string for every
+  gated key.
+- **Delivery.** `GET /api/users/:id/achievements` returns **`unavailable: string[]`** (§31.8),
+  computed per request **only when `:id` is the caller** (`[]` otherwise), so a switch flip shows on
+  the next load. The rule is a pure shared helper — `unavailableAchievements(held, flags)` in
+  `@skilly/shared/achievements`, with `flags = { hypeEnabled, aiAvailable, mcpEnabled,
+  marketplaceReachable }` — so the route and the tests use the same logic.
+- **Awarding is unaffected.** Being unavailable never blocks an award: if the event somehow happens
+  (e.g. the switch flips mid-request), the badge is recorded like any other.
+
+#### 31.12.5 The AI display name in badge copy
+- The catalog strings of `first_ai_draft` carry a **`{name}`** placeholder in `blurb` and `howToEarn`
+  — **never in `name`**, so *Robot Sidekick* reads the same everywhere and §23's guard test (which
+  matches on `name`) is unaffected. Written so `{name}` stands alone as a noun (§40.14 copy rule).
+- A shared pure helper, `achievementCopy(def, aiName)`, substitutes it. **Client** surfaces (profile
+  card, hall, toast) pass `aiDisplayName` from `/api/me` (§40.14 delivery). **Server-rendered** text
+  — the `achievement.earned` body (§31.4) — reads `ai_display_name` **when the row is created**, like
+  every other §40.14 notification. `follow.achievement` names only the badge, so it needs no
+  substitution.
+- No other catalog entry uses the placeholder. A unit test fails if `{name}` appears in any `name`,
+  or in any entry other than `first_ai_draft`.
+
+#### 31.12.6 Notifications, toggle, privacy
+- `achievement.earned` (§31.4) and therefore `follow.achievement` (§35.6) for every runtime award;
+  **none** for the migration-0099 backfill.
+- While `achievements_enabled` is off, awards record silently (§31.7).
+- Invariant #3: no new row stores a skill, proposal or link, so *Word of Mouth* earned on a
+  restricted skill discloses only that the person shared *something*.
+- **Not audited** (§31.7). GDPR erasure deletes the rows like every other key.
+
+#### 31.12.7 Backfill — migration 0099
+For non-erased users, `earned_at` = the earliest provable event, idempotent (`ON CONFLICT DO
+NOTHING`), **no notifications**:
+
+| Key | Source (`earned_at`) |
+|---|---|
+| `first_hype` | `min(skill_hypes.created_at)` by `user_id` — hype rows are never deleted (§50.3), so this is exact. |
+| `first_share` | `min(audit_log.created_at)` by `actor_user_id` over `action = 'skill.share_link_created'` — the audit is complete, whereas `skill_share_links` rows are swept after expiry. |
+| `first_icon` | `min(proposals.created_at)` by `submitted_by`, over proposals whose **initial revision** carries no `promotedFromSkillVersionId` and either (a) is for a **new skill** (`target_skill_id IS NULL`) with `iconSha256` or `iconEmoji` set, or (b) is a **new-version** proposal whose `iconSha256`'s `skill_icons.created_by` is the submitter. Bundle-borne icons are covered too (they reach the payload as these fields, and an extracted image's `created_by` is its uploader). **Accepted lossiness:** emoji-only new-version proposals (a kept emoji and a chosen one look alike) and direct publishes (no proposal row) are not provable; those users earn it on their next qualifying submission. |
+| `first_ai_draft` | the **earlier** of `min(ai_usage.created_at)` by `user_id` over `feature = 'skill_draft' AND ok` (§43; the 365-day retention bounds it, and an `ok` call whose reply was unusable is an accepted approximation), and `min(audit_log.created_at)` by `actor_user_id` over `action = 'skill.ai_draft_generated'` whose recorded `modified` count is ≥ 1 (§44). |
+| `first_update` | **not backfilled** — `last_served_semver` is overwritten on every clone, so no earlier move forward is provable. |
+
+After inserting, the migration stamps `users.hero_at = max(earned_at)` for any user it leaves
+holding **all 31** keys whose stamp is still null (the migration-0072 rule) — in practice nobody,
+since `first_update` cannot be backfilled, but the rule is kept for uniformity. Existing Heroes keep
+their stamp (§31.10); their bars read e.g. 26/31 until they earn the new five.
+
+The **deferred Habits backfill** (§31.3) also reads the new provable sources — hypes, share-link
+mints and AI drafts (`first_icon`'s source is the proposals it already reads).
+
+#### 31.12.8 Quick start (§23) — unchanged
+The tour does not teach any of the five features, so the Achievements card's named badges do not
+grow; §23's guard test only checks that named badges still exist.
+
+#### 31.12.9 Tests
+- **Unit (`@skilly/shared`):** the catalog still has unique keys, unique glyphs and complete fields
+  (31 entries, the five in their stated groups and positions); `{name}` appears only in
+  `first_ai_draft`'s `blurb`/`howToEarn` and never in a `name`; `achievementCopy` substitutes the
+  display name and leaves other entries untouched; `unavailableAchievements` across every flag
+  combination, including `triple_threat` (unavailable only via a part the owner lacks) and earned
+  keys never listed; the `first_update` predicate (previous NULL → no; new NULL → no; prerelease →
+  no; equal → no; lower → no; higher stable → yes).
+- **Integration (API + DB):**
+  - *Hype:* an accepted hype awards `first_hype` once (two hypes → one row, one notification); each
+    `409` reason awards nothing; the route `404` while hype is off awards nothing.
+  - *Share:* a mint awards `first_share`; a `404` mint (invisible skill) awards nothing.
+  - *Icon:* a new-skill proposal with an uploaded icon, one with an emoji, and one whose hosted
+    bundle carries `icon:` each award `first_icon`; a new-version proposal that keeps the current
+    icon, a *Keep current files* reuse, a pointer proposal with an upstream icon, a revise that adds
+    an icon, and promote-to-global do not; a direct publish with a chosen icon awards it in the
+    publish transaction, and one that echoes the current icon does not.
+  - *AI:* a successful §43 draft awards `first_ai_draft`; a failed, rate-limited or unusable one does
+    not; a §44 run with one AI-modified file awards it; a run with only deterministic junk deletes,
+    or only `unchanged`/`failed` files, does not.
+  - *Update (worker git server):* first clone → nothing; a re-clone after a newer stable version is
+    published → awarded once; a re-clone at the same version → nothing; a pinned re-clone → nothing;
+    a system installation → nothing; a `marketplace` fetch → nothing; a HEAD request → nothing.
+  - *Habits:* each of the five hooks evaluates Night Shift / Weekend Warrior.
+  - *Unavailable tile:* `GET /api/users/:id/achievements` for self lists the right keys as each of
+    `hype_enabled`, the AI integration, `mcp_enabled` and marketplace reachability flips; returns
+    `[]` for another user's id; never lists an earned key.
+  - *Migration 0099:* seeds each source with the earliest timestamp, skips erased users, writes no
+    notifications, leaves `first_update` unseeded, stamps `hero_at` for a user it completes (seeded
+    fixture), and is idempotent on re-run.
+  - *Notification copy:* with `ai_display_name = 'Aria'`, the `achievement.earned` body for
+    `first_ai_draft` names *Aria*, not "AI".
+- **E2e (Playwright):** hype a skill → the toast names *Hype Squad* → the profile card shows it
+  earned; with hype switched off, a user without the badge sees *Hype Squad* locked with the *"Not
+  available here yet"* hint while the level bar still counts out of 31.
 
 ---
 
@@ -6648,7 +6905,7 @@ minted by a signed-in user who can see the skill — and keeps every plain URL e
   hash, like every other token regime here), so the endpoint has nothing to hand back for a "reuse";
   multiple concurrent live links per (user, skill) are normal and harmless, each independently
   7-day-TTL'd. Every mint is audited **`skill.share_link_created`** (actor, skill, expiry — never
-  the token).
+  the token). The caller's first mint earns **Word of Mouth** (`first_share`, §31.12).
 - **Token:** 32 random bytes, base64url; stored as **sha256** in `skill_share_links` (§3) with
   `expires_at = created_at + 7 days` (fixed, no setting), `created_by`, `last_used_at`. Skill delete
   cascades; expired rows are swept by the worker's housekeeping. **No management UI** in v1 — links
@@ -9287,7 +9544,9 @@ end users see in place of **"AI"**.
   and an assessment by {name}"*, the Re-assess confirm), the review/propose pages' *"{name} assessment runs
   after publish"*, the §41.9 `skill.quality_low` subject/body (*"{name} summary"*,
   *"{name} suggestions"*), the §43 propose-form button (*"Draft with {name}"* and its messages), and
-  every §44 label (*"Draft improvements with {name}"*, *"Drafted with {name}"*, dialog copy). **Admin surfaces keep "AI"** — the AI integration card itself, its egress
+  every §44 label (*"Draft improvements with {name}"*, *"Drafted with {name}"*, dialog copy), and
+  the **Robot Sidekick** achievement's blurb and hint (§31.12.5 — profile card, hall, and the
+  `achievement.earned` body, which reads the setting at creation). **Admin surfaces keep "AI"** — the AI integration card itself, its egress
   notice and usage, the Maintenance card's quality line, the System log and audit actions — so
   admins always know what they are configuring.
 - **Copy rule.** Strings are written so the name stands alone as a noun (*"with {name}"*,
@@ -9802,6 +10061,9 @@ All shown inline beneath the button; none block the rest of the form.
   return ~2.3k characters of output.
 - **Not audited** (§40.11 — runtime AI calls are telemetry). **Nothing is persisted**: not the
   `SKILL.md`, the prompt, the response, nor any marker on the proposal.
+- **Achievement:** a `200` carrying a usable draft awards **Robot Sidekick** (`first_ai_draft`,
+  §31.12) to the caller, best-effort. The badge records only that the person used the feature
+  once, never which proposal, so "no marker on the proposal" still holds.
 - **Metric:** `skilly_ai_draft_requests_total{outcome}` (`ok` · `failed` · `rate_limited` ·
   `source_rejected`).
 
@@ -10095,6 +10357,9 @@ Computed server-side from the base version's artifact and its latest scan report
 - **Audit:** `skill.ai_draft_generated` (§44.5); the proposal's `proposal.created` audit (and a
   direct publish's `skill.published`) carries `aiDraftModel`. The materialized version carries **no marker** of its own; its
   provenance is its proposal.
+- **Achievement:** a run that ends with at least one **AI-drafted** file `modified` or `deleted`
+  (deterministic OS-junk deletes alone do not count) awards **Robot Sidekick** (`first_ai_draft`,
+  §31.12) to the runner, best-effort, after the `skill.ai_draft_generated` row.
 
 ### 44.9 Entry points
 - **Quality card** (§41.7): the button below the AI assessment, enabled / disabled / hidden by §44.2.
@@ -12059,6 +12324,11 @@ usual §31.4 rules, and `follow.achievement` (§35.6) fans out as for any badge.
 off the awards still record silently (the §31.7 dormant-not-destructive rule), with no notification
 or toast. The sweep awards **without the Habits evaluation** (§31.3): the person did nothing at that
 hour, the sweep did, so these awards never earn Night Shift or Weekend Warrior.
+
+A third hype badge, **Hype Squad** (`first_hype`, §31.12), rewards the **act** of hyping: it is
+awarded **inline** by `POST …/hype` when a hype is accepted (in the hype transaction), not by the
+sweep, and so **is** a Habits event. While `hype_enabled` is off, all three hype badges show the
+*"Not available here yet"* locked tile to an owner who lacks them (§31.12.4).
 
 ### 50.10 API surface
 - `POST /api/skills/:ns/:slug/hype` — place a hype. **201** `{ points, score, hypeCount, remaining,

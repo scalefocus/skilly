@@ -3,7 +3,10 @@
 // like `eraseUserByExternalId` mirrors `lib/eraseUser.ts`. The catalog and the pure rules are the
 // shared module's, so the two tiers cannot disagree about what a key means.
 import type { Pool, PoolClient } from "pg";
-import { ACHIEVEMENT_TOTAL, TRIPLE_THREAT_PARTS, achievementDef, fanOutToFollowers, habitKeysFor, isAchievementKey, tripleThreatDue } from "@skilly/shared";
+import {
+  ACHIEVEMENT_TOTAL, TRIPLE_THREAT_PARTS, achievementCopy, achievementDef, achievementNamesAi, coerceAiDisplayName, fanOutToFollowers, habitKeysFor,
+  isAchievementKey, tripleThreatDue,
+} from "@skilly/shared";
 
 type Db = Pool | PoolClient;
 
@@ -36,9 +39,11 @@ export async function awardAchievement(db: Db, userId: string, key: string | nul
   if (!opts.backfill && (await achievementsEnabledFor(db))) {
     for (const k of earned) {
       const def = achievementDef(k)!;
+      // §31.12.5 — mirrors web: a blurb naming the AI uses the display name as it stands now.
+      const blurb = achievementNamesAi(def) ? achievementCopy(def, await aiDisplayNameFor(db)).blurb : def.blurb;
       await db.query(
         `insert into notifications (user_id, type, payload) values ($1, 'achievement.earned', $2::jsonb)`,
-        [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
+        [userId, JSON.stringify({ key: k, name: def.name, blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
       );
     }
     await notifyFollowersOfBadges(db, userId, earned);
@@ -105,4 +110,9 @@ async function stampHero(db: Db, userId: string, complete: boolean, at: Date): P
 async function achievementsEnabledFor(db: Db): Promise<boolean> {
   const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = 'achievements_enabled'`);
   return rows[0]?.value !== false;
+}
+
+async function aiDisplayNameFor(db: Db): Promise<string> {
+  const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = 'ai_display_name'`);
+  return coerceAiDisplayName(rows[0]?.value);
 }

@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.0",
+    date: "2026-10-20",
+    summary:
+      "Five new achievements: Hype Squad for your first hype, Word of Mouth for your first share link, Glow Up for giving a skill an icon, Robot Sidekick for your first AI draft, and Fresh Coat for bringing an install up to date. If you've already done one, it's in your hall. A locked badge whose feature is switched off here now says so instead of explaining how to earn it.",
+  },
+  {
     version: "2.38.0",
     date: "2026-10-19",
     summary:

@@ -17,6 +17,7 @@ import {
 import { AiError, AI_BUDGET_EXHAUSTED_MESSAGE } from "@skilly/shared/ai";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { tryAward } from "./achievements";
 import { aiAvailable, aiComplete, aiDraftRunCapMs } from "./ai";
 import { isExplicitMaintainer } from "./grants";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
@@ -298,6 +299,9 @@ export async function runDraft(
   const signed: RunTokenPayload["c"] = [];
   let model: string | null = null;
   let calls = 0;
+  // Files the AI itself drafted (modified/deleted) — the deterministic junk deletes above never count
+  // toward Robot Sidekick (§31.12.3).
+  let aiDrafted = 0;
 
   for (const p of plan) {
     if (p.status === "skipped") counts.skipped!++;
@@ -352,6 +356,7 @@ export async function runDraft(
       result = { path: p.path, status: "failed", summary: "", addressed: [], reason: failReason(err, capped) };
     }
     counts[result.status] = (counts[result.status] ?? 0) + 1;
+    if (result.status === "modified" || result.status === "deleted") aiDrafted++;
     if (result.status === "modified") {
       signed.push([p.path, "modify", sha256Hex(result.content!)]);
       const d = diffLines(original, result.content!);
@@ -391,6 +396,8 @@ export async function runDraft(
     namespaceId: ctx.skill.namespaceId,
     after: { skill: ctx.skill.slug, baseSemver: ctx.semver, model, outcome, calls, files: counts },
   }).catch((err) => console.error(JSON.stringify({ level: "error", msg: "ai draft audit failed", err: String(err) })));
+  // §31.12 Robot Sidekick: the run returned at least one AI-drafted file, however it ended.
+  if (aiDrafted > 0) await tryAward(pool, access.userId, "first_ai_draft");
   emit({ type: "done", model, calls, runToken, outcome });
 }
 
