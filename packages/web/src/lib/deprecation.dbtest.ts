@@ -131,7 +131,8 @@ test("§45 deprecation: authority, successor rules, audit, fan-out, read shaping
   assert.equal(row.deprecationNote, "Use the new one.");
   assert.equal(row.successor?.id, newer);
   assert.equal(row.featured, false, "deprecating clears Featured");
-  const audits = (await pool.query<{ action: string; after: Record<string, unknown> }>(`select action, after from audit_log where target_id = $1 order by created_at`, [old])).rows;
+  // Both rows land in one transaction, so created_at ties (same now()) — seq is the append order.
+  const audits = (await pool.query<{ action: string; after: Record<string, unknown> }>(`select action, after from audit_log where target_id = $1 order by seq`, [old])).rows;
   assert.deepEqual(audits.map((a) => a.action), ["skill.deprecated", "skill.unfeatured"]);
   assert.equal(audits[0]!.after.successorSlug, `${K}-a/${K}-new`);
   assert.equal(audits[1]!.after.reason, "deprecated");
