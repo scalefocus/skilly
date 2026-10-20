@@ -9,7 +9,7 @@ Pins live in exactly three places and must stay in sync:
 
 | Where | What it pins |
 |---|---|
-| `deploy/docker-compose.yml` | postgres (×2: `postgres`, `migrate`), minio, minio/mc (`minio-init`), alpine (`git-perms`), clamav, caddy (`proxy`) |
+| `deploy/docker-compose.yml` | postgres (×2: `postgres`, `migrate`), minio (×2: `minio`, `minio-init`), alpine (`git-perms`), clamav, caddy (`proxy`) |
 | `deploy/helm/skilly/values.yaml` | postgres, minio, clamav (`<component>.image`) |
 | `packages/web/Dockerfile`, `packages/worker/Dockerfile` | the Node base images (build stage + runtime stage) |
 
@@ -20,8 +20,7 @@ Pins live in exactly three places and must stay in sync:
 | `node` | `22-alpine` | `sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402` | web build + runtime, worker build (`packages/*/Dockerfile`) |
 | `node` | `22-slim` | `sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392` | worker runtime (`packages/worker/Dockerfile`; Debian for `git-http-backend`) |
 | `postgres` | `16-alpine` | `sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea` | compose `postgres` + `migrate`; Helm `postgres.image` |
-| `minio/minio` | `RELEASE.2025-09-07T16-13-09Z` | `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | compose `minio`; Helm `minio.image` |
-| `minio/mc` | `RELEASE.2025-08-13T08-35-41Z` | `sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727` | compose `minio-init` (bucket + scoped account bootstrap) |
+| `minio/minio` | `RELEASE.2025-09-07T16-13-09Z` | `sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | compose `minio` + `minio-init` (the image ships `mc` RELEASE.2025-08-13T08-35-41Z, used for the bucket + scoped account bootstrap); Helm `minio.image` |
 | `clamav/clamav` | `1.5.4` | `sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6` | compose `clamav`; Helm `clamav.image` |
 | `caddy` | `2.11.7-alpine` | `sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f` | compose `proxy` (dev-only sample) |
 | `alpine` | `3.24.2` | `sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6` | compose `git-perms` (one-shot chown) |
@@ -29,9 +28,11 @@ Pins live in exactly three places and must stay in sync:
 Resolved 2026-10-16 from Docker Hub.
 
 > **MinIO note.** MinIO no longer serves its `minio/minio` and `minio/mc` images anonymously from
-> Docker Hub or quay.io (pulls answer `insufficient_scope` / `401`). The two digests above are the
-> index digests of the last publicly pulled images (the Jenkins deploy agent and dev machines have
-> them cached; `docker image inspect minio/minio:latest --format '{{json .RepoDigests}}'`). A fresh
+> Docker Hub or quay.io (pulls answer `insufficient_scope` / `401` / `pull access denied`). The
+> digest above is the index digest of the last publicly pulled image (the Jenkins deploy agent and
+> dev machines have it cached; `docker image inspect minio/minio:latest --format '{{json .RepoDigests}}'`).
+> This is also why `minio-init` runs `mc` from the `minio/minio` image instead of pulling a separate
+> `minio/mc` image: one pinned MinIO image is one image the deploy host already has. A fresh
 > host must pull them from an internal mirror or a registry proxy — the CI pipeline already has the
 > `CI_MINIO_IMAGE` override for its e2e stack, and the same mirror serves production. When a mirror
 > re-tags the image, the **digest stays the same** as long as the image is copied unmodified
