@@ -59,6 +59,7 @@ import { awardAchievement } from "./achievements";
 import { categoryListError, upsertCategory } from "./categories";
 import { normalizeCategoryNames } from "@skilly/shared";
 import { isSingleEmoji } from "@skilly/shared/icon";
+import { submissionChoosesIcon } from "@skilly/shared/achievements";
 import { s3ArtifactStore, type ArtifactStore } from "./objectStore";
 import { autoAddSubmitter, autoAddSubmitterOnNewVersion } from "./maintainers";
 import { findDuplicateSkill, findSlugMatches, publicMatch, type DuplicateMatch } from "./duplicate";
@@ -585,6 +586,20 @@ async function notifyReviewersNeedsReview(
   );
 }
 
+/**
+ * §31.12 Glow Up: does this submission set an icon the submitter chose — one that differs from the
+ * target skill's current icon (any, for a new skill)? A bundle-borne icon is in the payload too.
+ */
+async function choosesIcon(db: PoolClient, meta: ProposalMetadata, targetSkillId: string | null): Promise<boolean> {
+  if (!targetSkillId) return submissionChoosesIcon(meta, null);
+  const { rows } = await db.query<{ icon_sha256: string | null; icon_emoji: string | null }>(
+    `select icon_sha256, icon_emoji from skills where id = $1`,
+    [targetSkillId],
+  );
+  const cur = rows[0];
+  return submissionChoosesIcon(meta, cur ? { iconSha256: cur.icon_sha256, iconEmoji: cur.icon_emoji } : null);
+}
+
 export async function createProposal(pool: Pool, input: CreateProposalInput): Promise<{ id: string }> {
   const client = await pool.connect();
   try {
@@ -636,6 +651,10 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
     // targets the existing global copy yet proposes no new content.
     if (input.targetSkillId && !input.payload.promotedFromSkillVersionId) {
       await awardAchievement(client, input.submittedByUserId, "first_version_proposal", { noHabits: true });
+    }
+    // §31.12 Glow Up: the submission sets an icon the proposer chose (a promotion only copies one).
+    if (!input.payload.promotedFromSkillVersionId && (await choosesIcon(client, input.payload.metadata, input.targetSkillId ?? null))) {
+      await awardAchievement(client, input.submittedByUserId, "first_icon", { noHabits: true });
     }
     await client.query("commit");
     M.proposalsCreated.inc();
@@ -1665,6 +1684,8 @@ export async function directPublish(
         return { ok: false, status: 409, error: slugExistsMessage(matches), code: SLUG_EXISTS_CODE, matches: matches.map(publicMatch) };
       }
     }
+    // §31.12 Glow Up compares against the icon the skill has BEFORE this version syncs it.
+    const icon = !input.payload.promotedFromSkillVersionId && (await choosesIcon(client, input.payload.metadata, existing?.id ?? null));
     const result = await materializeVersion(client, {
       targetNamespaceId: ns.id,
       targetSkillId: existing?.id ?? null,
@@ -1680,6 +1701,7 @@ export async function directPublish(
     if (existing) {
       await awardAchievement(client, input.actorUserId, "first_version_proposal", { noHabits: !result.pendingMirror });
     }
+    if (icon) await awardAchievement(client, input.actorUserId, "first_icon", { noHabits: true });
     await appendAudit(client, {
       actorUserId: input.actorUserId,
       action: "skill.published",

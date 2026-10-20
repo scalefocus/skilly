@@ -5,6 +5,7 @@
 import { currentAccess } from "../../../../../lib/guard";
 import { getAchievements } from "../../../../../lib/achievements";
 import { getAchievementsEnabled } from "../../../../../lib/settings";
+import { achievementFlagsFor } from "../../../../../lib/achievementFlags";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   if (!(await getAchievementsEnabled())) return Response.json({ disabled: true });
   const { id } = await ctx.params;
   if (!UUID_RE.test(id)) return Response.json({ error: "user not found" }, { status: 404 });
-  const view = await getAchievements(id, access.userId);
+  // §31.12.4: the switch state matters only for the owner's own locked tiles.
+  const flags = id.toLowerCase() === access.userId.toLowerCase() ? await achievementFlagsFor(access) : undefined;
+  const view = await getAchievements(id, access.userId, undefined, flags);
   if (!view) return Response.json({ error: "user not found" }, { status: 404 });
   return Response.json(view);
 }

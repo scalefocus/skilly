@@ -26,6 +26,7 @@ import {
 } from "@skilly/shared/hype";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { awardAchievement } from "./achievements";
 import { createTtlCache } from "./ttlCache";
 import type { SkillIconView } from "./catalog";
 import { nameSql } from "./userLabel";
@@ -198,6 +199,8 @@ export async function placeHype(userId: string, skillId: string, settings: HypeS
     );
     const points = hypePointsFor(existing.rows[0]?.n ?? 0);
     await client.query(`insert into skill_hypes (skill_id, user_id, points) values ($1, $2, $3)`, [skillId, userId, points]);
+    // §31.12 Hype Squad — the act of hyping, in the hype's own transaction (a refusal never gets here).
+    await awardAchievement(client, userId, "first_hype");
 
     const totals = await client.query<{ score: number; hype_count: number }>(
       `select coalesce(sum(points), 0)::int as score, count(*)::int as hype_count

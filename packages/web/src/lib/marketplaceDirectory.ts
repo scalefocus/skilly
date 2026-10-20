@@ -39,6 +39,20 @@ const toIso = (v: unknown): string | null => {
 };
 
 /**
+ * Whether the directory below would list at least one row for this caller (§31.12.4 — Bulk Buyer's
+ * "not available here" tile): the public marketplace is on, or an enabled namespace marketplace is
+ * one they may mint for. The same row rule as `listMarketplaceDirectory`, without the payload work.
+ */
+export async function marketplaceReachable(access: EffectiveAccess, publicEnabled: boolean): Promise<boolean> {
+  if (publicEnabled) return true;
+  const { rows } = await pool.query<{ ok: boolean }>(
+    `select exists(select 1 from namespaces n where n.marketplace_enabled and ($1::boolean or n.id = any($2::uuid[]))) as ok`,
+    [access.isPlatformAdmin, [...access.namespaceRoles.keys()]],
+  );
+  return rows[0]?.ok === true;
+}
+
+/**
  * Rows for one caller. `publicEnabled` is the platform switch (§30.1) — the public row appears iff
  * it is on. The caller's own used `marketplace` tokens decide each row's `added` state.
  */

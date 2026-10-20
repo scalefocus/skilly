@@ -29,6 +29,7 @@ import { s3ArtifactStore } from "./objectStore";
 import { getMaxBundleBytes, getUploadChunkBytes } from "./settings";
 import { rateLimit } from "./ratelimit";
 import { M } from "./metrics";
+import { tryAward } from "./achievements";
 
 export type DraftSource =
   | { kind: "hosted"; bytes: Buffer; filename?: string }
@@ -173,5 +174,8 @@ export async function draftWithAi(access: EffectiveAccess & { userId: string }, 
 
   const draft = validateDraftOutput(json, known);
   if (!draft) return outcome(502, { error: "draft_failed", message: "Couldn’t draft right now — try again or write it yourself." }, "failed");
+  // §31.12 Robot Sidekick: a usable draft came back. Best-effort — §43 persists nothing, so there is
+  // no transaction to join, and the badge records no proposal (the "no AI marker" rule holds).
+  await tryAward(pool, access.userId, "first_ai_draft");
   return outcome(200, { description: draft.description, usage: draft.usage, categories: draft.categories }, "ok");
 }

@@ -71,4 +71,37 @@ test.describe("hype (@global/web-scraper)", () => {
       await settings(page, DEFAULTS);
     }
   });
+
+  // §31.12: the hype above earned Hype Squad; with hype switched off, the hype badges the dev user
+  // lacks show the "not available here" tile on the profile card, and the level still counts all 31.
+  test("achievements: Hype Squad is earned; switched-off hype badges say so on the profile card", async ({ page }) => {
+    await devSignIn(page);
+    const me = await (await page.request.get("/api/me")).json();
+    const view = async () => (await page.request.get(`/api/users/${me.userId}/achievements`)).json();
+    const held = (v: { earned: { key: string }[] }) => new Set(v.earned.map((e) => e.key));
+    expect(held(await view()).has("first_hype"), "the hype in the previous test earned Hype Squad").toBe(true);
+
+    expect((await settings(page, { ...DEFAULTS, hypeEnabled: false })).ok()).toBeTruthy();
+    try {
+      const off = await view();
+      const earned = held(off);
+      for (const k of ["hype_train", "first_hype", "talent_scout"]) {
+        expect(off.unavailable.includes(k), k).toBe(!earned.has(k));
+      }
+
+      await gotoLoaded(page, "/profile", /\/api\/users\/[^/]+\/achievements$/);
+      const card = page.getByTestId("achievements-card");
+      await expect(card).toBeVisible();
+      await expect(page.getByTestId("level-bar")).toContainText(/ of 31/);
+      await expect(card.locator('[data-badge="first_hype"]')).toHaveAttribute("data-earned", "1");
+      await expect(card.locator("[data-unavailable]")).toHaveCount(off.unavailable.length);
+      for (const k of off.unavailable as string[]) {
+        const tile = card.locator(`[data-badge="${k}"]`);
+        await expect(tile).toHaveAttribute("data-unavailable", "1");
+        await expect(tile).toContainText("Not available here yet");
+      }
+    } finally {
+      await settings(page, DEFAULTS);
+    }
+  });
 });

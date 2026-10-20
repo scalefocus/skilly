@@ -402,7 +402,7 @@ function AchievementsCard() {
       <div data-testid="achievements-progress" style={{ marginBottom: 16 }}>
         <LevelBar level={data.earned.length} total={data.total} heroAt={data.heroAt} />
       </div>
-      <AchievementGrid earned={data.earned} showLocked shareBase={hallUrl} />
+      <AchievementGrid earned={data.earned} showLocked shareBase={hallUrl} unavailable={data.unavailable} />
     </section>
   );
 }

@@ -2,6 +2,7 @@
 // Client-safe (subpath export `@skilly/shared/achievements`): the profile card, the hall page and
 // the notification renderer import the catalog from here; the server imports the evaluators.
 // Keys are stable identifiers — renaming a badge never changes its key (§31.1).
+import { channelOf, compareSemver, isValidSemver } from "./semver.js";
 
 export type AchievementGroup = "Consume" | "Ask" | "Contribute" | "Talk" | "Explore" | "Habits";
 
@@ -23,6 +24,7 @@ export const ACHIEVEMENT_GROUPS: AchievementGroup[] = ["Consume", "Ask", "Contri
 export const ACHIEVEMENTS: AchievementDef[] = [
   // Consume
   { key: "first_install", name: "Hello, Skill", blurb: "You brought your first skill home.", howToEarn: "Install a skill — clone it, download it, or read it over MCP.", glyph: "👋", group: "Consume" },
+  { key: "first_update", name: "Fresh Coat", blurb: "You brought an old install up to date.", howToEarn: "Re-run the install command, or npx skills update, on an install that's behind latest.", glyph: "🖌️", group: "Consume" },
   { key: "first_marketplace", name: "Bulk Buyer", blurb: "Why take one skill when you can take a whole marketplace?", howToEarn: "Add a Claude plugin marketplace and let Claude Code fetch it.", glyph: "🛒", group: "Consume" },
   { key: "first_mcp", name: "Ghost in the Machine", blurb: "An agent spoke to skilly on your behalf.", howToEarn: "Connect an MCP client and let it make its first tool call.", glyph: "👻", group: "Consume" },
   { key: "triple_threat", name: "Three Doors Down", blurb: "Install, marketplace and MCP — you have used every door.", howToEarn: "Earn Hello, Skill, Bulk Buyer and Ghost in the Machine.", glyph: "🚪", group: "Consume" },
@@ -33,9 +35,12 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: "first_fulfilment", name: "Genie", blurb: "You granted someone else's wish.", howToEarn: "Fulfil another person's skill request.", glyph: "🧞", group: "Contribute" },
   { key: "first_hosted_proposal", name: "Homegrown", blurb: "You proposed a skill built and hosted right here.", howToEarn: "Propose a hosted skill (upload a bundle).", glyph: "🌱", group: "Contribute" },
   { key: "first_pointer_proposal", name: "Finger Pointer", blurb: "You pointed skilly at a skill living elsewhere.", howToEarn: "Propose a pointer skill (an external git source).", glyph: "👉", group: "Contribute" },
+  { key: "first_icon", name: "Glow Up", blurb: "Your skill got a face.", howToEarn: "Propose a skill or a new version with an icon: upload an image, pick an emoji, or ship one in the bundle.", glyph: "✨", group: "Contribute" },
   { key: "first_published", name: "Shipped It", blurb: "A version you submitted went live in the catalog.", howToEarn: "Get a proposal accepted and published.", glyph: "🚀", group: "Contribute" },
   { key: "first_new_version", name: "Sequel", blurb: "You published a follow-up version of a skill.", howToEarn: "Publish a new version of a skill that already has one.", glyph: "🎬", group: "Contribute" },
   { key: "first_version_proposal", name: "Encore", blurb: "The crowd wanted more, so you proposed it.", howToEarn: "Propose a new version from a skill's page.", glyph: "🎤", group: "Contribute" },
+  // `{name}` is the §40.14 AI display name, substituted by `achievementCopy` (§31.12.5).
+  { key: "first_ai_draft", name: "Robot Sidekick", blurb: "You let {name} write the first draft.", howToEarn: "Use Draft with {name} on the propose form, or Draft improvements with {name} on a skill you maintain.", glyph: "🤖", group: "Contribute" },
   { key: "first_collection", name: "Mixtape", blurb: "You put skills together for someone else to pick up.", howToEarn: "Add a skill to a new collection with Add to collection on its page.", glyph: "📼", group: "Contribute" },
   { key: "hype_train", name: "Hype Train", blurb: "A skill you maintain made the top of the Hyped skills board.", howToEarn: "Maintain a new skill people get excited about — when it enters the top hyped skills, you're aboard.", glyph: "🚂", group: "Contribute" },
   { key: "maintainer_added", name: "Adopted", blurb: "Someone trusted you with a skill they created.", howToEarn: "Be added as a maintainer of a skill you did not propose.", glyph: "🤝", group: "Contribute" },
@@ -43,11 +48,13 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   { key: "first_message", name: "Icebreaker", blurb: "You said something. It counts.", howToEarn: "Send a message — a direct chat, a review thread, a request or skill discussion.", glyph: "🧊", group: "Talk" },
   { key: "first_reply", name: "Conversationalist", blurb: "You joined a conversation someone else started.", howToEarn: "Reply in a thread that another person opened.", glyph: "💬", group: "Talk" },
   { key: "first_mention", name: "Name Dropper", blurb: "You @mentioned a person or #mentioned a skill.", howToEarn: "Use @person or #skill in a message.", glyph: "📣", group: "Talk" },
+  { key: "first_share", name: "Word of Mouth", blurb: "You sent a skill out into the world, preview card and all.", howToEarn: "Use Share on a skill's page and paste the link into Teams, Slack or Outlook.", glyph: "🔗", group: "Talk" },
   { key: "followers_10", name: "Cult Following", blurb: "Ten people follow what you do. Lead wisely.", howToEarn: "Have 10 colleagues follow you.", glyph: "🕯️", group: "Talk" },
   // Explore
   { key: "first_watch", name: "Stalker, but Nicely", blurb: "You are keeping an eye on a skill.", howToEarn: "Watch a skill to be told about new versions.", glyph: "👀", group: "Explore" },
   { key: "first_follow", name: "Right Behind You", blurb: "You followed someone. They will never know.", howToEarn: "Follow a colleague from the leaderboard, a hover card or their achievements.", glyph: "👣", group: "Explore" },
   { key: "first_rating", name: "Critic", blurb: "You told the org what a skill is worth.", howToEarn: "Rate a skill on its page.", glyph: "⭐", group: "Explore" },
+  { key: "first_hype", name: "Hype Squad", blurb: "You put your name behind someone else's new skill.", howToEarn: "Hype a new skill from its page. You get a few hypes a week.", glyph: "🙌", group: "Explore" },
   { key: "talent_scout", name: "Talent Scout", blurb: "You hyped a skill before everyone else noticed it.", howToEarn: "Hype a new skill that goes on to enter the top hyped skills within a week.", glyph: "🔭", group: "Explore" },
   { key: "onboarded", name: "Read the Manual", blurb: "You actually read Quick start. Respect.", howToEarn: "Complete the Quick start guide.", glyph: "📖", group: "Explore" },
   // Habits
@@ -99,6 +106,89 @@ export const TRIPLE_THREAT_PARTS = ["first_install", "first_marketplace", "first
 export function tripleThreatDue(held: Iterable<string>): boolean {
   const s = new Set(held);
   return TRIPLE_THREAT_PARTS.every((k) => s.has(k));
+}
+
+// ---------------------------------------------------------------------------------------------
+// §31.12 — the AI display name in badge copy, the "not available here" tile, and the two
+// submission/clone predicates behind Glow Up and Fresh Coat.
+// ---------------------------------------------------------------------------------------------
+
+/** The placeholder for the §40.14 AI display name. Only ever in `blurb` / `howToEarn`, never `name`. */
+export const AI_NAME_TOKEN = "{name}";
+
+/** A badge's blurb and hint with the AI display name substituted (§31.12.5). */
+export function achievementCopy(def: AchievementDef, aiName: string): { blurb: string; howToEarn: string } {
+  return { blurb: def.blurb.split(AI_NAME_TOKEN).join(aiName), howToEarn: def.howToEarn.split(AI_NAME_TOKEN).join(aiName) };
+}
+
+/** True when the badge's copy names the AI and so needs the display name (§31.12.5). */
+export function achievementNamesAi(def: AchievementDef): boolean {
+  return def.blurb.includes(AI_NAME_TOKEN) || def.howToEarn.includes(AI_NAME_TOKEN);
+}
+
+/** The hint a locked badge shows while its feature is switched off for the owner (§31.12.4). */
+export const UNAVAILABLE_HINT = "Not available here yet — your administrator decides whether it's switched on.";
+
+/** The platform switches behind the switch-gated badges, as they stand for one owner. */
+export interface AchievementFlags {
+  hypeEnabled: boolean;
+  aiAvailable: boolean;
+  mcpEnabled: boolean;
+  /** A marketplace the owner can use exists (the set the marketplace directory lists for them). */
+  marketplaceReachable: boolean;
+}
+
+const GATE: Record<string, keyof AchievementFlags> = {
+  first_hype: "hypeEnabled",
+  talent_scout: "hypeEnabled",
+  hype_train: "hypeEnabled",
+  first_ai_draft: "aiAvailable",
+  first_mcp: "mcpEnabled",
+  first_marketplace: "marketplaceReachable",
+};
+
+/**
+ * The LOCKED keys whose feature is switched off for the owner (§31.12.4), in catalog order. An
+ * earned key is never listed; `triple_threat` is unavailable only through a part the owner lacks.
+ */
+export function unavailableAchievements(held: Iterable<string>, flags: AchievementFlags): string[] {
+  const h = new Set(held);
+  const off = (key: string): boolean => {
+    if (h.has(key)) return false;
+    if (key === "triple_threat") return TRIPLE_THREAT_PARTS.some((p) => off(p));
+    const gate = GATE[key];
+    return gate !== undefined && !flags[gate];
+  };
+  return ACHIEVEMENT_KEYS.filter(off);
+}
+
+/** The icon fields of a submission, and the target skill's current icon (null for a new skill). */
+export interface IconChoice { iconSha256?: string | null; iconEmoji?: string | null }
+
+/**
+ * Glow Up (§31.12.3): the submission sets an icon the user CHOSE — an image or an emoji that differs
+ * from the target skill's current one (any, for a new skill). An omitted field (`undefined`, the
+ * "keep" path) and an explicit null (remove) never count. A bundle-borne icon reaches the payload
+ * as `iconSha256` / `iconEmoji` too, so it is covered by the same comparison.
+ */
+export function submissionChoosesIcon(meta: IconChoice, current: IconChoice | null): boolean {
+  const sha = meta.iconSha256 ?? null;
+  const emoji = meta.iconEmoji?.trim() || null;
+  if (sha && sha !== (current?.iconSha256 ?? null)) return true;
+  if (emoji && emoji !== (current?.iconEmoji ?? null)) return true;
+  return false;
+}
+
+/**
+ * Fresh Coat (§31.12.3): a clone moved an existing installation forward — it had a recorded version,
+ * and now serves a HIGHER STABLE one. A first clone / unknown install (`prev` null), an empty repo
+ * (`next` null), a prerelease, an unchanged or a lower version never count.
+ */
+export function isForwardUpdate(prev: string | null | undefined, next: string | null | undefined): boolean {
+  if (!prev || !next) return false;
+  if (!isValidSemver(prev) || !isValidSemver(next)) return false;
+  if (channelOf(next) !== "stable") return false;
+  return compareSemver(next, prev) > 0;
 }
 
 /**

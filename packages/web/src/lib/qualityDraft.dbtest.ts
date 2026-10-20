@@ -198,6 +198,7 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     assert.deepEqual([by.get("scripts/leak.py")!.status, by.get("scripts/leak.py")!.reason], ["skipped", "secret"]);
 
     // ── Run ──
+    await pool.query(`delete from user_achievements where user_id = $1 and key = 'first_ai_draft'`, [maintainer]); // a prior run's badge
     stub.state.bodies.length = 0; // drop the connectivity test from saving the config
     const since = new Date(Date.now() - 1000);
     const events: Array<Record<string, unknown>> = [];
@@ -226,6 +227,12 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     assert.equal(audit.rowCount, 1);
     assert.equal(audit.rows[0]!.after.baseSemver, "1.0.0");
     assert.ok(!JSON.stringify(audit.rows[0]!.after).includes("Reviews contracts"), "audit never carries AI output");
+    // §31.12 Robot Sidekick: the run returned AI-drafted files, so the runner earns it.
+    assert.equal(
+      (await pool.query(`select 1 from user_achievements where user_id = $1 and key = 'first_ai_draft'`, [maintainer])).rowCount,
+      1,
+      "an improvements run with an AI-modified file earns Robot Sidekick",
+    );
 
     // ── Assemble ──
     const runToken = String(done.runToken);

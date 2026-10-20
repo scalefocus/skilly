@@ -108,6 +108,8 @@ test("§43 Draft with AI: availability, sources, egress, failures and limits", {
   const usageRows = async (userId: string) =>
     (await pool.query<{ ok: boolean; error_code: string | null }>(`select ok, error_code from ai_usage where feature = 'skill_draft' and user_id = $1 order by id`, [userId])).rows;
   const hosted = (files: Record<string, string>) => ({ kind: "hosted" as const, bytes: zipOf(files), filename: "bundle.zip" });
+  const robot = async (userId: string) =>
+    (await pool.query(`select 1 from user_achievements where user_id = $1 and key = 'first_ai_draft'`, [userId])).rowCount === 1;
 
   try {
     // ── AI off → 409, nothing reaches the provider ─────────────────────────────────────────
@@ -116,6 +118,7 @@ test("§43 Draft with AI: availability, sources, egress, failures and limits", {
     const off = await draftWithAi(who(u1), hosted({ "SKILL.md": SKILL_MD("x") }));
     assert.equal(off.status, 409);
     assert.equal(off.body.error, "ai_unavailable");
+    assert.equal(await robot(u1), false, "§31.12: no draft, no Robot Sidekick");
 
     // ── Enable the integration against the stub ────────────────────────────────────────────
     await pool.query(
@@ -129,6 +132,7 @@ test("§43 Draft with AI: availability, sources, egress, failures and limits", {
     const ok = await draftWithAi(who(u1), hosted({ "SKILL.md": SKILL_MD("contract-review"), "scripts/zz-marker.py": "SCRIPT_BODY_MARKER = 1\n" }));
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.description, "Reviews PDF contracts and flags risky clauses.");
+    assert.equal(await robot(u1), true, "§31.12: a usable draft earns Robot Sidekick");
     assert.match(String(ok.body.usage), /review this contract/);
     assert.deepEqual(
       ok.body.categories,
@@ -215,6 +219,7 @@ test("§43 Draft with AI: availability, sources, egress, failures and limits", {
     const garbage = await draftWithAi(who(u4), hosted({ "SKILL.md": SKILL_MD("x") }));
     assert.equal(garbage.status, 502);
     assert.equal((await usageRows(u4)).length, 2);
+    assert.equal(await robot(u4), false, "§31.12: a failed or unusable draft earns nothing");
     stub.state.mode = "ok";
 
     // ── Per-minute limit: the 11th request in a minute is a 429 ──────────────────────────

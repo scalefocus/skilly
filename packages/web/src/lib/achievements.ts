@@ -8,11 +8,16 @@ import {
   ACHIEVEMENTS,
   ACHIEVEMENT_TOTAL,
   TRIPLE_THREAT_PARTS,
+  achievementCopy,
   achievementDef,
+  achievementNamesAi,
   habitKeysFor,
   isAchievementKey,
   tripleThreatDue,
+  unavailableAchievements,
+  type AchievementFlags,
 } from "@skilly/shared/achievements";
+import { coerceAiDisplayName } from "@skilly/shared/ai-name";
 import { fanOutToFollowers } from "@skilly/shared/follows";
 
 type Db = Pool | PoolClient;
@@ -61,9 +66,11 @@ export async function awardAchievement(db: Db, userId: string, key: string | nul
   if (!opts.backfill && (await achievementsEnabledFor(db))) {
     for (const k of earned) {
       const def = achievementDef(k)!;
+      // §31.12.5: a blurb naming the AI uses the §40.14 display name as it stands at creation.
+      const blurb = achievementNamesAi(def) ? achievementCopy(def, await aiDisplayNameFor(db)).blurb : def.blurb;
       await db.query(
         `insert into notifications (user_id, type, payload) values ($1, 'achievement.earned', $2::jsonb)`,
-        [userId, JSON.stringify({ key: k, name: def.name, blurb: def.blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
+        [userId, JSON.stringify({ key: k, name: def.name, blurb, level, total: ACHIEVEMENT_TOTAL, hero })],
       );
     }
     await notifyFollowersOfBadges(db, userId, earned);
@@ -156,6 +163,12 @@ async function achievementsEnabledFor(db: Db): Promise<boolean> {
   return rows[0]?.value !== false;
 }
 
+// The §40.14 display name, read only for a badge whose copy names the AI (§31.12.5).
+async function aiDisplayNameFor(db: Db): Promise<string> {
+  const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = 'ai_display_name'`);
+  return coerceAiDisplayName(rows[0]?.value);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Read model (§31.8)
 // ---------------------------------------------------------------------------------------------
@@ -175,13 +188,16 @@ export interface AchievementsView {
   heroAt: string | null;
   /** §35.4 — viewer-independent Follow eligibility. */
   followable: boolean;
+  /** §31.12.4 — the owner's LOCKED keys whose feature is switched off; `[]` for anyone else. */
+  unavailable: string[];
 }
 
 /**
  * The hall payload for `targetId` as seen by `viewerId`. Null = 404 (unknown, erased, or
- * inactive — consistent with the leaderboard hiding deprovisioned users, §31.5).
+ * inactive — consistent with the leaderboard hiding deprovisioned users, §31.5). `flags` (the
+ * caller's own switch state, §31.12.4) is consulted only when the viewer is the target.
  */
-export async function getAchievements(targetId: string, viewerId: string, db: Db = pool): Promise<AchievementsView | null> {
+export async function getAchievements(targetId: string, viewerId: string, db: Db = pool, flags?: AchievementFlags): Promise<AchievementsView | null> {
   const { rows } = await db.query<{ id: string; display_name: string; avatar: string | null; hidden: boolean; hero_at: Date | null; allow_follows: boolean }>(
     `select id, display_name, avatar, achievements_hidden as hidden, hero_at, allow_follows
        from users where id = $1 and erased_at is null and status = 'active'`,
@@ -213,6 +229,8 @@ export async function getAchievements(targetId: string, viewerId: string, db: Db
     // §35.4 — the hall only exists for active, non-erased people, so followable = allow_follows.
     // Independent of `hidden`: keeping trophies private does not gate follows.
     followable: u.allow_follows === true,
+    // §31.12.4 — locked tiles are the owner's alone, so the switch state is never computed for others.
+    unavailable: viewerId === targetId && flags ? unavailableAchievements(earned.map((e) => e.key), flags) : [],
   };
 }
 
@@ -282,6 +300,10 @@ async function historicalEventTimes(db: Db, userId: string): Promise<Date[]> {
         union all select created_at from skill_watches where user_id = $1
         union all select created_at from skill_ratings where user_id = $1
         union all select onboarded_at from users where id = $1 and onboarded_at is not null
+        -- §31.12: hypes, share-link mints and AI drafts (the migration-0099 sources).
+        union all select created_at from skill_hypes where user_id = $1
+        union all select created_at from audit_log where actor_user_id = $1 and action in ('skill.share_link_created', 'skill.ai_draft_generated')
+        union all select created_at from ai_usage where user_id = $1 and feature = 'skill_draft' and ok
      ) e where at is not null order by at`,
     [userId],
   );

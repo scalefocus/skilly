@@ -16,10 +16,19 @@ import {
   isNightShift,
   isWeekend,
   habitKeysFor,
+  AI_NAME_TOKEN,
+  UNAVAILABLE_HINT,
+  achievementCopy,
+  achievementNamesAi,
+  unavailableAchievements,
+  submissionChoosesIcon,
+  isForwardUpdate,
+  type AchievementFlags,
 } from "./achievements.js";
 
-test("catalog: 26 badges, unique keys, every field populated, known groups", () => {
-  assert.equal(ACHIEVEMENTS.length, 26);
+test("catalog: 31 badges, unique keys, every field populated, known groups", () => {
+  assert.equal(ACHIEVEMENTS.length, 31);
+  assert.equal(new Set(ACHIEVEMENTS.map((a) => a.glyph)).size, ACHIEVEMENTS.length, "glyphs are unique");
   assert.equal(new Set(ACHIEVEMENT_KEYS).size, ACHIEVEMENTS.length);
   for (const a of ACHIEVEMENTS) {
     assert.match(a.key, /^[a-z][a-z0-9_]*$/, a.key); // `…_10` count-tier keys allowed (§31.1, §35.8)
@@ -41,6 +50,87 @@ test("catalog: Encore sits in Contribute directly after Sequel (§31.11)", () =>
   assert.equal(def?.name, "Encore");
   assert.equal(def?.group, "Contribute");
   assert.equal(ACHIEVEMENT_KEYS.indexOf("first_version_proposal"), ACHIEVEMENT_KEYS.indexOf("first_new_version") + 1);
+});
+
+test("catalog: the five §31.12 badges, in their groups and positions", () => {
+  const after = (key: string, prev: string) => assert.equal(ACHIEVEMENT_KEYS.indexOf(key), ACHIEVEMENT_KEYS.indexOf(prev) + 1, `${key} follows ${prev}`);
+  const expect: [string, string, string, string][] = [
+    ["first_update", "Fresh Coat", "Consume", "🖌️"],
+    ["first_icon", "Glow Up", "Contribute", "✨"],
+    ["first_ai_draft", "Robot Sidekick", "Contribute", "🤖"],
+    ["first_share", "Word of Mouth", "Talk", "🔗"],
+    ["first_hype", "Hype Squad", "Explore", "🙌"],
+  ];
+  for (const [key, name, group, glyph] of expect) {
+    const def = achievementDef(key);
+    assert.equal(def?.name, name);
+    assert.equal(def?.group, group);
+    assert.equal(def?.glyph, glyph);
+  }
+  after("first_update", "first_install");
+  after("first_icon", "first_pointer_proposal");
+  after("first_ai_draft", "first_version_proposal");
+  after("first_share", "first_mention");
+  after("talent_scout", "first_hype");
+});
+
+test("AI display name: {name} only in Robot Sidekick's blurb/hint, never in a name (§31.12.5)", () => {
+  for (const a of ACHIEVEMENTS) {
+    assert.ok(!a.name.includes(AI_NAME_TOKEN), `${a.key}.name`);
+    assert.equal(achievementNamesAi(a), a.key === "first_ai_draft", a.key);
+  }
+  const robot = achievementDef("first_ai_draft")!;
+  assert.deepEqual(achievementCopy(robot, "Aria"), {
+    blurb: "You let Aria write the first draft.",
+    howToEarn: "Use Draft with Aria on the propose form, or Draft improvements with Aria on a skill you maintain.",
+  });
+  // Any other entry passes through untouched.
+  const hello = achievementDef("first_install")!;
+  assert.deepEqual(achievementCopy(hello, "Aria"), { blurb: hello.blurb, howToEarn: hello.howToEarn });
+});
+
+test("unavailableAchievements: locked switch-gated keys only, in catalog order (§31.12.4)", () => {
+  const on: AchievementFlags = { hypeEnabled: true, aiAvailable: true, mcpEnabled: true, marketplaceReachable: true };
+  assert.deepEqual(unavailableAchievements([], on), []);
+  assert.deepEqual(unavailableAchievements([], { ...on, hypeEnabled: false }), ["hype_train", "first_hype", "talent_scout"]);
+  assert.deepEqual(unavailableAchievements([], { ...on, aiAvailable: false }), ["first_ai_draft"]);
+  // A missing MCP or marketplace door also closes Three Doors Down…
+  assert.deepEqual(unavailableAchievements([], { ...on, mcpEnabled: false }), ["first_mcp", "triple_threat"]);
+  assert.deepEqual(unavailableAchievements([], { ...on, marketplaceReachable: false }), ["first_marketplace", "triple_threat"]);
+  // …unless that door is already held.
+  assert.deepEqual(unavailableAchievements(["first_mcp"], { ...on, mcpEnabled: false }), []);
+  // Earned keys are never listed, whatever the switches say.
+  const off: AchievementFlags = { hypeEnabled: false, aiAvailable: false, mcpEnabled: false, marketplaceReachable: false };
+  assert.deepEqual(unavailableAchievements(["first_hype", "first_ai_draft", "triple_threat", "first_mcp", "first_marketplace", "hype_train", "talent_scout"], off), []);
+  assert.equal(unavailableAchievements([], off).length, 7);
+  assert.ok(UNAVAILABLE_HINT.startsWith("Not available here yet"));
+});
+
+test("submissionChoosesIcon: a chosen image or emoji that differs from the current icon (§31.12.3)", () => {
+  // New skill: any icon counts.
+  assert.equal(submissionChoosesIcon({ iconSha256: "a".repeat(64) }, null), true);
+  assert.equal(submissionChoosesIcon({ iconEmoji: "🦊" }, null), true);
+  assert.equal(submissionChoosesIcon({}, null), false);
+  assert.equal(submissionChoosesIcon({ iconSha256: null, iconEmoji: null }, null), false);
+  assert.equal(submissionChoosesIcon({ iconEmoji: "  " }, null), false);
+  // New version: keeping (undefined) or echoing the current icon does not; a change does.
+  const cur = { iconSha256: "b".repeat(64), iconEmoji: "🦊" };
+  assert.equal(submissionChoosesIcon({}, cur), false);
+  assert.equal(submissionChoosesIcon({ iconSha256: "b".repeat(64), iconEmoji: "🦊" }, cur), false);
+  assert.equal(submissionChoosesIcon({ iconSha256: null, iconEmoji: null }, cur), false); // remove
+  assert.equal(submissionChoosesIcon({ iconSha256: "c".repeat(64) }, cur), true);
+  assert.equal(submissionChoosesIcon({ iconEmoji: "🐙" }, cur), true);
+});
+
+test("isForwardUpdate: a recorded install moving to a higher stable version (§31.12.3)", () => {
+  assert.equal(isForwardUpdate(null, "1.2.0"), false); // first clone / unknown install
+  assert.equal(isForwardUpdate("1.2.0", null), false); // empty repo
+  assert.equal(isForwardUpdate("1.2.0", "1.2.0"), false);
+  assert.equal(isForwardUpdate("1.2.0", "1.1.0"), false);
+  assert.equal(isForwardUpdate("1.2.0", "1.3.0-beta.1"), false); // prerelease
+  assert.equal(isForwardUpdate("1.2.0", "1.10.0"), true); // semver order, not string order
+  assert.equal(isForwardUpdate("1.3.0-beta.1", "1.3.0"), true);
+  assert.equal(isForwardUpdate("junk", "1.3.0"), false);
 });
 
 test("triple_threat: due only when all three channel badges are held", () => {
@@ -114,15 +204,15 @@ test("habitKeysFor: both, one, or none", () => {
 
 test("ACHIEVEMENT_TOTAL is the catalog size — the level's denominator", () => {
   assert.equal(ACHIEVEMENT_TOTAL, ACHIEVEMENTS.length);
-  assert.equal(ACHIEVEMENT_TOTAL, 26);
+  assert.equal(ACHIEVEMENT_TOTAL, 31);
 });
 
 test("levelLabel / levelAriaLabel: the level is the count, Hero is the stamp", () => {
-  assert.equal(levelLabel(0, false), "Level 0 — 0 of 26");
-  assert.equal(levelLabel(7, false), "Level 7 — 7 of 26");
-  assert.equal(levelLabel(26, true), "Hero — 26 of 26");
-  assert.equal(levelAriaLabel(7, false), "Level 7 of 26");
-  assert.equal(levelAriaLabel(26, true), "Hero — 26 of 26");
+  assert.equal(levelLabel(0, false), "Level 0 — 0 of 31");
+  assert.equal(levelLabel(7, false), "Level 7 — 7 of 31");
+  assert.equal(levelLabel(31, true), "Hero — 31 of 31");
+  assert.equal(levelAriaLabel(7, false), "Level 7 of 31");
+  assert.equal(levelAriaLabel(31, true), "Hero — 31 of 31");
 });
 
 test("a grown catalog never demotes a Hero (§31.10 'never demote')", () => {
