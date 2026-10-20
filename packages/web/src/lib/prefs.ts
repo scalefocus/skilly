@@ -40,6 +40,10 @@ export const PREF_ONLINE_WINDOW = "skilly.online-window";
 // the default. (The legacy single-card `skilly.admin.ns-open` and `skilly.admin.email-open` keys
 // are retired — no migration.)
 export const adminCardPrefKey = (id: string): string => `skilly.admin.card.${id}-open`;
+// Notifications inbox → the collapsible Type filter row (§12): "1" = open, anything else
+// (including unset) = collapsed, the default. Only the open/closed choice is stored — the type
+// selection itself lasts one visit.
+export const PREF_NOTIFICATIONS_TYPES_OPEN = "skilly.notifications.types-open";
 
 export function removePref(key: string): void {
   if (typeof window === "undefined") return;

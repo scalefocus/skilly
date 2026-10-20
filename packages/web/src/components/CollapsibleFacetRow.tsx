@@ -27,6 +27,11 @@ export function FacetRow({ label, children }: { label: string; children: ReactNo
  * `count` is the size of the whole visible category vocabulary, NOT the number of chips currently
  * matching other filters: it must not wobble as the user filters (the catalog's
  * /api/skills/facets is filter-independent; §26 makes the requests facets so too).
+ *
+ * `collapsedSummary` (optional — the §12 notifications inbox's Type row) renders in the chips
+ * column ONLY while collapsed, so an active selection stays visible with its chips tucked away.
+ * While open the chips show the selection themselves, and hiding the summary means picking a chip
+ * never shifts the chips under the pointer. The catalog and /requests don't pass it.
  */
 export function CollapsibleFacetRow({
   id,
@@ -34,6 +39,7 @@ export function CollapsibleFacetRow({
   count,
   open,
   onToggle,
+  collapsedSummary,
   children,
 }: {
   id: string;
@@ -41,6 +47,7 @@ export function CollapsibleFacetRow({
   count: number;
   open: boolean;
   onToggle: () => void;
+  collapsedSummary?: ReactNode;
   children: ReactNode;
 }) {
   const chipsId = `facet-row-${id}`;
@@ -84,20 +91,23 @@ export function CollapsibleFacetRow({
           <path d="m9 18 6-6-6-6" />
         </svg>
       </button>
-      <div
-        className="facet-row-chipbox"
-        id={chipsId}
-        role="region"
-        data-open={open}
-        data-anim={animate}
-        data-settled={settled}
-        aria-hidden={!open}
-        // `inert` is a boolean attribute — present at all means inert — so it is spread in only
-        // while collapsed rather than passed as `inert={!open}`.
-        {...(open ? {} : { inert: true })}
-      >
-        <div className="facet-row-chipbox-inner">
-          <div className="facet-row-chips">{children}</div>
+      <div className="facet-row-body">
+        {!open && collapsedSummary != null && <div className="facet-row-summary">{collapsedSummary}</div>}
+        <div
+          className="facet-row-chipbox"
+          id={chipsId}
+          role="region"
+          data-open={open}
+          data-anim={animate}
+          data-settled={settled}
+          aria-hidden={!open}
+          // `inert` is a boolean attribute — present at all means inert — so it is spread in only
+          // while collapsed rather than passed as `inert={!open}`.
+          {...(open ? {} : { inert: true })}
+        >
+          <div className="facet-row-chipbox-inner">
+            <div className="facet-row-chips">{children}</div>
+          </div>
         </div>
       </div>
     </div>
