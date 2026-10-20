@@ -144,7 +144,7 @@ for f in db/migrations/*.sql; do
 docker exec -i skilly-pg psql -v ON_ERROR_STOP=1 -U skilly -d skilly < db/seed.dev.sql
 
 # 3) bucket
-docker run --rm --entrypoint /bin/sh minio/mc -c \
+docker run --rm --entrypoint /bin/sh minio/minio -c \
   "mc alias set h http://host.docker.internal:9000 skilly skillyminio && mc mb -p h/skilly-artifacts"
 ```
 
