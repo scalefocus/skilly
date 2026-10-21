@@ -17,6 +17,7 @@
 // a different target with PLAYWRIGHT_BASE_URL.
 import { defineConfig, devices, type Project } from "@playwright/test";
 import { totalmem } from "node:os";
+import { ciBudget } from "./budget";
 import { EXCLUSIVE, EXCLUSIVE_PROJECT, GROUPS, PARALLEL, PARALLEL_PROJECT, groupProject } from "./groups";
 
 // Heap ceiling for the auto-started dev server. `next dev` defaults to half the machine's RAM and
@@ -49,6 +50,10 @@ function ciWorkers(): number {
   }
   return n;
 }
+// The per-test and per-assertion budgets of this run (budget.ts): sized for one worker and scaled
+// with the worker count under CI=1, because the one dev server answers every worker. Locally the
+// warm-server defaults below apply.
+const budget = process.env.CI ? ciBudget(ciWorkers()) : null;
 
 // Projects come from the parallelism manifest (groups.ts): `exclusive` (one worker, alone),
 // `group-<name>` (one worker each, files in order) and `parallel`. All run the same browser.
@@ -91,8 +96,10 @@ export default defineConfig({
   // route on first hit, and paying that inside a spec's own budget was the suite's main flake.
   globalSetup: "./global-setup.ts",
   // `next dev` compiles each route on first hit; that compile can be slow, so give CI a generous
-  // per-test budget. Locally (warm dev server) the tighter default is fine.
-  timeout: process.env.CI ? 90_000 : 30_000,
+  // per-test budget: 90 s on one worker, scaled with the worker count (budget.ts) — a journey of a
+  // dozen round-trips runs about twice as long on the default four. Locally (warm dev server) the
+  // tighter default is fine.
+  timeout: budget ? budget.test : 30_000,
   fullyParallel: true,
   outputDir: `test-results${phaseDir}`,
   // In CI, E2E_WORKERS workers (ciWorkers above). Under webpack the dev server's one compiler was a
@@ -109,8 +116,9 @@ export default defineConfig({
     : "html",
   // Per-assertion budget. Specs gate on the hydrated shell (helpers/ready.ts) and pair every
   // mutation with its response, so assertions rarely wait long — but a loaded CI agent still
-  // needs more than the 5s default for a client-side navigation or a thread refetch.
-  expect: { timeout: process.env.CI ? 15_000 : 5_000 },
+  // needs more than the 5s default for a client-side navigation or a thread refetch: 15 s on one
+  // worker, scaled with the worker count like the per-test budget.
+  expect: { timeout: budget ? budget.expect : 5_000 },
   use: {
     baseURL,
     trace: "on-first-retry",

@@ -11,6 +11,7 @@
 //   * that auto-expand does NOT rewrite the stored preference (the invariant most likely to rot);
 //   * clearing the filter does not snap the row shut mid-visit.
 import { test, expect, devSignIn, type Page } from "./fixtures";
+import { gotoReady, reloadReady, NAV_TIMEOUT } from "./helpers/ready";
 
 const CATALOG_PREFS = "skilly.catalogPrefs";
 const REQUESTS_PREFS = "skilly.requestsPrefs";
@@ -59,11 +60,24 @@ async function clearPrefs(page: Page, key: string): Promise<void> {
   await page.evaluate((k) => localStorage.removeItem(k), key);
 }
 
+/** Reload and wait for the Category toggle to be back: the reload is gated on the hydrated shell
+ *  (helpers/ready.ts), and the toggle renders only once the page's facets have arrived — on a
+ *  loaded agent that is longer than one assertion's budget, so it gets a navigation's. */
+async function reloadToToggle(page: Page): Promise<void> {
+  await reloadReady(page);
+  await expect(toggle(page)).toBeVisible({ timeout: NAV_TIMEOUT });
+}
+
+/** Land on `path` with its stored prefs cleared: goto, clear, reload — every arrival gated. */
+async function openFresh(page: Page, path: "/catalog" | "/requests", key: string): Promise<void> {
+  await gotoReady(page, path);
+  await clearPrefs(page, key);
+  await reloadToToggle(page);
+}
+
 test("catalog: the Category row starts collapsed, and the chips are unreachable", async ({ page }) => {
   await devSignIn(page);
-  await page.goto("/catalog");
-  await clearPrefs(page, CATALOG_PREFS);
-  await page.reload();
+  await openFresh(page, "/catalog", CATALOG_PREFS);
 
   await expect(toggle(page)).toBeVisible();
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");
@@ -79,9 +93,7 @@ test("catalog: the Category row starts collapsed, and the chips are unreachable"
 
 test("catalog: the row animates on a user toggle, and releases its clip once open", async ({ page }) => {
   await devSignIn(page);
-  await page.goto("/catalog");
-  await clearPrefs(page, CATALOG_PREFS);
-  await page.reload();
+  await openFresh(page, "/catalog", CATALOG_PREFS);
 
   const box = chipbox(page, "catalog-category");
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");
@@ -107,9 +119,7 @@ test("catalog: the row animates on a user toggle, and releases its clip once ope
 test("catalog: prefers-reduced-motion gets an instant toggle, no transitions", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await devSignIn(page);
-  await page.goto("/catalog");
-  await clearPrefs(page, CATALOG_PREFS);
-  await page.reload();
+  await openFresh(page, "/catalog", CATALOG_PREFS);
 
   await expect(chipbox(page, "catalog-category")).toHaveAttribute("data-anim", "true");
   expect(await transitionDurations(page, "catalog-category")).toEqual({ box: "0s", inner: "0s", chevron: "0s" });
@@ -122,30 +132,26 @@ test("catalog: prefers-reduced-motion gets an instant toggle, no transitions", a
 
 test("catalog: expanding reveals the chips and the choice survives a reload", async ({ page }) => {
   await devSignIn(page);
-  await page.goto("/catalog");
-  await clearPrefs(page, CATALOG_PREFS);
-  await page.reload();
+  await openFresh(page, "/catalog", CATALOG_PREFS);
 
   await toggle(page).click();
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
   await expect(chips(page, "catalog-category").first()).toBeVisible();
   expect(await storedOpen(page, CATALOG_PREFS)).toBe(true);
 
-  await page.reload();
+  await reloadToToggle(page);
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
 
   // Collapsing again is likewise remembered.
   await toggle(page).click();
   expect(await storedOpen(page, CATALOG_PREFS)).toBe(false);
-  await page.reload();
+  await reloadToToggle(page);
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");
 });
 
 test("catalog: an active category filter force-opens the row without rewriting the preference", async ({ page }) => {
   await devSignIn(page);
-  await page.goto("/catalog");
-  await clearPrefs(page, CATALOG_PREFS);
-  await page.reload();
+  await openFresh(page, "/catalog", CATALOG_PREFS);
 
   // Pick a category, then collapse the row by hand — the filter stays on.
   await toggle(page).click();
@@ -159,7 +165,7 @@ test("catalog: an active category filter force-opens the row without rewriting t
 
   // Arriving again with that filter restored: the row opens anyway, so the filtered result count
   // has a visible cause…
-  await page.reload();
+  await reloadToToggle(page);
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#facet-row-catalog-category .facet-on")).toHaveCount(1);
   // …but the stored preference is still the user's own collapsed choice.
@@ -172,7 +178,7 @@ test("catalog: an active category filter force-opens the row without rewriting t
   expect(chipName.length).toBeGreaterThan(0);
 
   // And with no filter left to force it open, the next visit honours the collapsed preference.
-  await page.reload();
+  await reloadToToggle(page);
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");
 });
 
@@ -192,9 +198,7 @@ test("requests: the Category row behaves identically, on server-supplied facets"
   const created = (await res.json()) as { id: string };
 
   try {
-    await page.goto("/requests");
-    await clearPrefs(page, REQUESTS_PREFS);
-    await page.reload();
+    await openFresh(page, "/requests", REQUESTS_PREFS);
 
     // Collapsed by default, chips unreachable, and the count comes from the server facets.
     await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");

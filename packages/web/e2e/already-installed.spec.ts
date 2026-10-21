@@ -88,12 +88,15 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     await claim();
 
     // Go to skill → Installed skills with that skill's row highlighted (the param is dropped), and
-    // nothing minted.
+    // nothing minted. The ring lasts ~3 s from the moment the list has loaded, while the URL loses
+    // its ?highlight= only after the App Router's server round-trip for `router.replace` — on a
+    // loaded agent that round-trip can outlast the ring, so the ring is asserted FIRST (paired with
+    // the list's response) and the settled URL after it.
     await installBtn.click();
-    await page.getByTestId("already-installed-goto").click();
-    await expect(page).toHaveURL(/\/installed$/, { timeout: 20_000 });
     const row = page.locator('.installed-row[data-install-ref="global/web-scraper"]');
+    await clickAndAwait(page, () => page.getByTestId("already-installed-goto").click(), /\/api\/installs$/);
     await expect(row).toHaveClass(/install-flash/, { timeout: 20_000 });
+    await expect(page).toHaveURL(/\/installed$/, { timeout: 20_000 });
     await expect(row).not.toHaveClass(/install-flash/, { timeout: 10_000 }); // the ring fades after ~3 s
     expect(await counts()).toEqual({ claimed: 1, unclaimed: 0 });
 
