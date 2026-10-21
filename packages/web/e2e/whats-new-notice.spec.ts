@@ -11,9 +11,8 @@
 import { Pool } from "pg";
 import { APP_VERSION } from "@skilly/shared/version";
 import { CHANGELOG } from "../src/app/whats-new/changelog";
-import { test, expect, devSignIn } from "./fixtures";
+import { test, expect, devSignIn, signedInOid } from "./fixtures";
 
-const DEV_OID = process.env.SKILLY_DEV_OID ?? "dev-admin-oid";
 const dbUrl = process.env.DATABASE_URL;
 
 function oneMinorBelow(v: string): string | null {
@@ -51,9 +50,9 @@ test.describe("What's new update notice (§23)", () => {
   test.skip(!dbUrl, "DATABASE_URL not set — cannot seed the marker");
   let pool: Pool;
   const setMarker = (v: string | null) =>
-    pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [DEV_OID, v]);
+    pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [signedInOid(), v]);
   const readMarker = async () =>
-    (await pool.query(`select whats_new_seen_version v from users where entra_object_id = $1`, [DEV_OID])).rows[0]?.v as string | null;
+    (await pool.query(`select whats_new_seen_version v from users where entra_object_id = $1`, [signedInOid()])).rows[0]?.v as string | null;
 
   test.beforeAll(() => {
     pool = new Pool({ connectionString: dbUrl });

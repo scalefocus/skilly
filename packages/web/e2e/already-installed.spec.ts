@@ -3,16 +3,15 @@
 // `global/web-scraper` skill. A fresh mint only becomes an *install* when `npx skills` first clones
 // it (the gateway stamps used_at) — this dev-server suite has no git gateway, so the spec plays that
 // part with one SQL update (`claim()`), which needs DATABASE_URL in the launching shell; skipped
-// otherwise. It only ever touches the dev user's own web-scraper tokens and deletes them afterwards.
+// otherwise. It only ever touches the signed-in user's own web-scraper tokens and deletes them afterwards.
 //
 // Show install URL needs INSTALL_TOKEN_ENC_KEY on the dev server (playwright.config.ts sets a
 // test-only key); against a reused server started without it, that one step is skipped.
 import { Pool } from "pg";
-import { test, expect, devSignIn } from "./fixtures";
+import { test, expect, devSignIn, signedInOid } from "./fixtures";
 import { clickAndAwait, gotoLoaded } from "./helpers/ready";
 
 const dbUrl = process.env.DATABASE_URL;
-const DEV_OID = "dev-admin-oid";
 const SKILL_PAGE = "/skills/global/web-scraper";
 const MINE = `t.user_id = (select id from users where entra_object_id = $1) and t.type = 'install' and not t.is_system
   and t.skill_id = (select s.id from skills s join namespaces n on n.id = s.namespace_id where n.slug = 'global' and s.slug = 'web-scraper')`;
@@ -22,14 +21,14 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
   test.skip(!dbUrl, "DATABASE_URL not set — cannot play the gateway's first-clone claim");
   let pool: Pool;
 
-  const clear = () => pool.query(`delete from tokens t where ${MINE}`, [DEV_OID]);
+  const clear = () => pool.query(`delete from tokens t where ${MINE}`, [signedInOid()]);
   /** What the git gateway does on the first `npx skills add` clone: the unclaimed command becomes an install. */
-  const claim = () => pool.query(`update tokens t set used_at = now() where ${MINE} and t.used_at is null`, [DEV_OID]);
+  const claim = () => pool.query(`update tokens t set used_at = now() where ${MINE} and t.used_at is null`, [signedInOid()]);
   const counts = async () => {
     const r = (await pool.query<{ claimed: number; unclaimed: number }>(
       `select count(*) filter (where t.used_at is not null)::int as claimed, count(*) filter (where t.used_at is null)::int as unclaimed
          from tokens t where ${MINE}`,
-      [DEV_OID],
+      [signedInOid()],
     )).rows[0]!;
     return { claimed: r.claimed, unclaimed: r.unclaimed };
   };
@@ -166,7 +165,7 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     await mint("1.2.0");
     const stamp = () => pool.query(
       `update tokens t set last_served_semver = case when t.pinned_semver is null then '1.0.0' else t.pinned_semver end where ${MINE}`,
-      [DEV_OID],
+      [signedInOid()],
     );
     await stamp();
 
@@ -191,7 +190,7 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     // Clicking the header opens it: one child per install, newest first, with per-install actions.
     await card.getByTestId("install-card-count").click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    const newestFirst = (await pool.query<{ id: string }>(`select t.id from tokens t where ${MINE} order by t.used_at desc`, [DEV_OID])).rows.map((r) => r.id);
+    const newestFirst = (await pool.query<{ id: string }>(`select t.id from tokens t where ${MINE} order by t.used_at desc`, [signedInOid()])).rows.map((r) => r.id);
     await expect(children).toHaveCount(2);
     expect(await children.evaluateAll((els) => els.map((e) => e.getAttribute("data-install-id")))).toEqual(newestFirst);
     await expect(children.first().getByRole("button", { name: "uninstall" })).toBeVisible();

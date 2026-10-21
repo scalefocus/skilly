@@ -39,9 +39,10 @@ pipeline {
 
   options {
     timestamps()
-    // Sized for a FULL_E2E_TESTS run: on the 16 GB agent the whole suite runs as one shard of
-    // E2E_PASSES sequential passes (one worker, a route warm-up per pass), which alone takes well over
-    // an hour. At 60 minutes every full run was aborted mid-E2E, and on main its Deploy never ran.
+    // Sized for a FULL_E2E_TESTS run. The suite used to run as one shard of five sequential passes
+    // on one worker on the 16 GB agent, well over an hour, and at 60 minutes every full run was
+    // aborted mid-E2E. It now runs E2E_WORKERS workers on one stack (ci/e2e-run.sh); keep the headroom
+    // until a few runs have measured it.
     timeout(time: 120, unit: 'MINUTES')
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '30'))
@@ -49,9 +50,8 @@ pipeline {
 
   parameters {
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: true, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
-    choice(name: 'E2E_TESTS', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives a headless browser). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests, in a single shard (E2E_SHARDS is ignored; spec files with serial tests are sampled whole). FULL_E2E_TESTS = the whole suite, split across E2E_SHARDS shards. Either way only the pages and the core API routes are pre-warmed; the rest compile on first use.')
-    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one shard): split the e2e suite into this many shards (1-9), run in parallel on this agent, each on its own Postgres + MinIO + web dev server; 1 = the whole suite on one stack. Every shard repeats the stack setup and route warm-up, and all shards share the agent\'s CPU and RAM — so the stage runs fewer shards than asked when the agent\'s RAM cannot hold them (ci/e2e-shard-plan.sh; a 16 GB agent fits 1).')
-    string(name: 'E2E_PASSES', defaultValue: '5', description: 'FULL_E2E_TESTS only (QUICK_E2E_TESTS always runs one pass): run each shard\'s slice as this many passes (1-9), one after another on the same stack, each with a fresh web dev server. Under webpack the dev server kept every route it compiled in memory for the whole run, so one server driving the whole suite grew until the kernel OOM-killed it (on the 16 GB agent, ~60 tests in, just after the all-routes smoke spec) and every later test failed ECONNREFUSED; a fresh server per pass reset that. The dev server now runs Turbopack, whose e2e memory eviction keeps compiled routes on disk, so fewer passes may do; each pass repeats only the route warm-up. 1 = one dev server for the whole slice.')
+    choice(name: 'E2E_TESTS', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Gated Playwright e2e suite (spins ephemeral Postgres + MinIO, seeds the dev catalog, drives headless browsers). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests (spec files with serial tests are sampled whole). FULL_E2E_TESTS = the whole suite. Either way it runs on ONE stack with E2E_WORKERS Playwright workers, and only the pages and the core API routes are pre-warmed; the rest compile on first use.')
+    string(name: 'E2E_WORKERS', defaultValue: '4', description: 'Playwright workers for the e2e suite (1-16), all on one Postgres + MinIO + web dev server; each worker signs in as its own seeded user. Specs that change state every other spec can see run first on one worker, alone; specs that share state with each other run in order on one worker per group; the rest run in parallel (packages/web/e2e/groups.ts). The stage runs fewer workers than asked when the agent\'s RAM cannot hold them (ci/e2e-worker-plan.sh; a 16 GB agent fits 4).')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy regardless of branch (main deploys automatically)')
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     string(name: 'CI_POSTGRES_IMAGE', defaultValue: '', description: 'Pin the Postgres image for the gated db/e2e stacks (blank = postgres:16-alpine, falling back to the ECR public mirror). Point this at an internal mirror when the agent cannot pull from Docker Hub.')
@@ -70,8 +70,8 @@ pipeline {
     // fails the stage with "port is already allocated".
     CI_PG_CONTAINER = "skilly-ci-pg-${env.BUILD_TAG}"
     // Gated e2e stack — its own ephemeral Postgres + MinIO, independent of the db-test Postgres.
-    // Name PREFIXES: each e2e shard appends `-s<n>` and labels its containers
-    // skilly-ci-e2e=<BUILD_TAG>; the cleanups remove by that label (ci/e2e-shard.sh).
+    // Its containers are labelled skilly-ci-e2e=<BUILD_TAG>; the cleanups remove by that label
+    // (ci/e2e-run.sh).
     CI_E2E_PG_CONTAINER    = "skilly-ci-e2e-pg-${env.BUILD_TAG}"
     CI_E2E_MINIO_CONTAINER = "skilly-ci-e2e-minio-${env.BUILD_TAG}"
     CI_E2E_MINIO_PASSWORD  = 'e2e-minio-not-a-secret'
@@ -231,65 +231,51 @@ pipeline {
 
         stage('E2E tests') {
           // Needs a full live stack (headless browser + web dev server + Postgres + MinIO). The
-          // E2E_TESTS dropdown defaults to FULL_E2E_TESTS (the whole suite, sharded per E2E_SHARDS);
-          // QUICK_E2E_TESTS runs a random 10% of it in one shard; NO_E2E_TESTS skips
-          // it. A blank value — the first build after the parameter appears, before Jenkins has
-          // registered it — counts as NO_E2E_TESTS.
+          // E2E_TESTS dropdown defaults to FULL_E2E_TESTS (the whole suite); QUICK_E2E_TESTS runs a
+          // random 10% of it; NO_E2E_TESTS skips it. Either runs on one stack with E2E_WORKERS
+          // Playwright workers (ci/e2e-run.sh, SKILLY_SPEC.md §16 item 18). A blank value — the first
+          // build after the parameter appears, before Jenkins has registered it — counts as NO_E2E_TESTS.
           when { expression { return params.E2E_TESTS in ['QUICK_E2E_TESTS', 'FULL_E2E_TESTS'] } }
           steps {
             script {
               boolean quick = params.E2E_TESTS == 'QUICK_E2E_TESTS'
-              def shards = quick ? '1' : (params.E2E_SHARDS ?: '1').trim()
-              if (!(shards ==~ /[1-9]/)) {
-                error "E2E_SHARDS must be a whole number from 1 to 9 (got '${params.E2E_SHARDS}')"
+              // Blank (the first build after the parameter appears) takes the parameter's default.
+              def workers = (params.E2E_WORKERS ?: '4').trim()
+              if (!(workers ==~ /([1-9]|1[0-6])/)) {
+                error "E2E_WORKERS must be a whole number from 1 to 16 (got '${params.E2E_WORKERS}')"
               }
-              // Sequential passes per shard, each on a fresh dev server (ci/e2e-shard.sh): under
-              // webpack a server's compiled route graph only grew, and one server for the whole suite
-              // was OOM-killed ~60 tests in. Turbopack's e2e eviction should end that; the passes stay
-              // until a run has shown it. A quick sample is small enough for one. Blank (the first
-              // build after the parameter appears) takes the parameter's default.
-              def passes = quick ? '1' : (params.E2E_PASSES ?: '5').trim()
-              if (!(passes ==~ /[1-9]/)) {
-                error "E2E_PASSES must be a whole number from 1 to 9 (got '${params.E2E_PASSES}')"
-              }
-              // Cap the shard count at what this agent's RAM holds and size each dev server's heap
-              // (ci/e2e-shard-plan.sh): under webpack every shard kept every route it warmed or
-              // compiled in memory, so two shards on a 16 GB agent got the dev server OOM-killed
-              // mid-warm-up and the whole shard failed ECONNREFUSED. The plan's reasoning is in the log; stdout is "<shards> <heap MB>".
-              def plan = sh(script: "sh ci/e2e-shard-plan.sh ${shards}", returnStdout: true).trim().split(' ')
-              int total = plan[0] as int
+              // Cap the worker count at what this agent's RAM holds beside the stack, and size the dev
+              // server's heap (ci/e2e-worker-plan.sh). The plan's reasoning is in the log; stdout is
+              // "<workers> <heap MB>".
+              def plan = sh(script: "sh ci/e2e-worker-plan.sh ${workers}", returnStdout: true).trim().split(' ')
+              String plannedWorkers = plan[0]
               String heapMb = plan[1]
-              // Clear what a previous build may have left in the workspace: the prepare → shard handoff
-              // markers, and old JUnit/evidence (an unsharded run's results/junit.xml would otherwise
-              // be reported again by the junit glob below).
+              // Clear what a previous build may have left in the workspace: the prepare → run handoff
+              // markers, and old JUnit/evidence (it would otherwise be reported again by the junit glob below).
               sh 'rm -rf "${WORKSPACE}/.ci-e2e-prepare.done" "${WORKSPACE}/.ci-e2e-prepare.failed" packages/web/e2e/results packages/web/e2e/test-results'
               // Quick run: draw this build's sample (ci/e2e-quick-list.mjs) up front, so a listing
-              // failure stops the stage before any stack is provisioned. The single shard runs only the
+              // failure stops the stage before any stack is provisioned. The run executes only the
               // tests in this Playwright --test-list file; it is archived with the evidence below.
-              def shardEnv = []
+              def runEnv = ["E2E_WORKERS=${plannedWorkers}", "E2E_HEAP_MB=${heapMb}"]
               if (quick) {
                 sh '. "${HOME}/.asdf/asdf.sh" && node ci/e2e-quick-list.mjs packages/web/e2e/results/quick-test-list.txt'
-                shardEnv << "E2E_TEST_LIST=${env.WORKSPACE}/packages/web/e2e/results/quick-test-list.txt"
+                runEnv << "E2E_TEST_LIST=${env.WORKSPACE}/packages/web/e2e/results/quick-test-list.txt"
               }
               // `prepare` does the once-per-build work (browser install, wait for Typecheck —
-              // ci/e2e-prepare.sh) while every shard provisions its own Postgres + MinIO; each shard
-              // then waits for prepare's marker before starting its dev server (ci/e2e-shard.sh).
-              // No failFast here: every shard runs to the end, so a red build reports all of its
-              // failures, not just the first shard's. (A red Verify branch elsewhere still aborts all.)
-              def branches = [
+              // ci/e2e-prepare.sh) while `run` provisions Postgres + MinIO; `run` then waits for
+              // prepare's marker before it starts the dev server (ci/e2e-run.sh). The run's two phases
+              // (exclusive specs alone, then everything else) always both run, so a red build reports
+              // all of its failures.
+              parallel(
                 'e2e prepare': {
                   sh 'sh ci/e2e-prepare.sh'
-                }
-              ]
-              for (int i = 1; i <= total; i++) {
-                int shard = i
-                branches["e2e shard ${shard}/${total}".toString()] = {
-                  withEnv(["E2E_SHARD=${shard}", "E2E_SHARD_TOTAL=${total}", "E2E_PASSES=${passes}", "E2E_HEAP_MB=${heapMb}"] + shardEnv) {
-                    sh 'sh ci/e2e-shard.sh'
+                },
+                'e2e run': {
+                  withEnv(runEnv) {
+                    sh 'sh ci/e2e-run.sh'
                   }
                 }
-              }
-              parallel branches
+              )
             }
           }
           post {
@@ -298,10 +284,10 @@ pipeline {
               // Keep Playwright's own failure evidence. `error-context.md` (a full a11y snapshot of
               // the page at the moment of failure) and the first-retry trace are what make a red run
               // diagnosable afterwards; without them the console log's "element(s) not found" is all
-              // anyone gets, and the only way forward is to re-run the whole 25-minute stage. A sharded
-              // run writes each shard's evidence under test-results/shard-<n>/ and its JUnit under
-              // results/shard-<n>/junit.xml; the globs here already cover both. A quick run also keeps
-              // the list of tests it sampled, so a red sample can be re-run locally with --test-list.
+              // anyone gets, and the only way forward is to re-run the whole stage. Each phase writes its
+              // evidence under test-results/<phase>/ and its JUnit under results/<phase>/junit.xml; the
+              // globs here cover both, and the dev server's log (test-results/dev-server.log). A quick run
+              // also keeps the list of tests it sampled, so a red sample can be re-run locally with --test-list.
               archiveArtifacts artifacts: 'packages/web/test-results/**, packages/web/e2e/test-results/**, packages/web/e2e/results/quick-test-list.txt',
                                allowEmptyArchive: true, onlyIfSuccessful: false
               sh 'docker ps -aq --filter "label=skilly-ci-e2e=${BUILD_TAG}" | xargs -r docker rm -f >/dev/null 2>&1 || true'

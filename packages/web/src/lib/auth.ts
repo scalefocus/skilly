@@ -6,22 +6,35 @@ import AzureAD from "next-auth/providers/azure-ad";
 import Credentials from "next-auth/providers/credentials";
 import { pool } from "./db";
 import { fetchEntraDirectoryProfile, saveDirectoryProfile } from "./directory";
+import { resolveDevSignInOid } from "./devAuth";
 
-// DEV-ONLY: a credentials provider that signs in a fixed user. Gated by SKILLY_DEV_AUTH=1
-// so it is NEVER present in production builds/runtime. Used for local visual/dev passes
-// without a real Entra tenant. The user's entra_object_id must exist in the seeded DB.
-// Dev passwordless sign-in is gated by SKILLY_DEV_AUTH=1. The hard fail-safe that forbids it
-// in production runs at server startup (instrumentation.ts register()), NOT here — a
-// module-scope throw would also fire during `next build` (NODE_ENV=production).
+// DEV-ONLY: a credentials provider that signs in a seeded user without a password. Gated by
+// SKILLY_DEV_AUTH=1 so it is NEVER present in production builds/runtime. Used for local visual/dev
+// passes and the e2e suite without a real Entra tenant. The user's entra_object_id must exist in the
+// seeded DB. With no `oid` it signs in SKILLY_DEV_OID (the dev admin); an `oid` may name only the dev
+// admin or one of the e2e worker users (devAuth.ts — one per Playwright worker, §16 item 18).
+// The hard fail-safe that forbids SKILLY_DEV_AUTH in production runs at server startup
+// (instrumentation.ts register()), NOT here — a module-scope throw would also fire during
+// `next build` (NODE_ENV=production).
 const devProviders: NextAuthOptions["providers"] =
   process.env.SKILLY_DEV_AUTH === "1"
     ? [
         Credentials({
           id: "dev",
           name: "Dev sign-in",
-          credentials: {},
-          async authorize() {
-            return { id: process.env.SKILLY_DEV_OID ?? "dev-oid", name: "Dev Admin", email: "dev@skilly.local" };
+          credentials: { oid: { label: "User", type: "text" } },
+          async authorize(credentials) {
+            const oid = resolveDevSignInOid(credentials?.oid, process.env.SKILLY_DEV_OID);
+            if (!oid) return null;
+            // The user row's own name/email (a worker user is not "Dev Admin"). Best-effort: the
+            // session keys on the oid alone, so a lookup failure must not refuse the sign-in.
+            const { rows } = await pool
+              .query<{ display_name: string | null; email: string | null }>(
+                `select display_name, email from users where entra_object_id = $1`,
+                [oid],
+              )
+              .catch(() => ({ rows: [] as { display_name: string | null; email: string | null }[] }));
+            return { id: oid, name: rows[0]?.display_name || "Dev Admin", email: rows[0]?.email || "dev@skilly.local" };
           },
         }),
       ]
