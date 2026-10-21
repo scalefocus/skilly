@@ -10,6 +10,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import AdmZip from "adm-zip";
 import { test, expect, devSignIn, type Page } from "./fixtures";
+import { aiSaveSkipReason } from "./helpers/ai";
 import { awaitApi, gotoLoaded } from "./helpers/ready";
 
 test.describe.configure({ mode: "serial" });
@@ -63,13 +64,14 @@ test.afterEach(async ({ page }) => {
   await page.request.delete("/api/admin/ai").catch(() => {});
 });
 
-/** Save + enable the stub integration through the admin API; false when the dev server has no AI key. */
-async function enableAi(page: Page): Promise<boolean> {
+/** Save + enable the stub integration through the admin API; the skip reason when the dev server cannot take it. */
+async function enableAi(page: Page): Promise<string | null> {
   const saved = await page.request.put("/api/admin/ai", { data: { provider: "openwebui", baseUrl: stubUrl, model: "stub-llama", token: GOOD } });
-  if (saved.status() === 409) return false; // ai_key_missing
+  const reason = await aiSaveSkipReason(saved);
+  if (reason) return reason;
   expect(saved.ok(), await saved.text()).toBeTruthy();
   expect((await page.request.patch("/api/admin/ai", { data: { enabled: true } })).ok()).toBeTruthy();
-  return true;
+  return null;
 }
 
 function bundle(): Buffer {
@@ -93,7 +95,8 @@ test("draft fills description, usage and categories; undo; fill-empty-only; hidd
   test.setTimeout(180_000);
   await devSignIn(page);
   await page.request.delete("/api/admin/ai");
-  test.skip(!(await enableAi(page)), "AI_TOKEN_ENC_KEY is not set on the dev server");
+  const skip = await enableAi(page);
+  if (skip) test.skip(true, skip);
 
   await gotoLoaded(page, "/propose", "/api/propose/ai-draft");
   await expect(draftButton(page)).toBeVisible();

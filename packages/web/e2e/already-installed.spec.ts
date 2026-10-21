@@ -198,11 +198,16 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     await expect(children).toHaveCount(0);
 
     // Behind chip: filter first, then group — with one behind install the skill is a plain row ...
+    // The chip is mirrored into the URL by router.replace, which commits only after the App
+    // Router's server round-trip; the list re-renders at once. Wait for the URL before every
+    // reload or re-toggle, or a reload lands on the stale ?filter=behind and re-seeds the chip.
     const chip = page.getByRole("button", { name: "Behind latest" });
     await chip.click();
     await expect(page.locator('.installed-row[data-install-ref="global/web-scraper"]')).toBeVisible({ timeout: 10_000 });
     await expect(card).toHaveCount(0);
+    await expect(page).toHaveURL(/[?&]filter=behind\b/, { timeout: 10_000 });
     await chip.click();
+    await expect(page).not.toHaveURL(/filter=behind/, { timeout: 10_000 });
 
     // ... and with two of three behind it is an EXPANDED card reading "2 of 3 installations".
     await mint(null);
@@ -213,10 +218,12 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     await expect(card.getByTestId("install-card-count")).toHaveText("2 of 3 installations", { timeout: 10_000 });
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(children).toHaveCount(2);
+    await expect(page).toHaveURL(/[?&]filter=behind\b/, { timeout: 10_000 });
     // Chip off → back to collapsed.
     await chip.click();
     await expect(card.getByTestId("install-card-count")).toHaveText("3 installations", { timeout: 10_000 });
     await expect(children).toHaveCount(0);
+    await expect(page).not.toHaveURL(/filter=behind/, { timeout: 10_000 });
 
     // "Go to skill" lands here: the card opens and carries the highlight ring; the param is dropped.
     await page.goto("/installed?highlight=global/web-scraper");
