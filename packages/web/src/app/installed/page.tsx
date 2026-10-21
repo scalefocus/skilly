@@ -1,5 +1,5 @@
 "use client";
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApi, Pill, EmptyState, ScrollToTop, CopyCommand } from "../../components/ui";
@@ -85,23 +85,38 @@ function revealCaption(i: Install, system: boolean, date: (iso: string) => strin
   return parts.join(" · ");
 }
 
+// Reads the URL and hands the list its inputs. The header search rewrites ?q= on every keystroke, so
+// this wrapper is all that re-renders urgently: the query reaches the (memoised) list deferred, and
+// the list re-filters and re-renders at a lower priority that typing can interrupt.
 function InstalledInner() {
-  const fmt = useDateFmt();
   const router = useRouter();
   // The app-shell header search mirrors its query into ?q= on /installed (§23). We read it here and
   // filter the already-loaded list client-side — no refetch. Empty query → full list.
   const params = useSearchParams();
-  const q = (params.get("q") ?? "").trim();
+  const q = useDeferredValue((params.get("q") ?? "").trim());
   // The "Behind latest" chip (§23 "Installed-version freshness"): default off, mirrored to
   // ?filter=behind via router.replace (kept out of history, seeded from the URL on arrival — same
   // treatment as ?q=), persists across the Mine/System toggle, and composes with the header search.
   const behindOnly = params.get("filter") === "behind";
-  const setBehindOnly = (on: boolean) => {
-    const next = new URLSearchParams(params.toString());
+  // Built from the live URL at click time (which ?q= keeps current), so the callback stays stable
+  // across keystrokes and doesn't defeat the list's memo.
+  const setBehindOnly = useCallback((on: boolean) => {
+    const next = new URLSearchParams(window.location.search);
     if (on) next.set("filter", "behind"); else next.delete("filter");
     const qs = next.toString();
     router.replace(qs ? `/installed?${qs}` : "/installed", { scroll: false });
-  };
+  }, [router]);
+  return <InstalledList q={q} behindOnly={behindOnly} highlightParam={params.get("highlight")} setBehindOnly={setBehindOnly} />;
+}
+
+const InstalledList = memo(function InstalledList({ q, behindOnly, highlightParam, setBehindOnly }: {
+  q: string;
+  behindOnly: boolean;
+  highlightParam: string | null;
+  setBehindOnly: (on: boolean) => void;
+}) {
+  const fmt = useDateFmt();
+  const router = useRouter();
   // Admin-configured install-expiry horizon (calendar months) — bounds the reactivate picker. §23
   const { data: me } = useApi<{ installMaxTtlMonths?: number; isPlatformAdmin?: boolean }>("/api/me");
   // Platform admins can flip to the System installs view: platform-owned installs (CI/org tools),
@@ -110,7 +125,7 @@ function InstalledInner() {
   const { data, loading, error, reload } = useApi<{ installs: Install[] }>(
     scope === "system" ? "/api/installs?scope=system" : "/api/installs",
   );
-  const installs = data?.installs ?? [];
+  const installs = useMemo(() => data?.installs ?? [], [data]);
   // Sort toggle (§23): A–Z (default) or Recently installed, remembered per browser — one preference
   // for both scopes. Read after mount (no localStorage during SSR); blocked storage → A–Z every visit.
   const [sort, setSort] = useState<InstalledSort>("alpha");
@@ -123,16 +138,15 @@ function InstalledInner() {
   };
   // §23: case-insensitive substring match over title + @ns/slug (see lib/installedFilter). Applies
   // in both scopes; the query persists across the Mine/System toggle (it lives in the URL).
-  const visible = filterInstalls(filterBehind(installs, behindOnly), q);
+  const visible = useMemo(() => filterInstalls(filterBehind(installs, behindOnly), q), [installs, behindOnly, q]);
   // §23 "One card per skill": filter FIRST, then group — a skill with 2+ visible installs is one
   // collapsible card, one visible install a plain row. Entries follow the chosen sort.
-  const entries = groupInstalls(visible, installs, sort);
+  const entries = useMemo(() => groupInstalls(visible, installs, sort), [visible, installs, sort]);
 
   // Highlight on arrival (§23): ?highlight=<ns>/<slug> is where the already-installed prompt's
   // "Go to skill" lands. Force Mine, clear the header search (?q= and its box) and the Behind chip
   // so the rows can't be filtered out, then drop the param so a reload doesn't re-flash. The sort
   // choice is kept. Every row of that skill gets an accent ring that fades after ~3 s.
-  const highlightParam = params.get("highlight");
   const [flash, setFlash] = useState<string | null>(null);
   useEffect(() => {
     if (!highlightParam) return;
@@ -575,7 +589,7 @@ function InstalledInner() {
       )}
     </div>
   );
-}
+});
 
 export default function InstalledPage() {
   return (
