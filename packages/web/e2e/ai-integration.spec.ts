@@ -12,6 +12,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect, devSignIn, type Page } from "./fixtures";
 import { acceptNextDialog, clickAndAwait, gotoLoaded } from "./helpers/ready";
+import { aiSaveSkipReason } from "./helpers/ai";
 
 test.describe.configure({ mode: "serial" });
 
@@ -55,18 +56,23 @@ test.afterAll(async () => {
 const card = (page: Page) => page.locator('[data-last-card="ai"]');
 const header = (page: Page) => card(page).locator("[data-card-header]");
 
-async function openCard(page: Page): Promise<boolean> {
+/** Opens the card on a clean slate; the skip reason when the dev server cannot take the loopback stub. */
+async function openCard(page: Page): Promise<string | null> {
   await devSignIn(page);
   // Clean slate: the integration is a single platform-wide row.
   await page.request.delete("/api/admin/ai");
-  const res = page.waitForResponse((r) => r.url().endsWith("/api/admin/ai") && r.request().method() === "GET" && r.ok());
+  // Probe through the API first — no key (409) or a refused private base URL (422) is a skip, not
+  // a failure of the Load-models step; a save that went through is removed again.
+  const probe = await page.request.put("/api/admin/ai", { data: { provider: "openwebui", baseUrl: stubUrl, model: "stub-llama", token: GOOD } });
+  const reason = await aiSaveSkipReason(probe);
+  if (reason) return reason;
+  expect(probe.ok(), await probe.text()).toBeTruthy();
+  await page.request.delete("/api/admin/ai");
   await gotoLoaded(page, "/admin", "/api/admin/ai");
-  const state = (await (await res).json()) as { keyConfigured: boolean };
-  if (!state.keyConfigured) return false;
   await expect(header(page)).toHaveAttribute("aria-expanded", "false"); // collapsed by default
   await header(page).click();
   await expect(header(page)).toHaveAttribute("aria-expanded", "true");
-  return true;
+  return null;
 }
 
 // Never leave a configured (stub) integration behind, even when an assertion fails mid-test: later
@@ -77,7 +83,8 @@ test.afterEach(async ({ page }) => {
 });
 
 test("configure Open WebUI: models, test, rejected save, save, enable, remove", async ({ page }) => {
-  test.skip(!(await openCard(page)), "AI_TOKEN_ENC_KEY is not set on the dev server");
+  const skip = await openCard(page);
+  if (skip) test.skip(true, skip);
   const c = card(page);
   await expect(header(page)).toContainText("Not configured");
 

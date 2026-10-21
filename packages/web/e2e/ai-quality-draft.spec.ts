@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect, devSignIn, type Page } from "./fixtures";
+import { aiSaveSkipReason } from "./helpers/ai";
 import { deleteSkillFully } from "./helpers/skills";
 import { clickAndAwait, gotoLoaded, NAV_TIMEOUT } from "./helpers/ready";
 
@@ -76,15 +77,16 @@ test.afterEach(async ({ page }) => {
   await page.request.put("/api/admin/ai/display-name", { data: { displayName: "" } }).catch(() => {});
 });
 
-async function enableAi(page: Page): Promise<boolean> {
+/** Save + enable the stub integration; the skip reason when the dev server cannot take it. */
+async function enableAi(page: Page): Promise<string | null> {
   await page.request.delete("/api/admin/ai");
-  const st = await (await page.request.get("/api/admin/ai")).json();
-  if (!st.keyConfigured) return false;
   const saved = await page.request.put("/api/admin/ai", { data: { provider: "openwebui", baseUrl: stubUrl, model: "stub-drafter", token: TOKEN } });
+  const reason = await aiSaveSkipReason(saved);
+  if (reason) return reason;
   expect(saved.ok(), await saved.text()).toBeTruthy();
   const on = await page.request.patch("/api/admin/ai", { data: { enabled: true } });
   expect(on.ok(), await on.text()).toBeTruthy();
-  return true;
+  return null;
 }
 
 async function publishLowQuality(page: Page, slug: string): Promise<void> {
@@ -116,7 +118,8 @@ async function publishLowQuality(page: Page, slug: string): Promise<void> {
 test("draft improvements with a branded AI: plan → generate → review → propose → Drafted with badge", async ({ page }) => {
   test.setTimeout(240_000);
   await devSignIn(page);
-  test.skip(!(await enableAi(page)), "AI_TOKEN_ENC_KEY is not set on the dev server");
+  const skip = await enableAi(page);
+  if (skip) test.skip(true, skip);
   const named = await page.request.put("/api/admin/ai/display-name", { data: { displayName: "Aria" } });
   expect(named.ok(), await named.text()).toBeTruthy();
   const me = await (await page.request.get("/api/me")).json();
