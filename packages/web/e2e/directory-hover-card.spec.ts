@@ -23,7 +23,7 @@ const CARD_API = /\/api\/users\/[^/]+\/card/;
 
 test.describe("directory hover card (§28)", () => {
   test("hovering an avatar shows title, department, office and a mailto link", async ({ page }) => {
-    await devSignIn(page);
+    await devSignIn(page, { as: "dev-admin" });
     await gotoReady(page, "/profile");
 
     const b = bubble(page);
@@ -50,7 +50,7 @@ test.describe("directory hover card (§28)", () => {
   });
 
   test("keyboard: focus opens the card, Escape closes it", async ({ page }) => {
-    await devSignIn(page);
+    await devSignIn(page, { as: "dev-admin" });
     await gotoReady(page, "/profile");
 
     const b = bubble(page);
@@ -67,7 +67,7 @@ test.describe("directory hover card (§28)", () => {
   });
 
   test("the profile opt-out collapses the card to “No directory information”", async ({ page }) => {
-    await devSignIn(page);
+    await devSignIn(page, { as: "dev-admin" });
     const patch = (directoryHidden: boolean) =>
       page.request.patch("/api/me", { data: { directoryHidden } });
 

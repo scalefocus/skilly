@@ -7,7 +7,7 @@
 // hourly sweep writes and the e2e stack runs no worker, so that test seeds one rollup row itself
 // (needs DATABASE_URL in the launching shell, like whats-new-notice.spec.ts).
 import { Pool } from "pg";
-import { test, expect, devSignIn, type Page } from "./fixtures";
+import { test, expect, devSignIn, signedInDisplayName, type Page } from "./fixtures";
 
 test.describe.configure({ mode: "serial" });
 
@@ -93,7 +93,7 @@ test.describe("real user monitoring (§32)", () => {
     await table.locator("tr[data-route='/leaderboard']").click();
     const users = page.getByTestId("rum-users");
     await expect(users).toBeVisible({ timeout: 10_000 });
-    await expect(users).toContainText("Dev Admin");
+    await expect(users).toContainText(signedInDisplayName());
   });
 
   test("90d / All read the daily rollup, and their expander has no user dimension", async ({ page }) => {

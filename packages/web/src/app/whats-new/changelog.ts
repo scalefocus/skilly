@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.3",
+    date: "2026-10-21",
+    summary:
+      "Under the hood: the automated browser tests now run several tests at once on a single test environment, instead of splitting the suite across separate environments that each needed their own memory. Tests that could interfere with each other still run one at a time. Nothing changes in how Skilly looks or works.",
+  },
+  {
     version: "2.39.2",
     date: "2026-10-20",
     summary:

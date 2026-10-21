@@ -15,8 +15,9 @@
 // The `webServer` below auto-starts `next dev` when nothing is already serving baseURL, inheriting
 // the launching shell's env (so DATABASE_URL / S3_* / SKILLY_DEV_AUTH must be set there). Point at
 // a different target with PLAYWRIGHT_BASE_URL.
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices, type Project } from "@playwright/test";
 import { totalmem } from "node:os";
+import { EXCLUSIVE, EXCLUSIVE_PROJECT, GROUPS, PARALLEL, PARALLEL_PROJECT, groupProject } from "./groups";
 
 // Heap ceiling for the auto-started dev server. `next dev` defaults to half the machine's RAM and
 // restarts itself at 80% of that, i.e. at 40% of RAM. Under webpack, with ~180 routes kept compiled,
@@ -25,7 +26,7 @@ import { totalmem } from "node:os";
 // next.config.mjs), so the heap now stays far below the line. If it ever grows again, do NOT answer
 // that by raising the ceiling: V8 defers full collections while far below it, so a ceiling near RAM
 // fills with garbage until the kernel OOM-kills the server (a 10.8 GB ceiling on a 16 GB CI agent
-// did, mid-warm-up). Half of RAM, capped at 8 GB — the same cap ci/e2e-shard-plan.sh applies in
+// did, mid-warm-up). Half of RAM, capped at 8 GB — the same cap ci/e2e-worker-plan.sh applies in
 // Jenkins. Next honours an explicit --max-old-space-size and skips its own default; a caller's own wins.
 const callerNodeOptions = process.env.NODE_OPTIONS ?? "";
 const devServerHeapMb = Math.min(Math.floor((totalmem() / 1024 / 1024) * 0.5), 8192);
@@ -38,33 +39,50 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 // run on a free port when something else on the agent already holds 3000.
 const port = new URL(baseURL).port || "3000";
 
-// Sharded CI run (Jenkins E2E_SHARDS > 1): each shard is a full stack of its own (Postgres + MinIO +
-// `next dev`), and this process runs only its slice of the suite. E2E_SHARD is 1-based. Each shard
-// also gets its own Next build folder (next.config.mjs reads SKILLY_NEXT_DIST_DIR), test-results
-// folder and JUnit file, so parallel shards on one agent never write to the same place. Unset =
-// the whole suite, exactly as before.
-//
-// Passes (E2E_PASS of E2E_PASS_TOTAL, ci/e2e-shard.sh): a stack's slice run as several Playwright
-// invocations one after another, each starting a fresh dev server, because under webpack one
-// server's compiled route graph grew until the kernel OOM-killed it. Pass p of P on stack shard s of
-// S is Playwright shard (s-1)*P+p of S*P, so a stack's passes together cover exactly its contiguous
-// slice. Passes share the stack's build folder (Turbopack's disk cache carries over), not its result
-// folders.
-function sliceOf(index: string | undefined, total: string | undefined) {
-  const i = Number(index ?? 0);
-  const n = Number(total ?? 0);
-  return Number.isInteger(i) && Number.isInteger(n) && n > 1 && i >= 1 && i <= n ? { current: i, total: n } : null;
+// Workers (SKILLY_SPEC.md §16 item 18). Under CI=1 the worker count is E2E_WORKERS (Jenkins:
+// 1-16, default 4, capped by ci/e2e-worker-plan.sh), else 1 — the GitHub Actions job and any CI=1
+// run that does not set it keep the old one-worker run. Locally Playwright's default applies.
+function ciWorkers(): number {
+  const n = Number(process.env.E2E_WORKERS ?? 1);
+  if (!Number.isInteger(n) || n < 1 || n > 16) {
+    throw new Error(`E2E_WORKERS must be a whole number from 1 to 16 (got "${process.env.E2E_WORKERS}")`);
+  }
+  return n;
 }
-const stackShard = sliceOf(process.env.E2E_SHARD, process.env.E2E_SHARD_TOTAL);
-const pass = sliceOf(process.env.E2E_PASS, process.env.E2E_PASS_TOTAL);
-const shard =
-  stackShard || pass
-    ? {
-        current: ((stackShard?.current ?? 1) - 1) * (pass?.total ?? 1) + (pass?.current ?? 1),
-        total: (stackShard?.total ?? 1) * (pass?.total ?? 1),
-      }
-    : null;
-const shardDir = [stackShard && `shard-${stackShard.current}`, pass && `pass-${pass.current}`].filter(Boolean).join("/");
+
+// Projects come from the parallelism manifest (groups.ts): `exclusive` (one worker, alone),
+// `group-<name>` (one worker each, files in order) and `parallel`. All run the same browser.
+// E2E_PHASE (set by ci/e2e-run.sh) picks which ones this invocation defines: `exclusive` = phase 1,
+// `shared` = phase 2 (every group + parallel). Two invocations, not a project dependency: Playwright
+// skips every dependent project when a dependency fails, and a red exclusive spec must not hide the
+// rest of the suite. Unset = all projects in one run (GitHub Actions, local).
+const phase = process.env.E2E_PHASE ?? "";
+if (phase !== "" && phase !== "exclusive" && phase !== "shared") {
+  throw new Error(`E2E_PHASE must be "exclusive" or "shared" (got "${phase}")`);
+}
+const exactFiles = (files: readonly string[]) => files.map((f) => `**/${f}`);
+const browser = { ...devices["Desktop Chrome"] };
+const exclusiveProject: Project = {
+  name: EXCLUSIVE_PROJECT,
+  testMatch: exactFiles(EXCLUSIVE),
+  fullyParallel: false,
+  workers: 1,
+  use: browser,
+};
+const sharedProjects: Project[] = [
+  ...Object.entries(GROUPS).map(([name, group]): Project => ({
+    name: groupProject(name),
+    testMatch: exactFiles(group.specs),
+    fullyParallel: false,
+    workers: 1,
+    use: browser,
+  })),
+  { name: PARALLEL_PROJECT, testMatch: exactFiles(PARALLEL), fullyParallel: true, use: browser },
+];
+const projects =
+  phase === "exclusive" ? [exclusiveProject] : phase === "shared" ? sharedProjects : [exclusiveProject, ...sharedProjects];
+// Each phase writes its own evidence and JUnit, so phase 2 never overwrites phase 1's.
+const phaseDir = phase ? `/${phase}` : "";
 
 export default defineConfig({
   testDir: ".",
@@ -76,18 +94,18 @@ export default defineConfig({
   // per-test budget. Locally (warm dev server) the tighter default is fine.
   timeout: process.env.CI ? 90_000 : 30_000,
   fullyParallel: true,
-  shard,
-  outputDir: shard ? `test-results/${shardDir}` : "test-results",
-  // In CI, serialize: the dev server's compiler is a shared bottleneck, and many workers all
-  // triggering first-compiles at once thrash it into navigation timeouts. One worker lets each
-  // route compile once and stay cached for the rest of the run — slower but reliable. Locally
-  // Playwright's default (parallel) is used against an already-warm dev server.
-  workers: process.env.CI ? 1 : undefined,
+  outputDir: `test-results${phaseDir}`,
+  // In CI, E2E_WORKERS workers (ciWorkers above). Under webpack the dev server's one compiler was a
+  // shared bottleneck and several workers thrashed it into navigation timeouts, so CI ran one.
+  // Turbopack compiles routes independently and restores warmed ones from its disk cache, and each
+  // worker signs in as its own user (fixtures.ts), so the Jenkins run now drives several. Specs
+  // that share state are kept apart by the projects above. Locally Playwright's default applies.
+  workers: process.env.CI ? ciWorkers() : undefined,
   // A single retry in CI absorbs a first-compile that still overshoots; pairs with
   // trace-on-first-retry below.
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI
-    ? [["list"], ["junit", { outputFile: shard ? `results/${shardDir}/junit.xml` : "results/junit.xml" }]]
+    ? [["list"], ["junit", { outputFile: `results${phaseDir}/junit.xml` }]]
     : "html",
   // Per-assertion budget. Specs gate on the hydrated shell (helpers/ready.ts) and pair every
   // mutation with its response, so assertions rarely wait long — but a loaded CI agent still
@@ -115,13 +133,14 @@ export default defineConfig({
       LEADERBOARD_CACHE_TTL_MS: "0",
       INSTALL_TOKEN_ENC_KEY: process.env.INSTALL_TOKEN_ENC_KEY ?? "c2tpbGx5LWUyZS1pbnN0YWxsLXRva2VuLWtleS0zMmI=",
       NODE_OPTIONS: devServerNodeOptions,
-      ...(stackShard ? { SKILLY_NEXT_DIST_DIR: `.next-e2e-${stackShard.current}` } : {}),
     },
     url: baseURL,
     timeout: 120_000,
-    reuseExistingServer: !process.env.CI,
+    // Locally, reuse a dev server the developer already runs. Under CI=1 start a fresh one, unless
+    // E2E_EXTERNAL_SERVER=1: ci/e2e-run.sh starts ONE dev server itself and both phases drive it.
+    reuseExistingServer: !process.env.CI || process.env.E2E_EXTERNAL_SERVER === "1",
     stdout: "pipe",
     stderr: "pipe",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects,
 });

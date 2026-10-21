@@ -9,10 +9,9 @@
 // offer, and the admin feed + switch. Needs DATABASE_URL in the launching shell; skipped otherwise.
 import { Pool } from "pg";
 import { APP_VERSION } from "@skilly/shared/version";
-import { test, expect, devSignIn, type Page } from "./fixtures";
+import { test, expect, devSignIn, signedInOid, type Page } from "./fixtures";
 import { gotoReady } from "./helpers/ready";
 
-const DEV_OID = process.env.SKILLY_DEV_OID ?? "dev-admin-oid";
 const dbUrl = process.env.DATABASE_URL;
 
 function oneMinorBelow(v: string): string | null {
@@ -45,9 +44,9 @@ test.describe("Feedback survey (§36)", () => {
       `update users set onboarded_at = now() - interval '30 days', surveys_enabled = true, survey_last_shown_at = null,
               survey_self_shown_at = null, survey_offer = null
         where entra_object_id = $1`,
-      [DEV_OID],
+      [signedInOid()],
     );
-    await pool.query(`delete from user_feature_uses where user_id = (select id from users where entra_object_id = $1)`, [DEV_OID]);
+    await pool.query(`delete from user_feature_uses where user_id = (select id from users where entra_object_id = $1)`, [signedInOid()]);
   }
 
   test.beforeAll(async () => {
@@ -62,8 +61,8 @@ test.describe("Feedback survey (§36)", () => {
   });
   test.afterAll(async () => {
     // Leave the dev user quiet for the rest of the suite, and the table free of this run's rows.
-    await pool.query(`update users set surveys_enabled = false, survey_self_shown_at = null, survey_offer = null where entra_object_id = $1`, [DEV_OID]).catch(() => {});
-    await pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [DEV_OID, APP_VERSION]).catch(() => {});
+    await pool.query(`update users set surveys_enabled = false, survey_self_shown_at = null, survey_offer = null where entra_object_id = $1`, [signedInOid()]).catch(() => {});
+    await pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [signedInOid(), APP_VERSION]).catch(() => {});
     await pool.query(`delete from survey_responses where free_text like $1`, [`${MARK}%`]).catch(() => {});
     await pool.query(`update platform_settings set value = 'true'::jsonb where key = 'bug_reports_enabled'`).catch(() => {});
     await pool.end();
@@ -156,7 +155,7 @@ test.describe("Feedback survey (§36)", () => {
     const seeded = oneMinorBelow(APP_VERSION);
     test.skip(!seeded, `cannot derive a lower minor from ${APP_VERSION}`);
     await resetDevUser();
-    await pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [DEV_OID, seeded]);
+    await pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [signedInOid(), seeded]);
     await devSignIn(page, { surveys: true, stampWhatsNew: false });
     await forceWin(page);
     const [used] = await Promise.all([
@@ -167,7 +166,7 @@ test.describe("Feedback survey (§36)", () => {
     await expect(page.getByTestId("whats-new-notice")).toBeVisible({ timeout: 20_000 });
     await page.waitForTimeout(800);
     await expect(page.getByTestId("survey-card")).toHaveCount(0);
-    await pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [DEV_OID, APP_VERSION]);
+    await pool.query(`update users set whats_new_seen_version = $2 where entra_object_id = $1`, [signedInOid(), APP_VERSION]);
   });
 
   test("mobile: the card is a bottom sheet with ✕ and Submit in view", async ({ page }) => {
@@ -355,7 +354,7 @@ test.describe("Feedback survey (§36)", () => {
 
     const row = (await pool.query(`select trigger, feature, page_path, app_version from survey_responses where free_text = $1`, [`${MARK} bug one`])).rows[0];
     expect(row).toEqual({ trigger: "bug", feature: null, page_path: "/leaderboard", app_version: APP_VERSION });
-    const self = (await pool.query(`select survey_self_shown_at from users where entra_object_id = $1`, [DEV_OID])).rows[0];
+    const self = (await pool.query(`select survey_self_shown_at from users where entra_object_id = $1`, [signedInOid()])).rows[0];
     expect(self.survey_self_shown_at).toBeNull();
 
     // No cooldown: the button is still there and still opens the card.
@@ -411,7 +410,7 @@ test.describe("Feedback survey (§36)", () => {
     ]);
     expect(sent.status()).toBe(200);
     await expect(card).toHaveCount(0, { timeout: 8_000 });
-    const u = (await pool.query(`select survey_offer from users where entra_object_id = $1`, [DEV_OID])).rows[0];
+    const u = (await pool.query(`select survey_offer from users where entra_object_id = $1`, [signedInOid()])).rows[0];
     expect(u.survey_offer).toBeNull();
     await page.locator(".user-trigger").click();
     await expect(page.getByRole("menuitem", { name: "Profile" })).toBeVisible();

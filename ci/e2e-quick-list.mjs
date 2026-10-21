@@ -9,6 +9,9 @@
 //   - a spec file with any serial group (`test.describe.serial`, `mode: "serial"`) is ONE unit — its
 //     tests build on one another, so it runs whole or not at all;
 //   - every other test is a unit of its own (the suite is fullyParallel, so those are independent).
+// Every line names its test's Playwright project (`[project] › file › …`): the suite's projects come
+// from e2e/groups.ts, and the Jenkins run executes them in two phases (ci/e2e-run.sh), each loading
+// only its own projects, so a line must say which phase's project owns it. SKILLY_SPEC.md §16 item 18.
 // Units are shuffled and taken while they still fit under the target count, so the sample lands on
 // the target exactly unless only oversized units are left; then the smallest one tops it up.
 import { spawnSync } from "node:child_process";
@@ -58,10 +61,18 @@ const parseReport = (stdout) => {
 };
 const report = parseReport(listing.stdout);
 
-// Flatten the report into { file, titles, count } per test, titles = describe titles + test title.
+// Flatten the report into { file, project, titles, count } per test, titles = describe titles + test
+// title. Every spec file belongs to exactly one project (e2e/groups.ts), so a spec's first test names it.
 const tests = [];
 const walk = (suite, file, titles) => {
-  for (const spec of suite.specs ?? []) tests.push({ file, titles: [...titles, spec.title], count: spec.tests?.length ?? 1 });
+  for (const spec of suite.specs ?? []) {
+    const project = spec.tests?.[0]?.projectName;
+    if (!project) {
+      console.error(`no Playwright project listed for ${file} › ${[...titles, spec.title].join(" › ")}`);
+      process.exit(1);
+    }
+    tests.push({ file, project, titles: [...titles, spec.title], count: spec.tests?.length ?? 1 });
+  }
   for (const child of suite.suites ?? []) walk(child, file, child.title ? [...titles, child.title] : titles);
 };
 for (const fileSuite of report.suites ?? []) walk(fileSuite, fileSuite.file, []);
@@ -81,10 +92,11 @@ for (const t of tests) byFile.set(t.file, [...(byFile.get(t.file) ?? []), t]);
 const units = [];
 for (const [file, fileTests] of byFile) {
   const source = readFileSync(join(e2eDir, file), "utf-8");
+  const prefix = `[${fileTests[0].project}] › `;
   if (SERIAL.test(source) || fileTests.some((t) => t.titles.some(unsafeTitle))) {
-    units.push({ file, line: file, count: fileTests.reduce((n, t) => n + t.count, 0) });
+    units.push({ file, line: prefix + file, count: fileTests.reduce((n, t) => n + t.count, 0) });
   } else {
-    for (const t of fileTests) units.push({ file, line: [file, ...t.titles].join(" › "), count: t.count });
+    for (const t of fileTests) units.push({ file, line: prefix + [file, ...t.titles].join(" › "), count: t.count });
   }
 }
 
@@ -119,4 +131,4 @@ writeFileSync(
   [`# quick e2e: ${count} of ${total} tests (${Math.round((count / total) * 100)}%), random sample`, ...picked.map((u) => u.line), ""].join("\n"),
 );
 console.log(`quick e2e: ${count} of ${total} tests from ${new Set(picked.map((u) => u.file)).size} spec files → ${out}`);
-for (const u of picked) console.log(`  ${u.line}${u.line === u.file ? `  (whole file, ${u.count} test${u.count === 1 ? "" : "s"})` : ""}`);
+for (const u of picked) console.log(`  ${u.line}${u.line.endsWith(`] › ${u.file}`) ? `  (whole file, ${u.count} test${u.count === 1 ? "" : "s"})` : ""}`);

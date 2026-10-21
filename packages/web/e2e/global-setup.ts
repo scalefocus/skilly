@@ -23,8 +23,12 @@
 // route on its own and keeps the output in its disk cache, so the full sweep is now far cheaper.
 // E2E_WARM=core is pages plus CORE_API (below), the routes almost every spec meets: on the CI agent
 // a cold compile took 10–37 s and held up every request behind it, which pages-only could not
-// absorb. ci/e2e-shard.sh sets core for every Jenkins run, during which a fully warmed webpack server
+// absorb. ci/e2e-run.sh sets core for every Jenkins run, during which a fully warmed webpack server
 // got OOM-killed.
+//
+// Worker users (SKILLY_SPEC.md §16 item 18): under E2E_WORKER_USERS=1 each Playwright worker signs
+// in as its own seeded user (fixtures.ts), so every one of them (1..E2E_WORKERS) gets the same
+// onboarded stamp, and its What's new marker pre-stamped at the running version, before any spec.
 //
 // Every scope also stamps the dev user onboarded. A fresh stack's dev user has never seen Quick
 // start, so the first-login gate (AppShell, §8) sends the first page that learns this to
@@ -43,9 +47,11 @@
 // The one fatal case is the server itself going away: a refused connection means nothing listens on
 // the port any more (on a shared CI agent, almost always the kernel's OOM killer), and Playwright
 // does not restart it — so stop here with that cause rather than run every spec into ECONNREFUSED.
-import { request, type FullConfig } from "@playwright/test";
+import { request, type APIRequestContext, type FullConfig } from "@playwright/test";
+import { APP_VERSION } from "@skilly/shared/version";
 import { readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { e2eWorkerOid } from "../src/lib/devAuth";
 
 // Every page route a spec navigates to. Keep in sync when a spec starts visiting a new route.
 const PAGES = [
@@ -263,23 +269,52 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   }
   const ctx = await request.newContext({ baseURL });
 
+  /** The dev credentials handshake fixtures.ts uses; `oid` omitted = the dev admin. */
+  const signIn = async (on: APIRequestContext, oid?: string) => {
+    const csrf = (await (await on.get("/api/auth/csrf")).json()) as { csrfToken: string };
+    return on.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true", ...(oid ? { oid } : {}) } });
+  };
+
   // Stamp onboarded (idempotent — never moves the date), then mark the "Read the Manual" badge it
   // awards read, so it does not toast over the first page of every spec. Best-effort: a spec that
   // depends on it fails with a real assertion if it did not take.
-  const markOnboarded = async () => {
+  const markOnboarded = async (on: APIRequestContext, who: string) => {
     try {
-      const res = await ctx.post("/api/me/onboarded", { timeout: 120_000 });
-      if (!res.ok()) return console.warn(`[e2e warm-up] marking the dev user onboarded answered ${res.status()}`);
-      const list = (await (await ctx.get("/api/notifications", { timeout: 120_000 })).json()) as {
+      const res = await on.post("/api/me/onboarded", { timeout: 120_000 });
+      if (!res.ok()) return console.warn(`[e2e warm-up] marking ${who} onboarded answered ${res.status()}`);
+      const list = (await (await on.get("/api/notifications", { timeout: 120_000 })).json()) as {
         items?: { id: string; type: string; readAt: string | null; payload?: { key?: string } }[];
       };
       const ids = (list.items ?? [])
         .filter((n) => n.type === "achievement.earned" && n.payload?.key === "onboarded" && !n.readAt)
         .map((n) => n.id);
-      if (ids.length) await ctx.post("/api/notifications/read", { data: { ids }, timeout: 120_000 });
-      log(`dev user onboarded${ids.length ? " (badge notification marked read)" : ""}`);
+      if (ids.length) await on.post("/api/notifications/read", { data: { ids }, timeout: 120_000 });
+      log(`${who} onboarded${ids.length ? " (badge notification marked read)" : ""}`);
     } catch (err) {
-      console.warn(`[e2e warm-up] marking the dev user onboarded failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[e2e warm-up] marking ${who} onboarded failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  // Each worker user, in its own cookie jar: sign in, stamp onboarded, pre-stamp What's new.
+  const prepareWorkerUsers = async () => {
+    if (process.env.E2E_WORKER_USERS !== "1") return;
+    const workers = Number(process.env.E2E_WORKERS ?? 1);
+    for (let n = 1; n <= workers; n++) {
+      const oid = e2eWorkerOid(n);
+      const on = await request.newContext({ baseURL });
+      try {
+        const res = await signIn(on, oid);
+        if (!res.ok()) {
+          console.warn(`[e2e warm-up] dev sign-in as ${oid} answered ${res.status()} — is db/seed.e2e.sql applied?`);
+          continue;
+        }
+        await markOnboarded(on, oid);
+        await on.post("/api/me/whats-new-seen", { data: { version: APP_VERSION }, timeout: 120_000 });
+      } catch (err) {
+        console.warn(`[e2e warm-up] preparing ${oid} failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        await on.dispose();
+      }
     }
   };
 
@@ -289,10 +324,9 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     // server that answers HTML instead of JSON (still booting, or broken) must not abort the run —
     // the specs will report that with a real assertion.
     try {
-      const csrf = (await (await ctx.get("/api/auth/csrf")).json()) as { csrfToken: string };
-      const signIn = await ctx.post("/api/auth/callback/dev", { form: { csrfToken: csrf.csrfToken, json: "true" } });
-      if (!signIn.ok()) console.warn(`[e2e warm-up] dev sign-in answered ${signIn.status()} — warming the signed-out shell only`);
-      else await markOnboarded();
+      const res = await signIn(ctx);
+      if (!res.ok()) console.warn(`[e2e warm-up] dev sign-in answered ${res.status()} — warming the signed-out shell only`);
+      else await markOnboarded(ctx, "dev user");
     } catch (err) {
       console.warn(`[e2e warm-up] dev sign-in failed (${err instanceof Error ? err.message : String(err)}) — warming the signed-out shell only`);
     }
@@ -334,6 +368,8 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     // ~10 minutes on the mirror stack and saturated the dev server (`/api/auth/session` at 22s)
     // for the specs that followed — all to pre-pay a client-chunk compile the first spec pays
     // once, at ~40s. HTTP compiles the server side of every route; that is the part worth buying.
+
+    await prepareWorkerUsers();
 
     log(`done in ${Math.round((Date.now() - started) / 1000)}s`);
   } finally {

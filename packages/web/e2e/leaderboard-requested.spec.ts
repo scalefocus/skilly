@@ -14,7 +14,7 @@
 // cache on every page load, so without it the request created in beforeEach is invisible to the
 // UI's Requested sort until the TTL lapses - a read-your-writes race that surfaced once the suite
 // got fast enough to run two page loads inside one TTL window.
-import { test, expect, devSignIn, type Page } from "./fixtures";
+import { test, expect, devSignIn, signedInDisplayName, type Page } from "./fixtures";
 import { NAV_TIMEOUT, clickAndAwait, gotoLoaded, gotoReady, probe } from "./helpers/ready";
 
 const escapeRx = (s: string) => new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -78,11 +78,11 @@ test.describe("leaderboard: skills requested (§21/§26)", () => {
 
   test("the Requested-by view banners the requester, shows the state pill, and clears", async ({ page }) => {
     // The same URL another viewer would use for this person.
-    await gotoReady(page, `/requests?requester=${userId}&by=${encodeURIComponent("Dev Admin")}`);
+    await gotoReady(page, `/requests?requester=${userId}&by=${encodeURIComponent(signedInDisplayName())}`);
     const banner = page.locator(".requested-by-banner");
     await expect(banner).toBeVisible({ timeout: 20_000 });
     await expect(banner).toContainText("Requested by");
-    await expect(banner).toContainText("Dev Admin");
+    await expect(banner).toContainText(signedInDisplayName());
     // Mine and the admin state selector hide inside the view.
     await expect(page.getByRole("button", { name: /Mine/ })).toHaveCount(0);
     await expect(page.getByRole("group", { name: "Request state" })).toHaveCount(0);
