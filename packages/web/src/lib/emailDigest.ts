@@ -15,6 +15,7 @@ import {
 } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { invalidatePlatformSettings } from "./settings";
 
 /** The five §48.2 keys, defaults applied. */
 export async function getDigestSettings(db: Pool = pool): Promise<DigestSettings> {
@@ -109,5 +110,6 @@ export async function updateDigestSettings(
       after: { [FIELDS[k]]: after },
     });
   }
+  invalidatePlatformSettings();
   return { ok: true };
 }

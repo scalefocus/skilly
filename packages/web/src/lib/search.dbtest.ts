@@ -19,6 +19,7 @@ import {
   SearchAdminError,
 } from "./searchAdmin";
 import { pool } from "./db";
+import { invalidatePlatformSettings } from "./settings";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
 const NS = "fts-dbtest";
@@ -63,6 +64,7 @@ async function setLanguage(value: unknown): Promise<void> {
       [JSON.stringify(value), adminUserId],
     );
   }
+  invalidatePlatformSettings();
   // What the worker's reindex job does (§34.9), scoped to the fixture + the synonym groups.
   await pool.query(`update skills set search_lang = null where namespace_id = $1`, [nsId]);
   await pool.query(`update search_synonym_groups set terms = terms where normalized_lang is distinct from skilly_search_config()::text`);

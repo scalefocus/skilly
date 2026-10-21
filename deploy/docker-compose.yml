@@ -145,6 +145,8 @@ services:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://skilly_app:${SKILLY_APP_PASSWORD}@postgres:5432/${POSTGRES_DB:-skilly}
+      # Connection-pool size for this replica (lib/db.ts default 25); see .env.example.
+      PG_POOL_MAX: ${WEB_PG_POOL_MAX:-25}
       NEXTAUTH_URL: ${PUBLIC_BASE_URL}
       # Internal URL for server-to-server NextAuth calls — avoids routing back through
       # the org proxy for session/token operations that stay within the Docker network.

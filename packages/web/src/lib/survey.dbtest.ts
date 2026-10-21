@@ -32,7 +32,7 @@ import {
   submitSurvey,
 } from "./survey";
 import { eraseUser } from "./eraseUser";
-import { getPlatformSettings, setBugReportsEnabled } from "./settings";
+import { getPlatformSettings, invalidatePlatformSettings, setBugReportsEnabled } from "./settings";
 import { APP_VERSION } from "@skilly/shared/version";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
@@ -90,11 +90,13 @@ async function withSurveySwitch<T>(on: boolean, fn: () => Promise<T>, key = "sur
      on conflict (key) do update set value = excluded.value`,
     [key, JSON.stringify(on)],
   );
+  invalidatePlatformSettings();
   try {
     return await fn();
   } finally {
     if (prev === undefined) await pool.query(`delete from platform_settings where key = $1`, [key]);
     else await pool.query(`update platform_settings set value = $1::jsonb where key = $2`, [JSON.stringify(prev), key]);
+    invalidatePlatformSettings();
   }
 }
 

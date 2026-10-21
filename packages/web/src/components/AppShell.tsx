@@ -3,10 +3,11 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
+import nextDynamic from "next/dynamic";
 import { useSession, signIn, signOut } from "next-auth/react";
 // Subpath import: client-safe pure constant (the root barrel pulls node:crypto).
 import { APP_VERSION } from "@skilly/shared/version";
-import { whatsNewAction, selectWhatsNewExcerpt } from "@skilly/shared/whats-new";
+import { whatsNewAction } from "@skilly/shared/whats-new";
 import { ThemeToggle } from "./ThemeToggle";
 import { MessagesMenu } from "./MessagesMenu";
 import { UserBubble } from "./UserBubble";
@@ -15,12 +16,15 @@ import { PageLabelOverrideProvider } from "./PageLabelOverride";
 import { SkillIcon } from "./SkillIcon";
 import { RumCollector, markRumNavIntent } from "./RumCollector";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
-import { CHANGELOG } from "../app/whats-new/changelog";
 import { achievementDef } from "@skilly/shared/achievements";
 import { collectionPath } from "@skilly/shared/collections";
 import { bugButtonAction, bugButtonVisible, bugCardBlock, colophonFeedbackAction, type BugCardBlock, type SurveyOfferView, type SurveyVia } from "@skilly/shared/survey";
 import { SurveyCard, type NeedOfferResult } from "./SurveyCard";
 import { SURVEY_OFFER_EVENT, SURVEY_PREF_EVENT, SURVEY_REOPEN_EVENT, SURVEY_START_EVENT, SURVEY_STATE_EVENT, setSurveyCanShow, setSurveyReady } from "../lib/surveyClient";
+
+// The What's-new card pulls in the whole changelog, so it is its own chunk, fetched only when a
+// notice is actually due — not shipped with the shell on every page.
+const UpdateNotice = nextDynamic(() => import("./UpdateNotice").then((m) => m.UpdateNotice), { ssr: false });
 
 const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "review" | "requests" }[] = [
   { href: "/", label: "Overview", icon: "M3 12 12 4l9 8M5 10v9h14v-9" },
@@ -221,9 +225,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [pathname, liveFilter]);
 
   // Live-filter → URL: debounce the typed query into ?q=, merging with any other params on the
-  // current path so they aren't clobbered (the catalog's category/tool/etc.). router.replace keeps
+  // current path so they aren't clobbered (the catalog's category/tool/etc.). history.replaceState keeps
   // it out of history (like adjusting any other filter) and targets the current pathname so it works
-  // on every live-filter page. The char floor differs by page: the installed list filters
+  // on every live-filter page. Unlike router.replace it costs no server round trip per keystroke:
+  // Next syncs useSearchParams with the history API, and every live-filter page reads ?q= that way. The char floor differs by page: the installed list filters
   // client-side over an already-loaded set, so it engages from the 1st char (§23); the catalog,
   // usage, and Requested skills query the server at 2+ chars. Below the floor the q filter clears
   // (full list).
@@ -239,10 +244,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (next) sp.set("q", next);
       else sp.delete("q");
       const qs = sp.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname);
+      window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
     }, 250);
     return () => clearTimeout(t);
-  }, [q, liveFilter, peopleMode, onInstalled, onMarketplaceDir, pathname, router]);
+  }, [q, liveFilter, peopleMode, onInstalled, onMarketplaceDir, pathname]);
 
   // Ctrl/Cmd+K focuses the registry search (only while signed in, since the box only
   // exists then). The kbd hint next to the box advertises the shortcut.
@@ -706,7 +711,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Clear the header search in one action — the ✕ button and the Escape key both call this. Empties
   // the box, closes any open typeahead dropdown (and drops the "Nothing found" bubble by emptying the
   // query), and on a live-filter page (catalog/installed/usage/requests) drops ?q= IMMEDIATELY via
-  // router.replace — not waiting for the ~250ms live-filter debounce — so the full unfiltered list
+  // history.replaceState — not waiting for the ~250ms live-filter debounce — so the full unfiltered list
   // snaps back at once. Keeps keyboard focus in the box, ready to retype (never blurs or navigates).
   const clearSearch = () => {
     setQ("");
@@ -719,7 +724,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (sp.has("q")) {
         sp.delete("q");
         const qs = sp.toString();
-        router.replace(qs ? `${pathname}?${qs}` : pathname);
+        window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
       }
     }
     searchRef.current?.focus();
@@ -1255,65 +1260,6 @@ function stampWhatsNewSeen(): void {
   })
     .catch(() => null)
     .then(() => invalidateApi("/api/me"));
-}
-
-/** The floating "What's new in X" card (§23). Polite live region: it announces itself but never
- *  steals focus; the ✕ is a real button reached by Tab. Excerpt = changelog lines newer than the
- *  user's marker (cap 3, overflow folded into the link); a null marker shows only the running
- *  version's line. The card is height-capped (60vh, CSS) and the excerpt list is its only scrolling
- *  child: when the list actually overflows (measured, re-checked on resize) it gets a Tab stop and
- *  a name so keyboard users can scroll it; a list that fits has no Tab stop. */
-function UpdateNotice({ since, hidden, onClose, onFollow }: { since: string | null; hidden: boolean; onClose: () => void; onFollow: () => void }) {
-  const { entries, overflow } = selectWhatsNewExcerpt(CHANGELOG, since, APP_VERSION);
-  const listRef = useRef<HTMLUListElement>(null);
-  const [listOverflows, setListOverflows] = useState(false);
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const measure = () => setListOverflows(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", measure);
-      return () => window.removeEventListener("resize", measure);
-    }
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [hidden, entries.length]);
-  return (
-    <div className={`update-notice${hidden ? " update-notice-hidden" : ""}`} role="status" data-testid="whats-new-notice">
-      <div className="update-notice-head">
-        <h2 className="update-notice-title">
-          What&rsquo;s new in <span className="chip chip-accent mono">v{APP_VERSION}</span>
-        </h2>
-        <button type="button" className="update-notice-close" aria-label="Dismiss" onClick={onClose}>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-            <path d="M2 2l10 10M12 2L2 12" />
-          </svg>
-        </button>
-      </div>
-      {entries.length > 0 && (
-        <ul
-          ref={listRef}
-          className="update-notice-list"
-          data-testid="whats-new-notice-excerpt"
-          tabIndex={listOverflows ? 0 : undefined}
-          aria-label={listOverflows ? "Release notes" : undefined}
-        >
-          {entries.map((e) => (
-            <li key={e.version}>{e.summary}</li>
-          ))}
-        </ul>
-      )}
-      <Link
-        href={since ? `/whats-new?since=${encodeURIComponent(since)}` : "/whats-new"}
-        className="update-notice-link"
-        onClick={onFollow}
-      >
-        See what&rsquo;s new{overflow > 0 ? ` (+${overflow} more)` : ""}
-      </Link>
-    </div>
-  );
 }
 
 /** The survey card on screen (§36.4, §36.17). */

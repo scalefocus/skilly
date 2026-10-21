@@ -15,6 +15,7 @@ import { awardAchievement, getAchievements, setUserTimeZone, isOriginalProposer,
 import { getLevelMapFor } from "./levels";
 import { eraseUser } from "./eraseUser";
 import { pool } from "./db";
+import { invalidatePlatformSettings } from "./settings";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
 
@@ -51,6 +52,7 @@ test("achievements: idempotent awards, Habits by stored zone, combo, backfill + 
   const sofia = await mkUser("ach-sofia", "Europe/Sofia");
   const nozone = await mkUser("ach-nozone", null);
   await pool.query(`delete from platform_settings where key = 'achievements_enabled'`);
+  invalidatePlatformSettings();
   try {
     // Saturday 03:00 local ⇒ the badge itself plus both Habits badges, one notification each.
     const first = await awardAchievement(pool, sofia, "first_watch", { at: SAT_NIGHT_SOFIA });
@@ -83,10 +85,12 @@ test("achievements: idempotent awards, Habits by stored zone, combo, backfill + 
 
     // Platform toggle off: awards keep recording, notifications stop (dormant-not-destructive).
     await pool.query(`insert into platform_settings (key, value) values ('achievements_enabled', 'false'::jsonb) on conflict (key) do update set value = excluded.value`);
+    invalidatePlatformSettings();
     assert.deepEqual(await awardAchievement(pool, nozone, "onboarded"), ["onboarded"]);
     assert.equal(await notifCount(nozone), 5);
     assert.equal(await achievementCountForCard(nozone), null); // the hover-card line hides while off
     await pool.query(`delete from platform_settings where key = 'achievements_enabled'`);
+  invalidatePlatformSettings();
     assert.equal(await achievementCountForCard(nozone), 7);
 
     // An unknown key is a programming error, never a silent row.
@@ -100,6 +104,7 @@ test("achievements: idempotent awards, Habits by stored zone, combo, backfill + 
     assert.equal(payload.name, "Stalker, but Nicely");
   } finally {
     await pool.query(`delete from platform_settings where key = 'achievements_enabled'`);
+  invalidatePlatformSettings();
   }
 });
 
@@ -258,6 +263,7 @@ test("levels: hero_at is stamped once at full house, and never cleared or moved 
 test("levels: the notification carries the level the badge moved you to", { skip: !enabled }, async () => {
   const u = await mkUser("lvl-notify", null);
   await pool.query(`delete from platform_settings where key = 'achievements_enabled'`);
+  invalidatePlatformSettings();
   await awardAchievement(pool, u, "first_watch");
   await awardAchievement(pool, u, "first_rating");
   const payloads = (await pool.query<{ payload: { key: string; level: number; total: number; hero: boolean } }>(
