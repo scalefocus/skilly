@@ -128,10 +128,13 @@ export default defineConfig({
     // the board through the UI would see a board computed before its own fixture for up to 60s.
     // INSTALL_TOKEN_ENC_KEY: a TEST-ONLY key so minted installs keep a recoverable copy and the §23
     // "Show install URL" step of already-installed.spec.ts runs (the caller's own key wins if set).
+    // AI_ALLOW_PRIVATE_BASE_URL=1: the AI specs' stub provider listens on 127.0.0.1, which the
+    // §49.11 egress guard refuses otherwise (ci/e2e-run.sh sets it for the server it starts).
     env: {
       SKILLY_E2E_DEV_SERVER: "1",
       LEADERBOARD_CACHE_TTL_MS: "0",
       INSTALL_TOKEN_ENC_KEY: process.env.INSTALL_TOKEN_ENC_KEY ?? "c2tpbGx5LWUyZS1pbnN0YWxsLXRva2VuLWtleS0zMmI=",
+      AI_ALLOW_PRIVATE_BASE_URL: "1",
       NODE_OPTIONS: devServerNodeOptions,
     },
     url: baseURL,

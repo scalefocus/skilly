@@ -114,7 +114,7 @@ test.describe("MCP connect flow (§29)", () => {
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
   });
 
-  test("a missing PKCE challenge is refused as a protocol error back to the client", async ({ page }) => {
+  test("a missing PKCE challenge renders the error page — it is never redirected to the client (§49.5)", async ({ page }) => {
     await devSignIn(page);
     const client = await registerClient(page, "No PKCE Client");
     const p = new URLSearchParams({
@@ -123,10 +123,16 @@ test.describe("MCP connect flow (§29)", () => {
       redirect_uri: REDIRECT,
       state: "s",
     });
-    // The redirect_uri IS verified here, so the error goes back to the client the normal way.
+    // The redirect_uri IS verified here, and the endpoint still does not redirect: an authorize
+    // endpoint that bounces a malformed request before consent is an open redirector for any
+    // self-registered client. The OAuth error code lands on the page instead (§49.5).
     const res = await page.request.get(`/oauth/authorize?${p.toString()}`, { maxRedirects: 0 });
-    expect([302, 303, 307]).toContain(res.status());
-    expect(res.headers().location).toContain("error=invalid_request");
+    expect(res.status()).toBe(200);
+    expect(res.headers().location).toBeUndefined();
+    const html = await res.text();
+    expect(html).toContain("PKCE is required");
+    expect(html).toContain("invalid_request");
+    expect(html).not.toContain("Approve");
   });
 
   test("approving mints a code and lists the connection; revoking removes it", async ({ page }) => {

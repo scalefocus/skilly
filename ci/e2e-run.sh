@@ -182,6 +182,9 @@ export INSTALL_TOKEN_ENC_KEY="${INSTALL_TOKEN_ENC_KEY:-c2tpbGx5LWUyZS1pbnN0YWxsL
 export DATABASE_URL="${CI_E2E_DATABASE_URL}"
 export NEXTAUTH_SECRET=ci-e2e-not-a-secret NEXTAUTH_URL="${E2E_WEB_URL}"
 export AI_TOKEN_ENC_KEY=YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
+# The AI specs stand up an Open WebUI-shaped stub provider on 127.0.0.1 inside the test process;
+# the §49.11 egress guard refuses a private/loopback base URL unless the operator opts in.
+export AI_ALLOW_PRIVATE_BASE_URL=1
 export SKILLY_REGISTRY_URL="${E2E_WEB_URL}" PLAYWRIGHT_BASE_URL="${E2E_WEB_URL}"
 export S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}" S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts
 echo "[e2e] web dev server on ${E2E_WEB_URL} (log: ${DEV_LOG})"
