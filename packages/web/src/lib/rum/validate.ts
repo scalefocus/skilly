@@ -12,6 +12,14 @@ export type RumKind = (typeof RUM_KINDS)[number];
 export const RUM_VITALS = ["lcp", "inp", "cls", "ttfb"] as const;
 export type RumVital = (typeof RUM_VITALS)[number];
 
+/** TTFB's attribution breakdown, sent as extra ms-valued vital samples beside `ttfb`: `ttfb_waiting`
+ *  is the time before the request could start (redirects such as the sign-in bounce, unload),
+ *  `ttfb_request` the server's own time to first byte. Stored raw only — the rum_daily rollup and
+ *  the rated vitals (bands, page cells) cover the four RUM_VITALS. */
+export const RUM_TTFB_PARTS = ["ttfb_waiting", "ttfb_request"] as const;
+export type RumTtfbPart = (typeof RUM_TTFB_PARTS)[number];
+const VITAL_NAMES: readonly string[] = [...RUM_VITALS, ...RUM_TTFB_PARTS];
+
 export const RUM_MAX_BATCH = 50;
 export const RUM_MAX_BODY_BYTES = 32 * 1024;
 /** Upper bound for every duration (ms): nav, api, and the ms-valued vitals. */
@@ -59,6 +67,13 @@ export type ParseResult = { ok: true; samples: RumSample[] } | { ok: false; reas
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const finiteNonNeg = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
 
+/** The TTFB breakdown samples for a web-vitals TTFB attribution: each finite, non-negative part,
+ *  clamped to the duration cap; parts the browser didn't report are left out. */
+export function ttfbParts(attribution: { waitingDuration?: number; requestDuration?: number } | undefined): [RumTtfbPart, number][] {
+  const parts: [RumTtfbPart, number | undefined][] = [["ttfb_waiting", attribution?.waitingDuration], ["ttfb_request", attribution?.requestDuration]];
+  return parts.filter((p): p is [RumTtfbPart, number] => finiteNonNeg(p[1])).map(([name, v]) => [name, Math.min(v, RUM_MAX_DURATION_MS)]);
+}
+
 /** Parse + validate a `POST /api/rum` body. Never throws. */
 export function parseRumBatch(body: unknown): ParseResult {
   if (!isObj(body) || !Array.isArray(body.samples)) return { ok: false, reason: "samples[] required" };
@@ -94,7 +109,7 @@ function validateSample(raw: unknown): { ok: true; sample: RumSample } | { ok: f
       return { ok: true, sample: { ...base, name: null, value: null } };
     }
     case "vital": {
-      if (typeof name !== "string" || !(RUM_VITALS as readonly string[]).includes(name)) return { ok: false, reason: "unknown vital" };
+      if (typeof name !== "string" || !VITAL_NAMES.includes(name)) return { ok: false, reason: "unknown vital" };
       if (!finiteNonNeg(value)) return { ok: false, reason: "vital value must be a finite number ≥ 0" };
       const cap = name === "cls" ? RUM_MAX_CLS : RUM_MAX_DURATION_MS;
       if (value > cap) return { ok: false, reason: `vital ${name} above ${cap}` };

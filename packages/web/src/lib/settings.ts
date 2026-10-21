@@ -30,6 +30,7 @@ import {
 } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { createTtlCache } from "./ttlCache";
 
 /** How timestamps are presented org-wide. EU = dd/mm/yyyy + 24h, US = mm/dd/yyyy + AM/PM.
  *  Storage is always UTC; the *style* and the viewer's timezone are display concerns. */
@@ -206,7 +207,24 @@ function digestFields(get: (key: string) => unknown): Pick<PlatformSettings, "em
   return { emailDigestsEnabled: d.enabled, emailDigestDefaultMode: d.defaultMode, emailDigestHour: d.hour, emailDigestWeekday: d.weekday, emailDigestTypes: d.types };
 }
 
+// Read on nearly every request (several times on some), so the default-pool read is cached briefly
+// per replica. Every writer in this process invalidates it; another replica sees a change within the TTL.
+const SETTINGS_TTL_MS = 5_000;
+const settingsCache = createTtlCache<PlatformSettings>(SETTINGS_TTL_MS);
+
+/** Drop the cached platform settings — call after any write to platform_settings. */
+export function invalidatePlatformSettings(): void {
+  settingsCache.clear();
+}
+
+/** The platform settings. A non-default `db` (tests) bypasses the cache. Each call returns its own
+ *  copy, so a caller mutating the arrays can't corrupt the cached value. */
 export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSettings> {
+  if (db !== pool) return loadPlatformSettings(db);
+  return structuredClone(await settingsCache.get("all", () => loadPlatformSettings(pool)));
+}
+
+async function loadPlatformSettings(db: Pool): Promise<PlatformSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(`select key, value from platform_settings`);
   const map = new Map(rows.map((r) => [r.key, r.value]));
   const open = map.get("proposals_open");
@@ -249,11 +267,14 @@ export async function getPlatformSettings(db: Pool = pool): Promise<PlatformSett
 export async function setAiDisplayName(raw: unknown, actorUserId: string): Promise<{ ok: true; displayName: string } | { ok: false; error: string }> {
   const v = validateAiDisplayName(raw);
   if (!v.ok) return v;
-  const before = (await getPlatformSettings()).aiDisplayName;
+  const before = (await loadPlatformSettings(pool)).aiDisplayName;
   const after = v.value || AI_DISPLAY_NAME_DEFAULT;
   if (before === after) return { ok: true, displayName: after };
   if (v.value) await writeSetting("ai_display_name", v.value, actorUserId);
-  else await pool.query(`delete from platform_settings where key = 'ai_display_name'`);
+  else {
+    await pool.query(`delete from platform_settings where key = 'ai_display_name'`);
+    invalidatePlatformSettings();
+  }
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -275,12 +296,7 @@ export async function getRumSettings(db: Pool = pool): Promise<{ enabled: boolea
  *  the normalised ascending set and returns it. Throws (→ 400 at the API) on invalid input. */
 export async function setRumFlushIntervals(input: string | number[], actorUserId: string): Promise<number[]> {
   const intervals = parseRumFlushIntervals(input); // throws on invalid input
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('rum_flush_intervals', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(intervals), actorUserId],
-  );
+  await writeSetting("rum_flush_intervals", intervals, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -293,12 +309,7 @@ export async function setRumFlushIntervals(input: string | number[], actorUserId
 
 /** §32.6 RUM on/off. OFF: the collector stops within a minute, ingest discards, history stays visible. */
 export async function setRumEnabled(enabled: boolean, actorUserId: string): Promise<void> {
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('rum_enabled', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(enabled), actorUserId],
-  );
+  await writeSetting("rum_enabled", enabled, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -312,12 +323,7 @@ export async function setRumEnabled(enabled: boolean, actorUserId: string): Prom
 export async function setRumSampleRate(rate: unknown, actorUserId: string): Promise<void> {
   const n = typeof rate === "string" ? Number(rate) : rate;
   if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > 100) throw new Error("sample rate must be a whole number from 1 to 100");
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('rum_sample_rate', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(n), actorUserId],
-  );
+  await writeSetting("rum_sample_rate", n, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -368,12 +374,7 @@ export async function getAchievementsEnabled(db: Pool = pool): Promise<boolean> 
  * Audited as a setting like every other toggle.
  */
 export async function setAchievementsEnabled(enabled: boolean, actorUserId: string): Promise<void> {
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('achievements_enabled', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(enabled), actorUserId],
-  );
+  await writeSetting("achievements_enabled", enabled, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -405,6 +406,7 @@ async function writeSetting(key: string, value: unknown, actorUserId: string): P
      on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
     [key, JSON.stringify(value), actorUserId],
   );
+  invalidatePlatformSettings();
 }
 
 /**
@@ -427,6 +429,7 @@ export async function setMarketplacePublicEnabled(enabled: boolean, actorUserId:
     // The repo is gone, so the freshness stamp goes too — "not synced yet" until the sweep
     // rebuilds it after a re-enable (§30.5, §30.6 Page 3).
     await pool.query(`delete from platform_settings where key = 'marketplace_public_synced_at'`);
+    invalidatePlatformSettings();
   }
   await appendAudit(pool, {
     actorUserId,
@@ -629,12 +632,7 @@ export async function markNavSeen(userId: string, surface: NavSurface): Promise<
 }
 
 export async function setDateFormat(format: DateFormat, actorUserId: string): Promise<void> {
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('date_format', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(format), actorUserId],
-  );
+  await writeSetting("date_format", format, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -646,12 +644,7 @@ export async function setDateFormat(format: DateFormat, actorUserId: string): Pr
 
 export async function setMaxBundleBytes(bytes: number, actorUserId: string): Promise<void> {
   if (!(BUNDLE_SIZE_OPTIONS as readonly number[]).includes(bytes)) throw new Error("invalid bundle size");
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('max_bundle_bytes', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(bytes), actorUserId],
-  );
+  await writeSetting("max_bundle_bytes", bytes, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -665,12 +658,7 @@ export async function setMaxBundleBytes(bytes: number, actorUserId: string): Pro
  *  invalid input (surfaced by the admin save); stores bytes. Audited. §6. */
 export async function setUploadChunkMb(mbInput: unknown, actorUserId: string): Promise<number> {
   const bytes = parseUploadChunkMb(mbInput); // throws on invalid input
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('upload_chunk_bytes', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(bytes), actorUserId],
-  );
+  await writeSetting("upload_chunk_bytes", bytes, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -685,12 +673,7 @@ export async function setInstallMaxTtlMonths(months: number, actorUserId: string
   if (!Number.isInteger(months) || months < INSTALL_TTL_MONTHS_MIN || months > INSTALL_TTL_MONTHS_MAX) {
     throw new Error(`install URL expiry must be a whole number of months between ${INSTALL_TTL_MONTHS_MIN} and ${INSTALL_TTL_MONTHS_MAX}`);
   }
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('install_max_ttl_months', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(months), actorUserId],
-  );
+  await writeSetting("install_max_ttl_months", months, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -704,12 +687,7 @@ export async function setInstallMaxTtlMonths(months: number, actorUserId: string
  *  it never evicts skills already Featured — it only blocks new spotlights until the count drops. */
 export async function setMaxFeaturedSkills(count: number, actorUserId: string): Promise<void> {
   assertMaxFeatured(count); // throws on out-of-range / non-integer
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('max_featured_skills', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(count), actorUserId],
-  );
+  await writeSetting("max_featured_skills", count, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -720,12 +698,7 @@ export async function setMaxFeaturedSkills(count: number, actorUserId: string): 
 }
 
 export async function setDuplicateEnforcement(mode: DuplicateEnforcement, actorUserId: string): Promise<void> {
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('duplicate_proposal_enforcement', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(mode), actorUserId],
-  );
+  await writeSetting("duplicate_proposal_enforcement", mode, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -737,12 +710,7 @@ export async function setDuplicateEnforcement(mode: DuplicateEnforcement, actorU
 
 export async function setChatPollIntervals(input: string | number[], actorUserId: string): Promise<number[]> {
   const intervals = parseChatPollIntervals(input); // throws on invalid input
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('chat_poll_intervals', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(intervals), actorUserId],
-  );
+  await writeSetting("chat_poll_intervals", intervals, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -789,6 +757,7 @@ export async function requestRelatedRebuild(actorUserId: string): Promise<void> 
      on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
     [actorUserId],
   );
+  invalidatePlatformSettings();
   await appendAudit(pool, {
     actorUserId,
     action: "job.related_rebuild_requested",
@@ -838,12 +807,7 @@ export async function setSystemBanner(message: string, durationHours: number, ac
   }
   const expiresAt = new Date(Date.now() + durationHours * 3_600_000).toISOString();
   const value: SystemBanner = { message: trimmed, expiresAt };
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('system_banner', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(value), actorUserId],
-  );
+  await writeSetting("system_banner", value, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "system_banner.set",
@@ -860,6 +824,7 @@ export async function clearSystemBanner(actorUserId: string): Promise<void> {
   const { rows } = await pool.query<{ value: unknown }>(
     `delete from platform_settings where key = 'system_banner' returning value`,
   );
+  invalidatePlatformSettings();
   await appendAudit(pool, {
     actorUserId,
     action: "system_banner.cleared",
@@ -870,12 +835,7 @@ export async function clearSystemBanner(actorUserId: string): Promise<void> {
 }
 
 export async function setProposalsOpen(open: boolean, actorUserId: string): Promise<void> {
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('proposals_open', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(open), actorUserId],
-  );
+  await writeSetting("proposals_open", open, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -892,12 +852,7 @@ export async function setProposalsOpen(open: boolean, actorUserId: string): Prom
  * because "who turned the agent surface off, and when" is a governance question.
  */
 export async function setMcpEnabled(enabled: boolean, actorUserId: string): Promise<void> {
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('mcp_enabled', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(enabled), actorUserId],
-  );
+  await writeSetting("mcp_enabled", enabled, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -910,12 +865,7 @@ export async function setMcpEnabled(enabled: boolean, actorUserId: string): Prom
 /** §29 access-token lifetime (minutes). Throws a showable message on an out-of-range value. */
 export async function setMcpAccessTtlMinutes(minutes: unknown, actorUserId: string): Promise<number> {
   const v = assertMcpAccessTtlMinutes(minutes);
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('mcp_access_token_ttl_minutes', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(v), actorUserId],
-  );
+  await writeSetting("mcp_access_token_ttl_minutes", v, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -929,12 +879,7 @@ export async function setMcpAccessTtlMinutes(minutes: unknown, actorUserId: stri
 /** §29 refresh-token idle lifetime (days). */
 export async function setMcpRefreshTtlDays(days: unknown, actorUserId: string): Promise<number> {
   const v = assertMcpRefreshTtlDays(days);
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('mcp_refresh_token_ttl_days', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(v), actorUserId],
-  );
+  await writeSetting("mcp_refresh_token_ttl_days", v, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -948,12 +893,7 @@ export async function setMcpRefreshTtlDays(days: unknown, actorUserId: string): 
 /** §29 cap on a base64 hosted bundle sent inline in an MCP tool call (decoded bytes). */
 export async function setMcpMaxInlineUploadBytes(bytes: unknown, actorUserId: string): Promise<number> {
   const v = assertMcpInlineUploadBytes(bytes);
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('mcp_max_inline_upload_bytes', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(v), actorUserId],
-  );
+  await writeSetting("mcp_max_inline_upload_bytes", v, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",
@@ -967,12 +907,7 @@ export async function setMcpMaxInlineUploadBytes(bytes: unknown, actorUserId: st
 /** §29 cap on a single SKILL.md / bundle-file read over MCP (bytes). */
 export async function setMcpMaxResourceBytes(bytes: unknown, actorUserId: string): Promise<number> {
   const v = assertMcpResourceBytes(bytes);
-  await pool.query(
-    `insert into platform_settings (key, value, updated_by, updated_at)
-     values ('mcp_max_resource_bytes', $1::jsonb, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-    [JSON.stringify(v), actorUserId],
-  );
+  await writeSetting("mcp_max_resource_bytes", v, actorUserId);
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",

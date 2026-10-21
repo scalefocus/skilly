@@ -12,6 +12,7 @@ export function qualitySummary(score: number | null | undefined, mode: QualityMo
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
 import { hypeCardStats, topHypedSkillIds, type HypeCardStat } from "./hype";
+import type { GrantView } from "./grants";
 
 /** The `icon` shape every catalog/detail/suggest payload exposes (§33). */
 export interface SkillIconView { url: string | null; emoji: string | null }
@@ -735,10 +736,11 @@ export interface SkillVersionView {
   whatChanged: string | null;
 }
 
-export async function listVersions(skillId: string): Promise<SkillVersionView[]> {
-  const { rows } = await pool.query<{ semver: string; is_prerelease: boolean; status: "active" | "yanked" | "quarantined"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string; what_changed: string | null; quarantine_rules: string[] | null }>(
-    `select sv.semver, sv.is_prerelease, sv.status, sv.created_at, sv.git_published,
-            sv.artifact_filename, sv.external_ref, sv.what_changed, s.tool_harness,
+type VersionRow = { semver: string; is_prerelease: boolean; status: "active" | "yanked" | "quarantined"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string; what_changed: string | null; usage_examples: string | null; quarantine_rules: string[] | null };
+
+// Every version of one skill ($1), newest first — shared by listVersions and skillDetailCore.
+const VERSION_ROWS_SQL = `select sv.semver, sv.is_prerelease, sv.status, sv.created_at, sv.git_published,
+            sv.artifact_filename, sv.external_ref, sv.what_changed, sv.usage_examples, s.tool_harness,
             case when sv.status = 'quarantined' then (
               select array_agg(distinct f->>'rule')
                 from scan_reports r, jsonb_array_elements(r.findings) f
@@ -746,10 +748,10 @@ export async function listVersions(skillId: string): Promise<SkillVersionView[]>
                  and r.created_at = (select max(created_at) from scan_reports where subject_type = 'artifact' and subject_id = sv.artifact_object_key)
             ) end as quarantine_rules
        from skill_versions sv join skills s on s.id = sv.skill_id
-      where sv.skill_id = $1 order by sv.created_at desc`,
-    [skillId],
-  );
-  return rows.map((r) => ({
+      where sv.skill_id = $1 order by sv.created_at desc`;
+
+function versionView(r: VersionRow): SkillVersionView {
+  return {
     semver: r.semver,
     channel: r.is_prerelease ? "beta" : "stable",
     status: r.status,
@@ -758,7 +760,68 @@ export async function listVersions(skillId: string): Promise<SkillVersionView[]>
     gitPublished: r.git_published,
     downloadExt: resolveDownloadExt({ artifactFilename: r.artifact_filename, isPointer: !!r.external_ref, toolHarness: r.tool_harness }),
     whatChanged: r.what_changed,
-  }));
+  };
+}
+
+export async function listVersions(skillId: string): Promise<SkillVersionView[]> {
+  const { rows } = await pool.query<VersionRow>(VERSION_ROWS_SQL, [skillId]);
+  return rows.map(versionView);
+}
+
+/** The skill detail page's cheap per-skill reads in two statements instead of eight — the same
+ *  values as listVersions, latestStableSemver, latestVersionUsage, watcherCount, isWatching,
+ *  skillDiscussionCount, listGrants (only when `includeGrants`) and isExplicitMaintainer. */
+export interface SkillDetailCore {
+  versions: SkillVersionView[];
+  latest: string | null;
+  usageExamples: string | null;
+  watching: boolean;
+  watchers: number;
+  discussionCount: number;
+  grants: GrantView[];
+  explicitMaintainer: boolean;
+}
+
+export async function skillDetailCore(skillId: string, userId: string | null, includeGrants: boolean): Promise<SkillDetailCore> {
+  const [versionRows, scalarRows] = await Promise.all([
+    pool.query<VersionRow>(VERSION_ROWS_SQL, [skillId]),
+    // One row of scalars, repeated per grant row (left join keeps it when there are none).
+    pool.query<{ watchers: string; watching: boolean; discussion_count: string; explicit_maintainer: boolean; namespace_id: string | null; slug: string; display_name: string; granted_at: string; granted_by_name: string | null }>(
+      `select sc.watchers, sc.watching, sc.discussion_count, sc.explicit_maintainer,
+              g.namespace_id, g.slug, g.display_name, g.granted_at, g.granted_by_name
+         from (select (select count(*) from skill_watches where skill_id = $1::uuid)::text as watchers,
+                      exists (select 1 from skill_watches where skill_id = $1::uuid and user_id = $2::uuid) as watching,
+                      (select count(*) from messages m
+                         join conversations c on c.id = m.conversation_id
+                        where c.subject_type = 'skill' and c.subject_id = $1::uuid and m.removed_at is null)::text as discussion_count,
+                      exists (select 1 from skill_maintainers where skill_id = $1::uuid and user_id = $2::uuid) as explicit_maintainer) sc
+         left join lateral (
+           select g.namespace_id, n.slug, n.display_name, g.granted_at,
+                  coalesce(nullif(u.display_name, ''), u.email) as granted_by_name
+             from skill_namespace_grants g
+             join namespaces n on n.id = g.namespace_id
+             left join users u on u.id = g.granted_by
+            where g.skill_id = $1::uuid and $3::boolean
+         ) g on true
+        order by lower(g.display_name), g.slug`,
+      [skillId, userId, includeGrants],
+    ),
+  ]);
+  const active = versionRows.rows.filter((r) => r.status === "active");
+  const latest = resolveLatest(active.map((r) => r.semver));
+  const s = scalarRows.rows[0]!;
+  return {
+    versions: versionRows.rows.map(versionView),
+    latest,
+    usageExamples: active.find((r) => r.semver === latest)?.usage_examples ?? null,
+    watching: s.watching,
+    watchers: Number(s.watchers),
+    discussionCount: Number(s.discussion_count),
+    grants: scalarRows.rows
+      .filter((r) => r.namespace_id !== null)
+      .map((r) => ({ namespaceId: r.namespace_id!, slug: r.slug, displayName: r.display_name, grantedAt: r.granted_at, grantedBy: r.granted_by_name })),
+    explicitMaintainer: s.explicit_maintainer,
+  };
 }
 
 export interface PointerSource {
