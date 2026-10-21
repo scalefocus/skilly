@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isKnownApiRoute, isKnownPageRoute, labelForRoute, RUM_API_ROUTES, RUM_PAGE_ROUTES, RUM_ROUTE_ALL, RUM_ROUTE_OTHER, templateForApiUrl, templateForPath } from "./routes";
-import { fingerprintFor, normalizeMessage, parseRumBatch, RUM_MAX_BATCH, RUM_MAX_CLS, RUM_MAX_DURATION_MS, RUM_MAX_MESSAGE, sanitizeFrame, scrubMessage } from "./validate";
+import { fingerprintFor, normalizeMessage, parseRumBatch, RUM_MAX_BATCH, RUM_MAX_CLS, RUM_MAX_DURATION_MS, RUM_MAX_MESSAGE, sanitizeFrame, scrubMessage, ttfbParts } from "./validate";
 import { p75, rumBucketFor, weightedMean } from "./math";
 import { bandFor, bandTone, formatMs } from "./bands";
 import { sortRouteRows } from "./sort";
@@ -116,6 +116,12 @@ test("parseRumBatch: per-kind rules", () => {
   assert.ok(!one({ kind: "vital", route: "/", name: "cls", value: RUM_MAX_CLS + 0.01 }));
   assert.ok(!one({ kind: "vital", route: "/", name: "lcp", value: Number.NaN }));
   assert.ok(!one({ kind: "vital", route: "/", name: "lcp", value: "12" }));
+  // the TTFB breakdown parts: ms-valued, same 60 s cap
+  assert.ok(one({ kind: "vital", route: "/", name: "ttfb_waiting", value: 0 }));
+  assert.ok(one({ kind: "vital", route: "/", name: "ttfb_request", value: RUM_MAX_DURATION_MS }));
+  assert.ok(!one({ kind: "vital", route: "/", name: "ttfb_request", value: RUM_MAX_DURATION_MS + 1 }));
+  assert.ok(!one({ kind: "vital", route: "/", name: "ttfb_request", value: -1 }));
+  assert.ok(!one({ kind: "vital", route: "/", name: "ttfb_dns", value: 1 }));
   // nav
   assert.ok(!one({ kind: "nav", route: "/", name: "x", value: 1 }));
   assert.ok(!one({ kind: "nav", route: "/", value: RUM_MAX_DURATION_MS + 1 }));
@@ -256,3 +262,14 @@ test("bandFor at the published thresholds", () => {
     assert.deepEqual(input.map((r) => r.label), before);
   });
 }
+
+test("ttfbParts: the breakdown samples the collector sends beside ttfb", () => {
+  assert.deepEqual(ttfbParts({ waitingDuration: 412.5, requestDuration: 88 }), [["ttfb_waiting", 412.5], ["ttfb_request", 88]]);
+  assert.deepEqual(ttfbParts({ waitingDuration: 0, requestDuration: RUM_MAX_DURATION_MS * 2 }), [["ttfb_waiting", 0], ["ttfb_request", RUM_MAX_DURATION_MS]]);
+  assert.deepEqual(ttfbParts({ waitingDuration: Number.NaN, requestDuration: -3 }), []);
+  assert.deepEqual(ttfbParts({ requestDuration: 5 }), [["ttfb_request", 5]]);
+  assert.deepEqual(ttfbParts(undefined), []);
+  // every part it produces passes the ingest validation
+  const samples = ttfbParts({ waitingDuration: 1, requestDuration: 2 }).map(([name, value]) => ({ kind: "vital", route: "/", name, value, sessionId: SID }));
+  assert.ok(parseRumBatch({ samples }).ok);
+});

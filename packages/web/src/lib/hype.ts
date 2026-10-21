@@ -36,7 +36,22 @@ type Db = Pool | PoolClient;
 
 // ── Settings (§50.8) ───────────────────────────────────────────────────────────────────────────
 
+// Read by the skill page, /api/me and every hype route, so the default-pool read is cached briefly
+// per replica; updateHypeSettings invalidates it. A non-default `db` (tests, a transaction) bypasses it.
+const HYPE_SETTINGS_TTL_MS = 5_000;
+const settingsCache = createTtlCache<HypeSettings>(HYPE_SETTINGS_TTL_MS);
+
+/** Drop the cached hype settings — call after any write to the hype keys. */
+export function invalidateHypeSettings(): void {
+  settingsCache.clear();
+}
+
 export async function getHypeSettings(db: Db = pool): Promise<HypeSettings> {
+  if (db !== pool) return loadHypeSettings(db);
+  return { ...(await settingsCache.get("all", () => loadHypeSettings(pool))) };
+}
+
+async function loadHypeSettings(db: Db): Promise<HypeSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(
     `select key, value from platform_settings where key = any($1::text[])`,
     [Object.values(HYPE_SETTING_KEYS)],
@@ -65,7 +80,7 @@ export async function updateHypeSettings(
     if (e instanceof HypeSettingError) return { ok: false, status: 422, error: e.message };
     throw e;
   }
-  const before = await getHypeSettings(db);
+  const before = await loadHypeSettings(db);
   for (const k of Object.keys(next) as (keyof HypeSettings)[]) {
     const after = next[k]!;
     if (after === before[k]) continue;
@@ -85,6 +100,7 @@ export async function updateHypeSettings(
       after: { [key]: after },
     });
   }
+  invalidateHypeSettings();
   invalidateHypeBoard();
   return { ok: true, settings: await getHypeSettings(db) };
 }

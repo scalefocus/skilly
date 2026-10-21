@@ -70,6 +70,11 @@ export async function canManageMaintainers(access: EffectiveAccess, skill: Maint
   return (rowCount ?? 0) > 0;
 }
 
+/** canManageMaintainers for a caller that already knows whether the actor is an explicit maintainer. */
+export function managesMaintainers(access: EffectiveAccess, namespaceId: string, explicitMaintainer: boolean): boolean {
+  return access.isPlatformAdmin || access.namespaceRoles.get(namespaceId) === "namespace_admin" || explicitMaintainer;
+}
+
 /** Who may remove a maintainer (SKILLY_SPEC.md §19): anyone who can manage the list — a platform
  *  admin, the namespace's admin, or one of the skill's own maintainers — may remove any *explicit*
  *  maintainer; self-removal is always allowed. (Implicit ns-admin entries aren't in the explicit

@@ -21,7 +21,7 @@ import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { onCLS, onINP, onLCP, onTTFB } from "web-vitals/attribution";
 import { templateForApiUrl, templateForPath } from "../lib/rum/routes";
-import { fingerprintFor, RUM_MAX_BATCH, RUM_MAX_CLS, RUM_MAX_DURATION_MS, RUM_MAX_MESSAGE, sanitizeFrame, scrubMessage, type RumSampleIn } from "../lib/rum/validate";
+import { fingerprintFor, RUM_MAX_BATCH, RUM_MAX_CLS, RUM_MAX_DURATION_MS, RUM_MAX_MESSAGE, sanitizeFrame, scrubMessage, ttfbParts, type RumSampleIn } from "../lib/rum/validate";
 import { DEFAULT_RUM_FLUSH_INTERVALS, RUM_FLAGS_REREAD_MS, clampIndex, delayMs, isValidFlushSet, nextIndex, snappedDelayMs } from "../lib/rum/ladder";
 import { cachedGet } from "./ui";
 
@@ -239,7 +239,12 @@ function installOnce(): void {
     // Web Vitals. LCP/TTFB are document-load metrics → the landing route. CLS/INP report every
     // change; each report is attributed to the route current when it happened (§32.1).
     onLCP((m) => push({ kind: "vital", route: landingRoute(), name: "lcp", value: Math.min(m.value, RUM_MAX_DURATION_MS) }));
-    onTTFB((m) => push({ kind: "vital", route: landingRoute(), name: "ttfb", value: Math.min(m.value, RUM_MAX_DURATION_MS) }));
+    onTTFB((m) => {
+      const route = landingRoute();
+      push({ kind: "vital", route, name: "ttfb", value: Math.min(m.value, RUM_MAX_DURATION_MS) });
+      // The breakdown separates redirect/wait time (e.g. the sign-in bounce) from server time.
+      for (const [name, v] of ttfbParts(m.attribution)) push({ kind: "vital", route, name, value: v });
+    });
     onCLS((m) => {
       if (m.delta > 0) push({ kind: "vital", route: currentRoute, name: "cls", value: Math.min(m.delta, RUM_MAX_CLS) });
     }, { reportAllChanges: true });

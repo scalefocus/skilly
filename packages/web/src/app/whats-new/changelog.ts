@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.4",
+    date: "2026-10-21",
+    summary:
+      "Faster pages: skill pages need far fewer database round trips, common settings are no longer re-read several times per request, every page downloads less code up front, and typing in the search box no longer asks the server for anything. Performance monitoring now also splits page response time into waiting (such as the sign-in redirect) and server time. Nothing changes in how Skilly looks or works.",
+  },
+  {
     version: "2.39.3",
     date: "2026-10-21",
     summary:

@@ -2,11 +2,9 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../lib/access";
-import { findSkill, listVersions, latestStableSemver, latestVersionUsage, pointerSource, skillFormDefaults, pendingMirrorStatus } from "../../../../../lib/catalog";
-import { isWatching, watcherCount } from "../../../../../lib/watch";
+import { findSkill, skillDetailCore, pointerSource, skillFormDefaults, pendingMirrorStatus } from "../../../../../lib/catalog";
 import { getRating } from "../../../../../lib/ratings";
-import { getEffectiveMaintainers, canManageMaintainers } from "../../../../../lib/maintainers";
-import { skillDiscussionCount } from "../../../../../lib/messages";
+import { getEffectiveMaintainers, canManageMaintainers, managesMaintainers } from "../../../../../lib/maintainers";
 import { logView } from "../../../../../lib/usage";
 import { withSystemLog } from "../../../../../lib/apiLog";
 import { skillContentRiskSummary } from "../../../../../lib/contentRisk";
@@ -14,7 +12,6 @@ import { skillPolicySummary } from "../../../../../lib/policy";
 import { skillQualityDetail, skillVersionQualities } from "../../../../../lib/quality";
 import { qualitySummary } from "../../../../../lib/catalog";
 import { aiDraftAvailability } from "../../../../../lib/qualityDraft";
-import { listGrants, isExplicitMaintainer } from "../../../../../lib/grants";
 import { deprecationDetail, listReplaces } from "../../../../../lib/deprecation";
 import { hypeDetail } from "../../../../../lib/hype";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, canShareSkill, seesViaGrantOnly, resolveLatest } from "@skilly/shared";
@@ -44,34 +41,29 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   // Record the view only for live consumption — not an owner inspecting an archived skill. §21.
   if (!archived && access.userId) logView(skill.id, skill.namespaceId, access.userId);
 
-  const [policy, versions0, latest, watching, watchers, rating, usageExamples, maintainers, pointer, meta, pendingMirror, discussionCount, contentRisk, isOwner, versionQuality, grants, explicitMaintainer, replaces] = await Promise.all([
+  const [policy, core, rating, maintainers, pointer, meta, pendingMirror, contentRisk, versionQuality, replaces] = await Promise.all([
     // §47.9: the displayed version's policy-check status for every viewer — never results.
     skillPolicySummary({ id: skill.id, namespaceId: skill.namespaceId }),
-    listVersions(skill.id),
-    latestStableSemver(skill.id),
-    access.userId ? isWatching(access.userId, skill.id) : Promise.resolve(false),
-    watcherCount(skill.id),
+    // Versions, latest, usage, watch state, discussion count, §42 shared-with list (chips + the
+    // propose form's new-version pre-fill) and the explicit-maintainer bit, in two statements.
+    skillDetailCore(skill.id, access.userId ?? null, skill.visibility === "namespace"),
     getRating(skill.id, access.userId ?? null),
-    latestVersionUsage(skill.id),
     getEffectiveMaintainers({ id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }),
     pointerSource(skill.id),
     skillFormDefaults(skill.id),
     pendingMirrorStatus(skill.id),
-    skillDiscussionCount(skill.id),
     // §37.7: the displayed version's content-check status for every viewer — never findings.
     skillContentRiskSummary(skill.id),
-    // §37.8: owners (maintainers, namespace admins, platform admins) also get the full card.
-    access.userId ? canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId) : Promise.resolve(false),
     // §41.7: each version's own stars for the Versions list.
     skillVersionQualities(skill.id),
-    // §42: the shared-with list (chips + the propose form's new-version pre-fill).
-    skill.visibility === "namespace" ? listGrants(skill.id) : Promise.resolve([]),
-    isExplicitMaintainer(skill.id, access.userId ?? null),
     // §45.5: "Replaces <ns>/<slug>" — the visible, active skills that name THIS one as successor.
     listReplaces(access, skill.id),
   ]);
+  const { latest, watching, watchers, usageExamples, discussionCount, grants, explicitMaintainer } = core;
+  // §37.8: owners (maintainers, namespace admins, platform admins) also get the full card.
+  const isOwner = access.userId ? managesMaintainers(access, skill.namespaceId, explicitMaintainer) : false;
   // §49.2: quarantined versions are visible to the skill's owners/admins only.
-  const versions = versions0.filter((v) => v.status !== "quarantined" || isOwner).map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
+  const versions = core.versions.filter((v) => v.status !== "quarantined" || isOwner).map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
   // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
   const qualityDetail0 = latest ? await skillQualityDetail(access, skill, latest) : null;
   // §44.2: whether this viewer may draft improvements with AI (hidden = available:false, reason:null).

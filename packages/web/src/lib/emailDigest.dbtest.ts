@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DIGEST_SETTING_KEYS } from "@skilly/shared";
 import { getDigestSettings, setUserEmailDigest, updateDigestSettings } from "./emailDigest";
-import { getPlatformSettings } from "./settings";
+import { getPlatformSettings, invalidatePlatformSettings } from "./settings";
 import { pool } from "./db";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
@@ -27,6 +27,7 @@ test("§48: email frequency choice + digest admin settings", { skip: !enabled },
   const saved = (await pool.query<{ key: string; value: unknown }>(`select key, value from platform_settings where key = any($1::text[])`, [keys])).rows;
   try {
     await pool.query(`delete from platform_settings where key = any($1::text[])`, [keys]);
+    invalidatePlatformSettings();
     const userRow = async () =>
       (await pool.query<{ email_digest: string | null; last: Date | null; failures: number }>(
         `select email_digest, email_digest_last_run_at as last, email_digest_failures as failures from users where id = $1`, [user],

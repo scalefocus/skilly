@@ -3,12 +3,18 @@
 // immediate clear, and audit rows. Gated behind SKILLY_DB_E2E=1:
 //
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… pnpm --filter @skilly/web test:db
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { getSystemBanner, setSystemBanner, clearSystemBanner, setUserDriftNotifications, setUserNewVersionNotifications } from "./settings";
+import { getSystemBanner, setSystemBanner, clearSystemBanner, setUserDriftNotifications, setUserNewVersionNotifications, getPlatformSettings, invalidatePlatformSettings, setDateFormat } from "./settings";
+import { getHypeSettings, invalidateHypeSettings, updateHypeSettings } from "./hype";
 import { pool } from "./db";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
+
+// Several tests share this pool — close it once, after all of them.
+after(async () => {
+  if (enabled) await pool.end();
+});
 
 test("system banner + maintainer notification prefs: validation, replace semantics, lazy expiry, clear, audit, pref defaults", { skip: !enabled }, async () => {
   try {
@@ -101,6 +107,64 @@ test("system banner + maintainer notification prefs: validation, replace semanti
     assert.equal(p2.drift_notifications, true, "drift pref re-enabled");
     assert.equal(p2.new_version_notifications, false, "new-version opt-out persisted independently");
   } finally {
-    await pool.end();
+    // the pool closes in after()
+  }
+});
+
+test("settings caches: default-pool reads are cached briefly, writers invalidate, an explicit db bypasses", { skip: !enabled }, async () => {
+  const actor = (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ('settings-cache-admin','scadmin@t','SCAdmin')
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+  )).rows[0]!.id;
+  const saved = (await pool.query<{ key: string; value: unknown }>(
+    `select key, value from platform_settings where key in ('date_format', 'hype_top_n')`,
+  )).rows;
+  const restore = async (key: string) => {
+    const row = saved.find((r) => r.key === key);
+    if (row) await pool.query(`update platform_settings set value = $2::jsonb where key = $1`, [key, JSON.stringify(row.value)]);
+    else await pool.query(`delete from platform_settings where key = $1`, [key]);
+  };
+  const platformAdmin = { userId: actor, isPlatformAdmin: true };
+  try {
+    // Platform settings.
+    await setDateFormat("eu", actor);
+    assert.equal((await getPlatformSettings()).dateFormat, "eu");
+    // A write behind the cache's back is not seen by the cached read (within the TTL)...
+    await pool.query(`update platform_settings set value = '"us"'::jsonb where key = 'date_format'`);
+    assert.equal((await getPlatformSettings()).dateFormat, "eu", "served from the cache");
+    // ...but an explicit db always reads through, and invalidation drops the cached value.
+    assert.equal((await getPlatformSettings(pool)).dateFormat, "eu", "the default pool passed explicitly still uses the cache");
+    invalidatePlatformSettings();
+    assert.equal((await getPlatformSettings()).dateFormat, "us");
+    // Every setter invalidates on its own.
+    await setDateFormat("eu", actor);
+    assert.equal((await getPlatformSettings()).dateFormat, "eu", "the setter invalidated the cache");
+    // Callers get their own copy: mutating one doesn't touch the next read.
+    (await getPlatformSettings()).chatPollIntervals.push(9999);
+    assert.ok(!(await getPlatformSettings()).chatPollIntervals.includes(9999));
+
+    // Hype settings.
+    const client = await pool.connect();
+    try {
+      const before = (await getHypeSettings()).topN;
+      const next = before === 7 ? 8 : 7;
+      await pool.query(
+        `insert into platform_settings (key, value) values ('hype_top_n', $1::jsonb)
+         on conflict (key) do update set value = excluded.value`, [JSON.stringify(next)],
+      );
+      assert.equal((await getHypeSettings()).topN, before, "hype settings served from the cache");
+      assert.equal((await getHypeSettings(client)).topN, next, "a non-default db bypasses the cache");
+      // Saving the value already stored writes nothing, yet still drops the stale cached copy.
+      const r = await updateHypeSettings(platformAdmin, { hypeTopN: next });
+      assert.ok(r.ok);
+      assert.equal((await getHypeSettings()).topN, next, "updateHypeSettings invalidated the cache");
+    } finally {
+      client.release();
+    }
+  } finally {
+    await restore("date_format");
+    await restore("hype_top_n");
+    invalidatePlatformSettings();
+    invalidateHypeSettings();
   }
 });

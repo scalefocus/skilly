@@ -10,9 +10,10 @@ if (!connectionString) {
 
 // Bounded pool with explicit timeouts so a slow/runaway query can't wedge a replica or
 // exhaust connections under load. statement_timeout kills any single query past the cap.
+// 25 by default: one skill page alone issues ~20 reads in parallel, so a pool of 10 queued them.
 export const pool = new Pool({
   connectionString,
-  max: Number(process.env.PG_POOL_MAX ?? 10),
+  max: Number(process.env.PG_POOL_MAX ?? 25),
   connectionTimeoutMillis: 10_000,
   idleTimeoutMillis: 30_000,
   statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS ?? 15_000),

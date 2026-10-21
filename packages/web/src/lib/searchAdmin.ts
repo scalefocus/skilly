@@ -5,6 +5,7 @@ import type { Pool, PoolClient } from "pg";
 import { parseSynonymTerms, searchLanguageLabel, SYNONYM_MAX_GROUPS } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { invalidatePlatformSettings } from "./settings";
 
 /** A rejected write, carrying the HTTP status the route answers with (422 validation, 404 unknown). */
 export class SearchAdminError extends Error {
@@ -51,6 +52,7 @@ export async function setSearchLanguage(value: unknown, actorUserId: string): Pr
      on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
     [JSON.stringify(value), actorUserId],
   );
+  invalidatePlatformSettings();
   await appendAudit(pool, {
     actorUserId,
     action: "settings.updated",

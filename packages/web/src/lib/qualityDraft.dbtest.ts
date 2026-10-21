@@ -88,7 +88,7 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
   const ai = await import("./ai");
   const draft = await import("./qualityDraft");
   const { createProposal, getProposalDetail } = await import("./proposals");
-  const { setAiDisplayName, getPlatformSettings } = await import("./settings");
+  const { setAiDisplayName, getPlatformSettings, invalidatePlatformSettings } = await import("./settings");
   const shared = await import("@skilly/shared");
 
   const tag = `qd${Date.now().toString(36)}`;
@@ -345,6 +345,7 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
 
     // ── The display name (§40.14) ──
     await pool.query(`delete from platform_settings where key = 'ai_display_name'`);
+    invalidatePlatformSettings();
     assert.equal((await getPlatformSettings()).aiDisplayName, "AI");
     assert.deepEqual(await setAiDisplayName("x".repeat(25), maintainer), { ok: false, error: "the display name must be at most 24 characters" });
     const nameSince = new Date(Date.now() - 1000);

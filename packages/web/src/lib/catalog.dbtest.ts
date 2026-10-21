@@ -5,7 +5,10 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { EffectiveAccess } from "@skilly/shared";
-import { searchSkills, suggestSkills } from "./catalog";
+import { searchSkills, suggestSkills, skillDetailCore, listVersions, latestStableSemver, latestVersionUsage } from "./catalog";
+import { isWatching, watcherCount } from "./watch";
+import { skillDiscussionCount } from "./messages";
+import { listGrants, isExplicitMaintainer } from "./grants";
 import { pool } from "./db";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
@@ -99,4 +102,106 @@ test("suggestSkills: orgOnly excludes namespace-restricted skills even for a mem
     assert.ok(normalResults.map((r) => r.skillSlug).includes("sugg-restricted-skill"), "normal search still shows it via namespace access");
 
     await pool.query(`delete from skills where id = any($1::uuid[])`, [[orgSkill, restrictedSkill]]);
+});
+
+test("skillDetailCore: matches the per-call helpers it replaces on the skill page", { skip: !enabled }, async () => {
+  const q = <T extends Record<string, unknown>>(sql: string, params: unknown[] = []) => pool.query<T>(sql, params);
+  const nsId = async (slug: string) =>
+    (await q<{ id: string }>(
+      `insert into namespaces (slug, display_name, require_review) values ($1, $1, true)
+       on conflict (slug) do update set display_name = excluded.display_name returning id`, [slug],
+    )).rows[0]!.id;
+  const userId = async (oid: string) =>
+    (await q<{ id: string }>(
+      `insert into users (entra_object_id, email, display_name) values ($1, $1 || '@org', $1)
+       on conflict (entra_object_id) do update set email = excluded.email returning id`, [oid],
+    )).rows[0]!.id;
+  const skillId = async (ns: string, slug: string, visibility: "org" | "namespace") =>
+    (await q<{ id: string }>(
+      `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, status)
+       values ($1, $2, $2, 'd', 'claude', 'hosted', $3, 'active')
+       on conflict (namespace_id, slug) do update set visibility = excluded.visibility returning id`, [ns, slug, visibility],
+    )).rows[0]!.id;
+
+  const owner = await nsId("sdc-owner");
+  const granteeA = await nsId("sdc-grantee-a");
+  const granteeB = await nsId("sdc-grantee-b");
+  const viewer = await userId("sdc-viewer");
+  const other = await userId("sdc-other");
+  // Versions are immutable, so a re-run starts from fresh skills: drop the fixture's skills (their
+  // versions, watches, maintainers and grants cascade) under the purge GUC, plus their discussions.
+  const wipe = async () => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      await c.query("set local skilly.allow_version_delete = 'on'");
+      await c.query(
+        `delete from conversations where subject_type = 'skill'
+            and subject_id in (select id from skills where namespace_id = $1 and slug like 'sdc-%')`, [owner],
+      );
+      await c.query(`delete from skills where namespace_id = $1 and slug like 'sdc-%'`, [owner]);
+      await c.query("commit");
+    } catch (e) {
+      await c.query("rollback");
+      throw e;
+    } finally {
+      c.release();
+    }
+  };
+  await wipe();
+  const restricted = await skillId(owner, "sdc-restricted", "namespace");
+  const orgSkill = await skillId(owner, "sdc-org", "org");
+  try {
+    // Versions: two stable actives (1.2.0 is latest, with usage), a newer beta, a yanked 2.0.0.
+    await q(
+      `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, usage_examples, what_changed, created_at)
+       values ($1, '1.0.0', false, 'active', 'k/sdc/1.0.0', 'h', 'old usage', null, now() - interval '4 days'),
+              ($1, '1.2.0', false, 'active', 'k/sdc/1.2.0', 'h', 'current usage', 'fixes', now() - interval '3 days'),
+              ($1, '2.0.0', false, 'yanked', 'k/sdc/2.0.0', 'h', 'yanked usage', null, now() - interval '2 days'),
+              ($1, '2.1.0-beta.1', true, 'active', 'k/sdc/2.1.0-beta.1', 'h', 'beta usage', null, now() - interval '1 day')`,
+      [restricted],
+    );
+    await q(`insert into skill_watches (user_id, skill_id) values ($1, $3), ($2, $3)`, [viewer, other, restricted]);
+    await q(`insert into skill_maintainers (skill_id, user_id) values ($1, $2)`, [restricted, viewer]);
+    // Inserted B before A so the display-name ordering is actually exercised.
+    await q(`insert into skill_namespace_grants (skill_id, namespace_id, granted_by) values ($1, $2, $4), ($1, $3, null)`, [restricted, granteeB, granteeA, other]);
+    const conv = (await q<{ id: string }>(`insert into conversations (subject_type, subject_id) values ('skill', $1) returning id`, [restricted])).rows[0]!.id;
+    await q(
+      `insert into messages (conversation_id, author_id, body, removed_at) values ($1, $2, 'one', null), ($1, $3, 'two', null), ($1, $2, 'gone', now())`,
+      [conv, viewer, other],
+    );
+
+    const old = async (id: string, user: string | null, includeGrants: boolean) => ({
+      versions: await listVersions(id),
+      latest: await latestStableSemver(id),
+      usageExamples: await latestVersionUsage(id),
+      watching: user ? await isWatching(user, id) : false,
+      watchers: await watcherCount(id),
+      discussionCount: await skillDiscussionCount(id),
+      grants: includeGrants ? await listGrants(id) : [],
+      explicitMaintainer: await isExplicitMaintainer(id, user),
+    });
+
+    const seen = await skillDetailCore(restricted, viewer, true);
+    assert.deepEqual(seen, await old(restricted, viewer, true));
+    // Spot-check the fixture really exercises every field.
+    assert.equal(seen.latest, "1.2.0");
+    assert.equal(seen.usageExamples, "current usage");
+    assert.deepEqual(seen.versions.map((v) => v.semver), ["2.1.0-beta.1", "2.0.0", "1.2.0", "1.0.0"]);
+    assert.equal(seen.watchers, 2);
+    assert.equal(seen.watching, true);
+    assert.equal(seen.discussionCount, 2, "removed messages don't count");
+    assert.deepEqual(seen.grants.map((g) => g.slug), ["sdc-grantee-a", "sdc-grantee-b"]);
+    assert.equal(seen.explicitMaintainer, true);
+
+    // Another signed-in viewer, an anonymous one, grants skipped, and an empty org skill.
+    assert.deepEqual(await skillDetailCore(restricted, other, true), await old(restricted, other, true));
+    assert.deepEqual(await skillDetailCore(restricted, null, true), await old(restricted, null, true));
+    assert.deepEqual(await skillDetailCore(restricted, viewer, false), await old(restricted, viewer, false));
+    const empty = await skillDetailCore(orgSkill, viewer, false);
+    assert.deepEqual(empty, await old(orgSkill, viewer, false));
+    assert.deepEqual(empty, { versions: [], latest: null, usageExamples: null, watching: false, watchers: 0, discussionCount: 0, grants: [], explicitMaintainer: false });
+  } finally {
+    await wipe();
+  }
 });
