@@ -1,6 +1,6 @@
 // Thin Postgres pool. The web service connects as `skilly_app` (least privilege:
 // no UPDATE/DELETE on audit_log). SKILLY_SPEC.md §11, db/migrations/0002.
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -21,3 +21,13 @@ export const pool = new Pool({
 
 // A pool-level error handler prevents an idle-client error from crashing the process.
 pool.on("error", (err) => console.error(JSON.stringify({ level: "error", msg: "pg pool error", err: String(err) })));
+
+// Clients checked out of the default pool, so a helper taking `Pool | PoolClient` can tell a
+// transaction on the app's own pool from a test's separate pool (e.g. to use cached settings).
+const defaultPoolClients = new WeakSet<PoolClient>();
+pool.on("connect", (client) => defaultPoolClients.add(client));
+
+/** True for the default pool and any client checked out of it. */
+export function usesDefaultPool(db: Pool | PoolClient): boolean {
+  return db === pool || defaultPoolClients.has(db as PoolClient);
+}

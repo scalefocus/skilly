@@ -394,5 +394,6 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     } else {
       await pool.query(`delete from platform_settings where key = 'ai_display_name'`);
     }
+    invalidatePlatformSettings();
   }
 }));

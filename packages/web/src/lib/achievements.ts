@@ -3,7 +3,8 @@
 // module owns the SQL. The worker mirrors `awardAchievement` (packages/worker/src/achievements.ts)
 // for the hooks that live there — keep the two in sync.
 import type { Pool, PoolClient } from "pg";
-import { pool } from "./db";
+import { pool, usesDefaultPool } from "./db";
+import { getPlatformSettings } from "./settings";
 import {
   ACHIEVEMENTS,
   ACHIEVEMENT_TOTAL,
@@ -157,14 +158,17 @@ async function stampHero(db: Db, userId: string, complete: boolean, at: Date): P
   return rows[0]?.hero_at != null;
 }
 
-// The toggle is read per award (one tiny indexed query); the admin surfaces read the same row.
+// The toggle is read per award. On the app's pool (or a transaction on it) that is the cached
+// platform settings, like every other reader; any other db reads the row directly.
 async function achievementsEnabledFor(db: Db): Promise<boolean> {
+  if (usesDefaultPool(db)) return (await getPlatformSettings()).achievementsEnabled;
   const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = 'achievements_enabled'`);
   return rows[0]?.value !== false;
 }
 
 // The §40.14 display name, read only for a badge whose copy names the AI (§31.12.5).
 async function aiDisplayNameFor(db: Db): Promise<string> {
+  if (usesDefaultPool(db)) return (await getPlatformSettings()).aiDisplayName;
   const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = 'ai_display_name'`);
   return coerceAiDisplayName(rows[0]?.value);
 }

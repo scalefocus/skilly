@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.5",
+    date: "2026-10-21",
+    summary:
+      "Faster pages, continued: a skill page now loads its quality, AI-draft and hype details at the same time instead of one after another, badge awards reuse the cached platform settings, and filtering the Installed skills list as you type keeps the page responsive. Nothing changes in how Skilly looks or works.",
+  },
+  {
     version: "2.39.4",
     date: "2026-10-21",
     summary:

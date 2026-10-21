@@ -21,6 +21,7 @@ import { placeHype } from "./hype";
 import { mintShareLink } from "./shareLinks";
 import { createProposal, directPublish, type RevisionPayload } from "./proposals";
 import { appendAudit } from "./audit";
+import { invalidatePlatformSettings } from "./settings";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
 after(async () => { if (enabled) await pool.end(); });
@@ -238,6 +239,7 @@ test("Robot Sidekick: the notification names the AI by its display name (§31.12
       `insert into platform_settings (key, value, updated_at) values ('ai_display_name', '"Aria"'::jsonb, now())
        on conflict (key) do update set value = excluded.value, updated_at = now()`,
     );
+    invalidatePlatformSettings(); // the award reads the cached settings
     await awardAchievement(pool, u, "first_ai_draft", { noHabits: true });
     const payload = (await q<{ payload: { blurb: string } }>(
       `select payload from notifications where user_id = $1 and type = 'achievement.earned' and payload->>'key' = 'first_ai_draft'`, [u],
@@ -246,6 +248,7 @@ test("Robot Sidekick: the notification names the AI by its display name (§31.12
   } finally {
     if (saved === undefined) await q(`delete from platform_settings where key = 'ai_display_name'`);
     else await q(`update platform_settings set value = $1::jsonb where key = 'ai_display_name'`, [JSON.stringify(saved)]);
+    invalidatePlatformSettings();
   }
 });
 

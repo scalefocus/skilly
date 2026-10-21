@@ -22,9 +22,9 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   const session = await getServerSession(authOptions);
   const oid = (session as { oid?: string } | null)?.oid;
   if (!oid) return Response.json({ error: "unauthenticated" }, { status: 401 });
-  const access = await resolveUserAccess(oid);
-
-  const skill = await findSkill((await ctx.params).ns, (await ctx.params).slug);
+  const { ns, slug } = await ctx.params;
+  // The viewer's access and the skill row are independent reads — fetch them together.
+  const [access, skill] = await Promise.all([resolveUserAccess(oid), findSkill(ns, slug)]);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
 
   const archived = skill.status === "archived";
@@ -64,12 +64,19 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   const isOwner = access.userId ? managesMaintainers(access, skill.namespaceId, explicitMaintainer) : false;
   // §49.2: quarantined versions are visible to the skill's owners/admins only.
   const versions = core.versions.filter((v) => v.status !== "quarantined" || isOwner).map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
-  // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
-  const qualityDetail0 = latest ? await skillQualityDetail(access, skill, latest) : null;
-  // §44.2: whether this viewer may draft improvements with AI (hidden = available:false, reason:null).
-  const qualityDetail = qualityDetail0 && !archived
-    ? { ...qualityDetail0, aiDraft: await aiDraftAvailability(access, skill.namespaceSlug, skill.slug) }
-    : qualityDetail0 && { ...qualityDetail0, aiDraft: { available: false, reason: null } };
+  // The three reads below depend only on `latest` / `archived`, not on each other — run them together.
+  const [qualityDetail0, aiDraft, hype] = await Promise.all([
+    // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
+    latest ? skillQualityDetail(access, skill, latest) : null,
+    // §44.2: whether this viewer may draft improvements with AI (hidden = available:false, reason:null).
+    // Only used alongside a quality card, so only fetched when one can exist.
+    latest && !archived ? aiDraftAvailability(access, skill.namespaceSlug, skill.slug) : null,
+    // §50.6 the hype block — null when the feature is off or the skill is hard-ineligible (archived
+    // skills are hard-ineligible, so an owner inspecting one sees no hype UI).
+    archived ? null : hypeDetail(skill.id, access.userId ?? null),
+  ]);
+  // A quality card implies `latest`, so `aiDraft` is null here only for an archived skill (hidden).
+  const qualityDetail = qualityDetail0 && { ...qualityDetail0, aiDraft: aiDraft ?? { available: false, reason: null } };
   const isGlobal = skill.namespaceSlug === "global";
   // INSTALLABLE = latest stable version whose serving git repo is actually synthesized
   // (git_published). A freshly published version is `active` (so `latest` is set) but its repo
@@ -81,9 +88,6 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   );
   const publishing = latest != null && latestInstallable == null;
   const deprecated = skill.deprecatedAt != null;
-  // §50.6 the hype block — null when the feature is off or the skill is hard-ineligible (archived
-  // skills are hard-ineligible, so an owner inspecting one sees no hype UI).
-  const hype = archived ? null : await hypeDetail(skill.id, access.userId ?? null);
   const canDeprecate = !archived && canYankOrArchive(access, skill.namespaceId);
   return Response.json({
     // §38.3 the Add-to-collection popup addresses the skill by id; `collectible` gates the button
