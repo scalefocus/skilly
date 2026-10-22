@@ -342,7 +342,6 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // goes, and so does every vote they cast. Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from feature_ideas where author_id = $1 and status <> 'published'`, [userId]);
     await client.query(`delete from feature_idea_votes where user_id = $1`, [userId]);
-    await client.query(`delete from upcoming_votes where user_id = $1`, [userId]);
     // Scrub + detach the row (tombstone). Display label retains the former email
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";

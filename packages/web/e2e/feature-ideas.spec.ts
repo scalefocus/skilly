@@ -1,20 +1,24 @@
 // e2e: feature ideas (SKILLY_SPEC.md §60). The signed-in dev user is a platform admin, so one user
 // plays both parts: they suggest an idea from What's new, edit it while it's pending, publish it from
-// the Feature ideas page, find it in Coming soon with their own vote, un-vote and re-vote, close it as
-// Planned, then mark it shipped — which leaves both badges (Bright Idea, Made It Real) in their hall.
+// the Feature ideas page, find it in Coming soon with their own vote, un-vote and re-vote, then close
+// it as Shipped (Planned is no longer offered) — which leaves both badges (Bright Idea, Made It Real)
+// in their hall. Last, with suggestions switched off for everyone else, the admin still sees the list
+// and the Suggest button, and the Feature ideas page says who can suggest. (Every e2e user is a
+// platform admin, so the plain-user side — no button, 403 — is covered by lib/ideas.dbtest.ts.)
 //
-// EXCLUSIVE (groups.ts): a published idea changes Coming soon for every user. The idea is closed by
-// the end, so nothing is left in the list. With DATABASE_URL set, the user's own ideas are cleared
-// first, so a re-run never trips the 5-a-day cap; a fresh CI stack starts clean anyway.
+// EXCLUSIVE (groups.ts): a published idea changes Coming soon for every user, and the spec flips the
+// feature switch. The idea is closed by the end, so nothing is left in the list, and the switch is
+// turned back on. With DATABASE_URL set, the user's own ideas are cleared first, so a re-run never
+// trips the 5-a-day cap; a fresh CI stack starts clean anyway.
 import { Pool } from "pg";
 import { test, expect, devSignIn, signedInOid } from "./fixtures";
-import { acceptNextDialog, awaitApi, clickAndAwait, gotoLoaded, probe } from "./helpers/ready";
+import { clickAndAwait, gotoLoaded, probe } from "./helpers/ready";
 
 const dbUrl = process.env.DATABASE_URL;
 
 test.describe.configure({ mode: "serial" });
 
-test("feature ideas: suggest → edit → publish → vote → close as Planned → mark shipped", async ({ page }) => {
+test("feature ideas: suggest → edit → publish → vote → close as Shipped; the switch spares admins", async ({ page }) => {
   await devSignIn(page);
   if (dbUrl) {
     const pool = new Pool({ connectionString: dbUrl });
@@ -69,7 +73,6 @@ test("feature ideas: suggest → edit → publish → vote → close as Planned 
   // ── Vote on it in Coming soon (it starts with the proposer's own vote) ────────────────────────
   await gotoLoaded(page, "/whats-new#coming-soon", "/api/coming-soon");
   const row = page.getByTestId("coming-soon-row").filter({ hasText: title });
-  await expect(row).toHaveAttribute("data-kind", "idea");
   await expect(row.getByTestId("suggested-by")).toBeVisible();
   const vote = row.getByTestId("vote-button");
   await expect(vote).toHaveAttribute("aria-pressed", "true");
@@ -80,26 +83,22 @@ test("feature ideas: suggest → edit → publish → vote → close as Planned 
   await clickAndAwait(page, () => vote.click(), /\/api\/coming-soon\/ideas\/[^/]+\/vote$/, { method: "PUT" });
   await expect(vote).toHaveAttribute("aria-pressed", "true");
 
-  // ── Close as Planned, then mark shipped ───────────────────────────────────────────────────────
+  // ── Close as Shipped (Planned is no longer an outcome) ─────────────────────────────────────────
   await gotoLoaded(page, "/admin/ideas", "/api/admin/ideas?status=pending");
   await clickAndAwait(page, () => page.getByTestId("ideas-tab-published").click(), "/api/admin/ideas?status=published");
   const published = page.getByTestId("admin-idea").filter({ hasText: title });
   await expect(published.getByTestId("admin-idea-votes")).toContainText("1");
   await published.getByTestId("idea-close").click();
   const close = page.getByRole("dialog", { name: "Close idea" });
-  await close.getByTestId("idea-outcome-planned").check();
-  await close.getByTestId("idea-note").fill("Next quarter.");
+  await expect(close.getByTestId("idea-outcome-planned")).toHaveCount(0);
+  await close.getByTestId("idea-outcome-shipped").check();
+  await close.getByTestId("idea-note").fill("Out in this release.");
   await clickAndAwait(page, () => close.getByTestId("idea-dialog-submit").click(), /\/api\/admin\/ideas\/[^/]+\/close$/, { method: "POST" });
 
   await clickAndAwait(page, () => page.getByTestId("ideas-tab-closed").click(), "/api/admin/ideas?status=closed");
   const closed = page.getByTestId("admin-idea").filter({ hasText: title });
-  await expect(closed).toContainText("Planned");
-  const confirmed = acceptNextDialog(page);
-  const reloaded = awaitApi(page, "/api/admin/ideas?status=closed");
-  await clickAndAwait(page, () => closed.getByTestId("idea-ship").click(), /\/api\/admin\/ideas\/[^/]+\/ship$/, { method: "POST" });
-  await confirmed;
-  await reloaded;
-  await expect(page.getByTestId("admin-idea").filter({ hasText: title })).toContainText("Shipped");
+  await expect(closed).toContainText("Shipped");
+  await expect(closed.getByTestId("idea-ship")).toHaveCount(0);
 
   // ── The proposer's view and the two badges ────────────────────────────────────────────────────
   await gotoLoaded(page, "/whats-new#your-ideas", "/api/coming-soon");
@@ -111,4 +110,18 @@ test("feature ideas: suggest → edit → publish → vote → close as Planned 
   const keys = hall.earned.map((e) => e.key);
   expect(keys).toContain("idea_published");
   expect(keys).toContain("idea_shipped");
+
+  // ── Suggestions off for everyone else: a platform admin still sees the list and may suggest ────
+  const off = await page.request.patch("/api/admin/settings", { data: { featureIdeasEnabled: false } });
+  expect(off.ok()).toBeTruthy();
+  try {
+    const listOff = (await (await page.request.get("/api/coming-soon")).json()) as { canSuggest: boolean };
+    expect(listOff.canSuggest).toBe(true);
+    await gotoLoaded(page, "/whats-new", "/api/coming-soon");
+    await expect(page.getByTestId("coming-soon").getByTestId("suggest-feature")).toBeVisible();
+    await gotoLoaded(page, "/admin/ideas", "/api/admin/ideas?status=pending");
+    await expect(page.getByTestId("ideas-off")).toContainText("Only platform admins can suggest features right now.");
+  } finally {
+    await page.request.patch("/api/admin/settings", { data: { featureIdeasEnabled: true } });
+  }
 });

@@ -1,5 +1,5 @@
 // The proposer's own pending idea (SKILLY_SPEC.md §60.4). PATCH { description } edits it, DELETE
-// withdraws it. 204 · 404 not theirs (or the feature is off) · 409 no longer pending · 422 bad length.
+// withdraws it, whatever the switch says. 204 · 404 not theirs · 409 no longer pending · 422 bad length.
 import { editOwnIdea, withdrawOwnIdea } from "../../../../../lib/ideas";
 import { ideaResultResponse, ideasCaller, isIdeaId, jsonBody, notFound } from "../../../../../lib/ideasRoute";
 import { enforceRateLimit } from "../../../../../lib/ratelimit";

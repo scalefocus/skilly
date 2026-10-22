@@ -142,7 +142,6 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // worker scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from feature_ideas where author_id = $1 and status <> 'published'`, [targetUserId]);
     await client.query(`delete from feature_idea_votes where user_id = $1`, [targetUserId]);
-    await client.query(`delete from upcoming_votes where user_id = $1`, [targetUserId]);
 
     // Scrub + detach the row (tombstone). Detaching entra_object_id lets a returning person get a
     // brand-new account. The display label retains the former email ("<email> - Deleted") so a

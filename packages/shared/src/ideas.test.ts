@@ -1,5 +1,5 @@
-// Unit tests for the feature-ideas rules (SKILLY_SPEC.md §60): validators, the submission caps, the
-// merged Coming soon order and the notification wording.
+// Unit tests for the feature-ideas rules (SKILLY_SPEC.md §60): validators, who may suggest, the
+// submission caps, the close outcomes, the Coming soon order and the notification wording.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -15,14 +15,14 @@ import {
   ideaLimitRefusal,
   ideaTextLength,
   ideaNotificationContent,
+  isIdeaCloseOutcome,
   isIdeaNotificationType,
   isIdeaOutcome,
-  isUpcomingKey,
+  maySuggestIdea,
   validateIdeaDescription,
   validateIdeaNote,
   validateIdeaTitle,
-  type ComingSoonIdeaItem,
-  type ComingSoonTeaserItem,
+  type ComingSoonItem,
 } from "./ideas.js";
 import { NOTIFICATION_LABELS } from "./notifications.js";
 
@@ -69,14 +69,18 @@ test("note: optional, blank → null, ≤ 500 characters", () => {
   assert.equal(validateIdeaNote(7).ok, false);
 });
 
-test("outcomes and teaser keys", () => {
+test("outcomes: every stored one is known, but a new close never takes Planned (§60.1 decision 3)", () => {
   for (const o of ["planned", "shipped", "duplicate", "wont_do"]) assert.equal(isIdeaOutcome(o), true, o);
   assert.equal(isIdeaOutcome("done"), false);
-  assert.equal(isUpcomingKey("skill-evals"), true);
-  assert.equal(isUpcomingKey("evals2"), true);
-  for (const bad of ["Skill-evals", "skill_evals", "-evals", "evals-", "skill--evals", "", "x".repeat(61), 3]) {
-    assert.equal(isUpcomingKey(bad), false, String(bad));
-  }
+  for (const o of ["shipped", "duplicate", "wont_do"]) assert.equal(isIdeaCloseOutcome(o), true, o);
+  for (const bad of ["planned", "done", "", null, 3]) assert.equal(isIdeaCloseOutcome(bad), false, String(bad));
+});
+
+test("who may suggest: platform admins always, everyone else while the switch is on", () => {
+  assert.equal(maySuggestIdea({ isPlatformAdmin: false }, true), true);
+  assert.equal(maySuggestIdea({ isPlatformAdmin: false }, false), false);
+  assert.equal(maySuggestIdea({ isPlatformAdmin: true }, true), true);
+  assert.equal(maySuggestIdea({ isPlatformAdmin: true }, false), true);
 });
 
 test("caps: the pending cap first, then the daily cap", () => {
@@ -93,27 +97,24 @@ test("caps: Retry-After counts down to when the oldest row leaves the 24 h windo
   assert.equal(dailyRetryAfterSeconds(new Date(now.getTime() - IDEA_DAILY_WINDOW_MS - 5_000), now), 1, "never below 1");
 });
 
-const teaser = (key: string, votes: number): ComingSoonTeaserItem => ({ kind: "teaser", key, title: key, teaser: "t", votes, voted: false });
-const idea = (id: string, votes: number, publishedAt: string): ComingSoonIdeaItem => ({
-  kind: "idea", id, title: id, description: "d", votes, voted: false, suggestedBy: null, publishedAt,
-});
-const keyOf = (i: { kind: string; key?: string; id?: string }) => (i.kind === "teaser" ? i.key : i.id);
-
-test("order: most votes first, teasers and ideas together", () => {
-  const out = comingSoonOrder(
-    [teaser("a", 1), teaser("b", 4)],
-    [idea("x", 3, "2026-10-01T00:00:00Z"), idea("y", 0, "2026-10-02T00:00:00Z")],
-  );
-  assert.deepEqual(out.map(keyOf), ["b", "x", "a", "y"]);
+const item = (id: string, votes: number, publishedAt: string): ComingSoonItem => ({
+  id, title: id, description: "d", votes, voted: false, suggestedBy: null, publishedAt,
 });
 
-test("order: ties → teasers before ideas, teasers in list order, ideas newest-published first", () => {
-  const out = comingSoonOrder(
-    [teaser("first", 2), teaser("second", 2)],
-    [idea("old", 2, "2026-10-01T00:00:00Z"), idea("new", 2, "2026-10-05T00:00:00Z"), idea("b-same", 2, "2026-10-03T00:00:00Z"), idea("a-same", 2, "2026-10-03T00:00:00Z")],
-  );
-  assert.deepEqual(out.map(keyOf), ["first", "second", "new", "a-same", "b-same", "old"]);
-  assert.deepEqual(comingSoonOrder([], []), []);
+test("order: most votes first", () => {
+  const out = comingSoonOrder([item("a", 1, "2026-10-03T00:00:00Z"), item("b", 4, "2026-10-01T00:00:00Z"), item("x", 3, "2026-10-01T00:00:00Z"), item("y", 0, "2026-10-02T00:00:00Z")]);
+  assert.deepEqual(out.map((i) => i.id), ["b", "x", "a", "y"]);
+});
+
+test("order: ties → newest published first, then id", () => {
+  const out = comingSoonOrder([
+    item("old", 2, "2026-10-01T00:00:00Z"),
+    item("new", 2, "2026-10-05T00:00:00Z"),
+    item("b-same", 2, "2026-10-03T00:00:00Z"),
+    item("a-same", 2, "2026-10-03T00:00:00Z"),
+  ]);
+  assert.deepEqual(out.map((i) => i.id), ["new", "a-same", "b-same", "old"]);
+  assert.deepEqual(comingSoonOrder([]), []);
 });
 
 test("notifications: every idea type has a label and wording; others get null", () => {

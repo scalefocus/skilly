@@ -1,21 +1,23 @@
 "use client";
-// The Feature ideas page (SKILLY_SPEC.md §60.5) — platform admins review what people suggested on the
-// What's new page. Pending (oldest first): Publish… (adds the title, may tidy the text) or Reject…
-// (optional reason). Published (most-voted first): Edit… or Close… with an outcome. Closed: rejected
-// and closed ideas, read-only, with Mark shipped on an idea closed as Planned. Every write answers 409
-// when someone else got there first; the list then reloads. While the feature is switched off the
-// lists stay readable and every action is disabled.
+// The Feature ideas page (SKILLY_SPEC.md §60.5) — platform admins run the What's new Coming soon list.
+// Pending (oldest first): Publish… (adds the title, may tidy the text) or Reject… (optional reason).
+// Published (most-voted first) is everything on Coming soon, the items with no proposer included:
+// Edit… or Close… as Shipped, Duplicate or Won't do. Closed: rejected and closed ideas, read-only,
+// with Mark shipped on an idea closed as Planned before v2.41.0. Every write answers 409 when someone
+// else got there first; the list then reloads. While suggestions are off for everyone else, a notice
+// says so; every action stays available.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import {
   IDEA_DESCRIPTION_MAX,
   IDEA_DESCRIPTION_MIN,
+  IDEA_CLOSE_OUTCOMES,
   IDEA_NOTE_MAX,
-  IDEA_OUTCOMES,
   IDEA_OUTCOME_LABELS,
   IDEA_TITLE_MAX,
   IDEA_TITLE_MIN,
   ideaTextLength,
+  type IdeaCloseOutcome,
   type IdeaOutcome,
 } from "@skilly/shared/ideas";
 import { EmptyState, Modal, Pill, useApi } from "../../../components/ui";
@@ -106,19 +108,19 @@ function AdminIdeas() {
     return <EmptyState icon="🔒" title="Platform admins only" hint="Feature ideas are reviewed by platform administrators." />;
   }
 
-  const disabled = list ? !list.enabled : true;
+  const disabled = !list;
   return (
     <div style={{ maxWidth: 980 }}>
       <div className="page-head reveal">
         <div className="eyebrow">Administration</div>
         <h1 className="page-title">Feature ideas.</h1>
-        <p className="page-sub">Ideas people suggested. Publish the good ones for voting, then close them once they&rsquo;re planned, shipped or settled.</p>
+        <p className="page-sub">What&rsquo;s on Coming soon, and the ideas waiting to join it. Publish the good ones for voting, then close them once they ship or are settled.</p>
       </div>
 
       {list && !list.enabled && (
         <div className="card card-pad" role="status" style={{ marginBottom: 18 }} data-testid="ideas-off">
-          Feature ideas are switched off. People can&rsquo;t see, suggest or vote on ideas.{" "}
-          <Link href="/admin">Turn it on in Administration</Link>.
+          Only platform admins can suggest features right now.{" "}
+          <Link href="/admin">Change it in Administration</Link>.
         </div>
       )}
 
@@ -164,7 +166,7 @@ function AdminIdeas() {
                     {idea.author.nameHidden && <span className="muted" style={{ fontSize: 12 }}>(name hidden from users)</span>}
                   </span>
                 ) : (
-                  <span className="muted" style={{ fontSize: 13 }}>Unknown proposer</span>
+                  <span className="muted" style={{ fontSize: 13 }} data-testid="admin-idea-no-proposer">No proposer</span>
                 )}
                 <span className="muted mono" style={{ fontSize: 11.5, marginLeft: "auto" }}>
                   {fmt.dateTime(idea.status === "pending" ? idea.createdAt : idea.closedAt ?? idea.decidedAt ?? idea.publishedAt ?? idea.createdAt)}
@@ -228,7 +230,7 @@ function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; 
   const [title, setTitle] = useState(idea.title ?? "");
   const [description, setDescription] = useState(idea.description);
   const [note, setNote] = useState("");
-  const [outcome, setOutcome] = useState<IdeaOutcome | null>(null);
+  const [outcome, setOutcome] = useState<IdeaCloseOutcome | null>(null);
   const [busy, setBusy] = useState(false);
   const titleId = useId();
   const descId = useId();
@@ -286,13 +288,15 @@ function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; 
       {kind === "close" && (
         <fieldset style={{ border: 0, padding: 0, margin: "0 0 12px" }}>
           <legend style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Outcome</legend>
-          {IDEA_OUTCOMES.map((o) => (
+          {IDEA_CLOSE_OUTCOMES.map((o) => (
             <label key={o} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, marginBottom: 6 }}>
               <input type="radio" name="idea-outcome" value={o} checked={outcome === o} onChange={() => setOutcome(o)} data-testid={`idea-outcome-${o}`} />
               {IDEA_OUTCOME_LABELS[o]}
             </label>
           ))}
-          <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>Closing removes the idea from Coming soon and deletes its votes. The proposer is told the outcome.</p>
+          <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>
+            Closing removes the item from Coming soon and deletes its votes. The proposer, if there is one, is told the outcome.
+          </p>
         </fieldset>
       )}
       {(kind === "reject" || kind === "close") && (
@@ -311,7 +315,7 @@ function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; 
             style={{ width: "100%", resize: "vertical", fontSize: 14 }}
             data-testid="idea-note"
           />
-          <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>The proposer sees this.</p>
+          <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>{idea.author ? "The proposer sees this." : "Only platform admins see this."}</p>
         </>
       )}
     </Modal>

@@ -1,7 +1,8 @@
-// Feature ideas — the web tier (SKILLY_SPEC.md §60): the merged Coming soon list with its votes, the
-// proposer's own suggestions (the two caps under a per-user advisory lock), the two kinds of vote,
-// and the platform-admin review actions with their notifications, badges and audit rows. The pure
-// rules — limits, validators, the order and the notification wording — live in @skilly/shared/ideas.
+// Feature ideas — the web tier (SKILLY_SPEC.md §60): the Coming soon list with its votes (every
+// item is a published `feature_ideas` row), the proposer's own suggestions (who may suggest, and the
+// two caps under a per-user advisory lock), the votes, and the platform-admin review actions with
+// their notifications, badges and audit rows. The pure rules — limits, validators, who may suggest,
+// the order and the notification wording — live in @skilly/shared/ideas.
 //
 // Ideas and votes are ordinary mutable rows: the proposer's own actions and every vote are never
 // audited; the admin's decisions are (§60.10). Every admin write re-reads the row FOR UPDATE and
@@ -16,12 +17,12 @@ import {
   dailyRetryAfterSeconds,
   ideaExcerpt,
   ideaLimitRefusal,
+  isIdeaCloseOutcome,
+  maySuggestIdea,
   validateIdeaDescription,
   validateIdeaNote,
   validateIdeaTitle,
-  type ComingSoonIdeaItem,
   type ComingSoonItem,
-  type ComingSoonTeaserItem,
   type IdeaLimitRefusal,
   type IdeaOutcome,
   type IdeaStatus,
@@ -29,13 +30,14 @@ import {
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { awardAchievement } from "./achievements";
+import { getFeatureIdeasEnabled } from "./settings";
 import { nameSql } from "./userLabel";
-import { UPCOMING, upcomingFor, type UpcomingViewer } from "../app/whats-new/upcoming";
 
 type Db = Pool | PoolClient;
 
-export interface IdeaViewer extends UpcomingViewer {
+export interface IdeaViewer {
   userId: string;
+  isPlatformAdmin: boolean;
 }
 
 // ── Reading: the Coming soon payload (§60.3) ───────────────────────────────────────────────────
@@ -65,25 +67,20 @@ export interface ComingSoonView {
   items: ComingSoonItem[];
   mine: MyIdeaView[];
   limits: ComingSoonLimits;
+  /** May the caller suggest right now? Platform admins always, everyone else while the switch is on. */
+  canSuggest: boolean;
 }
 
-/** May `viewer` see (and so vote on) the teaser with this key? The §23 audience, on the server too. */
-export function teaserVisibleTo(key: string, viewer: UpcomingViewer): boolean {
-  return upcomingFor(UPCOMING, viewer).some((e) => e.key === key);
+/** §60.4 who may suggest, against the live switch. */
+export async function canSuggest(viewer: IdeaViewer): Promise<boolean> {
+  return maySuggestIdea(viewer, await getFeatureIdeasEnabled());
 }
 
 const iso = (d: Date | string | null): string | null => (d == null ? null : new Date(d).toISOString());
 
-/** The caller's merged, ordered list, their own ideas and where they stand against the caps. */
+/** Every published item, ordered; the caller's own ideas; where they stand against the caps. */
 export async function getComingSoon(viewer: IdeaViewer, db: Db = pool): Promise<ComingSoonView> {
-  const teasers = upcomingFor(UPCOMING, viewer);
-  const keys = teasers.map((t) => t.key);
-  const [teaserVotes, ideas, mine, limits] = await Promise.all([
-    db.query<{ upcoming_key: string; votes: number; voted: boolean }>(
-      `select upcoming_key, count(*)::int as votes, bool_or(user_id = $2) as voted
-         from upcoming_votes where upcoming_key = any($1::text[]) group by upcoming_key`,
-      [keys, viewer.userId],
-    ),
+  const [items, mine, limits, suggest] = await Promise.all([
     db.query<{
       id: string; title: string; description: string; published_at: Date; author_id: string | null;
       display_name: string | null; avatar: string | null; attributed: boolean; votes: number; voted: boolean;
@@ -100,30 +97,23 @@ export async function getComingSoon(viewer: IdeaViewer, db: Db = pool): Promise<
     ),
     listMyIdeas(viewer.userId, db),
     limitCounts(db, viewer.userId),
+    canSuggest(viewer),
   ]);
-  const byKey = new Map(teaserVotes.rows.map((r) => [r.upcoming_key, r]));
-  const teaserItems: ComingSoonTeaserItem[] = teasers.map((t) => ({
-    kind: "teaser",
-    key: t.key,
-    title: t.title,
-    teaser: t.teaser,
-    votes: byKey.get(t.key)?.votes ?? 0,
-    voted: byKey.get(t.key)?.voted === true,
-  }));
-  const ideaItems: ComingSoonIdeaItem[] = ideas.rows.map((r) => ({
-    kind: "idea",
-    id: r.id,
-    title: r.title,
-    description: r.description,
-    votes: r.votes,
-    voted: r.voted,
-    suggestedBy: r.attributed && r.author_id ? { id: r.author_id, displayName: r.display_name ?? "", avatar: r.avatar } : null,
-    publishedAt: iso(r.published_at)!,
-  }));
   return {
-    items: comingSoonOrder(teaserItems, ideaItems),
+    items: comingSoonOrder(
+      items.rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        votes: r.votes,
+        voted: r.voted,
+        suggestedBy: r.attributed && r.author_id ? { id: r.author_id, displayName: r.display_name ?? "", avatar: r.avatar } : null,
+        publishedAt: iso(r.published_at)!,
+      })),
+    ),
     mine,
     limits: { pending: limits.pending, pendingMax: IDEA_PENDING_MAX, today: limits.today, dailyMax: IDEA_DAILY_MAX },
+    canSuggest: suggest,
   };
 }
 
@@ -162,15 +152,19 @@ async function limitCounts(db: Db, userId: string): Promise<{ pending: number; t
 
 export type SubmitIdeaResult =
   | { ok: true; idea: MyIdeaView }
+  | { ok: false; status: 403; reason: "suggestions_off" }
   | { ok: false; status: 422; error: string }
   | { ok: false; status: 429; reason: IdeaLimitRefusal; retryAfterSeconds: number | null };
 
 /**
- * Submit a suggestion. Both caps are checked inside the insert's transaction under a per-user
- * advisory lock, so two tabs can't slip past them. Every platform admin (minus the author and the
- * `idea_notifications` opt-outs) gets the coalesced `idea.submitted` row in the same transaction.
+ * Submit a suggestion. While the switch is off only platform admins may (403 otherwise). Both caps
+ * are checked inside the insert's transaction under a per-user advisory lock, so two tabs can't slip
+ * past them. Every platform admin (minus the author and the `idea_notifications` opt-outs) gets the
+ * coalesced `idea.submitted` row in the same transaction.
  */
-export async function submitIdea(userId: string, rawDescription: unknown): Promise<SubmitIdeaResult> {
+export async function submitIdea(viewer: IdeaViewer, rawDescription: unknown): Promise<SubmitIdeaResult> {
+  if (!(await canSuggest(viewer))) return { ok: false, status: 403, reason: "suggestions_off" };
+  const userId = viewer.userId;
   const v = validateIdeaDescription(rawDescription);
   if (!v.ok) return { ok: false, status: 422, error: v.error };
   const client = await pool.connect();
@@ -272,18 +266,6 @@ export async function withdrawOwnIdea(userId: string, id: string): Promise<OwnId
 // ── Votes (§60.6) ──────────────────────────────────────────────────────────────────────────────
 
 export type VoteResult = { ok: true; votes: number; voted: boolean } | { ok: false; status: 404 };
-
-/** Upvote (`on`) or un-vote a teaser the viewer can see. Idempotent. */
-export async function voteTeaser(viewer: IdeaViewer, key: string, on: boolean): Promise<VoteResult> {
-  if (!teaserVisibleTo(key, viewer)) return { ok: false, status: 404 };
-  if (on) {
-    await pool.query(`insert into upcoming_votes (upcoming_key, user_id) values ($1, $2) on conflict do nothing`, [key, viewer.userId]);
-  } else {
-    await pool.query(`delete from upcoming_votes where upcoming_key = $1 and user_id = $2`, [key, viewer.userId]);
-  }
-  const { rows } = await pool.query<{ votes: number }>(`select count(*)::int as votes from upcoming_votes where upcoming_key = $1`, [key]);
-  return { ok: true, votes: rows[0]?.votes ?? 0, voted: on };
-}
 
 /**
  * Upvote or un-vote a published idea. Idempotent. The idea row is read FOR SHARE, which waits for a
@@ -552,12 +534,13 @@ export async function editPublishedIdea(actorUserId: string, id: string, input: 
   });
 }
 
-/** Close a published idea with an outcome. Its votes are deleted; Shipped also awards Made It Real. */
+/**
+ * Close a published idea with an outcome. Its votes are deleted; Shipped also awards Made It Real.
+ * Never Planned any more (§60.1 decision 3): being on the list is what "planned" means.
+ */
 export async function closeIdea(actorUserId: string, id: string, input: { outcome: unknown; note: unknown }): Promise<AdminIdeaResult> {
   const outcome = input.outcome;
-  if (outcome !== "planned" && outcome !== "shipped" && outcome !== "duplicate" && outcome !== "wont_do") {
-    return invalid("outcome must be planned, shipped, duplicate or wont_do");
-  }
+  if (!isIdeaCloseOutcome(outcome)) return invalid("outcome must be shipped, duplicate or wont_do");
   const note = validateIdeaNote(input.note);
   if (!note.ok) return invalid(note.error);
   return withLockedIdea(id, async (db, idea) => {
@@ -587,7 +570,7 @@ export async function closeIdea(actorUserId: string, id: string, input: { outcom
   });
 }
 
-/** Planned → Shipped, one way: awards Made It Real and tells the proposer. */
+/** Planned (closed before v2.41.0) → Shipped, one way: awards Made It Real and tells the proposer. */
 export async function markIdeaShipped(actorUserId: string, id: string): Promise<AdminIdeaResult> {
   return withLockedIdea(id, async (db, idea) => {
     if (idea.status !== "closed" || idea.outcome !== "planned") return conflict("only an idea closed as Planned can be marked shipped");

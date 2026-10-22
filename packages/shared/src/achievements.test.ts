@@ -98,20 +98,21 @@ test("AI display name: {name} only in Robot Sidekick's blurb/hint, never in a na
 });
 
 test("unavailableAchievements: locked switch-gated keys only, in catalog order (§31.12.4)", () => {
-  const on: AchievementFlags = { hypeEnabled: true, aiAvailable: true, mcpEnabled: true, marketplaceReachable: true, featureIdeasEnabled: true };
+  const on: AchievementFlags = { hypeEnabled: true, aiAvailable: true, mcpEnabled: true, marketplaceReachable: true };
   assert.deepEqual(unavailableAchievements([], on), []);
   assert.deepEqual(unavailableAchievements([], { ...on, hypeEnabled: false }), ["hype_train", "first_hype", "talent_scout"]);
   assert.deepEqual(unavailableAchievements([], { ...on, aiAvailable: false }), ["first_ai_draft"]);
-  assert.deepEqual(unavailableAchievements([], { ...on, featureIdeasEnabled: false }), ["idea_published", "idea_shipped"]);
   // A missing MCP or marketplace door also closes Three Doors Down…
   assert.deepEqual(unavailableAchievements([], { ...on, mcpEnabled: false }), ["first_mcp", "triple_threat"]);
   assert.deepEqual(unavailableAchievements([], { ...on, marketplaceReachable: false }), ["first_marketplace", "triple_threat"]);
   // …unless that door is already held.
   assert.deepEqual(unavailableAchievements(["first_mcp"], { ...on, mcpEnabled: false }), []);
   // Earned keys are never listed, whatever the switches say.
-  const off: AchievementFlags = { hypeEnabled: false, aiAvailable: false, mcpEnabled: false, marketplaceReachable: false, featureIdeasEnabled: false };
-  assert.deepEqual(unavailableAchievements(["first_hype", "first_ai_draft", "triple_threat", "first_mcp", "first_marketplace", "hype_train", "talent_scout", "idea_published", "idea_shipped"], off), []);
-  assert.equal(unavailableAchievements([], off).length, 9);
+  const off: AchievementFlags = { hypeEnabled: false, aiAvailable: false, mcpEnabled: false, marketplaceReachable: false };
+  assert.deepEqual(unavailableAchievements(["first_hype", "first_ai_draft", "triple_threat", "first_mcp", "first_marketplace", "hype_train", "talent_scout"], off), []);
+  assert.equal(unavailableAchievements([], off).length, 7);
+  // The two feature-idea badges are always available: platform admins can always suggest (§60.8).
+  assert.equal(unavailableAchievements([], off).some((k) => k.startsWith("idea_")), false);
   assert.ok(UNAVAILABLE_HINT.startsWith("Not available here yet"));
 });
 
