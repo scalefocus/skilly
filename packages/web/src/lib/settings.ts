@@ -163,6 +163,8 @@ export interface PlatformSettings {
   surveyEnabled: boolean;
   /** §36.17 bug reports on/off. Ships ON; effective only while `surveyEnabled` is on too. */
   bugReportsEnabled: boolean;
+  /** §60.9 feature ideas (Coming soon votes + suggestions) on/off. Ships ON; OFF is dormant, not destructive. */
+  featureIdeasEnabled: boolean;
   /** §34.9 the stored search language (a PostgreSQL text-search configuration name). The database
    *  resolves what search actually uses (skilly_search_config(), falling back to english). */
   searchLanguage: string;
@@ -199,7 +201,7 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, bugReportsEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, ...digestFields(() => undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, bugReportsEnabled: true, featureIdeasEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, ...digestFields(() => undefined) };
 
 /** §48.2 the five digest keys, flattened into the settings shape (defaults applied). */
 function digestFields(get: (key: string) => unknown): Pick<PlatformSettings, "emailDigestsEnabled" | "emailDigestDefaultMode" | "emailDigestHour" | "emailDigestWeekday" | "emailDigestTypes"> {
@@ -254,6 +256,7 @@ async function loadPlatformSettings(db: Pool): Promise<PlatformSettings> {
     rumFlushIntervals: coerceRumFlushIntervals(map.get("rum_flush_intervals")),
     surveyEnabled: map.get("survey_enabled") !== false,
     bugReportsEnabled: map.get("bug_reports_enabled") !== false,
+    featureIdeasEnabled: map.get("feature_ideas_enabled") !== false,
     searchLanguage: typeof map.get("search_language") === "string" ? (map.get("search_language") as string) : DEFAULTS.searchLanguage,
     aiDisplayName: coerceAiDisplayName(map.get("ai_display_name")),
     ...digestFields((k) => map.get(k)),
@@ -361,6 +364,26 @@ export async function setBugReportsEnabled(enabled: boolean, actorUserId: string
     targetId: "bug_reports_enabled",
     after: { bugReportsEnabled: enabled },
   });
+}
+
+/**
+ * §60.9 the feature-ideas switch. OFF hides votes, suggestions and idea rows (Coming soon falls back to
+ * the §23 list), 404s the user routes and makes the admin page read-only; nothing is deleted.
+ */
+export async function setFeatureIdeasEnabled(enabled: boolean, actorUserId: string): Promise<void> {
+  await writeSetting("feature_ideas_enabled", enabled, actorUserId);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "feature_ideas_enabled",
+    after: { featureIdeasEnabled: enabled },
+  });
+}
+
+/** Is §60 feature ideas on? Read by every /api/coming-soon route and the admin page. */
+export async function getFeatureIdeasEnabled(db: Pool = pool): Promise<boolean> {
+  return (await getPlatformSettings(db)).featureIdeasEnabled;
 }
 
 /** Are §31 achievements shown? Read by the profile card, the hall, the hover card and the award helper. */
@@ -591,6 +614,16 @@ export async function setUserHypeNotifications(userId: string, enabled: boolean)
 
 export async function setUserDiscussionNotifications(userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set discussion_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
+/** §60.9 "Show my name on feature ideas I suggest" — stored inverted, applied live to every idea. */
+export async function setUserIdeaAttributionHidden(userId: string, hidden: boolean): Promise<void> {
+  await pool.query(`update users set idea_attribution_hidden = $2, updated_at = now() where id = $1`, [userId, hidden]);
+}
+
+/** §60.7 a platform admin's opt-out of `idea.submitted` (row-level, like the maintainer opt-outs). */
+export async function setUserIdeaNotifications(userId: string, enabled: boolean): Promise<void> {
+  await pool.query(`update users set idea_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);
 }
 
 /** When the user last opened the Catalog / Review queue / System log / Requested skills — drives

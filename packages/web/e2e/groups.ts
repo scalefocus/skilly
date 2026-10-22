@@ -32,6 +32,7 @@ export const EXCLUSIVE: readonly string[] = [
   "deprecation.spec.ts", // deprecates the seeded global/lint-fixer
   "email-digests.spec.ts", // platform settings: digest switch and defaults
   "email-notifications.spec.ts", // the platform email wrapper (Administration card)
+  "feature-ideas.spec.ts", // a published idea changes Coming soon for every user; the feature switch
   "featured-skills.spec.ts", // features the seeded global/pdf-tools on the home page
   "hype.spec.ts", // platform settings: hype switch
   "maintainer-contact.spec.ts", // team-a namespace settings

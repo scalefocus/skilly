@@ -6,14 +6,15 @@ import type { AchievementFlags } from "@skilly/shared/achievements";
 import { aiAvailable } from "./ai";
 import { getHypeSettings } from "./hype";
 import { marketplaceReachable } from "./marketplaceDirectory";
-import { getMarketplacePublicEnabled, getMcpEnabled } from "./settings";
+import { getFeatureIdeasEnabled, getMarketplacePublicEnabled, getMcpEnabled } from "./settings";
 
 export async function achievementFlagsFor(access: EffectiveAccess): Promise<AchievementFlags> {
-  const [hype, ai, mcp, publicEnabled] = await Promise.all([getHypeSettings(), aiAvailable(), getMcpEnabled(), getMarketplacePublicEnabled()]);
+  const [hype, ai, mcp, publicEnabled, ideas] = await Promise.all([getHypeSettings(), aiAvailable(), getMcpEnabled(), getMarketplacePublicEnabled(), getFeatureIdeasEnabled()]);
   return {
     hypeEnabled: hype.enabled,
     aiAvailable: ai,
     mcpEnabled: mcp,
     marketplaceReachable: await marketplaceReachable(access, publicEnabled),
+    featureIdeasEnabled: ideas,
   };
 }

@@ -21,6 +21,8 @@ import {
   setUserDirectoryHidden,
   setUserAchievementsHidden,
   setUserAllowFollows,
+  setUserIdeaAttributionHidden,
+  setUserIdeaNotifications,
 } from "../../../lib/settings";
 import { invalidateLeaderboard } from "../../../lib/leaderboard";
 import { invalidateLevels } from "../../../lib/levels";
@@ -67,6 +69,8 @@ export async function GET() {
             policy_notifications: boolean;
             ai_prereview_notifications: boolean;
             hype_notifications: boolean;
+            idea_attribution_hidden: boolean;
+            idea_notifications: boolean;
             directory_hidden: boolean;
             achievements_hidden: boolean;
             allow_follows: boolean;
@@ -77,7 +81,7 @@ export async function GET() {
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, email_digest, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, hype_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, email_digest, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, hype_notifications, idea_attribution_hidden, idea_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -143,6 +147,11 @@ export async function GET() {
     // §50.7 hype milestones on skills they maintain (row-level), and whether hype is on at all.
     hypeNotifications: prefs?.hype_notifications ?? true,
     hypeEnabled,
+    // §60.9 feature ideas: the "show my name" toggle (stored inverted), a platform admin's opt-out of
+    // the review-queue notification, and whether the feature is on (the profile hides both while off).
+    ideaAttributionHidden: prefs?.idea_attribution_hidden ?? false,
+    ideaNotifications: prefs?.idea_notifications ?? true,
+    featureIdeasEnabled: settings.featureIdeasEnabled,
     // §28 directory opt-out: hide job title / office / department from other people's hover cards.
     directoryHidden: prefs?.directory_hidden ?? false,
     // §31 achievements opt-out: hide earned badges from other people (the hall + hover card).
@@ -211,6 +220,8 @@ export async function PATCH(req: Request) {
     policyNotifications?: boolean;
     aiPrereviewNotifications?: boolean;
     hypeNotifications?: boolean;
+    ideaAttributionHidden?: boolean;
+    ideaNotifications?: boolean;
     directoryHidden?: boolean;
     achievementsHidden?: boolean;
     allowFollows?: boolean;
@@ -258,6 +269,13 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.hypeNotifications === "boolean") {
     await setUserHypeNotifications(access.userId, body.hypeNotifications);
+  }
+  // §60.9 feature ideas: the attribution opt-out and the admin's review-queue notification opt-out.
+  if (typeof body.ideaAttributionHidden === "boolean") {
+    await setUserIdeaAttributionHidden(access.userId, body.ideaAttributionHidden);
+  }
+  if (typeof body.ideaNotifications === "boolean") {
+    await setUserIdeaNotifications(access.userId, body.ideaNotifications);
   }
   if (typeof body.aiPrereviewNotifications === "boolean") {
     await setUserAiPrereviewNotifications(access.userId, body.aiPrereviewNotifications);

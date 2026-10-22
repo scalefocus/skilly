@@ -1,5 +1,6 @@
 // The spec ⇄ "Coming soon" consistency check (SKILLY_SPEC.md §23 "Coming soon"). Pure — the unit
 // test feeds it the real SKILLY_SPEC.md text plus fixture strings. Not imported by the page.
+import { isUpcomingKey } from "@skilly/shared/ideas";
 import type { UpcomingEntry } from "./upcoming";
 
 export type GapKind = "new feature" | "code fix";
@@ -25,9 +26,14 @@ export function upcomingProblems(spec: string, entries: readonly UpcomingEntry[]
   const openFeatures = new Set(markers.filter((m) => m.kind === "new feature").map((m) => m.id));
 
   const owners = new Map<string, number>();
+  const keys = new Set<string>();
   entries.forEach((e, i) => {
     const label = `UPCOMING[${i}] "${e.title}"`;
     if (e.ids.length === 0) problems.push(`${label} has no ids`);
+    // §60.3 the vote key: present, kebab-case, ≤ 60 characters, unique.
+    if (!isUpcomingKey(e.key)) problems.push(`${label} has a missing or malformed key`);
+    else if (keys.has(e.key)) problems.push(`${label} reuses the key "${e.key}"`);
+    else keys.add(e.key);
     for (const id of e.ids) {
       if (!openFeatures.has(id)) problems.push(`${label} lists ${id}, which is not an open new-feature marker`);
       owners.set(id, (owners.get(id) ?? 0) + 1);

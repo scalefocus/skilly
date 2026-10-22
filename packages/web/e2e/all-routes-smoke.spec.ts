@@ -26,6 +26,7 @@ const ROUTES = [
   "/quick-start",
   "/whats-new",
   "/admin",
+  "/admin/ideas",
 ];
 
 test.describe("all-routes smoke", () => {

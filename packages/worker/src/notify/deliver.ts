@@ -21,6 +21,7 @@ import type { Pool } from "pg";
 import { GraphSendError } from "@skilly/shared/email";
 import {
   followNotificationContent,
+  ideaNotificationContent,
   isFollowNotificationType,
   notificationTitle,
   contentRiskRuleLabel,
@@ -443,6 +444,17 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: `${follow.sentence} ${cta(follow.ctaLabel, follow.path)}`,
       webhook: { event: n.type, title: s, actor: typeof p.actorName === "string" ? p.actorName : null, url: abs(follow.path) },
+    };
+  }
+
+  // idea.* (§60.7) — the shared wording, so the inbox and the email never disagree.
+  const idea = ideaNotificationContent(n.type, p);
+  if (idea) {
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${idea.sentence}${idea.detail ? `\n\n${idea.detail}` : ""} ${cta(idea.ctaLabel, idea.path)}`,
+      webhook: { event: n.type, title: s, ideaId: typeof p.ideaId === "string" ? p.ideaId : null, url: abs(idea.path) },
     };
   }
 

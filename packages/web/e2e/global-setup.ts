@@ -59,6 +59,7 @@ const PAGES = [
   "/profile",
   "/admin",
   "/admin/rum",
+  "/admin/ideas",
   "/namespaces",
   "/installed",
   "/catalog",

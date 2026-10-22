@@ -26,8 +26,8 @@ import {
   type AchievementFlags,
 } from "./achievements.js";
 
-test("catalog: 31 badges, unique keys, every field populated, known groups", () => {
-  assert.equal(ACHIEVEMENTS.length, 31);
+test("catalog: 33 badges, unique keys, every field populated, known groups", () => {
+  assert.equal(ACHIEVEMENTS.length, 33);
   assert.equal(new Set(ACHIEVEMENTS.map((a) => a.glyph)).size, ACHIEVEMENTS.length, "glyphs are unique");
   assert.equal(new Set(ACHIEVEMENT_KEYS).size, ACHIEVEMENTS.length);
   for (const a of ACHIEVEMENTS) {
@@ -74,6 +74,14 @@ test("catalog: the five §31.12 badges, in their groups and positions", () => {
   after("talent_scout", "first_hype");
 });
 
+test("catalog: the two §60.8 feature-idea badges sit in Ask after Wish Granted", () => {
+  const after = (key: string, prev: string) => assert.equal(ACHIEVEMENT_KEYS.indexOf(key), ACHIEVEMENT_KEYS.indexOf(prev) + 1, `${key} follows ${prev}`);
+  assert.deepEqual([achievementDef("idea_published")?.name, achievementDef("idea_published")?.group, achievementDef("idea_published")?.glyph], ["Bright Idea", "Ask", "💡"]);
+  assert.deepEqual([achievementDef("idea_shipped")?.name, achievementDef("idea_shipped")?.group, achievementDef("idea_shipped")?.glyph], ["Made It Real", "Ask", "🛠️"]);
+  after("idea_published", "request_fulfilled");
+  after("idea_shipped", "idea_published");
+});
+
 test("AI display name: {name} only in Robot Sidekick's blurb/hint, never in a name (§31.12.5)", () => {
   for (const a of ACHIEVEMENTS) {
     assert.ok(!a.name.includes(AI_NAME_TOKEN), `${a.key}.name`);
@@ -90,19 +98,20 @@ test("AI display name: {name} only in Robot Sidekick's blurb/hint, never in a na
 });
 
 test("unavailableAchievements: locked switch-gated keys only, in catalog order (§31.12.4)", () => {
-  const on: AchievementFlags = { hypeEnabled: true, aiAvailable: true, mcpEnabled: true, marketplaceReachable: true };
+  const on: AchievementFlags = { hypeEnabled: true, aiAvailable: true, mcpEnabled: true, marketplaceReachable: true, featureIdeasEnabled: true };
   assert.deepEqual(unavailableAchievements([], on), []);
   assert.deepEqual(unavailableAchievements([], { ...on, hypeEnabled: false }), ["hype_train", "first_hype", "talent_scout"]);
   assert.deepEqual(unavailableAchievements([], { ...on, aiAvailable: false }), ["first_ai_draft"]);
+  assert.deepEqual(unavailableAchievements([], { ...on, featureIdeasEnabled: false }), ["idea_published", "idea_shipped"]);
   // A missing MCP or marketplace door also closes Three Doors Down…
   assert.deepEqual(unavailableAchievements([], { ...on, mcpEnabled: false }), ["first_mcp", "triple_threat"]);
   assert.deepEqual(unavailableAchievements([], { ...on, marketplaceReachable: false }), ["first_marketplace", "triple_threat"]);
   // …unless that door is already held.
   assert.deepEqual(unavailableAchievements(["first_mcp"], { ...on, mcpEnabled: false }), []);
   // Earned keys are never listed, whatever the switches say.
-  const off: AchievementFlags = { hypeEnabled: false, aiAvailable: false, mcpEnabled: false, marketplaceReachable: false };
-  assert.deepEqual(unavailableAchievements(["first_hype", "first_ai_draft", "triple_threat", "first_mcp", "first_marketplace", "hype_train", "talent_scout"], off), []);
-  assert.equal(unavailableAchievements([], off).length, 7);
+  const off: AchievementFlags = { hypeEnabled: false, aiAvailable: false, mcpEnabled: false, marketplaceReachable: false, featureIdeasEnabled: false };
+  assert.deepEqual(unavailableAchievements(["first_hype", "first_ai_draft", "triple_threat", "first_mcp", "first_marketplace", "hype_train", "talent_scout", "idea_published", "idea_shipped"], off), []);
+  assert.equal(unavailableAchievements([], off).length, 9);
   assert.ok(UNAVAILABLE_HINT.startsWith("Not available here yet"));
 });
 
@@ -204,15 +213,15 @@ test("habitKeysFor: both, one, or none", () => {
 
 test("ACHIEVEMENT_TOTAL is the catalog size — the level's denominator", () => {
   assert.equal(ACHIEVEMENT_TOTAL, ACHIEVEMENTS.length);
-  assert.equal(ACHIEVEMENT_TOTAL, 31);
+  assert.equal(ACHIEVEMENT_TOTAL, 33);
 });
 
 test("levelLabel / levelAriaLabel: the level is the count, Hero is the stamp", () => {
-  assert.equal(levelLabel(0, false), "Level 0 — 0 of 31");
-  assert.equal(levelLabel(7, false), "Level 7 — 7 of 31");
-  assert.equal(levelLabel(31, true), "Hero — 31 of 31");
-  assert.equal(levelAriaLabel(7, false), "Level 7 of 31");
-  assert.equal(levelAriaLabel(31, true), "Hero — 31 of 31");
+  assert.equal(levelLabel(0, false), "Level 0 — 0 of 33");
+  assert.equal(levelLabel(7, false), "Level 7 — 7 of 33");
+  assert.equal(levelLabel(33, true), "Hero — 33 of 33");
+  assert.equal(levelAriaLabel(7, false), "Level 7 of 33");
+  assert.equal(levelAriaLabel(33, true), "Hero — 33 of 33");
 });
 
 test("a grown catalog never demotes a Hero (§31.10 'never demote')", () => {

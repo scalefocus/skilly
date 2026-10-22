@@ -1848,3 +1848,35 @@ a.mention-chip:hover { text-decoration: underline; }
 .coming-soon-row-teaser { margin: 2px 0 0; font-size: 13.5px; line-height: 1.5; }
 @keyframes coming-soon-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .coming-soon-list { animation: none; } }
+
+/* Feature ideas (§60.3): the "Suggest a feature" button BESIDE the expand control (never inside it),
+   an upvote at each row's trailing edge, and the viewer's own ideas under the list. Rows keep the
+   muted, dashed look — only the vote control takes the accent once pressed. */
+.coming-soon-headrow { display: flex; align-items: stretch; gap: 10px; }
+.coming-soon-headrow .coming-soon-head { flex: 1; min-width: 0; width: auto; }
+.coming-soon-suggest { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 560px) {
+  .coming-soon-headrow { flex-direction: column; }
+  .coming-soon-suggest { align-self: flex-start; }
+}
+.coming-soon-empty { margin: 10px 0 0; font-size: 13.5px; }
+.coming-soon-voted { display: flex; align-items: flex-start; gap: 12px; }
+.coming-soon-row-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.coming-soon-row-by { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12.5px; }
+.vote-btn {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0;
+  min-width: 44px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--muted); font: inherit; cursor: pointer;
+}
+.vote-btn:hover { border-color: var(--muted); color: var(--ink); }
+.vote-btn.vote-on { border-color: var(--accent); color: var(--accent); }
+.vote-count { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.your-ideas { margin-top: 18px; }
+.your-ideas-title { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+.your-ideas-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.your-idea { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.your-idea-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.your-idea-title { font-weight: 600; font-size: 14px; margin-top: 6px; }
+.your-idea-text { margin: 4px 0 0; font-size: 13.5px; line-height: 1.5; white-space: pre-line; }
+.your-idea-note { margin: 6px 0 0; font-size: 12.5px; white-space: pre-line; }
+.your-idea-actions { display: flex; gap: 6px; margin-top: 8px; }

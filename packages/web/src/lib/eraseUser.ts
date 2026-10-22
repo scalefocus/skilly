@@ -137,6 +137,12 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // touched: they carry no user reference, so there is nothing to erase. Mirrored in worker
     // scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from user_feature_uses where user_id = $1`, [targetUserId]);
+    // Feature ideas (§60.9): published ideas stay (shown unattributed — the tombstone has erased_at),
+    // every other idea of theirs goes, and so does every vote they cast (counts drop). Mirrored in
+    // worker scim/store.ts eraseUserByExternalId — keep the two in sync.
+    await client.query(`delete from feature_ideas where author_id = $1 and status <> 'published'`, [targetUserId]);
+    await client.query(`delete from feature_idea_votes where user_id = $1`, [targetUserId]);
+    await client.query(`delete from upcoming_votes where user_id = $1`, [targetUserId]);
 
     // Scrub + detach the row (tombstone). Detaching entra_object_id lets a returning person get a
     // brand-new account. The display label retains the former email ("<email> - Deleted") so a
@@ -154,6 +160,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
               achievements_hidden = false, time_zone = null, hero_at = null, allow_follows = true,
               surveys_enabled = true, survey_last_shown_at = null, survey_offer = null, survey_self_shown_at = null,
               email_digest = null, email_digest_last_run_at = null, email_digest_failures = 0,
+              idea_attribution_hidden = false, idea_notifications = true,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [targetUserId, deletedLabel],

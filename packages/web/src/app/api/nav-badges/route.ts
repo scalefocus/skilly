@@ -1,6 +1,7 @@
 // Nav badge counts + "mark seen" for the Catalog / Review queue / System log / Requested skills
 // sidebar items.
-// GET  -> { catalog, review, systemLog, requests } counts of items new since the user last opened each.
+// GET  -> { catalog, review, systemLog, requests } counts of items new since the user last opened each,
+//         plus `ideas` — the platform admin's pending feature ideas (§60.5), a plain count with no marker.
 // POST { surface: "catalog" | "review" | "system-log" | "requests" } -> records a view (clears that badge).
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
