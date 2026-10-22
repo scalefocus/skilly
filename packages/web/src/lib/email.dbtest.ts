@@ -16,6 +16,7 @@ test("email channel: wrapper save + status pill + connect/disconnect audit", { s
   const { Pool } = await import("pg");
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const { getEmailChannelStatus, saveEmailWrapper, disconnectEmail, finishConnect, webGraphMailEnv } = await import("./email");
+  const { decryptToken } = await import("@skilly/shared/email");
   try {
     const actor = (await pool.query<{ id: string }>(
       `insert into users (entra_object_id, email, display_name) values ('email-admin-oid','eadmin@t','EAdmin')
@@ -44,7 +45,9 @@ test("email channel: wrapper save + status pill + connect/disconnect audit", { s
 
     // Connect (store) → status reflects the account; audit records the (null) replaced UPN.
     const env = webGraphMailEnv()!;
-    const tokens = { accessToken: "AT", refreshToken: "RT", expiresInSec: 3600, idToken: "x" };
+    // "-" is outside the base64 alphabet, so the plaintext can never occur by chance in the
+    // random `v1:<iv>:<tag>:<ct>` ciphertext (a two-letter token like "RT" did, ~1% of runs).
+    const tokens = { accessToken: "plain-access-token", refreshToken: "plain-refresh-token", expiresInSec: 3600, idToken: "x" };
     await finishConnect(env, { claims: { oid: "svc-oid", upn: "svc@t", name: "Svc" }, tokens, actorUserId: actor });
     status = await getEmailChannelStatus();
     assert.equal(status.connected, true);
@@ -53,7 +56,9 @@ test("email channel: wrapper save + status pill + connect/disconnect audit", { s
     assert.equal(status.pill, "operational");
     // Tokens are encrypted at rest — never the raw value.
     const rawRow = await pool.query<{ refresh_token_enc: string }>(`select refresh_token_enc from email_service_account`);
-    assert.ok(!rawRow.rows[0]!.refresh_token_enc.includes("RT"));
+    const storedRefresh = rawRow.rows[0]!.refresh_token_enc;
+    assert.ok(!storedRefresh.includes("plain-refresh-token"));
+    assert.equal(decryptToken(storedRefresh, env.key), "plain-refresh-token");
 
     // Re-connect replaces atomically and records the replaced UPN in the audit payload.
     await finishConnect(env, { claims: { oid: "svc2-oid", upn: "svc2@t", name: "Svc2" }, tokens, actorUserId: actor });
