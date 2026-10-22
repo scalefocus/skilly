@@ -3,10 +3,12 @@
 // Pending (oldest first): Publish… (adds the title, may tidy the text) or Reject… (optional reason).
 // Published (most-voted first) is everything on Coming soon, the items with no proposer included:
 // Edit… or Close… as Shipped, Duplicate or Won't do. Closed: rejected and closed ideas, read-only,
-// with Mark shipped on an idea closed as Planned before v2.41.0. Every write answers 409 when someone
-// else got there first; the list then reloads. While suggestions are off for everyone else, a notice
-// says so; every action stays available.
+// with Mark shipped on an idea closed as Planned before v2.41.0. Every card in every tab ends with
+// Delete…, which removes the idea for good without telling its proposer. Every write answers 409 when
+// someone else got there first; the list then reloads. While suggestions are off for everyone else, a
+// notice says so; every action stays available.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
   IDEA_DESCRIPTION_MAX,
@@ -53,8 +55,10 @@ interface ListResponse {
 }
 
 type DialogState =
-  | { kind: "publish" | "reject" | "edit" | "close"; idea: AdminIdea }
+  | { kind: "publish" | "reject" | "edit" | "close" | "delete"; idea: AdminIdea }
   | null;
+
+type Act = (url: string, method: string, body?: unknown, success?: string) => Promise<boolean>;
 
 const TABS: { tab: Tab; label: string }[] = [
   { tab: "pending", label: "Pending" },
@@ -70,6 +74,13 @@ function AdminIdeas() {
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const load = useCallback(async (t: Tab, offset = 0) => {
     try {
@@ -87,11 +98,13 @@ function AdminIdeas() {
     if (me?.isPlatformAdmin) void load(tab);
   }, [me?.isPlatformAdmin, tab, load]);
 
-  // One write: 204 → reload; anything else → the server's message, then reload (409 means stale).
-  const act = async (url: string, method: string, body?: unknown): Promise<boolean> => {
+  // One write: 204 → reload (and the success toast, if any); anything else → the server's message,
+  // then reload (409 means stale).
+  const act: Act = async (url, method, body, success) => {
     const r = await fetch(url, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined }).catch(() => null);
     if (r?.ok) {
       setNotice(null);
+      if (success) setToast(success);
       await load(tab);
       return true;
     }
@@ -211,6 +224,7 @@ function AdminIdeas() {
                     Mark shipped
                   </button>
                 )}
+                <button type="button" className="btn btn-danger" style={{ marginLeft: "auto" }} disabled={disabled} onClick={() => setDialog({ kind: "delete", idea })} data-testid="idea-delete">Delete…</button>
               </div>
             </article>
           ))}
@@ -221,11 +235,12 @@ function AdminIdeas() {
       )}
 
       {dialog && <IdeaDialog state={dialog} onClose={() => setDialog(null)} act={act} />}
+      {toast && typeof document !== "undefined" && createPortal(<div className="toast" role="status">{toast}</div>, document.body)}
     </div>
   );
 }
 
-function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; onClose: () => void; act: (url: string, method: string, body?: unknown) => Promise<boolean> }) {
+function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; onClose: () => void; act: Act }) {
   const { kind, idea } = state;
   const [title, setTitle] = useState(idea.title ?? "");
   const [description, setDescription] = useState(idea.description);
@@ -251,13 +266,16 @@ function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; 
       kind === "publish" ? await act(`${base}/publish`, "POST", { title, description, expectedUpdatedAt: idea.version })
       : kind === "reject" ? await act(`${base}/reject`, "POST", { reason: note, expectedUpdatedAt: idea.version })
       : kind === "edit" ? await act(base, "PATCH", { title, description })
+      : kind === "delete" ? await act(`${base}/delete`, "POST", { reason: note, expectedUpdatedAt: idea.version }, "Idea deleted")
       : await act(`${base}/close`, "POST", { outcome, note });
     setBusy(false);
     if (ok) onClose();
   };
 
-  const heading = kind === "publish" ? "Publish idea" : kind === "reject" ? "Reject idea" : kind === "edit" ? "Edit idea" : "Close idea";
-  const action = kind === "publish" ? "Publish" : kind === "reject" ? "Reject" : kind === "edit" ? "Save" : "Close idea";
+  const heading = kind === "publish" ? "Publish idea" : kind === "reject" ? "Reject idea" : kind === "edit" ? "Edit idea" : kind === "delete" ? "Delete this idea?" : "Close idea";
+  const action = kind === "publish" ? "Publish" : kind === "reject" ? "Reject" : kind === "edit" ? "Save" : kind === "delete" ? "Delete" : "Close idea";
+  const submitClass = kind === "delete" ? "btn btn-danger" : kind === "reject" ? "btn" : "btn btn-primary";
+  const votes = `${idea.votes} vote${idea.votes === 1 ? "" : "s"}`;
   return (
     <Modal
       title={heading}
@@ -266,7 +284,7 @@ function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; 
       footer={
         <>
           <button type="button" className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="button" className={`btn ${kind === "reject" ? "" : "btn-primary"}`} onClick={() => void submit()} disabled={!valid || busy} data-testid="idea-dialog-submit">{action}</button>
+          <button type="button" className={submitClass} onClick={() => void submit()} disabled={!valid || busy} data-testid="idea-dialog-submit">{action}</button>
         </>
       }
     >
@@ -299,13 +317,20 @@ function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; 
           </p>
         </fieldset>
       )}
-      {(kind === "reject" || kind === "close") && (
+      {kind === "delete" && (
+        <p style={{ fontSize: 14, marginTop: 0 }} data-testid="idea-delete-warning">
+          {idea.status === "published"
+            ? `This removes the idea and its ${votes} for good. Its proposer isn't told, and it can't be undone. To settle an item on Coming soon, close it instead.`
+            : "This removes the idea for good. Its proposer isn't told, and it can't be undone."}
+        </p>
+      )}
+      {(kind === "reject" || kind === "close" || kind === "delete") && (
         <>
           <label htmlFor={noteId} style={{ display: "block", fontWeight: 600, fontSize: 14, marginBottom: 6 }}>
-            {kind === "reject" ? "Reason (optional)" : "Note (optional)"}
+            {kind === "reject" ? "Reason (optional)" : kind === "delete" ? "Reason (kept in the audit log, not shown to the proposer)" : "Note (optional)"}
           </label>
           <textarea
-            ref={kind === "reject" ? first : undefined}
+            ref={kind === "reject" || kind === "delete" ? first : undefined}
             id={noteId}
             className="input"
             rows={3}
@@ -315,7 +340,9 @@ function IdeaDialog({ state, onClose, act }: { state: NonNullable<DialogState>; 
             style={{ width: "100%", resize: "vertical", fontSize: 14 }}
             data-testid="idea-note"
           />
-          <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>{idea.author ? "The proposer sees this." : "Only platform admins see this."}</p>
+          {kind !== "delete" && (
+            <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>{idea.author ? "The proposer sees this." : "Only platform admins see this."}</p>
+          )}
         </>
       )}
     </Modal>

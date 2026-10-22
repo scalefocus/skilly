@@ -359,7 +359,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`ai_prereview_dispositions`** — append-only Agree/Dismiss per finding `fingerprint`, keyed to a proposal **or** a version; `decided_by` (FK → `users`, SET NULL), `reason` (≤ 500). The same migration adds `skill_versions.ai_prereview_notified_at` and `users.ai_prereview_notifications` (default true).
 
 ### `feature_ideas` / `feature_idea_votes` (migrations 0100 and 0101, detailed in §60)
-- **`feature_ideas`** — every What's new *Coming soon* item: a feature suggestion goes `pending` → `published` (on *Coming soon*) → `closed` with an outcome, or `rejected` / `withdrawn`; the proposer's own text is kept beside the admin-edited one. Items seeded by migration 0101 have no proposer (§60.2).
+- **`feature_ideas`** — every What's new *Coming soon* item: a feature suggestion goes `pending` → `published` (on *Coming soon*) → `closed` with an outcome, or `rejected` / `withdrawn`; the proposer's own text is kept beside the admin-edited one. Items seeded by migration 0101 have no proposer (§60.2). A platform admin may **hard-delete** any idea the admin page shows (§60.5).
 - **`feature_idea_votes`** — one upvote per user per published item; mutable personal rows, CASCADE on the user (§60.6). (Migration 0101 moved the former `upcoming_votes` rows here and dropped that table.)
 
 ---
@@ -1225,7 +1225,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
   - **Email digests (§48.13):** `settings.updated` for the five `email_digest*` platform keys. The user's digest choice and the digest sends are **not audited**.
   - **Feedback survey (§36.11):** submissions, closes and first uses are **never audited** (an audit row would tie a person to an anonymous response). Audited: `settings.updated` for `survey_enabled` and `bug_reports_enabled` (§36.17), and **`survey.response_deleted`** (the admin; `before` = date, trigger, feature, segment, catalog version, answer count and text length — **never the text or a bug report's page path**). Bug reports (§36.17) are never audited either.
-  - **Feature ideas (§60.10):** `idea.published`, `idea.rejected`, `idea.updated`, `idea.closed` (outcome, note, deleted vote count), `idea.marked_shipped`, and `settings.updated` for `feature_ideas_enabled`. Submitting, editing or withdrawing an idea, votes and the two profile toggles are **not audited**.
+  - **Feature ideas (§60.10):** `idea.published`, `idea.rejected`, `idea.updated`, `idea.closed` (outcome, note, deleted vote count), `idea.marked_shipped`, `idea.deleted` (a snapshot of the deleted row, the reason, the deleted vote count), and `settings.updated` for `feature_ideas_enabled`. Submitting, editing or withdrawing an idea, votes and the two profile toggles are **not audited**.
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
 - **Retention:** configurable, **default indefinite**. **SIEM export via syslog/stdout** (structured JSON).
 - **Hash-chaining deferred.**
@@ -12444,8 +12444,8 @@ sweep, and so **is** a Habits event. While `hype_enabled` is off, all three hype
 The What's new page's *Coming soon* list (§23) is skilly's roadmap, and **every item on it is a
 database row**. A signed-in user **suggests a feature** in a text box, a platform admin reviews it
 and **publishes** the good ones to the list, and everyone **upvotes** them. The list is ordered by
-votes: **the most-voted items are next in line**. Platform admins edit published items and close
-them once they ship or are settled. Two badges reward a suggestion that gets published and one that
+votes: **the most-voted items are next in line**. Platform admins edit published items, close
+them once they ship or are settled, and may delete any idea outright. Two badges reward a suggestion that gets published and one that
 ships. (Until v2.41.0 the list also held teasers written in code for spec-ahead features. Migration
 0101 turned them into ordinary items, §60.2.)
 
@@ -12468,6 +12468,7 @@ ships. (Until v2.41.0 the list also held teasers written in code for spec-ahead 
 | 14 | On **erasure**, published ideas stay but lose their name; every other idea of the user and every vote they cast is deleted. | The community's votes outlive the person; their personal trail does not. |
 | 15 | **No MCP tool, no leaderboard credit, no follower fan-out** beyond the achievement's own. Votes and the proposer's own actions are **not audited**; admin decisions are. | §29's "fold before adding surface"; §11's posture for personal rows. |
 | 16 | **No audience.** Every published item is shown to every signed-in user. | The user's call. (The code teasers could be limited to admins; the two that were became visible to everyone in v2.41.0.) |
+| 17 | **Platform admins may delete any idea** the admin page shows (pending, published, rejected or closed, seeded items included), **one at a time**. It is a **hard delete**: the row and its votes go, the proposer is **not told**, and their earlier notifications about the idea go too. Badges stay. The reason is optional and lives only in the `idea.deleted` audit row, which keeps a snapshot of what was deleted. | The user's call: a way to remove junk, test data and anything that should never have been listed, beyond Reject and Close. |
 
 ### 60.2 Data model (migrations 0100 and 0101)
 - **`feature_ideas`**: `id` (uuid PK), `author_id` (FK → `users`, `ON DELETE SET NULL`; NULL on
@@ -12605,7 +12606,7 @@ how it behaves.
 - **Three tabs**, each with its count:
   - **Pending**, oldest first. Each card shows the proposer (name and hover card, always, with a
     *"name hidden from users"* note when they opted out), the submitted time, the description and
-    two actions:
+    two actions, plus **Delete…** (below):
     - **Publish…**: a dialog with **Title** (required, 3–80) and **Description** (prefilled,
       20–1,000, editable), plus the reminder *"Published ideas are visible to every signed-in user.
       Remove names of people, restricted skills and namespaces."* Publishing sets `status =
@@ -12620,16 +12621,39 @@ how it behaves.
   - **Published**: everything on *Coming soon*, most-voted first. Each card shows the vote count,
     title, description, proposer (or a muted *"No proposer"* on the items seeded by migration 0101)
     and published date, with a **Show original** disclosure when the published text differs from
-    `submitted_description`. Two actions, on every published item, seeded ones included:
+    `submitted_description`. Two actions, plus **Delete…** (below), on every published item, seeded
+    ones included:
     - **Edit…**: title and description (same bounds), with no notification.
     - **Close…**: an **Outcome** choice (*Shipped*, *Duplicate*, *Won't do*; required; decision 3)
       and an optional **Note** (≤ 500). Closing records the outcome and `closed_*` (`shipped_at`
       too for *Shipped*), **deletes the idea's votes** (their count goes into the audit row first)
       and notifies the proposer, if there is one. *Shipped* also awards them *Made It Real*.
-  - **Closed**: rejected and closed ideas, newest decision first, 50 per page, read-only, with
-    outcome chip, note or reason and dates. An idea closed as **Planned** before v2.41.0 carries a
-    **Mark shipped** action: a one-way move to `shipped` that sets `shipped_at`, awards *Made It
-    Real* and notifies the proposer.
+  - **Closed**: rejected and closed ideas, newest decision first, 50 per page, read-only apart from
+    **Delete…** (below), with outcome chip, note or reason and dates. An idea closed as **Planned**
+    before v2.41.0 carries a **Mark shipped** action: a one-way move to `shipped` that sets
+    `shipped_at`, awards *Made It Real* and notifies the proposer.
+- **Delete…** (decision 17) is the last action on every card in all three tabs, styled as a
+  destructive action. It opens a confirm dialog titled **"Delete this idea?"** with an optional
+  **Reason** (≤ 500 characters, labelled *"Reason (kept in the audit log, not shown to the
+  proposer)"*) and the text *"This removes the idea for good. Its proposer isn't told, and it can't
+  be undone."* On a published item the text reads *"This removes the idea and its N votes for good.
+  Its proposer isn't told, and it can't be undone. To settle an item on Coming soon, close it
+  instead."* The confirm button is a destructive **Delete**.
+  - **One transaction**, under the row lock. A pending card sends its `version` as
+    `expectedUpdatedAt`, like Publish and Reject, and gets **409** *"this idea changed since you
+    opened it"* if the proposer edited it since the page loaded. Other statuses need no version.
+    An idea the proposer withdrew, or that another admin already deleted, answers **404**.
+  - **Order:** write the `idea.deleted` audit row (§60.10); delete the author's notifications of
+    the four author types (`idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped`) whose
+    `payload.ideaId` is this idea, read or unread; delete the row. Its votes go with it (FK
+    CASCADE).
+  - **Nothing else changes.** No notification goes out, and no badge is awarded or revoked
+    (§60.8). The coalesced `idea.submitted` rows carry only a count and are left alone.
+  - **Effects.** The idea leaves *Coming soon* (and its count N), the proposer's *Your ideas* and
+    this page. The nav badge drops on its next poll. A deleted idea no longer counts toward its
+    proposer's limits (§60.4, §60.12). A deleted notification whose email has not gone out yet is
+    never emailed; an email already sent stays sent.
+  - On success the card leaves its tab, the tab counts update and a toast says *"Idea deleted"*.
 - Every admin write runs in a transaction that re-reads the row `FOR UPDATE` and checks its status,
   so two admins cannot decide one idea twice: the second gets **409**.
 
@@ -12640,7 +12664,7 @@ how it behaves.
   never reveals a pending or rejected idea.
 - Rate limit **120 / min** per user (the watch endpoint's limit). Votes are not audited and earn no
   badge.
-- Closing an idea deletes its votes.
+- Closing or deleting an idea deletes its votes.
 
 ### 60.7 Notifications (§12)
 The email subject is `Skilly - <label>` like every type (§12); the sentence, the optional second line
@@ -12656,7 +12680,8 @@ the worker's email renderer both call.
 | `idea.shipped` | The author (closed as *Shipped*, or a pre-v2.41.0 *Planned* → *Shipped*) | "A feature you suggested has shipped: \"{title}\" is now part of skilly." | What's new → `/whats-new` |
 
 - No row is created for an item with **no proposer**, or for an **inactive or erased** author.
-  `idea.submitted` goes out whatever `feature_ideas_enabled` says. The four author types are **proposer
+  **Deleting an idea notifies no one**, and removes the author's rows of the four author types
+  that name it (§60.5). `idea.submitted` goes out whatever `feature_ideas_enabled` says. The four author types are **proposer
   lifecycle**, with no per-type opt-out, like `proposal.*`. `NOTIFICATION_LABELS` gains five labels:
   *Feature idea submitted*, *Feature idea published*, *Feature idea not published*, *Feature idea
   closed*, *Feature idea shipped*.
@@ -12674,7 +12699,8 @@ catalog **from 31 to 33**:
 
 - **Awarded inside the admin's transaction** (publish, close as *Shipped*, *Mark shipped*), to the
   idea's author, through the shared award helper (§31.2), idempotent on the PK. Never for an
-  inactive or erased author. Never revoked: editing, closing or erasing the idea leaves the badge.
+  inactive or erased author. Never revoked: editing, closing, deleting or erasing the idea leaves
+  the badge.
 - **Not Habits events** (§31.3): the admin acted, not the badge's owner (as for `followers_10` and
   the hype sweep). The award call passes `noHabits: true`.
 - The usual `achievement.earned` row, toast and `follow.achievement` fan-out apply unchanged
@@ -12710,8 +12736,12 @@ catalog **from 31 to 33**:
 ### 60.10 Audit (§11)
 Audited, with `target_type = 'feature_idea'`: `idea.published` (before = the submitted text; after
 = title and description), `idea.rejected` (the reason), `idea.updated` (title and description before
-and after), `idea.closed` (outcome, note, and the vote count that was deleted) and
-`idea.marked_shipped`, plus `settings.updated` for `feature_ideas_enabled`. **Not audited:**
+and after), `idea.closed` (outcome, note, and the vote count that was deleted),
+`idea.marked_shipped` and `idea.deleted` (before = a snapshot of the row: status, title,
+description, submitted description, outcome, admin note, proposer id, created and published dates;
+after = the reason and the vote count that was deleted), plus `settings.updated` for
+`feature_ideas_enabled`. The `idea.deleted` snapshot is the only record left of a deleted idea, and
+it keeps the proposer's text even after their erasure (invariant #5). **Not audited:**
 submitting, editing or withdrawing an idea, votes, and the two profile toggles. These are personal,
 mutable rows, like ratings and hypes. Migration 0101's inserts and vote moves are not audited
 either: a one-off schema migration with no actor.
@@ -12737,7 +12767,10 @@ All routes are auth-required.
   `PATCH /api/admin/ideas/:id { title?, description? }` (published only) ·
   `POST /api/admin/ideas/:id/close { outcome: "shipped" | "duplicate" | "wont_do", note? }`
   (published only; any other outcome, `planned` included, → **422**) ·
-  `POST /api/admin/ideas/:id/ship` (closed as *Planned* before v2.41.0 only).
+  `POST /api/admin/ideas/:id/ship` (closed as *Planned* before v2.41.0 only) ·
+  `POST /api/admin/ideas/:id/delete { reason?, expectedUpdatedAt? }` (any status the admin page
+  shows; `expectedUpdatedAt` required for a pending idea; **404** for an unknown, withdrawn or
+  already-deleted idea, **409** for a stale pending version, **422** for a reason over 500).
 - `GET /api/nav-badges` gains `ideas`; `GET | PATCH /api/me` gains `ideaAttributionHidden` and
   `ideaNotifications`; `GET | PATCH /api/admin/settings` gains `featureIdeasEnabled`.
 - Rate limits: submit and edit **30 / min**; votes **120 / min**; reads use the defaults.
@@ -12756,6 +12789,13 @@ All routes are auth-required.
   everyone (decision 16), so an admin-only plan must be worded for everyone or kept off the list.
 - **Counts invite bandwagoning.** Visible counts and the votes ordering favour early leaders. This
   is accepted, because the list exists to surface demand.
+- **Deleting frees limit room.** A deleted pending idea stops counting toward its proposer's
+  pending and daily caps, so someone whose three junk ideas were deleted can submit again at once.
+  This is accepted: proposers are named Entra accounts, and an admin who wants the caps to hold
+  rejects instead of deleting.
+- **Delete is final and quiet.** There is no restore; the audit snapshot is the only record. The
+  proposer is not told, so an idea they remember simply disappears from *Your ideas*, and an email
+  sent before the delete stays in their mailbox.
 
 ### 60.13 Tests (shipped with the change)
 - **Unit:** `comingSoonOrder` (votes, then newest published, then id), the three validators, the
@@ -12771,13 +12811,20 @@ All routes are auth-required.
   for each role with the switch on and off, attribution hidden by the toggle, for an erased author
   and for an item with no proposer); migration 0101 (after migrating, the nine seeded items are
   `published` with no proposer, in the old order, and `upcoming_votes` no longer exists); erasure
-  (what is deleted and what stays).
+  (what is deleted and what stays); delete (platform admin only; each of pending, published,
+  rejected, closed and a seeded item; the votes cascade; only that idea's four author-type
+  notifications are removed, other ideas' and `idea.submitted` rows untouched; badges kept; no
+  notification created; the audit snapshot and vote count; a pending idea without or with a stale
+  `expectedUpdatedAt` → 409; withdrawn, unknown or deleted twice → 404; a reason over 500 → 422;
+  a deleted pending idea no longer counts toward the caps).
 - **e2e:** the `feature-ideas` spec, classified **`exclusive`** because a published idea changes
   *Coming soon* for every user. A user suggests an idea through the dialog and sees it pending in
   *Your ideas*, then edits it. The dev admin sees the nav badge, publishes the idea with a title,
   and it appears in *Coming soon* with 1 vote. A second user upvotes (2) and un-votes (1). The admin
   closes it as *Shipped*: it leaves the list, *Your ideas* shows *Shipped*, and both badges are in
   the proposer's hall. With the switch turned off, the dev admin still sees *Suggest a feature* and
-  the Feature ideas page shows its notice; the spec turns the switch back on. (Every e2e user is a
+  the Feature ideas page shows its notice; the spec turns the switch back on. Last, the admin
+  publishes a second idea and deletes it from the Published tab: it leaves *Coming soon*, the
+  Published tab and *Your ideas*. (Every e2e user is a
   platform admin, so the plain-user side, no button and a 403, is covered by the integration test.)
   The *Coming soon* e2e (§23) reads its expected count from `GET /api/coming-soon`.

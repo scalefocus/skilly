@@ -2,14 +2,16 @@
 // plays both parts: they suggest an idea from What's new, edit it while it's pending, publish it from
 // the Feature ideas page, find it in Coming soon with their own vote, un-vote and re-vote, then close
 // it as Shipped (Planned is no longer offered) — which leaves both badges (Bright Idea, Made It Real)
-// in their hall. Last, with suggestions switched off for everyone else, the admin still sees the list
-// and the Suggest button, and the Feature ideas page says who can suggest. (Every e2e user is a
-// platform admin, so the plain-user side — no button, 403 — is covered by lib/ideas.dbtest.ts.)
+// in their hall. With suggestions switched off for everyone else, the admin still sees the list and
+// the Suggest button, and the Feature ideas page says who can suggest. Last, a second idea is
+// published and then deleted from the Published tab, leaving Coming soon and Your ideas. (Every e2e
+// user is a platform admin, so the plain-user side — no button, 403 — is covered by
+// lib/ideas.dbtest.ts.)
 //
 // EXCLUSIVE (groups.ts): a published idea changes Coming soon for every user, and the spec flips the
-// feature switch. The idea is closed by the end, so nothing is left in the list, and the switch is
-// turned back on. With DATABASE_URL set, the user's own ideas are cleared first, so a re-run never
-// trips the 5-a-day cap; a fresh CI stack starts clean anyway.
+// feature switch. One idea is closed and the other deleted by the end, so nothing is left in the
+// list, and the switch is turned back on. With DATABASE_URL set, the user's own ideas are cleared
+// first, so a re-run never trips the 5-a-day cap; a fresh CI stack starts clean anyway.
 import { Pool } from "pg";
 import { test, expect, devSignIn, signedInOid } from "./fixtures";
 import { clickAndAwait, gotoLoaded, probe } from "./helpers/ready";
@@ -124,4 +126,29 @@ test("feature ideas: suggest → edit → publish → vote → close as Shipped;
   } finally {
     await page.request.patch("/api/admin/settings", { data: { featureIdeasEnabled: true } });
   }
+
+  // ── Delete a published item: gone from Coming soon, the Published tab and Your ideas ──────────
+  const doomedText = `${probe("idea-delete")} — a second idea, published only to be deleted.`;
+  const doomedTitle = `Doomed idea ${Date.now()}`;
+  const submitted = await page.request.post("/api/coming-soon/ideas", { data: { description: doomedText } });
+  expect(submitted.status()).toBe(201);
+  const doomedId = ((await submitted.json()) as { idea: { id: string } }).idea.id;
+  const queue = (await (await page.request.get("/api/admin/ideas?status=pending")).json()) as { ideas: { id: string; version: string }[] };
+  const doomedVersion = queue.ideas.find((i) => i.id === doomedId)!.version;
+  const published2 = await page.request.post(`/api/admin/ideas/${doomedId}/publish`, { data: { title: doomedTitle, description: doomedText, expectedUpdatedAt: doomedVersion } });
+  expect(published2.status()).toBe(204);
+
+  await gotoLoaded(page, "/admin/ideas", "/api/admin/ideas?status=pending");
+  await clickAndAwait(page, () => page.getByTestId("ideas-tab-published").click(), "/api/admin/ideas?status=published");
+  const doomed = page.getByTestId("admin-idea").filter({ hasText: doomedTitle });
+  await doomed.getByTestId("idea-delete").click();
+  const del = page.getByRole("dialog", { name: "Delete this idea?" });
+  await expect(del.getByTestId("idea-delete-warning")).toContainText("its 1 vote for good");
+  await del.getByTestId("idea-note").fill("Test data.");
+  await clickAndAwait(page, () => del.getByTestId("idea-dialog-submit").click(), /\/api\/admin\/ideas\/[^/]+\/delete$/, { method: "POST" });
+  await expect(page.getByText("Idea deleted")).toBeVisible();
+  await expect(page.getByTestId("admin-idea").filter({ hasText: doomedTitle })).toHaveCount(0);
+  const after = (await (await page.request.get("/api/coming-soon")).json()) as { items: { id: string }[]; mine: { id: string }[] };
+  expect(after.items.some((i) => i.id === doomedId)).toBe(false);
+  expect(after.mine.some((i) => i.id === doomedId)).toBe(false);
 });

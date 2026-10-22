@@ -7,12 +7,15 @@
 // and a pre-v2.41.0 Planned → Shipped (Made It Real), the votes (idempotent, 404 off a published
 // idea), the list (ordering, attribution and its opt-out, `canSuggest`), the switch (only platform
 // admins may suggest while it is off; everything else carries on), an inactive author, the admin
-// list, and GDPR erasure (published ideas stay unattributed, everything else and every vote goes).
+// list, the admin delete (every status, votes and the idea's own notifications go, nobody is told,
+// badges stay, the audit snapshot, the caps freed), and GDPR erasure (published ideas stay
+// unattributed, everything else and every vote goes).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pool } from "./db";
 import {
   closeIdea,
+  deleteIdea,
   editOwnIdea,
   editPublishedIdea,
   getComingSoon,
@@ -84,7 +87,8 @@ test("feature ideas: caps, notifications, review, votes, list, badges, erasure",
   const voter = await mkUser("ideas-voter");
   const erasee = await mkUser("ideas-erasee");
   const racer = await mkUser("ideas-racer");
-  const mine = [author, author2, voter, erasee, racer, admin];
+  const deletee = await mkUser("ideas-deletee");
+  const mine = [author, author2, voter, erasee, racer, deletee, admin];
 
   const grp = await one(
     `insert into groups (entra_object_id, display_name) values ('ideas-padmin-grp','Ideas Platform Admins')
@@ -324,6 +328,83 @@ test("feature ideas: caps, notifications, review, votes, list, badges, erasure",
   assert.equal(raced[1].ok, true);
   assert.equal((await q(`select 1 from feature_idea_votes where idea_id = $1`, [racerIds[0]])).rowCount, 0);
   for (const id of racerIds.slice(1)) await withdrawOwnIdea(racer, id);
+
+  // ── Delete: any status the admin page shows, for good and quietly ─────────────────────────────
+  const submitAs = async (userId: string, n: number) => {
+    const r = await submitIdea(viewer(userId), TEXT(n));
+    assert.ok(r.ok);
+    return r.ok ? r.idea.id : "";
+  };
+  const noteCount = async (userId: string) => (await q<{ n: number }>(`select count(*)::int as n from notifications where user_id = $1`, [userId])).rows[0]!.n;
+  const dPending = await submitAs(deletee, 40);
+  const dPublished = await submitAs(deletee, 41);
+  const dKept = await submitAs(deletee, 42);
+  assert.equal((await submitIdea(viewer(deletee), TEXT(43))).ok, false, "the pending cap is full");
+
+  // A pending idea must match the version the admin saw; a reason over 500 is refused.
+  const staleD = await version(dPending);
+  await q(`update feature_ideas set updated_at = updated_at + interval '1 second' where id = $1`, [dPending]);
+  const conflictD = { ok: false, status: 409, error: "this idea changed since you opened it" };
+  assert.deepEqual(await deleteIdea(admin, dPending, { reason: null, expectedUpdatedAt: staleD }), conflictD);
+  assert.deepEqual(await deleteIdea(admin, dPending, { reason: null, expectedUpdatedAt: undefined }), conflictD, "a pending idea needs a version");
+  const tooLong = await deleteIdea(admin, dPending, { reason: "x".repeat(501), expectedUpdatedAt: await version(dPending) });
+  assert.equal(!tooLong.ok && tooLong.status, 422);
+
+  const pendingNow = await pendingIdeaCount();
+  assert.deepEqual(await deleteIdea(admin, dPending, { reason: " Spam. ", expectedUpdatedAt: await version(dPending) }), { ok: true });
+  assert.equal((await q(`select 1 from feature_ideas where id = $1`, [dPending])).rowCount, 0, "the row is gone");
+  assert.equal(await pendingIdeaCount(), pendingNow - 1);
+  const pendingAudit = await audit("idea.deleted", dPending);
+  assert.equal(pendingAudit?.before?.status, "pending");
+  assert.equal(pendingAudit?.before?.description, TEXT(40));
+  assert.equal(pendingAudit?.before?.authorId, deletee);
+  assert.deepEqual(pendingAudit?.after, { reason: "Spam.", votes: 0 });
+  const freed = await submitAs(deletee, 43);
+  assert.equal((await getComingSoon(viewer(deletee))).limits.today, 3, "a deleted idea leaves both caps");
+
+  // A published idea: its votes cascade, only its own notifications go, the badge stays, nobody is told.
+  assert.deepEqual(await publishIdea(admin, dPublished, { title: "Doomed item", description: TEXT(41), expectedUpdatedAt: await version(dPublished) }), { ok: true });
+  assert.deepEqual(await publishIdea(admin, dKept, { title: "Kept item", description: TEXT(42), expectedUpdatedAt: await version(dKept) }), { ok: true });
+  assert.equal((await voteIdea(voter, dPublished, true)).ok, true);
+  const submittedBefore = await notes(admin, "idea.submitted");
+  const deleteeNotes = await noteCount(deletee);
+  assert.deepEqual(await deleteIdea(admin, dPublished, { reason: null, expectedUpdatedAt: undefined }), { ok: true }, "no version needed once published");
+  assert.equal((await q(`select 1 from feature_idea_votes where idea_id = $1`, [dPublished])).rowCount, 0, "the votes cascade");
+  assert.deepEqual(await notes(deletee, "idea.published"), [{ ideaId: dKept, title: "Kept item" }], "only the deleted idea's notification goes");
+  assert.equal(await noteCount(deletee), deleteeNotes - 1, "no notification about the delete");
+  assert.deepEqual(await notes(admin, "idea.submitted"), submittedBefore, "idea.submitted rows untouched");
+  assert.equal(await hasBadge(deletee, "idea_published"), true, "Bright Idea stays");
+  const publishedAudit = await audit("idea.deleted", dPublished);
+  assert.equal(publishedAudit?.before?.title, "Doomed item");
+  assert.deepEqual(publishedAudit?.after, { reason: null, votes: 2 });
+  assert.equal((await getComingSoon(plain)).items.some((i) => i.id === dPublished), false, "off Coming soon");
+  assert.equal((await getComingSoon(viewer(deletee))).mine.some((m) => m.id === dPublished), false, "off Your ideas");
+
+  // Closed and rejected ideas take their notifications with them.
+  assert.deepEqual(await closeIdea(admin, dKept, { outcome: "wont_do", note: null }), { ok: true });
+  assert.deepEqual(await deleteIdea(admin, dKept, { reason: null, expectedUpdatedAt: undefined }), { ok: true }, "a closed idea");
+  assert.deepEqual(await notes(deletee, "idea.published"), []);
+  assert.deepEqual(await notes(deletee, "idea.closed"), []);
+  assert.deepEqual(await rejectIdea(admin, freed, { reason: null, expectedUpdatedAt: await version(freed) }), { ok: true });
+  assert.deepEqual(await deleteIdea(admin, freed, { reason: null, expectedUpdatedAt: undefined }), { ok: true }, "a rejected idea");
+  assert.deepEqual(await notes(deletee, "idea.rejected"), []);
+  assert.equal((await audit("idea.deleted", freed))?.before?.status, "rejected");
+
+  // An item with no proposer; two admins at once: one deletes, the other gets 404.
+  const orphanD = await one(
+    `insert into feature_ideas (status, title, description, submitted_description, decided_at, published_at)
+     values ('published', 'Orphan to delete', $1, $1, now(), now()) returning id`,
+    [TEXT(44)],
+  );
+  const both = await Promise.all([
+    deleteIdea(admin, orphanD, { reason: null, expectedUpdatedAt: undefined }),
+    deleteIdea(admin, orphanD, { reason: null, expectedUpdatedAt: undefined }),
+  ]);
+  assert.deepEqual(both.map((r) => (r.ok ? 204 : r.status)).sort(), [204, 404]);
+  assert.equal((await audit("idea.deleted", orphanD))?.before?.authorId, null);
+  const gone = { ok: false, status: 404, error: "not found" };
+  assert.deepEqual(await deleteIdea(admin, id3, { reason: null, expectedUpdatedAt: undefined }), gone, "a withdrawn idea");
+  assert.deepEqual(await deleteIdea(admin, "00000000-0000-4000-8000-000000000000", { reason: null, expectedUpdatedAt: undefined }), gone);
 
   // ── Erasure ───────────────────────────────────────────────────────────────────────────────────
   const e1 = await submitIdea(viewer(erasee), TEXT(9));
