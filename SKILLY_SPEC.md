@@ -20,6 +20,16 @@ Every decision below was explicitly confirmed.
 > `new feature` marker is also teased on the What's new page's *Coming soon* list (§23), kept in
 > step by a unit test; `code fix` markers are never teased. CLAUDE.md's change workflow repeats
 > this rule.
+>
+> **Roadmap-level sections.** A `new feature` may also be specified ahead at **roadmap level**: its
+> section pins the intent, the scope, the parts of skilly it builds on, the invariants it must keep
+> and a numbered list of **open decisions**, but not the detailed behaviour, data model or API. Its
+> marker says *"specified at roadmap level"*. Before any of it is built, the open decisions are
+> grilled and pinned by a **spec amendment** that passes CLAUDE.md's gate like any other change; the
+> amendment rewrites the section to full depth and keeps the marker, which is deleted only when the
+> feature ships. Where a roadmap-level section would reverse a decision recorded elsewhere, that
+> earlier text stays authoritative for today's behaviour and carries a one-line pointer to the new
+> section. §51–§59 are roadmap-level.
 
 ---
 
@@ -533,7 +543,9 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Directory profile (job title, office, department)
 - `users.job_title`, `users.office_location`, `users.department` (§3) mirror the Entra `jobTitle`,
   `officeLocation` and `department` attributes. They exist **solely to power the directory hover
-  card (§28)** — no role, gate, filter or notification reads them.
+  card (§28)** — no role, gate, filter or notification reads them. *(§56, specified ahead at
+  roadmap level, would also read `department` as an aggregate discovery input, never as a role or
+  gate.)*
 - **Two writers, and both overwrite unconditionally** — deliberately *unlike* `avatar`, which is
   only ever filled when missing (`setUserAvatarIfMissing`). A promotion, a re-org or an office move
   must propagate; a stale title must never survive. A Graph value that is absent or empty writes
@@ -604,7 +616,8 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     for that single skill; no `--skill`/`--all` flags appear (those are consumer-side flags for
     repos that contain multiple skills, which a skilly mirror never does). One proposal still
     produces **exactly one** skill — bulk-importing every skill in an upstream repo is out of
-    scope.
+    scope. *(§58, specified ahead at roadmap level, would add a batch import in which each folder
+    is still its own proposal and its own skill.)*
   - **skills-hub.ai origin (API-mirrored, not git).** A pointer may also originate from the
     skills-hub.ai registry (`npx @skills-hub-ai/cli install <slug>`). **Pinned from the CLI's
     source (v0.4.1)**: that tool does **no git clone and fetches no tarball** — it calls
@@ -1010,6 +1023,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Re-propose to global:** any member of the owning namespace initiates a proposal targeting `global`; **Platform Admins approve**.
 - On accept, materialized as an independent global skill with **provenance link** (`promoted_from_skill_version_id`). Team copy and global copy version independently (possible divergence; manual re-promotion to sync).
 - **Exempt from the slug-match redirect** (§8 above): a promotion is a same-slug new skill (or a re-version of the global copy) by design, so neither the submit-time match nor the accept-time re-check applies to it.
+- **The reverse direction** (copying a visible skill into another namespace with a recorded lineage) is specified ahead at roadmap level in §57.
 
 ---
 
@@ -2017,6 +2031,25 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Worker:** the `/info/refs` stamp reports the previous `last_served_semver` and awards
       `first_update`. (MCP proposals carry no icon fields, so the worker has no Glow Up hook.)
     - **Minor** release (v2.39.0).
+
+**Roadmap — specified ahead at roadmap level, not built.** Each section below carries an open
+`new feature` marker and a list of open decisions that a spec amendment pins before any code (see
+*Implementation gaps* at the top). They are not numbered build items until that amendment lands.
+- **§51 Skill evals:** test cases in the bundle, run per version through §40, with pass rates and
+  regressions for reviewers.
+- **§52 Upstream release watch:** pointer maintainers learn of newer upstream releases and propose an
+  update in one click.
+- **§53 Playground:** try a skill with the configured model from its page before installing.
+- **§54 Reviewer assignment and review deadlines:** assignees, per-namespace targets, reminders,
+  escalation, and a review-time metric.
+- **§55 Search gaps:** an aggregate-only, floor-gated log of searches that found nothing.
+- **§56 Popular in your department:** a home-page row built from adoptions within the viewer's Entra
+  department.
+- **§57 Customize a skill:** copy a visible skill into your namespace with a recorded lineage and
+  source-update notices.
+- **§58 Bulk import:** one repository with many skill folders becomes a batch of pointer proposals.
+- **§59 Usage reporting:** an opt-in, skilly-owned marketplace hook that counts real use (open tension
+  with the no-CLI rule).
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -7340,7 +7373,8 @@ popularity keys **within** each tier:
   `skilly_search_zero_results_total{surface}`; worker gauges `skilly_search_index_pending` and
   `skilly_search_index_failed`.
 - **No query text is stored or logged anywhere** — counts only (a zero-result query log is deferred,
-  §34.18). Structured request logs already omit query strings (§22).
+  §34.18; §55 specifies an aggregate-only one ahead at roadmap level). Structured request logs
+  already omit query strings (§22).
 
 ### 34.16 Tests (ship with the change — §16 discipline)
 - **Unit (`@skilly/shared`):** the parser — plain words, stop words, 1-character words, closed and
@@ -7416,7 +7450,7 @@ popularity keys **within** each tier:
 7. **A language change degrades matching** for the seconds its rebuild takes.
 8. **No "why it matched" in the UI** in v1 — `snippet` and `matchedIn` are MCP-only.
 9. **No query analytics** — counts only. A zero-result query log (the natural input for curating
-   synonyms) is **deferred**, not rejected.
+   synonyms) is **deferred**, not rejected. §55 picks it up ahead, at roadmap level.
 
 ---
 
@@ -12412,3 +12446,475 @@ sweep, and so **is** a Habits event. While `hype_enabled` is off, all three hype
 - Any hype signal in search ranking, `related` skills (§10) or recommendations.
 - MCP exposure (§29) and the email digest's own "hyped skills" block (§48).
 - Retention / pruning of aged-out `skill_hypes` rows.
+
+---
+
+## 51. Skill evals
+
+> ⚠ GAP-4 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §51 is built, and its open decisions (§51.5) are pinned by a spec amendment before any
+> code. Today no bundle carries evals and nothing runs them.
+
+The quality rating (§41), the AI pre-review (§46) and policy rules (§47) all judge what a skill
+**says**. None of them checks how a model **behaves** with the skill loaded. **Evals** let an author
+ship test cases inside the bundle. skilly runs them for every new version through the AI integration
+(§40) and records a pass rate per version. Reviewers then see behaviour and **regressions**, not
+only text.
+
+### 51.1 What it does
+- **Evals travel in the bundle.** A bundle may carry an eval file at a fixed path (provisionally
+  `evals/evals.json`). It holds a list of cases, each a user prompt plus the expected behaviour in
+  plain language. Because the file is part of the bundle, it is part of the immutable version
+  (invariant #2) and goes through scanning, the bundle browser and the file-change view (§8) like
+  any other file. Changing an eval means proposing a new revision or version.
+- **One run per set of bytes.** The worker runs every case once per distinct set of reviewed bytes,
+  cached by content digest, exactly as §46.4 caches pre-review runs. Each case is two calls. The
+  **subject call** sends the skill's `SKILL.md` as system context plus the case prompt. The **judge
+  call** grades the answer against the expected behaviour and returns pass or fail with a one-line
+  reason.
+- **Where it shows.** Reviewers get an **Evals** panel on the review page: the pass rate, the
+  per-case results, and the **regressions** against the file-change view's baseline (the latest
+  stable active version). On the skill page, each version row gets a pass-rate chip
+  ("9/10 evals pass").
+- **Advisory, like §46.** Results never go in `scan_reports`, never trip the §37.4 override gate
+  and never hold the review queue.
+- **Pointer skills** are evaluated against their mirrored bytes.
+
+### 51.2 Builds on
+§40 (the helper, `ai_usage`, and new feature keys, provisionally `skill_eval`), §46.4–§46.5 (the
+worker run and its digest cache), §8 (the review page and the file-change baseline), §41.7 (the
+version-row chip pattern).
+
+### 51.3 Constraints
+- **Egress (§40.10).** The run sends `SKILL.md`, the eval prompts and the model's answers to the
+  provider. The feature must register that statement in `AI_FEATURES`. Lines the secret scanner
+  flags are redacted, as in §46 decision 5.
+- **Visibility.** Results inherit the visibility of their inputs (§40.10). Before accept, only the
+  people who may see the proposal (a reviewer of the target namespace or the submitter) see the
+  results.
+- **Nothing executes.** Scripts in the bundle are never run and the model gets no tools. Evals
+  measure instruction-following only, and the UI says so.
+- **A platform switch, off by default**, like §46 decision 9, because a run spends tokens on every
+  version.
+- **No new MCP tool** (§29's 25-tool ceiling). `get_skill` may carry the pass rate.
+
+### 51.4 Out of scope
+Running bundled scripts or giving the model tools; multi-turn cases; per-skill model choice;
+comparing several models; human grading.
+
+### 51.5 Open decisions
+1. **File format.** Adopt an existing community eval shape or define skilly's own? What is the
+   maximum number of cases per version?
+2. **Gate or advice.** Does a failing or regressing eval ever block accept or a direct publish? For
+   example, a namespace could set "no regressions" as an enforced rule, like §47.
+3. **Judge noise.** One run per case, or N runs with a majority vote? How does the UI show a flaky
+   case?
+4. **Cost.** §40 has no caps. What per-run case cap and per-day budget apply, and who may re-run?
+5. **Subject context.** `SKILL.md` only, or also the referenced text files (and at what size cap)?
+6. **Who sees the pass rate.** Owners and reviewers only, as with §46 decision 12, or consumers too?
+7. **Notification.** Does a regression on a direct publish notify maintainers? If so, what is the new
+   type's §48.3 digest tier?
+
+---
+
+## 52. Upstream release watch for pointer skills
+
+> ⚠ GAP-5 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §52 is built, and its open decisions (§52.5) are pinned by a spec amendment before any
+> code. Today the pointer-refresh job only re-checks each pinned ref for drift and never looks for a
+> newer upstream release.
+
+The pointer-refresh job (`worker/git/pointerRefresh.ts`, §16 #13) re-checks each pointer version's
+**pinned ref** about once a day and raises `skill.drift` when the content at that ref changes (§12).
+It never looks for a **newer** ref. A pointer skill pinned to `v1.4.0` therefore stays there
+silently after upstream ships `v2.0.0`, and its maintainers find out only if they check the origin
+themselves.
+
+### 52.1 What it does
+- **Detect.** The refresh pass also lists the origin's refs, using the same lookup as
+  `GET /api/pointer/refs` and MCP `list_upstream_refs`. It compares them with the pinned ref of the
+  skill's latest pointer version. For a skills-hub.ai origin it compares the registry's latest
+  version instead.
+- **Notify.** When a newer stable release exists, the effective maintainers (§19) get one
+  notification per new release, deduplicated the same way drift onsets are (§12): *"v2.0.0 is
+  available upstream"*.
+- **Propose update.** The notification and an owner-only banner on the skill page offer **Propose
+  update**. It opens the propose form as a new-version proposal, pre-filled with the origin, the
+  folder, the new ref, a proposed semver derived from the tag when the tag parses, and the current
+  metadata. Submitting it takes the unchanged pointer path: submit-time verification (§8), mirroring,
+  scanning, AI pre-review (§46) and review.
+
+### 52.2 Builds on
+The pointer-refresh job, `GET /api/pointer/refs` / `list_upstream_refs`, the drift-onset dedup and
+the maintainer opt-outs (§12), the propose form's pointer prefill (§8).
+
+### 52.3 Constraints
+- **Never publishes and never re-pins.** A pinned ref stays immutable, and a person always submits
+  the proposal (the same rule as §29's "an agent authors, a human decides").
+- **Upstream contact** uses the existing SSRF-hardened transport (§22, §49).
+- **Visibility.** Only effective maintainers who can see the skill are notified.
+
+### 52.4 Out of scope
+Auto-publishing; hosted skills; tracking branches (a pointer pinned to a branch such as `main` is
+drift territory, §6).
+
+### 52.5 Open decisions
+1. **Notify only, or also draft?** §8 has no draft state today. Is a one-click prefill enough, or
+   should skilly create a proposal for the maintainer to submit?
+2. **Which refs count.** Stable semver tags only, or prereleases and non-semver tags too? How are
+   pointers pinned to a commit treated?
+3. **Dedup grain.** Notify once per new tag, or once per "behind" onset? When several tags land
+   between passes, notify for the highest only?
+4. **Opt-out and digests.** A new maintainer toggle ("Upstream releases of skills I maintain") and the
+   new type's §48.3 tier.
+5. **Consumers.** Should consumers also see "a newer upstream version exists"?
+6. **AI summary.** Should Propose update attach an AI-drafted change summary of the upstream diff
+   (a new feature key and egress statement, §40)?
+
+---
+
+## 53. Try a skill before installing (playground)
+
+> ⚠ GAP-6 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §53 is built, and its open decisions (§53.5) are pinned by a spec amendment before any
+> code. Today a skill can only be judged from its page before it is installed.
+
+Today a user decides to install from a skill's description, usage examples, ratings and quality
+stars. The **playground** lets a signed-in user chat with the configured model, with the skill
+loaded, straight from the skill page. Reviewers get the same panel on a proposal.
+
+### 53.1 What it does
+- A **Try it** button on the skill page (for one version, by default the latest stable) opens a side
+  panel. It is a short chat whose system context is that version's `SKILL.md`. The user types
+  prompts and reads the model's answers. The panel is labelled as a preview: nothing runs, the model
+  has no tools, and no files are attached.
+- On a proposal's review page, the same panel runs against the proposed revision's bytes, for the
+  people who may see the proposal.
+- **Conversations are not stored.** §40.12 defers storing prompts and responses, and closing the
+  panel ends the chat. Each turn writes one `ai_usage` row under a new feature key (provisionally
+  `skill_playground`) with `userId` set.
+
+### 53.2 Builds on
+§40 (the helper and `ai_usage`), the skill page and review page access gates, §40.14 (the AI display
+name in the panel's copy).
+
+### 53.3 Constraints
+- **Egress (§40.10).** The panel sends `SKILL.md` and the user's own typed text. Free user text is a
+  new kind of egress, and the feature's registered statement must say so. Secret-scanner redaction
+  applies to the skill content.
+- **Visibility.** Only someone who can see the skill (or the proposal) can open the panel.
+- **A platform switch, off by default.**
+- **No new MCP tool** (§29). An agent can already read the skill itself.
+
+### 53.4 Out of scope
+Running scripts, tool use, file uploads, saving or sharing conversations, choosing a model.
+
+### 53.5 Open decisions
+1. **Limits.** §40 has no quotas. What per-user daily cap and maximum turns per chat apply?
+2. **Streaming.** §40's helper is non-streaming and §40.12 defers streaming. Accept the wait, or add
+   streaming?
+3. **Restricted skills.** Allowed, or `org`-visible skills only?
+4. **Context.** `SKILL.md` only, or referenced text files too (and at what size cap)?
+5. **Analytics.** Do tries count as a §21 metric next to views and installs?
+
+---
+
+## 54. Reviewer assignment and review deadlines
+
+> ⚠ GAP-7 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §54 is built, and its open decisions (§54.5) are pinned by a spec amendment before any
+> code. Today the review queue is shared, unassigned and untimed.
+
+The §8 review queue is shared per namespace. Any reviewer (a namespace admin there, or any platform
+admin) may pick up any proposal, and nothing measures how long proposals wait. This section adds
+**assignment**, a per-namespace **review target**, reminders, escalation and a review-time metric.
+
+### 54.1 What it does
+- **Assign.** A reviewer of the target namespace can assign a proposal to a named reviewer of that
+  namespace, themselves included, and can reassign or unassign it. The queue gains an **Assigned to
+  me** filter, and the assignee is notified.
+- **Review target.** Each namespace may set a target time to a decision (for example 3 business
+  days). Namespace admins set it for their namespace and platform admins set it for `global`. The
+  clock runs while the proposal is `proposed` or `under_review` and pauses while it is
+  `changes_requested`, because then it waits on the proposer.
+- **Reminders and escalation.** When a proposal passes its target, the assignee is reminded, or
+  every reviewer of the namespace if it is unassigned. At a second threshold, platform admins are
+  notified.
+- **Metric.** Time to first action and time to decision per namespace, in the §21 analytics, under
+  §21's ownership matrix: per namespace for its admins, plus the platform aggregate for platform
+  admins.
+
+### 54.2 Builds on
+§8 (the state machine and the review dashboard), §12 (notifications), §21 (analytics and its
+ownership matrix), the Namespace administration page, §11 (audit).
+
+### 54.3 Constraints
+- **RBAC is unchanged (§4).** Assignment never grants review authority. The assignee must hold
+  reviewer authority, re-checked on assign, and an assignment clears when they lose it.
+- **Audited.** Assign, reassign and unassign are governance actions in `audit_log` (append-only,
+  invariant #5), as are changes to a namespace's target.
+- **Direct publish** (`require_review = false`) has no queue, so none of this applies to it.
+
+### 54.4 Out of scope
+External ticketing integration; reviewer workload balancing beyond what §54.5 decides.
+
+### 54.5 Open decisions
+1. **Hint or lock.** May other reviewers still act on an assigned proposal?
+2. **Auto-assignment.** Manual only, or round-robin / least-loaded per namespace?
+3. **Business days.** Whose time zone and working week? Are holidays out of scope?
+4. **Thresholds.** Defaults, who sets the escalation threshold, and whether the target is off until a
+   namespace sets one.
+5. **Notifications.** The new types and their §48.3 tier. Today the review-queue types are "always
+   immediate".
+6. **Proposer view.** Does the proposer see the assignee and the target?
+
+---
+
+## 55. Search gaps
+
+> ⚠ GAP-8 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §55 is built, and its open decisions (§55.5) are pinned by a spec amendment before any
+> code. Today no search text is stored anywhere (§34.15).
+
+§34 stores no query text (§34.15) and defers a zero-result query log (§34.18 #9). As a result,
+nobody can see what people search for and do not find. That is the natural input for curating
+synonyms (§34.8), for Request a skill (§26), and for deciding what a team should build next.
+
+### 55.1 What it does
+- **An aggregate-only zero-result log.** When a search on a counted surface returns nothing, its
+  normalized query is counted per day: lowercased, whitespace-collapsed, in the §34 parser's
+  canonical form. It is stored **with no user id, session or namespace**: only the query, the day
+  and a distinct-searcher count that cannot be traced back to a person.
+- **A k-anonymity floor.** A query becomes visible only once at least *k* distinct people have
+  searched it within the window. Below the floor it is shown nowhere.
+- **The page.** An admin page, **Search gaps**, lists the qualifying queries by distinct searchers
+  over 7, 30 or 90 days, with three actions: **Add a synonym** (the §34.8 editor, pre-filled),
+  **Post a request** (§26, pre-filled) and **Dismiss**.
+- **Retention.** Rows older than the longest window are pruned.
+
+### 55.2 Builds on
+§34 (the engine, its counted surfaces and `skilly_search_zero_results_total`), §34.8 (the synonym
+editor), §26 (requests).
+
+### 55.3 Constraints
+- **It narrows §34.15's "no query text is stored anywhere"** to: zero-result queries only, aggregated
+  and floor-gated. §34.15 and §34.18 #9 are amended when this ships.
+- **Invariant #3.** The stored text is what searchers typed, never a skill name or count. It
+  therefore cannot reveal a restricted skill.
+- **Personal data.** A query can contain a name or an identifier. The floor mitigates that, and the
+  write path drops queries that look like email addresses or long digit runs.
+- **Request logs stay free of query strings** (§22).
+
+### 55.4 Out of scope
+Analytics on queries that did return results; per-user search history; click-through tracking.
+
+### 55.5 Open decisions
+1. **Audience.** Platform admins only, or namespace admins too? The log is org-wide, not
+   per-namespace.
+2. **The floor and the counting.** The value of *k*, the window, and how distinct searchers are
+   counted without storing who they are (for example a daily salted hash set that is discarded at day
+   end).
+3. **Surfaces.** Catalog, header dropdown and MCP `search_skills`? The dropdown sees every keystroke
+   prefix, so which query counts as final?
+4. **Near misses.** Also log queries with very few results?
+5. **Kill switch.** A platform setting, and whether it is on by default.
+
+---
+
+## 56. Popular in your department
+
+> ⚠ GAP-9 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §56 is built, and its open decisions (§56.5) are pinned by a spec amendment before any
+> code. Today `users.department` is display-only (§5).
+
+"Skills you might like" (`related_skills`, §3) comes from co-installs. Nothing in discovery uses who
+the viewer **is**. Entra already syncs each user's `department` (§5), today only for the hover card
+(§28). This section adds a home-page row of the skills most adopted in the viewer's own department.
+
+### 56.1 What it does
+- A home-page row, **"Popular in ‹department›"**, lists the skills most adopted in the last 30 days by
+  active users who share the viewer's department. It reads the de-duplicated adoption ledger
+  `skill_installs` (§21) and leaves out skills the viewer already has installed.
+- **Floors.** A skill qualifies only when at least 3 distinct people in the department adopted it,
+  and the row appears only when the department has a minimum number of active users. Neither the
+  row nor its order can reveal one person's installs.
+- **Visibility.** Every listed skill passes the shared visibility predicate for the viewer
+  (invariant #3).
+- The worker computes the row nightly, next to `recomputeRelatedSkills`.
+
+### 56.2 Builds on
+`users.department` (§5), `skill_installs` (§21), the nightly related-skills recompute (§3), the home
+page (§10).
+
+### 56.3 Constraints
+- **It amends §5** ("no role, gate, filter or notification reads them"): `department` becomes an
+  aggregate **discovery** input. It never becomes a role, a gate or a filter on anything else, and
+  roles still resolve only from SCIM groups and `role_mappings` (invariant #1).
+- **Grouping** is by the exact synced value. Entra's department is free text.
+
+### 56.4 Out of scope
+Rows by office or job title, manager-chain rows, comparisons between departments, admin-curated
+department picks.
+
+### 56.5 Open decisions
+1. **Floors.** The installer floor and the minimum department size.
+2. **Visibility model.** `org`-visible skills only, which gives one row per department, or
+   per-viewer filtering of a wider list?
+3. **Opt-out.** Does `directory_hidden` or `leaderboard_hidden` remove a user's installs from the
+   aggregate?
+4. **Normalization.** Case and whitespace folding of department names, and aliases.
+5. **Other surfaces.** The catalog (as a sort or facet), email digests (§48), MCP?
+
+---
+
+## 57. Customize a skill for your team (fork with lineage)
+
+> ⚠ GAP-10 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §57 is built, and its open decisions (§57.5) are pinned by a spec amendment before any
+> code. Today a copy of another skill keeps no link to its source.
+
+§8 *Promotion to global* copies a team skill **up** to `global`. The reverse, a team adapting a
+global or another team's skill to its own conventions, today means downloading the bundle and
+proposing it as a new skill. That copy loses its link to the original and silently falls behind it.
+This is §17 risk #6 (promotion divergence) seen from the other side.
+
+### 57.1 What it does
+- **Customize** on a skill page opens the propose form as a **new-skill** proposal, pre-filled with
+  the source version's bundle and metadata, targeting a namespace the user may propose to.
+- On accept, the new skill records **derived from** (source skill and version). Both pages show it:
+  "Derived from …" on the copy, and a count of visible derivatives on the source.
+- When the source ships a new stable version, the derivative's maintainers are notified with a link
+  to the file-change view (§8) between the version they derived from and the new one, so they can
+  bring changes over as a new version of their copy.
+
+### 57.2 Builds on
+The §8 propose form and *Keep current files* reuse, promotion provenance
+(`promoted_from_skill_version_id`), the file-change view, §12 notifications, §19 maintainers.
+
+### 57.3 Constraints
+- **Visibility (invariants #3 and #7).** Customizing copies bytes to a new audience. The proposer must
+  be able to see the source, and the copy must not reach anyone who could not already see the
+  source.
+- **The lineage link never reveals a restricted derivative.** The source's derivative count includes
+  only derivatives the viewer can see.
+- **Versions stay immutable (invariant #2).** The copy is a new skill and never changes the source.
+
+### 57.4 Out of scope
+Automatically merging source changes into a copy; lineage with several parents; showing chains
+deeper than one level.
+
+### 57.5 Open decisions
+1. **Which sources.** Only `org`-visible sources (the simplest way to keep 57.3), or restricted
+   sources into namespaces that already see them?
+2. **Slug.** May the copy keep the source's slug, exempt from the §8 slug-match redirect as promotion
+   is, or must it take a new one?
+3. **Pointer sources.** Copy as a pointer (same origin, its own pin) or as a hosted bundle?
+4. **Notification.** The update type, a maintainer toggle, and its §48.3 tier.
+5. **Opting out.** May a source's maintainers stop their skill from being customized?
+6. **Credit.** Do the copy's installs credit the source anywhere (the leaderboard, §21)?
+
+---
+
+## 58. Bulk import from a multi-skill repository
+
+> ⚠ GAP-11 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §58 is built, and its open decisions (§58.5) are pinned by a spec amendment before any
+> code. Today one pointer proposal produces exactly one skill, and bulk import is out of scope (§6).
+
+Organizations adopting skilly often start from a repository that holds many skills, one per folder.
+Today each folder needs its own pointer proposal, typed in by hand. This section adds a guided import
+that turns one repository into a batch of proposals.
+
+### 58.1 What it does
+- **Import from repository** on the propose page. The user enters an origin URL and a ref. skilly
+  lists the folders that contain a `SKILL.md`, using the same SSRF-hardened checkout as pointer
+  review (§8). Each folder shows its frontmatter name and description and the §8 duplicate check
+  (slug, plus origin and folder).
+- The user ticks folders and picks the target namespace and visibility once for the batch.
+- **Submit creates one pointer proposal per ticked folder**, linked as a **batch**. Each proposal is
+  still verified, mirrored, scanned and pre-reviewed on its own.
+- **Reviewers see the batch together** and act on each proposal, with a batch action whose limits
+  §58.5 decides.
+
+### 58.2 Builds on
+Pointer proposals with `external_subdir` (§6), `list_upstream_refs`, the duplicate check (§8), the
+review dashboard (§8), the content-risk gate (§37).
+
+### 58.3 Constraints
+- **One skill = one repo is unchanged.** Each imported folder is mirrored into its own skilly repo,
+  so the install contract is untouched.
+- **No batch override.** Every proposal still passes the §37 gate on its own.
+- **Audit** records each proposal as today, plus one row for the batch.
+
+### 58.4 Out of scope
+Importing from several repositories at once; continuously syncing folders added upstream later.
+
+### 58.5 Open decisions
+1. **Size.** The maximum number of folders per batch.
+2. **Batch accept.** Allowed at all? If so, only for proposals with no findings that need an
+   override?
+3. **Per-skill edits.** Edit metadata and categories in the wizard, or only after submission?
+4. **Hosted variant.** A zip holding several skill folders?
+5. **Direct publish.** Does a batch into a `require_review = false` namespace publish directly?
+6. **Later folders.** Should §52 also suggest folders that appear upstream after the import?
+
+---
+
+## 59. Usage reporting from the plugin marketplaces
+
+> ⚠ GAP-12 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
+> nothing in §59 is built, and its open decisions (§59.5) are pinned by a spec amendment before any
+> code. Today skilly sees installs and page views, never a skill being used.
+
+skilly counts installs (clones) and page views (§21). It never sees a skill being **used**. A skill
+installed by 300 people and invoked by five looks the same as one used every day. The plugins skilly
+synthesizes for its marketplaces (§30) already pass maintainer-supplied `hooks.json` through to the
+plugin root (§30.3). skilly could therefore add an **opt-in hook of its own** that reports when one
+of its skills runs.
+
+> **Recorded tension.** This ships code that runs on users' machines. CLAUDE.md pins "skilly ships
+> no CLI". A hook is plugin configuration, not a binary, but it is still client-side code authored
+> by skilly, and it produces telemetry about individuals. Both points must be settled in the grill
+> before anything is built, and the outcome may be to withdraw this section.
+
+### 59.1 What it would do
+- Each synthesized plugin may carry a **skilly-owned hook entry** that, when one of the plugin's
+  skills is invoked, calls a skilly usage endpoint with the skill's identity and nothing else: no
+  prompts, no files, no output.
+- **Opt-in** with a platform switch, off by default, plus whatever per-marketplace and per-user
+  consent §59.5 decides.
+- skilly aggregates the calls into **active use** per skill (invocations and distinct users per day
+  and week) and shows it in the §21 analytics next to installs, under §21's ownership matrix.
+
+### 59.2 Builds on
+§30.3 (plugin-component pass-through and merging), §30.4 (the marketplace token), §21 (analytics
+and its ownership matrix), `usage_events`.
+
+### 59.3 Constraints
+- **Marketplace installs only.** A skill installed with `npx skills add` has no plugin wrapper, so it
+  is not covered. The UI must say that the number is a floor.
+- **Credentials (invariant #6).** The hook must authenticate without a long-lived secret leaking into
+  shell history or logs, and the endpoint never logs credentials or query strings.
+- **Counts, not content.** Nothing about what the user asked or what the skill did is collected.
+- **Never in the way.** Fire-and-forget: the hook never slows down, blocks or breaks a skill, and it
+  fails silently offline or behind a proxy.
+- **Transparent.** The entry is visible in the plugin's `hooks.json`, and the marketplaces page
+  explains it in plain words.
+
+### 59.4 Out of scope
+Capturing content; per-prompt analytics; harnesses other than Claude Code.
+
+### 59.5 Open decisions
+1. **The no-CLI rule.** Accept a skilly-authored hook as configuration rather than a CLI, or withdraw
+   the feature?
+2. **Authentication.** How the hook proves it may report. The marketplace token sits in the
+   consumer's marketplace URL and is not available to a hook.
+3. **Consent.** Org-level opt-in only, or a per-user decline as well?
+4. **The trigger.** Which Claude Code hook event reliably signals a skill invocation (to be verified
+   against the current hook events), and how a plugin and skill folder map back to a skilly skill.
+5. **Attribution.** Per person, under §21's drill-down rules, or anonymous counts only?
+6. **Merge safety.** Under the §30.3 merge, a hook event's matcher lists concatenate, so skilly's
+   entry would sit beside maintainer hooks on the same event. Where does it go in that order, and can
+   a maintainer's hook on the same event stop it from running?
+7. **Downstream use.** Retention, and whether active use feeds ranking (§34.6), Hype eligibility
+   (§50) or the leaderboard (§21).

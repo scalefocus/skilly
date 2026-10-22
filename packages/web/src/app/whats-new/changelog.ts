@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.6",
+    date: "2026-10-22",
+    summary:
+      "The Coming soon list on this page now previews nine planned features, including skill test runs, alerts for newer upstream releases, a try-before-you-install chat, review assignments and bulk import from a repository. Plans can change.",
+  },
+  {
     version: "2.39.5",
     date: "2026-10-21",
     summary:

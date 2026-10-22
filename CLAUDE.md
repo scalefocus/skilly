@@ -55,6 +55,9 @@ never reused (see "Implementation gaps" at the top of `SKILLY_SPEC.md`). Every o
 new-feature marker needs exactly one teaser in `packages/web/src/app/whats-new/upcoming.ts`
 (the What's new *Coming soon* list); `upcoming.test.ts` fails otherwise. The commit that
 ships the feature **deletes its marker and its teaser**, and its changelog entry announces it.
+A section may also be specified ahead at **roadmap level** (intent, scope, constraints and a
+list of open decisions, not full behaviour); its open decisions are grilled and pinned by a
+spec amendment through this same gate before any code is written.
 
 ## Commands / dev workflow
 Node ≥ 22, pnpm 9.15.x (pinned via `packageManager`). Workspace packages:
