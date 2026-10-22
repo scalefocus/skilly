@@ -589,6 +589,49 @@ export async function markIdeaShipped(actorUserId: string, id: string): Promise<
   });
 }
 
+/** The four author types (§60.7) whose rows name one idea — what a delete takes with it. */
+const AUTHOR_NOTIFICATION_TYPES = ["idea.published", "idea.rejected", "idea.closed", "idea.shipped"];
+
+/**
+ * Delete any idea the admin page shows, for good (§60.1 decision 17, §60.5). A pending one must still
+ * match the version the admin saw. The audit row keeps a snapshot first; the author's notifications
+ * about the idea go; its votes cascade with the row. Nobody is told, and no badge is awarded or revoked.
+ */
+export async function deleteIdea(actorUserId: string, id: string, input: { reason: unknown; expectedUpdatedAt: unknown }): Promise<AdminIdeaResult> {
+  const reason = validateIdeaNote(input.reason);
+  if (!reason.ok) return invalid(reason.error);
+  return withLockedIdea(id, async (db, idea) => {
+    if (idea.status === "pending" && !(await sameVersion(db, idea.id, input.expectedUpdatedAt))) return conflict("this idea changed since you opened it");
+    const { rows } = await db.query<{ admin_note: string | null; created_at: Date; published_at: Date | null; votes: number }>(
+      `select admin_note, created_at, published_at,
+              (select count(*) from feature_idea_votes v where v.idea_id = i.id)::int as votes
+         from feature_ideas i where id = $1`,
+      [id],
+    );
+    const snap = rows[0]!;
+    await appendAudit(db, {
+      actorUserId,
+      action: "idea.deleted",
+      targetType: "feature_idea",
+      targetId: id,
+      before: {
+        status: idea.status, title: idea.title, description: idea.description, submittedDescription: idea.submitted_description,
+        outcome: idea.outcome, adminNote: snap.admin_note, authorId: idea.author_id,
+        createdAt: iso(snap.created_at), publishedAt: iso(snap.published_at),
+      },
+      after: { reason: reason.value, votes: snap.votes },
+    });
+    if (idea.author_id) {
+      await db.query(
+        `delete from notifications where user_id = $1 and type = any($2::text[]) and payload->>'ideaId' = $3`,
+        [idea.author_id, AUTHOR_NOTIFICATION_TYPES, id],
+      );
+    }
+    await db.query(`delete from feature_ideas where id = $1`, [id]);
+    return null;
+  });
+}
+
 /**
  * Does the client's `expectedUpdatedAt` still match the row? It is the `updated_at::text` the list
  * handed out (every pool connection renders it in the same zone), compared as text so a malformed

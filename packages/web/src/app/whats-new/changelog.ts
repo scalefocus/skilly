@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.42.0",
+    date: "2026-10-22",
+    summary:
+      "Platform admins can now delete any feature idea from the Feature ideas page, whether it is pending, published, rejected or closed. Deleting removes the idea and its votes for good without telling the proposer, and an optional reason is kept in the audit log. To settle an item on Coming soon, close it instead.",
+  },
+  {
     version: "2.41.0",
     date: "2026-10-22",
     summary:
