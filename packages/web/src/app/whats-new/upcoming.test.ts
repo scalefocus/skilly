@@ -12,6 +12,7 @@ const SPEC = readFileSync(fileURLToPath(new URL("../../../../../SKILLY_SPEC.md",
 
 const entry = (ids: string[], over: Partial<UpcomingEntry> = {}): UpcomingEntry => ({
   ids,
+  key: ids.map((id) => id.toLowerCase()).join("-") || "no-ids",
   title: "Team channels",
   teaser: "Announcements in your team's channel.",
   audience: "everyone",
@@ -50,6 +51,10 @@ test("coming soon: catches every failure case", () => {
   has(upcomingProblems(spec, [entry(["GAP-1"], { teaser: "" })]), /empty teaser/);
   has(upcomingProblems(spec, [entry(["GAP-1"], { title: "See §12" })]), /title mentions a spec section/);
   has(upcomingProblems(spec, [entry(["GAP-1"], { teaser: "Closes GAP-1." })]), /teaser mentions a spec section/);
+  // §60.3 vote keys.
+  has(upcomingProblems(spec, [entry(["GAP-1"], { key: "" })]), /missing or malformed key/);
+  has(upcomingProblems(spec, [entry(["GAP-1"], { key: "Team_Channels" })]), /missing or malformed key/);
+  has(upcomingProblems(`${spec}\n⚠ GAP-3 · new feature`, [entry(["GAP-1"], { key: "same" }), entry(["GAP-3"], { key: "same" })]), /reuses the key "same"/);
 });
 
 test("coming soon: upcomingFor filters by audience and keeps order", () => {

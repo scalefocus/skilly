@@ -34,6 +34,8 @@ export const DIGEST_DEFAULT_TYPES = [
   "follow.request_created",
   "follow.request_fulfilled",
   "follow.collection_created",
+  // §60.7 the coalesced "feature ideas to review" row for platform admins.
+  "idea.submitted",
 ] as const;
 
 /** Proposer lifecycle, safety flags, deprecations, fulfilled requests: immediate by default; the
@@ -51,6 +53,11 @@ export const DIGEST_OPTIONAL_TYPES = [
   "skill.ai_prereview_flagged",
   "skill.deprecated",
   "request.fulfilled",
+  // §60.7 the proposer's feature-idea lifecycle.
+  "idea.published",
+  "idea.rejected",
+  "idea.closed",
+  "idea.shipped",
 ] as const;
 
 /** Never emailed at all, so never digest candidates. */

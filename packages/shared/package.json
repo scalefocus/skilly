@@ -150,6 +150,10 @@
     "./hype": {
       "types": "./dist/hype.d.ts",
       "default": "./dist/hype.js"
+    },
+    "./ideas": {
+      "types": "./dist/ideas.d.ts",
+      "default": "./dist/ideas.js"
     }
   },
   "scripts": {

@@ -35,6 +35,11 @@ interface Me {
   hypeNotifications?: boolean;
   hypeEnabled?: boolean;
   directoryHidden: boolean;
+  /** §60.9 feature ideas: the attribution opt-out, an admin's review-queue opt-out, and the switch. */
+  ideaAttributionHidden?: boolean;
+  ideaNotifications?: boolean;
+  featureIdeasEnabled?: boolean;
+  isPlatformAdmin?: boolean;
   achievementsHidden: boolean;
   achievementsEnabled: boolean;
   allowFollows: boolean;
@@ -200,6 +205,62 @@ function DirectoryPref() {
   );
 }
 
+// §60.9 "Show my name on feature ideas I suggest": on by default, applied live to every idea of yours
+// on the Coming soon list. Platform admins always see who suggested what. Hidden while the feature is off.
+function IdeaAttributionPref() {
+  const { data, reload } = useApi<Me>("/api/me");
+  const [busy, setBusy] = useState(false);
+  if (!data) return <div className="skeleton" style={{ height: 70, borderRadius: "var(--radius)" }} />;
+  if (data.featureIdeasEnabled === false) return null;
+  const hidden = data.ideaAttributionHidden ?? false;
+
+  const choose = async (next: boolean) => {
+    if (next === hidden) return;
+    setBusy(true);
+    try {
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ideaAttributionHidden: next }) });
+      reload();
+    } finally { setBusy(false); }
+  };
+
+  const opts: { label: string; hint: string; hidden: boolean }[] = [
+    { label: "Shown", hint: "suggested by you", hidden: false },
+    { label: "Hidden", hint: "no name", hidden: true },
+  ];
+  return (
+    <section className="reveal" style={{ marginBottom: 30 }} data-testid="idea-attribution">
+      <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Feature ideas</h2>
+      <p className="page-sub" style={{ marginBottom: 16 }}>
+        Show my name on feature ideas I suggest. When a platform admin publishes one of your ideas to the Coming soon
+        list on the What&rsquo;s new page, it reads &ldquo;Suggested by&rdquo; and your name.
+      </p>
+      <div className="sort-toggle" role="group" aria-label="Show my name on feature ideas I suggest">
+        {opts.map((o) => {
+          const active = o.hidden === hidden;
+          return (
+            <button
+              key={o.label}
+              type="button"
+              className={`sort-opt${active ? " sort-on" : ""}`}
+              aria-pressed={active}
+              disabled={busy}
+              title={o.hint}
+              onClick={() => choose(o.hidden)}
+            >
+              {o.label} <span className="muted mono" style={{ fontSize: 11 }}>{o.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        {hidden
+          ? "Your ideas show without a name. Platform admins still see who suggested them."
+          : "Your name shows on the ideas you suggested, on every one of them."}
+      </p>
+    </section>
+  );
+}
+
 // §12 email-channel opt-out: on by default; off = in-app (and webhook) only. The user
 // doesn't pick a transport — email either arrives or it doesn't.
 function EmailNotificationsPref() {
@@ -314,7 +375,7 @@ function MaintainerNotificationsPref() {
   const [busy, setBusy] = useState(false);
   if (!data) return <div className="skeleton" style={{ height: 120, borderRadius: "var(--radius)" }} />;
 
-  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications", enabled: boolean) => {
+  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications" | "ideaNotifications", enabled: boolean) => {
     setBusy(true);
     try {
       await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: enabled }) });
@@ -322,7 +383,7 @@ function MaintainerNotificationsPref() {
     } finally { setBusy(false); }
   };
 
-  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications"; label: string; offHint: string; value: boolean }[] = [
+  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications" | "ideaNotifications"; label: string; offHint: string; value: boolean }[] = [
     { field: "driftNotifications", label: "Upstream drift", offHint: "You won't be alerted when an external skill's pinned source changes.", value: data.driftNotifications },
     { field: "newVersionNotifications", label: "New versions", offHint: "You won't be alerted when a skill you maintain publishes a version. Skills you watch still notify you.", value: data.newVersionNotifications },
     { field: "contentRiskNotifications", label: "Content check flags", offHint: "You won't be alerted when the content check flags a published version of a skill you maintain.", value: data.contentRiskNotifications },
@@ -333,6 +394,10 @@ function MaintainerNotificationsPref() {
       ? [{ field: "hypeNotifications" as const, label: "Hype milestones", offHint: "You won't be told when a skill you maintain enters the top hyped skills.", value: data.hypeNotifications ?? true }]
       : []),
     { field: "discussionNotifications", label: "Discussion comments, replies and @mentions", offHint: "You won't be alerted about new comments on skills you maintain or watch, replies in threads you're part of, or when someone @mentions you.", value: data.discussionNotifications },
+    // §60.7 — only platform admins review feature ideas, so only they see the toggle (hidden while off).
+    ...(data.isPlatformAdmin && data.featureIdeasEnabled !== false
+      ? [{ field: "ideaNotifications" as const, label: "New feature ideas to review", offHint: "You won't be told when someone suggests a feature. The Feature ideas page still shows the queue.", value: data.ideaNotifications ?? true }]
+      : []),
     // §46.10 — only namespace admins receive it, so only they see the toggle.
     ...(data.administersNamespace
       ? [{ field: "aiPrereviewNotifications" as const, label: "AI pre-review flags in namespaces I administer", offHint: "You won't be alerted when an AI pre-review flags a version that was published without a reviewer seeing the result.", value: data.aiPrereviewNotifications ?? true }]
@@ -665,6 +730,7 @@ function ProfileInner() {
 
       <DateFormatPref />
       <DirectoryPref />
+      <IdeaAttributionPref />
       <LeaderboardPref />
       <AchievementsPref />
       <EmailNotificationsPref />

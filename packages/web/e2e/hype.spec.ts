@@ -92,7 +92,7 @@ test.describe("hype (@global/web-scraper)", () => {
       await gotoLoaded(page, "/profile", /\/api\/users\/[^/]+\/achievements$/);
       const card = page.getByTestId("achievements-card");
       await expect(card).toBeVisible();
-      await expect(page.getByTestId("level-bar")).toContainText(/ of 31/);
+      await expect(page.getByTestId("level-bar")).toContainText(/ of 33/);
       await expect(card.locator('[data-badge="first_hype"]')).toHaveAttribute("data-earned", "1");
       await expect(card.locator("[data-unavailable]")).toHaveCount(off.unavailable.length);
       for (const k of off.unavailable as string[]) {

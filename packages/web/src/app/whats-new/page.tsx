@@ -7,7 +7,7 @@ import { ScrollToTop, cachedGet, invalidateApi } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { CHANGELOG } from "./changelog";
-import { UPCOMING, upcomingFor, type UpcomingViewer } from "./upcoming";
+import type { UpcomingViewer } from "./upcoming";
 import { ComingSoon } from "./ComingSoon";
 
 function WhatsNew() {
@@ -60,7 +60,7 @@ function WhatsNew() {
         </p>
       </div>
 
-      {viewer && <ComingSoon entries={upcomingFor(UPCOMING, viewer)} />}
+      {viewer && <ComingSoon viewer={viewer} />}
 
       {/* A simple vertical timeline: version + date on the left rail, the change on the right. */}
       <ol style={{ listStyle: "none", margin: 0, padding: 0, position: "relative" }}>

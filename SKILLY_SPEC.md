@@ -140,7 +140,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60 — not built yet), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -285,7 +285,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; not built yet), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -363,7 +363,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`ai_prereview_links`** — binds a run to a subject: a proposal revision **or** a skill version (CASCADE); `cached` marks a link that reused an existing run; the latest link is the subject's current run.
 - **`ai_prereview_dispositions`** — append-only Agree/Dismiss per finding `fingerprint`, keyed to a proposal **or** a version; `decided_by` (FK → `users`, SET NULL), `reason` (≤ 500). The same migration adds `skill_versions.ai_prereview_notified_at` and `users.ai_prereview_notifications` (default true).
 
-### `feature_ideas` / `feature_idea_votes` / `upcoming_votes` (migration 0100, detailed in §60 — not built yet)
+### `feature_ideas` / `feature_idea_votes` / `upcoming_votes` (migration 0100, detailed in §60)
 - **`feature_ideas`** — a user's feature suggestion: `pending` → `published` (into What's new *Coming soon*) → `closed` with an outcome, or `rejected` / `withdrawn`; the proposer's own text is kept beside the admin-edited one (§60.2).
 - **`feature_idea_votes`** / **`upcoming_votes`** — one upvote per user per published idea / per *Coming soon* teaser `key`; mutable personal rows, CASCADE on the user (§60.6).
 
@@ -415,8 +415,8 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Share a restricted skill with another namespace (§42) | ✅ (any) | ✅ (owner ns) | ❌ | explicit maintainers of that skill |
 | Revoke a namespace share (§42) | ✅ (any) | ✅ (owner ns **or** the receiving ns) | ❌ | explicit maintainers of that skill |
 | Draft quality improvements with AI (§44) — hosted skills, AI operational | ✅ (any) | ✅ (own ns) | explicit maintainers of that skill | explicit maintainers of that skill |
-| Suggest a feature; edit or withdraw an **own** pending idea; upvote *Coming soon* entries (§60, not built yet) | ✅ | ✅ | ✅ | ✅ |
-| Publish / reject / edit / close feature ideas; switch the feature (§60, not built yet) | ✅ | ❌ | ❌ | ❌ |
+| Suggest a feature; edit or withdraw an **own** pending idea; upvote *Coming soon* entries (§60) | ✅ | ✅ | ✅ | ✅ |
+| Publish / reject / edit / close feature ideas; switch the feature (§60) | ✅ | ❌ | ❌ | ❌ |
 
 > **Maintainers (§19)** are an ownership + notification concept and grant **no authority** (invariant #1 — all power stays in SCIM groups + `role_mappings`). The *single* exception is the row above: a skill's own maintainers may curate its co-maintainer list, bounded by the visibility eligibility gate (they can never add anyone who couldn't already see the skill). Drafting quality improvements with AI (§44) is **not authority** either: anyone may propose a new version; that row only limits who may spend AI calls on a skill, and the result is an ordinary proposal through the ordinary gate.
 
@@ -476,7 +476,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. Likewise **`ai_usage.user_id` → NULL** (§40.3), keeping AI usage totals intact. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
-- **Feature ideas (§60.9, not built yet):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false` and `idea_notifications = true`.
+- **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false` and `idea_notifications = true`.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
 - **Leaderboard credit transfer (same optional target):** with a "Replace maintainer to" target, the erased user's `install_credits` rows are **reassigned to the target** instead of deleted, so their contributor-leaderboard standing (installs + "skills adopted", §21) is retained under the successor. Two classes of row are **excepted and deleted** (as plain erasure would): **would-be self-credits** — credits for installs the *target* performed themselves; the no-self-credit rule (§21) holds even through transfer — and **duplicates** — the target already holds a credit for the same install (they co-maintained the skill); one install never counts twice for one person. Credit transfer is **independent of the maintainer-transfer eligibility check**: **all** remaining credits move, including those on restricted skills the target can't see — no leak, because the board exposes only per-person aggregates and never skill identities (invariant #3 holds); the target's "skills adopted" may therefore count skills their leaderboard "Skills" catalog link won't show (that link visibility-filters independently). Reassigned rows keep their original `access_log` timestamps, so both windows stay faithful (the target's 30d numbers may jump). **"Requests fulfilled" and "skills requested" are deliberately NOT transferred** — `fulfilled_by_user_id` / `requester_user_id` record who actually did the work / actually asked, and rewriting either would misattribute history on the request record itself (and change who appears as the requester in threads and detail pages); both stay on the tombstone, hidden from the board as today. **"Skills watched" needs no transfer** — it derives from *current* explicit maintainership, so it already follows the maintainer transfer for eligible skills. With **no target** (including the SCIM erasure path, which never has one), credits are deleted exactly as before (§21 "Erasure removes credit").
@@ -1233,7 +1233,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
   - **Email digests (§48.13):** `settings.updated` for the five `email_digest*` platform keys. The user's digest choice and the digest sends are **not audited**.
   - **Feedback survey (§36.11):** submissions, closes and first uses are **never audited** (an audit row would tie a person to an anonymous response). Audited: `settings.updated` for `survey_enabled` and `bug_reports_enabled` (§36.17), and **`survey.response_deleted`** (the admin; `before` = date, trigger, feature, segment, catalog version, answer count and text length — **never the text or a bug report's page path**). Bug reports (§36.17) are never audited either.
-  - **Feature ideas (§60.10, not built yet):** `idea.published`, `idea.rejected`, `idea.updated`, `idea.closed` (outcome, note, deleted vote count), `idea.marked_shipped`, and `settings.updated` for `feature_ideas_enabled`. Submitting, editing or withdrawing an idea, votes and the two profile toggles are **not audited**.
+  - **Feature ideas (§60.10):** `idea.published`, `idea.rejected`, `idea.updated`, `idea.closed` (outcome, note, deleted vote count), `idea.marked_shipped`, and `settings.updated` for `feature_ideas_enabled`. Submitting, editing or withdrawing an idea, votes and the two profile toggles are **not audited**.
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
 - **Retention:** configurable, **default indefinite**. **SIEM export via syslog/stdout** (structured JSON).
 - **Hash-chaining deferred.**
@@ -1276,7 +1276,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Channels (v1):** in-app notification center (always-on) + **email** (two transports — the admin-connected **Graph service account** preferred, env-configured **SMTP** as fallback; see *Email channel* below) + **pluggable outbound webhook** channel (Teams/Slack integration itself deferred). Email/webhook are fanned out by the leader-only worker delivery sweep (§16 #14): each undelivered row is rendered, sent over the configured channels, and marked delivered exactly once with retry/back-off; when no external channel is operational, in-app **is** the delivery and rows are marked delivered immediately.
 - **Read semantics:** opening the in-app inbox **is** the read action — all of the user's notifications are marked read server-side on load (no per-item or "mark all read" buttons). The just-opened visit keeps the "new" highlight on items that were unread so the user can see what arrived; the topbar bell badge clears immediately.
 - **Event-type filter (inbox).** The inbox (`/notifications`) carries a **multi-select event-type filter**: one toggle chip per notification type, labelled from the shared `NOTIFICATION_LABELS` map (the same source as the row pills and the email subject, below). Any combination can be selected, `✕ clear` drops the selection, and an empty selection shows everything. The filter is **server-side** (`GET /api/notifications?types=a,b,c`, since the list paginates) and every change resets the list to page 0. **The selection lasts for the current visit only** and is never stored.
-  - **Collapsible and collapsed by default.** The chip set lists *every* notification type (33 today, and growing), so it wraps to many lines and pushes the inbox itself below the fold. It is therefore rendered by the **shared `CollapsibleFacetRow`** (§10) as a **`Type · <n> ▸`** row, where `<n>` is the number of notification types (the size of `NOTIFICATION_LABELS`, a constant, so the count never wobbles), and it **starts collapsed**. Everything else is inherited from that component unchanged: the header is a `type="button"` with `aria-expanded`/`aria-controls`; collapsed chips stay mounted but `inert` + `aria-hidden` (not focusable, not announced, not visible); the open/close animation runs ~0.2s; and the left label gutter is the same as the catalog's.
+  - **Collapsible and collapsed by default.** The chip set lists *every* notification type (38 today, and growing), so it wraps to many lines and pushes the inbox itself below the fold. It is therefore rendered by the **shared `CollapsibleFacetRow`** (§10) as a **`Type · <n> ▸`** row, where `<n>` is the number of notification types (the size of `NOTIFICATION_LABELS`, a constant, so the count never wobbles), and it **starts collapsed**. Everything else is inherited from that component unchanged: the header is a `type="button"` with `aria-expanded`/`aria-controls`; collapsed chips stay mounted but `inert` + `aria-hidden` (not focusable, not announced, not visible); the open/close animation runs ~0.2s; and the left label gutter is the same as the catalog's.
   - **Remembered per browser.** The user's own open/closed choice is stored in localStorage under **`skilly.notifications.types-open`** (`"1"` = open; anything else, or absent, = collapsed, which is the default). **Only** that choice is stored, never the type selection. Blocked storage means the row is collapsed on every visit. A remembered-open row **paints open on arrival with no slide**; only a user toggle animates (the §10 rule). No auto-expand rule is needed, because the selection is never persisted and the page therefore always arrives unfiltered.
   - **A collapsed, filtered inbox always shows why.** While the row is **collapsed and at least one type is selected**, a summary **`<k> selected · ✕ clear`** sits beside the header, in the chips column. A filtered list therefore never appears without a visible cause, and the selection can be cleared without expanding. **While the row is open the summary is not shown**: the chips show the selection, and `✕ clear` stays at the end of the chips as before, so selecting a chip never shifts the chips under the pointer. Clearing from the collapsed summary leaves the row collapsed, and toggling the row never changes the selection.
 - **Events:**
@@ -1295,7 +1295,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
   - To **effective maintainers** (minus `hype_notifications` opt-outs): `skill.hyped` when the worker's hype sweep sees their skill **enter the top N hyped skills** (§50.7, **at most once per skill per 7 days**); digestible by default (§48.3).
-  - To **platform admins** and to a feature idea's **author** (§60.7, not built yet): `idea.submitted` to platform admins (coalesced per recipient until read, gated by `idea_notifications`), and `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` to the author (proposer lifecycle, no per-type opt-out).
+  - To **platform admins** and to a feature idea's **author** (§60.7): `idea.submitted` to platform admins (coalesced per recipient until read, gated by `idea_notifications`), and `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` to the author (proposer lifecycle, no per-type opt-out).
   - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only** (the one exception: a digest-mode recipient gets them in the email digest, §48), have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
@@ -1789,7 +1789,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `PUT /api/admin/ai/prereview { enabled }` — the AI pre-review switch (§46.2, platform-admin); `GET /api/admin/ai` gains `prereview`.
 - **Feedback survey (§36.10, all platform-admin):** `GET /api/admin/survey/summary`, `GET /api/admin/survey/comments`, `DELETE /api/admin/survey/responses/:id` (audited `survey.response_deleted`); `survey_enabled` and `bug_reports_enabled` (§36.17) on `GET|PATCH /api/admin/settings`.
-- **Feature ideas (§60.11, not built yet):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/teasers/:key/vote`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
+- **Feature ideas (§60.11):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/teasers/:key/vote`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), **email digests** (`email_digests_enabled`, `email_digest_default_mode`, `email_digest_hour`, `email_digest_weekday`, `email_digest_types`, §48.11), …).
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
@@ -2051,7 +2051,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
     - **Web:** *Coming soon* votes, the *Suggest a feature* dialog and *Your ideas*; the
       `/admin/ideas` page and its nav badge; the Administration card and the Profile toggles;
       five notification types; the erasure additions.
-    - **Minor** release. **Specified ahead — not built yet** (see the marker at the top of §60).
+    - **Minor** release (v2.40.0).
 
 **Roadmap — specified ahead at roadmap level, not built.** Each section below carries an open
 `new feature` marker and a list of open decisions that a spec amendment pins before any code (see
@@ -3204,10 +3204,11 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   - **Not in the notice.** The update notice (below) lists only shipped releases; teasers appear on
     the page alone, and the section has no effect on the `whats_new_seen_version` marker or the
     read receipt.
-  - **Votes and community ideas (§60, not built yet).** Once §60 ships, every entry gets an
-    upvote, the heading gains a *Suggest a feature* button, published user ideas join the list,
-    the list sorts by votes, the section always shows while the feature is on, and a proposer
-    sees their own ideas in a *Your ideas* sub-list. Until then, the rules above stand.
+  - **Votes and community ideas (§60).** While the feature-ideas switch is on (the default),
+    §60.3 changes this section: every entry gets an upvote, the heading gains a *Suggest a
+    feature* button, published user ideas join the list, the list sorts by votes, the section
+    always shows, and a proposer sees their own ideas in a *Your ideas* sub-list. The rules above
+    describe the section with the switch off, and its fallback when the list cannot load.
 - **Update notice — once per minor/major release, per user, after onboarding, until dismissed.**
   When a user's authenticated page load runs a **newer** app version than the one they last
   acknowledged, the app shell shows a single persistent floating card pointing at this page. It
@@ -5731,7 +5732,7 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 | `night_shift` | **Night Shift** | Any achievement event (below) at **00:00–04:59 in the user's own timezone** (§31.3). | Habits |
 | `weekend_warrior` | **Weekend Warrior** | Any achievement event on a **Saturday or Sunday in the user's own timezone** (§31.3). | Habits |
 
-§60 (not built yet) adds two more **Ask** badges directly after `request_fulfilled`: `idea_published` (*Bright Idea*) and `idea_shipped` (*Made It Real*), growing the catalog to 33 (§60.8).
+§60 adds two more **Ask** badges directly after `request_fulfilled`: `idea_published` (*Bright Idea*) and `idea_shipped` (*Made It Real*), growing the catalog to 33 (§60.8).
 
 - **Self-actions count.** Installing, watching or rating a skill the user maintains **does** earn
   the badge — achievements measure *trying the feature*, not contribution, so the leaderboard's
@@ -5956,8 +5957,8 @@ around the bubble itself (§31.10) — one number, never which badges earned it.
 ### 31.10 Level (the badge count, worn on the bubble)
 
 A **level** is nothing more than *how many of the catalog's badges a user has earned* — one number
-from 0 to the catalog size (31 today, after §35.8 added two, §38.8 one, §31.11 one, §50.9 two
-and §31.12 five). It introduces no new event, no new award rule and no new
+from 0 to the catalog size (33 today, after §35.8 added two, §38.8 one, §31.11 one, §50.9 two,
+§31.12 five and §60.8 two). It introduces no new event, no new award rule and no new
 disclosure: everything it shows, the §31.5 achievements count already showed. What it adds is
 **reach** — the number travels with the avatar, so progress is legible at a glance instead of only
 on a page someone has to go and open.
@@ -6326,7 +6327,7 @@ Every hook below is also a **Habits event** (§31.3) — the person acted at tha
   | `first_mcp` | `mcp_enabled` is off (§29) |
   | `first_marketplace` | no marketplace is reachable by the owner — the set `GET /api/marketplaces/directory` would list for them is empty (public marketplace off **and** no namespace marketplace open to them, §30) |
   | `triple_threat` | any of its three parts that the owner does **not** already hold is unavailable |
-| `idea_published`, `idea_shipped` (§60.8, not built yet) | `feature_ideas_enabled` is off (§60.9) |
+| `idea_published`, `idea_shipped` (§60.8) | `feature_ideas_enabled` is off (§60.9) |
 
   Every other key is always available.
 - **Only locked tiles, only for the owner.** The marker applies to a badge the owner has **not**
@@ -6423,7 +6424,7 @@ grow; §23's guard test only checks that named badges still exist.
     `first_ai_draft` names *Aria*, not "AI".
 - **E2e (Playwright):** hype a skill → the toast names *Hype Squad* → the profile card shows it
   earned; with hype switched off, a user without the badge sees *Hype Squad* locked with the *"Not
-  available here yet"* hint while the level bar still counts out of 31.
+  available here yet"* hint while the level bar still counts out of the full catalog (33 since §60.8).
 
 ---
 
@@ -11633,8 +11634,8 @@ all read it, so they can never disagree.
 | Tier | Types | Admin can change? |
 |---|---|---|
 | **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.revise`, `proposal.resubmit` — the review queue | No |
-| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), and the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`) | Yes — each can be switched off |
-| **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled` | Yes — each can be switched on |
+| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`), and `idea.submitted` (§60.7) | Yes — each can be switched off |
+| **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled`; the feature-idea lifecycle (§60.7): `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` | Yes — each can be switched on |
 | **Never emailed** | `system.error`, `achievement.earned` | No (not candidates) |
 
 - **`email_digest_types`** holds the enabled candidates from the two changeable tiers. The server
@@ -11647,9 +11648,6 @@ all read it, so they can never disagree.
 - **`follow.*`.** A digestible `follow.*` row reaches email **only** through a digest. Per-update
   users never get it by email (§35.6 unchanged), and a `follow.*` type the admin switches off is
   in-app only for everyone again.
-- **Feature ideas (§60.7, not built yet)** classify their types here when they ship:
-  `idea.submitted` is digestible by default; `idea.published`, `idea.rejected`, `idea.closed` and
-  `idea.shipped` are immediate by default.
 
 ### 48.4 Effective mode
 A pure shared function `effectiveDigestMode(user, settings)` decides, in order:
@@ -12954,12 +12952,6 @@ Capturing content; per-prompt analytics; harnesses other than Claude Code.
 
 ## 60. Feature ideas — vote on what's next, and suggest it
 
-> ⚠ GAP-13 · new feature — none of §60 is built yet: no idea or vote tables (migration 0100), no
-> votes, *Suggest a feature* dialog or *Your ideas* list on What's new, no *Feature ideas* admin
-> page, notifications, badges or platform switch, and none of the entries other sections carry for
-> it (§3, §4, §11, §12, §15, §16 #41, §23, §31, §48.3). Today *Coming soon* is the static, curated,
-> vote-less list that §23 describes.
-
 The What's new page's *Coming soon* list (§23) tells users what is coming, but they cannot say what
 they want. This section lets every signed-in user **upvote** the entries on that list and
 **suggest a feature** of their own in a text box. A platform admin reviews each suggestion and
@@ -13110,9 +13102,9 @@ While `feature_ideas_enabled` is on, §23's *Coming soon* section changes as fol
       one transaction.
     - **Reject…**: a dialog with an optional **Reason** (≤ 500). It sets `status = 'rejected'`,
       `admin_note` and `decided_*`, and notifies the proposer.
-    - Both carry the card's `updated_at`. If the proposer edited or withdrew the idea since the
-      page loaded, the action answers **409** *"This idea changed since you opened it"* and the card
-      reloads.
+    - Both send back the card's `version` (its `updated_at`, rendered at full precision) as
+      `expectedUpdatedAt`. If the proposer edited or withdrew the idea since the page loaded, the
+      action answers **409** *"this idea changed since you opened it"* and the list reloads.
   - **Published**, most-voted first. Each card shows the vote count, title, description, proposer
     and published date, with a **Show original** disclosure when the published text differs from
     `submitted_description`. Two actions:
@@ -13129,7 +13121,8 @@ While `feature_ideas_enabled` is on, §23's *Coming soon* section changes as fol
   so two admins cannot decide one idea twice: the second gets **409**.
 
 ### 60.6 Votes
-- `PUT` upvotes and `DELETE` removes; both are **idempotent** and answer **204**. A teaser vote
+- `PUT` upvotes and `DELETE` removes; both are **idempotent** and answer **200** `{ votes, voted }`
+  (the new count, so the optimistic flip settles on the server's number). A teaser vote
   needs a key present in `UPCOMING` **and** allowed for the caller by `upcomingFor`; an idea vote
   needs a `published` idea. Anything else → **404**, the same answer as for an unknown key, so the
   route never reveals an admin-only teaser.
@@ -13139,13 +13132,17 @@ While `feature_ideas_enabled` is on, §23's *Coming soon* section changes as fol
   (§60.3, §60.12).
 
 ### 60.7 Notifications (§12)
-| Type | Recipients | Subject / body | CTA |
+The email subject is `Skilly - <label>` like every type (§12); the sentence, the optional second line
+and the call-to-action come from one shared function, `ideaNotificationContent`, which the inbox and
+the worker's email renderer both call.
+
+| Type | Recipients | Sentence (second line) | CTA |
 |---|---|---|---|
-| `idea.submitted` | Every **active platform admin** except the author, minus `idea_notifications` opt-outs. **Coalesced per recipient until read**, like `message.new`. | *New feature ideas to review* / "{n} feature idea(s) are waiting for review." | Review ideas → `/admin/ideas` |
-| `idea.published` | The author | *Your feature idea is up for a vote* / "\"{title}\" is on the Coming soon list now. Everyone can upvote it." | See the list → `/whats-new#coming-soon` |
-| `idea.rejected` | The author | *Your feature idea wasn't published* / the reason, or "No reason was given.", followed by the first 140 characters of the description. | Your ideas → `/whats-new#your-ideas` |
-| `idea.closed` | The author (outcomes *Planned*, *Duplicate*, *Won't do*) | *Your feature idea was closed: {Outcome}* / "\"{title}\"", then the note if any. | Your ideas → `/whats-new#your-ideas` |
-| `idea.shipped` | The author (closed as *Shipped*, or *Planned* → *Shipped*) | *A feature you suggested has shipped* / "\"{title}\" is now part of skilly." | What's new → `/whats-new` |
+| `idea.submitted` | Every **active platform admin** except the author, minus `idea_notifications` opt-outs. **Coalesced per recipient until read**, like `message.new`: a new submission bumps the unread row's `count` (a partial unique index, migration 0100). | "A new feature idea is waiting for review." / "{n} new feature ideas are waiting for review." | Review ideas → `/admin/ideas` |
+| `idea.published` | The author | "Your feature idea \"{title}\" is on the Coming soon list now. Everyone can upvote it." | See the list → `/whats-new#coming-soon` |
+| `idea.rejected` | The author | "Your feature idea wasn't published. Reason: {reason}" (or "No reason was given.") — then the first 140 characters of the description, quoted. | Your ideas → `/whats-new#your-ideas` |
+| `idea.closed` | The author (outcomes *Planned*, *Duplicate*, *Won't do*) | "Your feature idea \"{title}\" was closed: {Outcome}." — then the note, if any. | Your ideas → `/whats-new#your-ideas` |
+| `idea.shipped` | The author (closed as *Shipped*, or *Planned* → *Shipped*) | "A feature you suggested has shipped: \"{title}\" is now part of skilly." | What's new → `/whats-new` |
 
 - No row is created for an **inactive or erased** author. The four author types are **proposer
   lifecycle**, with no per-type opt-out, like `proposal.*`. `NOTIFICATION_LABELS` gains five labels:
@@ -13206,7 +13203,7 @@ mutable rows, like ratings and hypes.
 All routes are auth-required. While the switch is off, the user routes answer **404**.
 - `GET /api/coming-soon` → `{ items, mine, limits }`. `items` is the ordered merged list (§60.3):
   `{ kind: "teaser", key, title, teaser, votes, voted }` or `{ kind: "idea", id, title,
-  description, votes, voted, suggestedBy: { id, displayName } | null, publishedAt }`. `mine` is
+  description, votes, voted, suggestedBy: { id, displayName, avatar } | null, publishedAt }`. `mine` is
   the caller's ideas (§60.3 *Your ideas*). `limits` is described in §60.4.
 - `POST /api/coming-soon/ideas { description }` → **201** `{ idea }`; **422** for a bad length;
   **429** at a limit (§60.4).

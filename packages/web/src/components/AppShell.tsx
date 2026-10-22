@@ -43,6 +43,8 @@ const SYSLOG_NAV = { href: "/system-log", label: "System log", icon: "M4 5h16v14
 // §32.7 Monitoring (real user monitoring + the Currently online presence card, §4) — platform admins
 // only, directly under System log. Sidebar label only: the page title stays "Real user monitoring."
 const RUM_NAV = { href: "/admin/rum", label: "Monitoring", icon: "M3 17l5-6 4 4 5-8 4 5M3 21h18" };
+// §60.5 Feature ideas — platform admins only, directly under Monitoring, with the pending-queue count.
+const IDEAS_NAV = { href: "/admin/ideas", label: "Feature ideas", icon: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z" };
 const ADMIN_NAV = { href: "/admin", label: "Administration", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" };
 const NS_ADMIN_NAV = { href: "/namespaces", label: "Namespace administration", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" };
 
@@ -97,7 +99,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [badgeToast, setBadgeToast] = useState<{ id: string; name: string; glyph: string; level: string | null } | null>(null);
   const [unread, setUnread] = useState(0);
   // "New since you last looked" counts for the Catalog / Review queue / Requested skills nav items.
-  const [navBadges, setNavBadges] = useState<{ catalog: number; review: number; systemLog: number; requests: number }>({ catalog: 0, review: 0, systemLog: 0, requests: 0 });
+  const [navBadges, setNavBadges] = useState<{ catalog: number; review: number; systemLog: number; requests: number; ideas: number }>({ catalog: 0, review: 0, systemLog: 0, requests: 0, ideas: 0 });
   // The header system banner (§27) — a platform-admin-set, org-wide announcement pill. Piggybacks
   // the same poll as the nav badges below rather than a dedicated transport.
   const [systemBanner, setSystemBanner] = useState<{ message: string; expiresAt: string } | null>(null);
@@ -637,6 +639,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             review: here === "review" ? 0 : Number(j.review ?? 0),
             systemLog: here === "system-log" ? 0 : Number(j.systemLog ?? 0),
             requests: here === "requests" ? 0 : Number(j.requests ?? 0),
+            // §60.5 a plain count of the queue — never zeroed on visit, it drops as ideas are decided.
+            ideas: Number(j.ideas ?? 0),
           });
         })
         .catch(() => {});
@@ -795,6 +799,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link href={RUM_NAV.href} className={`nav-item${isActive(RUM_NAV.href) ? " active" : ""}`}>
             <Icon d={RUM_NAV.icon} />
             {RUM_NAV.label}
+          </Link>
+        )}
+        {isPlatformAdmin && (
+          <Link href={IDEAS_NAV.href} className={`nav-item${isActive(IDEAS_NAV.href) ? " active" : ""}`}>
+            <Icon d={IDEAS_NAV.icon} />
+            {IDEAS_NAV.label}
+            {navBadges.ideas > 0 && (
+              <sup className="nav-badge" aria-label={`${navBadges.ideas > 9 ? "9+" : navBadges.ideas} pending`}>{navBadges.ideas > 9 ? "9+" : navBadges.ideas}</sup>
+            )}
           </Link>
         )}
         {canAdminNamespace && (

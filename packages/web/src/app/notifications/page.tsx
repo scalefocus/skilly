@@ -8,6 +8,7 @@ import { PREF_NOTIFICATIONS_TYPES_OPEN, readPref, writePref } from "../../lib/pr
 import { storedFlagOpen } from "../../lib/facetRow";
 import { NOTIFICATION_LABELS } from "@skilly/shared/notifications";
 import { followNotificationContent } from "@skilly/shared/follows";
+import { ideaNotificationContent } from "@skilly/shared/ideas";
 
 const PAGE = 100;
 
@@ -206,6 +207,8 @@ export default function NotificationsPage() {
             // §35.6 follow.* — the shared sentence + CTA (the email renderer uses the same one), in
             // place of the generic per-field links below.
             const follow = followNotificationContent(n.type, n.payload);
+            // §60.7 idea.* — the same shared sentence, second line and CTA the email uses.
+            const idea = ideaNotificationContent(n.type, n.payload);
             // §45.6 skill.deprecated: the successor (named only when THIS recipient could see it at insert).
             const succNs = n.type === "skill.deprecated" && typeof n.payload.successorNamespaceSlug === "string" ? n.payload.successorNamespaceSlug : null;
             const succSlug = n.type === "skill.deprecated" && typeof n.payload.successorSlug === "string" ? n.payload.successorSlug : null;
@@ -235,6 +238,15 @@ export default function NotificationsPage() {
                       <p style={{ fontSize: 13.5, margin: "8px 0 0" }}>{follow.sentence}</p>
                       <Link href={follow.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                         {follow.ctaLabel.toLowerCase()} →
+                      </Link>
+                    </>
+                  )}
+                  {idea && (
+                    <>
+                      <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-idea">{idea.sentence}</p>
+                      {idea.detail && <p className="muted" style={{ fontSize: 13, margin: "4px 0 0", whiteSpace: "pre-line" }}>{idea.detail}</p>}
+                      <Link href={idea.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                        {idea.ctaLabel.toLowerCase()} →
                       </Link>
                     </>
                   )}

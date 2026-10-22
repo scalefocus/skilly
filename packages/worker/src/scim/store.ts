@@ -338,6 +338,11 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // The feedback survey's first-use ledger (§36.12); responses carry no user reference and stay.
     // Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_feature_uses where user_id = $1`, [userId]);
+    // Feature ideas (§60.9): published ideas stay (shown unattributed), every other idea of theirs
+    // goes, and so does every vote they cast. Mirrored in web lib/eraseUser.ts — keep the two in sync.
+    await client.query(`delete from feature_ideas where author_id = $1 and status <> 'published'`, [userId]);
+    await client.query(`delete from feature_idea_votes where user_id = $1`, [userId]);
+    await client.query(`delete from upcoming_votes where user_id = $1`, [userId]);
     // Scrub + detach the row (tombstone). Display label retains the former email
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";
@@ -349,6 +354,7 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
               job_title = null, office_location = null, department = null, directory_hidden = false,
               achievements_hidden = false, time_zone = null, hero_at = null, allow_follows = true,
               surveys_enabled = true, survey_last_shown_at = null, survey_offer = null, survey_self_shown_at = null,
+              idea_attribution_hidden = false, idea_notifications = true,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [userId, deletedLabel],

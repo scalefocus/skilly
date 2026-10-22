@@ -31,6 +31,9 @@ export const ACHIEVEMENTS: AchievementDef[] = [
   // Ask
   { key: "first_request", name: "Wishful Thinker", blurb: "You asked the org for a skill that did not exist yet.", howToEarn: "Post a skill request from the Propose page (\"I want a skill\").", glyph: "🌠", group: "Ask" },
   { key: "request_fulfilled", name: "Wish Granted", blurb: "Someone built the skill you asked for.", howToEarn: "Post a request and wait for a colleague to fulfil it.", glyph: "🎁", group: "Ask" },
+  // §60.8 feature ideas — awarded by the platform admin's publish / ship, never a Habits event.
+  { key: "idea_published", name: "Bright Idea", blurb: "Your idea is up for a vote.", howToEarn: "Suggest a feature from Coming soon on the What's new page. It counts once an admin publishes it.", glyph: "💡", group: "Ask" },
+  { key: "idea_shipped", name: "Made It Real", blurb: "A feature you suggested made it into skilly.", howToEarn: "Suggest a feature. When it ships, this one is yours.", glyph: "🛠️", group: "Ask" },
   // Contribute
   { key: "first_fulfilment", name: "Genie", blurb: "You granted someone else's wish.", howToEarn: "Fulfil another person's skill request.", glyph: "🧞", group: "Contribute" },
   { key: "first_hosted_proposal", name: "Homegrown", blurb: "You proposed a skill built and hosted right here.", howToEarn: "Propose a hosted skill (upload a bundle).", glyph: "🌱", group: "Contribute" },
@@ -136,6 +139,8 @@ export interface AchievementFlags {
   mcpEnabled: boolean;
   /** A marketplace the owner can use exists (the set the marketplace directory lists for them). */
   marketplaceReachable: boolean;
+  /** §60.9 the feature-ideas switch. */
+  featureIdeasEnabled: boolean;
 }
 
 const GATE: Record<string, keyof AchievementFlags> = {
@@ -145,6 +150,8 @@ const GATE: Record<string, keyof AchievementFlags> = {
   first_ai_draft: "aiAvailable",
   first_mcp: "mcpEnabled",
   first_marketplace: "marketplaceReachable",
+  idea_published: "featureIdeasEnabled",
+  idea_shipped: "featureIdeasEnabled",
 };
 
 /**

@@ -23,7 +23,7 @@ interface Mapping { id: string; role: Role; namespaceId: string | null; groupId:
 interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -43,7 +43,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
   "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
-  "achievements", "hype", "search", "contentrisk", "policyrules", "policy",
+  "achievements", "hype", "featureideas", "search", "contentrisk", "policyrules", "policy",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -263,6 +263,34 @@ function AchievementsSettings({
         checked={enabled}
         disabled={busy}
         onChange={(next) => void patch({ achievementsEnabled: next })}
+      />
+    </CollapsibleCard>
+  );
+}
+
+// Feature ideas (§60.9). OFF hides the Coming soon votes, the Suggest button and every idea row, and
+// the Feature ideas page goes read-only — but nothing is deleted, so switching back restores it all.
+function FeatureIdeasSettings({
+  enabled, busy, call, open, onToggle,
+}: {
+  enabled: boolean;
+  busy: boolean;
+  call: (input: RequestInfo, init: RequestInit) => Promise<boolean>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <CollapsibleCard cardId="featureideas" title="Feature ideas" summary={enabled ? "on" : "off"} open={open} onToggle={onToggle}>
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
+        Lets everyone upvote the Coming soon list on the What&rsquo;s new page and suggest features of their own, which you
+        review on the <a href="/admin/ideas">Feature ideas</a> page. Switching this off hides the votes, the suggestions and the
+        published ideas, and makes the review page read-only. Nothing is deleted — switch it back on and everything returns.
+      </p>
+      <Switch
+        label="Allow votes and suggestions"
+        checked={enabled}
+        disabled={busy}
+        onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ featureIdeasEnabled: next }) })}
       />
     </CollapsibleCard>
   );
@@ -711,6 +739,9 @@ export default function AdminPage() {
 
       {/* Hype (§50.8) — the switch, the budget, the two eligibility thresholds and the top N */}
       <HypeCard open={cards.open.hype} onToggle={() => cards.toggle("hype")} />
+
+      {/* Feature ideas (§60.9) — the dormant-not-destructive on/off */}
+      <FeatureIdeasSettings enabled={data.settings.featureIdeasEnabled} busy={busy} call={call} open={cards.open.featureideas} onToggle={() => cards.toggle("featureideas")} />
 
       <EmailCard open={cards.open.email} onToggle={() => cards.toggle("email")} />
 

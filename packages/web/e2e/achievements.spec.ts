@@ -23,7 +23,7 @@ test("profile: the Achievements card — the level bar, every badge, locked hint
   // §31.10: the level bar replaced the old "N of M earned" text line and reports the same fact.
   const bar = page.getByTestId("level-bar");
   await expect(bar).toBeVisible();
-  await expect(bar).toContainText(/(Level \d+|Hero) — \d+ of 31/);
+  await expect(bar).toContainText(/(Level \d+|Hero) — \d+ of 33/);
   const level = Number(await bar.getAttribute("data-level"));
   expect(level).toBeGreaterThanOrEqual(1); // "Read the Manual" was just stamped above
   await expect(bar.getByRole("progressbar")).toHaveAttribute("aria-valuemax", String(ACHIEVEMENT_TOTAL));
@@ -59,7 +59,7 @@ test("hall: own view with ?badge= spotlight and the level bar; an unknown id is 
   await expect(tile).toBeVisible();
   await expect(tile).toHaveAttribute("data-earned", "1");
   // The header's level bar carries the N-of-M count — the body no longer repeats a total (§31.5).
-  await expect(page.getByTestId("level-bar")).toContainText(/(Level \d+|Hero) — \d+ of 31/);
+  await expect(page.getByTestId("level-bar")).toContainText(/(Level \d+|Hero) — \d+ of 33/);
   await expect(page.getByTestId("hall-count")).toHaveCount(0);
   // The owner sees locked badges here too (same content as the profile card).
   await expect(page.locator("[data-badge]")).toHaveCount(ACHIEVEMENT_TOTAL);
@@ -143,7 +143,7 @@ test("levels: the bulk map drives the bubble ring, and the opt-out removes the c
 
   // The ring itself: the profile page's own bubble is labelled with the level.
   await page.goto("/profile", { timeout: 20_000 });
-  await expect(page.getByRole("img", { name: /^(Level \d+ of 31|Hero — \d+ of 31)$/ }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("img", { name: /^(Level \d+ of 33|Hero — \d+ of 33)$/ }).first()).toBeVisible({ timeout: 20_000 });
 });
 
 test("levels: the ring never appears on a bubble whose owner has no badges", async ({ page }) => {

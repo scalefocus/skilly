@@ -1,0 +1,240 @@
+// Feature ideas (SKILLY_SPEC.md §60) — the SINGLE SOURCE OF TRUTH for the limits, the status and
+// outcome enums, the validators, the merged "Coming soon" order and the notification wording. The
+// web routes, the What's new page, the admin page and the worker email renderer all read it, so
+// they can never disagree. Client-safe (no node deps); subpath export `@skilly/shared/ideas`.
+
+// ── Limits (§60.2, §60.4) ──────────────────────────────────────────────────────────────────────
+
+export const IDEA_DESCRIPTION_MIN = 20;
+export const IDEA_DESCRIPTION_MAX = 1000;
+export const IDEA_TITLE_MIN = 3;
+export const IDEA_TITLE_MAX = 80;
+/** A rejection reason or a closing note. */
+export const IDEA_NOTE_MAX = 500;
+/** Ideas awaiting review per author. */
+export const IDEA_PENDING_MAX = 3;
+/** Submissions per author per rolling 24 h, withdrawn ones included. */
+export const IDEA_DAILY_MAX = 5;
+export const IDEA_DAILY_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** "Your ideas" shows at most this many, newest first. */
+export const IDEA_MINE_LIMIT = 20;
+/** The admin Closed tab's page size. */
+export const IDEA_ADMIN_PAGE = 50;
+/** A rejected idea's notification quotes this much of the description. */
+export const IDEA_EXCERPT_MAX = 140;
+
+/** A teaser's vote key in `upcoming.ts` (§60.3): kebab-case, ≤ 60 characters, never reused. */
+export const UPCOMING_KEY_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const UPCOMING_KEY_MAX = 60;
+
+export function isUpcomingKey(v: unknown): v is string {
+  return typeof v === "string" && v.length <= UPCOMING_KEY_MAX && UPCOMING_KEY_RE.test(v);
+}
+
+// ── Status and outcome ─────────────────────────────────────────────────────────────────────────
+
+export type IdeaStatus = "pending" | "published" | "rejected" | "closed" | "withdrawn";
+
+export const IDEA_OUTCOMES = ["planned", "shipped", "duplicate", "wont_do"] as const;
+export type IdeaOutcome = (typeof IDEA_OUTCOMES)[number];
+
+export const IDEA_OUTCOME_LABELS: Record<IdeaOutcome, string> = {
+  planned: "Planned",
+  shipped: "Shipped",
+  duplicate: "Duplicate",
+  wont_do: "Won't do",
+};
+
+export function isIdeaOutcome(v: unknown): v is IdeaOutcome {
+  return typeof v === "string" && (IDEA_OUTCOMES as readonly string[]).includes(v);
+}
+
+// ── Validation ─────────────────────────────────────────────────────────────────────────────────
+
+export type TextValidation = { ok: true; value: string } | { ok: false; error: string };
+
+/**
+ * Length in characters (code points), as the database's `char_length` counts it — never `.length`,
+ * which counts UTF-16 units, so an emoji would count twice and slip past the database's bounds.
+ */
+export function ideaTextLength(text: string): number {
+  return Array.from(text).length;
+}
+
+/** Trimmed, with Windows/old-Mac line endings folded to `\n`. Plain text: nothing else changes. */
+export function normalizeIdeaText(raw: string): string {
+  return raw.replace(/\r\n?/g, "\n").trim();
+}
+
+export function validateIdeaDescription(raw: unknown): TextValidation {
+  if (typeof raw !== "string") return { ok: false, error: "description is required" };
+  const value = normalizeIdeaText(raw);
+  const n = ideaTextLength(value);
+  if (n < IDEA_DESCRIPTION_MIN) return { ok: false, error: `description must be at least ${IDEA_DESCRIPTION_MIN} characters` };
+  if (n > IDEA_DESCRIPTION_MAX) return { ok: false, error: `description must be at most ${IDEA_DESCRIPTION_MAX} characters` };
+  return { ok: true, value };
+}
+
+/** One line: whitespace runs (line breaks included) collapse to a single space. */
+export function validateIdeaTitle(raw: unknown): TextValidation {
+  if (typeof raw !== "string") return { ok: false, error: "title is required" };
+  const value = raw.replace(/\s+/g, " ").trim();
+  const n = ideaTextLength(value);
+  if (n < IDEA_TITLE_MIN) return { ok: false, error: `title must be at least ${IDEA_TITLE_MIN} characters` };
+  if (n > IDEA_TITLE_MAX) return { ok: false, error: `title must be at most ${IDEA_TITLE_MAX} characters` };
+  return { ok: true, value };
+}
+
+/** Optional: absent or blank → null. */
+export function validateIdeaNote(raw: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  if (typeof raw !== "string") return { ok: false, error: "note must be text" };
+  const value = normalizeIdeaText(raw);
+  if (ideaTextLength(value) > IDEA_NOTE_MAX) return { ok: false, error: `note must be at most ${IDEA_NOTE_MAX} characters` };
+  return { ok: true, value: value || null };
+}
+
+// ── Submission caps (§60.4) ────────────────────────────────────────────────────────────────────
+
+export type IdeaLimitRefusal = "pending_limit" | "daily_limit";
+
+/** Which cap a new submission would break, the pending cap first; null = it may go in. */
+export function ideaLimitRefusal(counts: { pending: number; today: number }): IdeaLimitRefusal | null {
+  if (counts.pending >= IDEA_PENDING_MAX) return "pending_limit";
+  if (counts.today >= IDEA_DAILY_MAX) return "daily_limit";
+  return null;
+}
+
+/** Whole seconds (≥ 1) until the oldest submission in the window leaves it. */
+export function dailyRetryAfterSeconds(oldestInWindow: Date, now: Date = new Date()): number {
+  return Math.max(1, Math.ceil((oldestInWindow.getTime() + IDEA_DAILY_WINDOW_MS - now.getTime()) / 1000));
+}
+
+export const IDEA_LIMIT_MESSAGES: Record<IdeaLimitRefusal, string> = {
+  pending_limit: `You have ${IDEA_PENDING_MAX} ideas waiting for review. Wait for a decision, or withdraw one.`,
+  daily_limit: `You've suggested ${IDEA_DAILY_MAX} features in the last 24 hours. Try again later.`,
+};
+
+// ── The merged Coming soon list (§60.3) ────────────────────────────────────────────────────────
+
+export interface ComingSoonTeaserItem {
+  kind: "teaser";
+  key: string;
+  title: string;
+  teaser: string;
+  votes: number;
+  voted: boolean;
+}
+
+export interface ComingSoonIdeaItem {
+  kind: "idea";
+  id: string;
+  title: string;
+  description: string;
+  votes: number;
+  voted: boolean;
+  /** Null when the proposer opted out, was erased, or is gone (§60.3). */
+  suggestedBy: { id: string; displayName: string; avatar: string | null } | null;
+  publishedAt: string;
+}
+
+export type ComingSoonItem = ComingSoonTeaserItem | ComingSoonIdeaItem;
+
+/**
+ * §60.1 decision 2: most votes first, teasers and ideas together. Ties: teasers before ideas,
+ * teasers in their `UPCOMING` order (the order given here), ideas newest-published first, then id.
+ */
+export function comingSoonOrder(teasers: readonly ComingSoonTeaserItem[], ideas: readonly ComingSoonIdeaItem[]): ComingSoonItem[] {
+  const ranked = [
+    ...teasers.map((item, idx) => ({ item: item as ComingSoonItem, tier: 0, idx, at: 0, id: "" })),
+    ...ideas.map((item) => ({ item: item as ComingSoonItem, tier: 1, idx: 0, at: Date.parse(item.publishedAt) || 0, id: item.id })),
+  ];
+  ranked.sort(
+    (a, b) =>
+      b.item.votes - a.item.votes ||
+      a.tier - b.tier ||
+      a.idx - b.idx ||
+      b.at - a.at ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  return ranked.map((r) => r.item);
+}
+
+// ── Notifications (§60.7) ──────────────────────────────────────────────────────────────────────
+
+export const IDEA_NOTIFICATION_TYPES = ["idea.submitted", "idea.published", "idea.rejected", "idea.closed", "idea.shipped"] as const;
+
+export function isIdeaNotificationType(type: string): boolean {
+  return (IDEA_NOTIFICATION_TYPES as readonly string[]).includes(type);
+}
+
+/** The first `max` characters of a description, on one line, with an ellipsis when cut. */
+export function ideaExcerpt(text: string, max: number = IDEA_EXCERPT_MAX): string {
+  const chars = Array.from(text.replace(/\s+/g, " ").trim());
+  return chars.length > max ? `${chars.slice(0, max - 1).join("").trimEnd()}…` : chars.join("");
+}
+
+export interface IdeaNotificationContent {
+  sentence: string;
+  /** A second line: the reason, the note or the excerpt. */
+  detail: string | null;
+  ctaLabel: string;
+  path: string;
+}
+
+/**
+ * The §60.7 wording of an `idea.*` row, shared by the in-app inbox and the worker's email renderer.
+ * Payload keys: `count` (submitted), `title` (published, closed, shipped), `reason` and `excerpt`
+ * (rejected), `outcome` and `adminNote` (closed). Null for any other type.
+ */
+export function ideaNotificationContent(type: string, payload: Record<string, unknown>): IdeaNotificationContent | null {
+  const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const title = str(payload.title);
+  const named = title ? `"${title}"` : "Your feature idea";
+  switch (type) {
+    case "idea.submitted": {
+      const n = typeof payload.count === "number" && payload.count > 0 ? payload.count : 1;
+      return {
+        sentence: n === 1 ? "A new feature idea is waiting for review." : `${n} new feature ideas are waiting for review.`,
+        detail: null,
+        ctaLabel: "Review ideas",
+        path: "/admin/ideas",
+      };
+    }
+    case "idea.published":
+      return {
+        sentence: title ? `Your feature idea "${title}" is on the Coming soon list now. Everyone can upvote it.` : "Your feature idea is on the Coming soon list now. Everyone can upvote it.",
+        detail: null,
+        ctaLabel: "See the list",
+        path: "/whats-new#coming-soon",
+      };
+    case "idea.rejected": {
+      const reason = str(payload.reason);
+      const excerpt = str(payload.excerpt);
+      return {
+        sentence: `Your feature idea wasn't published. ${reason ? `Reason: ${reason}` : "No reason was given."}`,
+        detail: excerpt ? `"${excerpt}"` : null,
+        ctaLabel: "Your ideas",
+        path: "/whats-new#your-ideas",
+      };
+    }
+    case "idea.closed": {
+      const outcome = isIdeaOutcome(payload.outcome) ? IDEA_OUTCOME_LABELS[payload.outcome] : "closed";
+      return {
+        sentence: `${named === "Your feature idea" ? named : `Your feature idea ${named}`} was closed: ${outcome}.`,
+        detail: str(payload.adminNote),
+        ctaLabel: "Your ideas",
+        path: "/whats-new#your-ideas",
+      };
+    }
+    case "idea.shipped":
+      return {
+        sentence: title ? `A feature you suggested has shipped: "${title}" is now part of skilly.` : "A feature you suggested has shipped.",
+        detail: null,
+        ctaLabel: "What's new",
+        path: "/whats-new",
+      };
+    default:
+      return null;
+  }
+}

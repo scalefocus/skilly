@@ -57,6 +57,12 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "follow.request_created": { title: "New request from someone you follow", tone: "muted" },
   "follow.request_fulfilled": { title: "Request fulfilled by someone you follow", tone: "ok" },
   "follow.collection_created": { title: "New collection from someone you follow", tone: "ok" }, // §38.8
+  // Feature ideas (§60.7) — the review queue for platform admins, the lifecycle for the proposer.
+  "idea.submitted": { title: "Feature idea submitted", tone: "warn" },
+  "idea.published": { title: "Feature idea published", tone: "ok" },
+  "idea.rejected": { title: "Feature idea not published", tone: "danger" },
+  "idea.closed": { title: "Feature idea closed", tone: "muted" },
+  "idea.shipped": { title: "Feature idea shipped", tone: "ok" },
 };
 
 /** The subject-line title for a type; a generic fallback so no unknown type ever leaks its key. */
