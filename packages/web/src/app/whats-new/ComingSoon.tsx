@@ -13,7 +13,6 @@ import {
 import { Modal, Pill } from "../../components/ui";
 import { UserBubble } from "../../components/UserBubble";
 import { useDateFmt } from "../../components/DateFormat";
-import { UPCOMING, upcomingFor, type UpcomingEntry, type UpcomingViewer } from "./upcoming";
 
 /** `GET /api/coming-soon` (SKILLY_SPEC.md §60.11). */
 interface MyIdea {
@@ -30,27 +29,26 @@ interface ComingSoonData {
   items: ComingSoonItem[];
   mine: MyIdea[];
   limits: { pending: number; pendingMax: number; today: number; dailyMax: number };
+  /** Platform admins always; everyone else while the feature-ideas switch is on (§60.4). */
+  canSuggest: boolean;
 }
 
 /** The fragments the §60.7 notification links use: either one opens the section and scrolls to it. */
 const ANCHORS = new Set(["#coming-soon", "#your-ideas"]);
 
 /**
- * The "Coming soon" section above the release list (SKILLY_SPEC.md §23, §60.3). With feature ideas
- * on, it is one list of spec'd teasers and published ideas, ordered by votes, with an upvote on every
- * row, a "Suggest a feature" button beside the heading and the viewer's own ideas underneath. With the
- * feature off (or the list unavailable) it is the static §23 list. Nothing renders until the list has
- * loaded, so the count never changes after first paint. Collapsed on every visit, except when the URL
- * fragment points into it.
+ * The "Coming soon" section above the release list (SKILLY_SPEC.md §23, §60.3): every published
+ * feature idea, ordered by votes, with an upvote on every row, a "Suggest a feature" button beside the
+ * heading for a caller who may suggest, and the caller's own ideas underneath. Nothing renders until
+ * the list has loaded, so the count never changes after first paint; if it fails to load the section
+ * stays hidden. Collapsed on every visit, except when the URL fragment points into it.
  */
-export function ComingSoon({ viewer }: { viewer: UpcomingViewer }) {
-  const [data, setData] = useState<ComingSoonData | "fallback" | null>(null);
+export function ComingSoon() {
+  const [data, setData] = useState<ComingSoonData | null>(null);
 
   const load = useCallback(async (): Promise<boolean> => {
     try {
       const r = await fetch("/api/coming-soon");
-      // 404 = switched off — now, or since the page loaded: fall back to the §23 list either way.
-      if (r.status === 404) setData("fallback");
       if (!r.ok) return false;
       setData((await r.json()) as ComingSoonData);
       return true;
@@ -60,45 +58,13 @@ export function ComingSoon({ viewer }: { viewer: UpcomingViewer }) {
   }, []);
 
   useEffect(() => {
-    void load().then((ok) => {
-      // 404 = the feature is switched off; any other failure degrades the same way (§60.3).
-      if (!ok) setData((d) => d ?? "fallback");
-    });
+    void load();
   }, [load]);
 
   if (data === null) return null;
-  if (data === "fallback") return <StaticComingSoon entries={upcomingFor(UPCOMING, viewer)} />;
-  return <LiveComingSoon data={data} update={(fn) => setData((d) => (d && d !== "fallback" ? fn(d) : d))} reload={load} />;
-}
-
-/** §23 exactly: the curated teasers, no votes, no button, hidden when nothing applies. */
-function StaticComingSoon({ entries }: { entries: UpcomingEntry[] }) {
-  const [open, setOpen] = useState(false);
-  const listId = useId();
-  if (entries.length === 0) return null;
-  return (
-    <section className="coming-soon" data-testid="coming-soon">
-      <button type="button" className="coming-soon-head" aria-expanded={open} aria-controls={listId} onClick={() => setOpen((o) => !o)}>
-        <CompassGlyph />
-        <span className="coming-soon-text">
-          <span className="coming-soon-title">Coming soon · {entries.length}</span>
-          <span className="muted coming-soon-sub">Planned and specified, not available yet. Plans can change.</span>
-        </span>
-        <Chevron open={open} />
-      </button>
-      {open && (
-        <ul id={listId} aria-label="Coming soon" className="coming-soon-list">
-          {entries.map((e) => (
-            <li key={e.key} className="coming-soon-row">
-              <span className="chip" style={{ fontSize: 12 }}>Coming soon</span>
-              <div className="coming-soon-row-title">{e.title}</div>
-              <p className="coming-soon-row-teaser">{e.teaser}</p>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
+  // Nothing to list, nothing of theirs and no button to offer: hide the section (§60.3).
+  if (!data.canSuggest && data.items.length === 0 && data.mine.length === 0) return null;
+  return <LiveComingSoon data={data} update={(fn) => setData((d) => (d ? fn(d) : d))} reload={load} />;
 }
 
 type DialogState = { mode: "suggest" } | { mode: "edit"; idea: MyIdea } | null;
@@ -149,16 +115,15 @@ function LiveComingSoon({
 
   // Optimistic vote: flip in place, revert on failure. Never re-sorts — rows stay put until the next load.
   const vote = async (item: ComingSoonItem) => {
-    const id = itemKey(item);
+    const id = item.id;
     if (voting.current.has(id)) return;
     voting.current.add(id);
     const next = !item.voted;
     const patch = (voted: boolean, votes: number) =>
-      update((d) => ({ ...d, items: d.items.map((i) => (sameItem(i, item) ? { ...i, voted, votes } : i)) }));
+      update((d) => ({ ...d, items: d.items.map((i) => (i.id === item.id ? { ...i, voted, votes } : i)) }));
     patch(next, Math.max(0, item.votes + (next ? 1 : -1)));
-    const url = item.kind === "teaser" ? `/api/coming-soon/teasers/${encodeURIComponent(item.key)}/vote` : `/api/coming-soon/ideas/${item.id}/vote`;
     try {
-      const r = await fetch(url, { method: next ? "PUT" : "DELETE" });
+      const r = await fetch(`/api/coming-soon/ideas/${item.id}/vote`, { method: next ? "PUT" : "DELETE" });
       if (!r.ok) throw new Error(String(r.status));
       const j = (await r.json()) as { votes: number; voted: boolean };
       patch(j.voted, j.votes);
@@ -197,28 +162,28 @@ function LiveComingSoon({
           </span>
           <Chevron open={open} />
         </button>
-        <button type="button" className="btn coming-soon-suggest" onClick={() => setDialog({ mode: "suggest" })} data-testid="suggest-feature">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          Suggest a feature
-        </button>
+        {data.canSuggest && (
+          <button type="button" className="btn coming-soon-suggest" onClick={() => setDialog({ mode: "suggest" })} data-testid="suggest-feature">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Suggest a feature
+          </button>
+        )}
       </div>
       {open && (
         <div id={listId}>
           {n === 0 ? (
-            <p className="muted coming-soon-empty">Nothing here yet. Suggest a feature to get the list started.</p>
+            <p className="muted coming-soon-empty">{data.canSuggest ? "Nothing here yet. Suggest a feature to get the list started." : "Nothing here yet."}</p>
           ) : (
             <ul aria-label="Coming soon" className="coming-soon-list">
               {data.items.map((item) => (
-                <li key={itemKey(item)} className="coming-soon-row coming-soon-voted" data-testid="coming-soon-row" data-kind={item.kind}>
+                <li key={item.id} className="coming-soon-row coming-soon-voted" data-testid="coming-soon-row">
                   <div className="coming-soon-row-main">
                     <span className="chip" style={{ fontSize: 12 }}>Coming soon</span>
                     <div className="coming-soon-row-title">{item.title}</div>
-                    <p className="coming-soon-row-teaser" style={item.kind === "idea" ? { whiteSpace: "pre-line" } : undefined}>
-                      {item.kind === "teaser" ? item.teaser : item.description}
-                    </p>
-                    {item.kind === "idea" && item.suggestedBy && (
+                    <p className="coming-soon-row-teaser" style={{ whiteSpace: "pre-line" }}>{item.description}</p>
+                    {item.suggestedBy && (
                       <div className="coming-soon-row-by" data-testid="suggested-by">
                         Suggested by
                         <UserBubble name={item.suggestedBy.displayName} avatar={item.suggestedBy.avatar} userId={item.suggestedBy.id} size={18} />
@@ -280,14 +245,6 @@ function LiveComingSoon({
   );
 }
 
-function itemKey(item: ComingSoonItem): string {
-  return item.kind === "teaser" ? `t:${item.key}` : `i:${item.id}`;
-}
-
-function sameItem(a: ComingSoonItem, b: ComingSoonItem): boolean {
-  return itemKey(a) === itemKey(b);
-}
-
 function IdeaStatusPill({ idea }: { idea: MyIdea }) {
   if (idea.status === "pending") return <Pill tone="warn">Pending review</Pill>;
   if (idea.status === "published") return <Pill tone="ok">Published</Pill>;
@@ -338,8 +295,10 @@ function SuggestDialog({
         onStale();
         return;
       }
-      const j = (await r.json().catch(() => ({}))) as { error?: string; reason?: IdeaLimitRefusal };
-      setError(j.reason ? IDEA_LIMIT_MESSAGES[j.reason] : j.error ?? `Couldn't save (${r.status}).`);
+      // 429 at a cap, or 403 when suggestions were switched off since the page loaded (§60.4).
+      const j = (await r.json().catch(() => ({}))) as { error?: string; reason?: string };
+      const capped = j.reason === "pending_limit" || j.reason === "daily_limit" ? IDEA_LIMIT_MESSAGES[j.reason] : null;
+      setError(capped ?? j.error ?? `Couldn't save (${r.status}).`);
     } catch {
       setError("Couldn't save. Check your connection and try again.");
     } finally {

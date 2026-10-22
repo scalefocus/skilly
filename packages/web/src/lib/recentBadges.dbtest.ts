@@ -220,7 +220,7 @@ test("Glow Up: a chosen icon on submission counts; keeping, echoing, removing an
 test("unavailable: only the owner's locked switch-gated keys, never another viewer's (§31.12.4)", { skip: !enabled }, async () => {
   const owner = await user("rb-unavail-owner");
   const other = await user("rb-unavail-other");
-  const flags: AchievementFlags = { hypeEnabled: false, aiAvailable: false, mcpEnabled: true, marketplaceReachable: true, featureIdeasEnabled: true };
+  const flags: AchievementFlags = { hypeEnabled: false, aiAvailable: false, mcpEnabled: true, marketplaceReachable: true };
   await awardAchievement(pool, owner, "first_hype", { backfill: true, noHabits: true });
   const self = await getAchievements(owner, owner, pool, flags);
   // Catalog order: Robot Sidekick and Hype Train (Contribute) before Talent Scout (Explore).

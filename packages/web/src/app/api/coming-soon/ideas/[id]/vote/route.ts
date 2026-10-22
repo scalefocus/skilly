@@ -1,5 +1,5 @@
-// Upvote a published idea (SKILLY_SPEC.md §60.6). PUT votes, DELETE un-votes; both idempotent →
-// 200 { votes, voted }. 404 for anything but a published idea, and while the feature is off.
+// Upvote a Coming soon item — a published idea (SKILLY_SPEC.md §60.6). PUT votes, DELETE un-votes;
+// both idempotent → 200 { votes, voted }. 404 for anything but a published idea.
 import { voteIdea } from "../../../../../../lib/ideas";
 import { ideasCaller, isIdeaId, notFound } from "../../../../../../lib/ideasRoute";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";

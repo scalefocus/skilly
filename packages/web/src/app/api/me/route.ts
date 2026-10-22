@@ -147,11 +147,10 @@ export async function GET() {
     // §50.7 hype milestones on skills they maintain (row-level), and whether hype is on at all.
     hypeNotifications: prefs?.hype_notifications ?? true,
     hypeEnabled,
-    // §60.9 feature ideas: the "show my name" toggle (stored inverted), a platform admin's opt-out of
-    // the review-queue notification, and whether the feature is on (the profile hides both while off).
+    // §60.9 feature ideas: the "show my name" toggle (stored inverted) and a platform admin's opt-out
+    // of the review-queue notification. Both always apply: the list and the queue never switch off.
     ideaAttributionHidden: prefs?.idea_attribution_hidden ?? false,
     ideaNotifications: prefs?.idea_notifications ?? true,
-    featureIdeasEnabled: settings.featureIdeasEnabled,
     // §28 directory opt-out: hide job title / office / department from other people's hover cards.
     directoryHidden: prefs?.directory_hidden ?? false,
     // §31 achievements opt-out: hide earned badges from other people (the hall + hover card).

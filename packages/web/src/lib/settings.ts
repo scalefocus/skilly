@@ -367,8 +367,8 @@ export async function setBugReportsEnabled(enabled: boolean, actorUserId: string
 }
 
 /**
- * §60.9 the feature-ideas switch. OFF hides votes, suggestions and idea rows (Coming soon falls back to
- * the §23 list), 404s the user routes and makes the admin page read-only; nothing is deleted.
+ * §60.9 the feature-ideas switch. OFF stops users who are not platform admins from suggesting (403 on
+ * submit, no button); the Coming soon list, votes and the admin page are unaffected.
  */
 export async function setFeatureIdeasEnabled(enabled: boolean, actorUserId: string): Promise<void> {
   await writeSetting("feature_ideas_enabled", enabled, actorUserId);
@@ -381,7 +381,7 @@ export async function setFeatureIdeasEnabled(enabled: boolean, actorUserId: stri
   });
 }
 
-/** Is §60 feature ideas on? Read by every /api/coming-soon route and the admin page. */
+/** May everyone suggest features (§60.9)? Read by the submit path, Coming soon's `canSuggest` and the admin page. */
 export async function getFeatureIdeasEnabled(db: Pool = pool): Promise<boolean> {
   return (await getPlatformSettings(db)).featureIdeasEnabled;
 }

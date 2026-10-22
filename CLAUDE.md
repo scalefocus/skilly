@@ -51,13 +51,14 @@ comments) and doc-only edits — but if in doubt, it's gated.
 
 **Spec-ahead (optional).** An approved spec section may merge *before* it is built if it
 carries an inline `⚠ GAP-nn · new feature` (or `· code fix`) marker — next free number,
-never reused (see "Implementation gaps" at the top of `SKILLY_SPEC.md`). Every open
-new-feature marker needs exactly one teaser in `packages/web/src/app/whats-new/upcoming.ts`
-(the What's new *Coming soon* list); `upcoming.test.ts` fails otherwise. The commit that
-ships the feature **deletes its marker and its teaser**, and its changelog entry announces it.
-A section may also be specified ahead at **roadmap level** (intent, scope, constraints and a
-list of open decisions, not full behaviour); its open decisions are grilled and pinned by a
-spec amendment through this same gate before any code is written.
+never reused (see "Implementation gaps" at the top of `SKILLY_SPEC.md`). The commit that ships
+the feature **deletes its marker**, and its changelog entry announces it.
+
+**The roadmap is not in the spec or in code.** Ideas and planned features that are not specified
+to full depth are *Coming soon* items on the What's new page: `feature_ideas` rows that people
+suggest and platform admins publish, edit and close on `/admin/ideas` (§60). Never add a roadmap
+stub to the spec or a hard-coded teaser to the app. A spec-ahead marker needs no *Coming soon*
+item; if one exists for the feature, a platform admin closes it as *Shipped* when it ships.
 
 ## Commands / dev workflow
 Node ≥ 22, pnpm 9.15.x (pinned via `packageManager`). Workspace packages:

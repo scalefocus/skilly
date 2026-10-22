@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.41.0",
+    date: "2026-10-22",
+    summary:
+      "Every item on Coming soon is now a published feature idea that platform admins can edit and close, and their votes carried over. Every item is visible to everyone, and an item closes as Shipped, Duplicate or Won't do. The feature-ideas setting now only decides whether people other than platform admins can suggest; the list and voting are always on.",
+  },
+  {
     version: "2.40.0",
     date: "2026-10-22",
     summary:

@@ -268,8 +268,8 @@ function AchievementsSettings({
   );
 }
 
-// Feature ideas (§60.9). OFF hides the Coming soon votes, the Suggest button and every idea row, and
-// the Feature ideas page goes read-only — but nothing is deleted, so switching back restores it all.
+// Feature ideas (§60.9). The switch decides only whether users who are not platform admins may suggest
+// features. The Coming soon list, the votes and the Feature ideas page stay on either way.
 function FeatureIdeasSettings({
   enabled, busy, call, open, onToggle,
 }: {
@@ -282,12 +282,12 @@ function FeatureIdeasSettings({
   return (
     <CollapsibleCard cardId="featureideas" title="Feature ideas" summary={enabled ? "on" : "off"} open={open} onToggle={onToggle}>
       <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
-        Lets everyone upvote the Coming soon list on the What&rsquo;s new page and suggest features of their own, which you
-        review on the <a href="/admin/ideas">Feature ideas</a> page. Switching this off hides the votes, the suggestions and the
-        published ideas, and makes the review page read-only. Nothing is deleted — switch it back on and everything returns.
+        The Coming soon list on the What&rsquo;s new page is skilly&rsquo;s roadmap: people suggest features, you publish and
+        edit them on the <a href="/admin/ideas">Feature ideas</a> page, and everyone upvotes. Off: only platform admins can
+        suggest. The Coming soon list and voting stay on for everyone.
       </p>
       <Switch
-        label="Allow votes and suggestions"
+        label="Everyone can suggest features"
         checked={enabled}
         disabled={busy}
         onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ featureIdeasEnabled: next }) })}

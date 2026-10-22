@@ -1,7 +1,7 @@
 // Feature ideas (SKILLY_SPEC.md §60) — the SINGLE SOURCE OF TRUTH for the limits, the status and
-// outcome enums, the validators, the merged "Coming soon" order and the notification wording. The
-// web routes, the What's new page, the admin page and the worker email renderer all read it, so
-// they can never disagree. Client-safe (no node deps); subpath export `@skilly/shared/ideas`.
+// outcome enums, the validators, who may suggest, the "Coming soon" order and the notification
+// wording. The web routes, the What's new page, the admin page and the worker email renderer all
+// read it, so they can never disagree. Client-safe (no node deps); subpath export `@skilly/shared/ideas`.
 
 // ── Limits (§60.2, §60.4) ──────────────────────────────────────────────────────────────────────
 
@@ -23,20 +23,28 @@ export const IDEA_ADMIN_PAGE = 50;
 /** A rejected idea's notification quotes this much of the description. */
 export const IDEA_EXCERPT_MAX = 140;
 
-/** A teaser's vote key in `upcoming.ts` (§60.3): kebab-case, ≤ 60 characters, never reused. */
-export const UPCOMING_KEY_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-export const UPCOMING_KEY_MAX = 60;
+// ── Who may suggest (§60.4) ────────────────────────────────────────────────────────────────────
 
-export function isUpcomingKey(v: unknown): v is string {
-  return typeof v === "string" && v.length <= UPCOMING_KEY_MAX && UPCOMING_KEY_RE.test(v);
+/** Platform admins always; everyone else only while `feature_ideas_enabled` is on (§60.1 decision 12). */
+export function maySuggestIdea(viewer: { isPlatformAdmin: boolean }, featureIdeasEnabled: boolean): boolean {
+  return viewer.isPlatformAdmin || featureIdeasEnabled;
 }
 
 // ── Status and outcome ─────────────────────────────────────────────────────────────────────────
 
 export type IdeaStatus = "pending" | "published" | "rejected" | "closed" | "withdrawn";
 
+/** Every outcome a closed row can carry. `planned` survives only on rows closed before v2.41.0. */
 export const IDEA_OUTCOMES = ["planned", "shipped", "duplicate", "wont_do"] as const;
 export type IdeaOutcome = (typeof IDEA_OUTCOMES)[number];
+
+/** The outcomes a close accepts now (§60.1 decision 3): being on the list already means "planned". */
+export const IDEA_CLOSE_OUTCOMES = ["shipped", "duplicate", "wont_do"] as const;
+export type IdeaCloseOutcome = (typeof IDEA_CLOSE_OUTCOMES)[number];
+
+export function isIdeaCloseOutcome(v: unknown): v is IdeaCloseOutcome {
+  return typeof v === "string" && (IDEA_CLOSE_OUTCOMES as readonly string[]).includes(v);
+}
 
 export const IDEA_OUTCOME_LABELS: Record<IdeaOutcome, string> = {
   planned: "Planned",
@@ -115,47 +123,28 @@ export const IDEA_LIMIT_MESSAGES: Record<IdeaLimitRefusal, string> = {
   daily_limit: `You've suggested ${IDEA_DAILY_MAX} features in the last 24 hours. Try again later.`,
 };
 
-// ── The merged Coming soon list (§60.3) ────────────────────────────────────────────────────────
+// ── The Coming soon list (§60.3) ───────────────────────────────────────────────────────────────
 
-export interface ComingSoonTeaserItem {
-  kind: "teaser";
-  key: string;
-  title: string;
-  teaser: string;
-  votes: number;
-  voted: boolean;
-}
-
-export interface ComingSoonIdeaItem {
-  kind: "idea";
+/** One published item: every Coming soon row is a `feature_ideas` row (§60.1 decision 1). */
+export interface ComingSoonItem {
   id: string;
   title: string;
   description: string;
   votes: number;
   voted: boolean;
-  /** Null when the proposer opted out, was erased, or is gone (§60.3). */
+  /** Null when the proposer opted out, was erased, or there is none (the items migration 0101 seeded). */
   suggestedBy: { id: string; displayName: string; avatar: string | null } | null;
   publishedAt: string;
 }
 
-export type ComingSoonItem = ComingSoonTeaserItem | ComingSoonIdeaItem;
-
-/**
- * §60.1 decision 2: most votes first, teasers and ideas together. Ties: teasers before ideas,
- * teasers in their `UPCOMING` order (the order given here), ideas newest-published first, then id.
- */
-export function comingSoonOrder(teasers: readonly ComingSoonTeaserItem[], ideas: readonly ComingSoonIdeaItem[]): ComingSoonItem[] {
-  const ranked = [
-    ...teasers.map((item, idx) => ({ item: item as ComingSoonItem, tier: 0, idx, at: 0, id: "" })),
-    ...ideas.map((item) => ({ item: item as ComingSoonItem, tier: 1, idx: 0, at: Date.parse(item.publishedAt) || 0, id: item.id })),
-  ];
+/** §60.1 decision 2: most votes first. Ties: newest published first, then id. */
+export function comingSoonOrder(items: readonly ComingSoonItem[]): ComingSoonItem[] {
+  const ranked = items.map((item) => ({ item, at: Date.parse(item.publishedAt) || 0 }));
   ranked.sort(
     (a, b) =>
       b.item.votes - a.item.votes ||
-      a.tier - b.tier ||
-      a.idx - b.idx ||
       b.at - a.at ||
-      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      (a.item.id < b.item.id ? -1 : a.item.id > b.item.id ? 1 : 0),
   );
   return ranked.map((r) => r.item);
 }

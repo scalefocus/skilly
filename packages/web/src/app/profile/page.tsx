@@ -35,10 +35,9 @@ interface Me {
   hypeNotifications?: boolean;
   hypeEnabled?: boolean;
   directoryHidden: boolean;
-  /** §60.9 feature ideas: the attribution opt-out, an admin's review-queue opt-out, and the switch. */
+  /** §60.9 feature ideas: the attribution opt-out and an admin's review-queue opt-out. */
   ideaAttributionHidden?: boolean;
   ideaNotifications?: boolean;
-  featureIdeasEnabled?: boolean;
   isPlatformAdmin?: boolean;
   achievementsHidden: boolean;
   achievementsEnabled: boolean;
@@ -206,12 +205,11 @@ function DirectoryPref() {
 }
 
 // §60.9 "Show my name on feature ideas I suggest": on by default, applied live to every idea of yours
-// on the Coming soon list. Platform admins always see who suggested what. Hidden while the feature is off.
+// on the Coming soon list. Platform admins always see who suggested what.
 function IdeaAttributionPref() {
   const { data, reload } = useApi<Me>("/api/me");
   const [busy, setBusy] = useState(false);
   if (!data) return <div className="skeleton" style={{ height: 70, borderRadius: "var(--radius)" }} />;
-  if (data.featureIdeasEnabled === false) return null;
   const hidden = data.ideaAttributionHidden ?? false;
 
   const choose = async (next: boolean) => {
@@ -394,8 +392,8 @@ function MaintainerNotificationsPref() {
       ? [{ field: "hypeNotifications" as const, label: "Hype milestones", offHint: "You won't be told when a skill you maintain enters the top hyped skills.", value: data.hypeNotifications ?? true }]
       : []),
     { field: "discussionNotifications", label: "Discussion comments, replies and @mentions", offHint: "You won't be alerted about new comments on skills you maintain or watch, replies in threads you're part of, or when someone @mentions you.", value: data.discussionNotifications },
-    // §60.7 — only platform admins review feature ideas, so only they see the toggle (hidden while off).
-    ...(data.isPlatformAdmin && data.featureIdeasEnabled !== false
+    // §60.7 — only platform admins review feature ideas, so only they see the toggle.
+    ...(data.isPlatformAdmin
       ? [{ field: "ideaNotifications" as const, label: "New feature ideas to review", offHint: "You won't be told when someone suggests a feature. The Feature ideas page still shows the queue.", value: data.ideaNotifications ?? true }]
       : []),
     // §46.10 — only namespace admins receive it, so only they see the toggle.

@@ -10,7 +10,7 @@
 import type { Pool } from "pg";
 import { pool } from "./db";
 import { skillVisibilityWhere, type EffectiveAccess } from "@skilly/shared";
-import { getFeatureIdeasEnabled, getNavSeen } from "./settings";
+import { getNavSeen } from "./settings";
 import { pendingIdeaCount } from "./ideas";
 
 export interface NavBadges {
@@ -23,7 +23,7 @@ export interface NavBadges {
    *  requester sees their own just-posted request as "new" too, same as anyone else). */
   requests: number;
   /** §60.5 the feature-ideas review queue: a plain count of pending ideas (no "seen" marker).
-   *  0 for non-admins and while the feature is off. */
+   *  0 for non-admins. */
   ideas: number;
 }
 
@@ -121,7 +121,7 @@ export async function getNavBadges(access: EffectiveAccess & { userId: string | 
     ).rows[0]?.n ?? 0,
   );
 
-  const ideas = access.isPlatformAdmin && (await getFeatureIdeasEnabled(db)) ? await pendingIdeaCount(db) : 0;
+  const ideas = access.isPlatformAdmin ? await pendingIdeaCount(db) : 0;
 
   return { catalog, review, systemLog, requests, ideas };
 }

@@ -139,8 +139,6 @@ export interface AchievementFlags {
   mcpEnabled: boolean;
   /** A marketplace the owner can use exists (the set the marketplace directory lists for them). */
   marketplaceReachable: boolean;
-  /** §60.9 the feature-ideas switch. */
-  featureIdeasEnabled: boolean;
 }
 
 const GATE: Record<string, keyof AchievementFlags> = {
@@ -150,8 +148,6 @@ const GATE: Record<string, keyof AchievementFlags> = {
   first_ai_draft: "aiAvailable",
   first_mcp: "mcpEnabled",
   first_marketplace: "marketplaceReachable",
-  idea_published: "featureIdeasEnabled",
-  idea_shipped: "featureIdeasEnabled",
 };
 
 /**

@@ -16,20 +16,15 @@ Every decision below was explicitly confirmed.
 > sentences on what is missing. The spec text is authoritative; the marker states what the code
 > must change to match it. Numbers run sequentially through this document and are **never
 > reused**; each id appears in exactly one marker. A marker is **deleted in the same commit that
-> closes it**, so `grep -n "GAP-" SKILLY_SPEC.md` always lists exactly the open work. Every open
-> `new feature` marker is also teased on the What's new page's *Coming soon* list (§23), kept in
-> step by a unit test; `code fix` markers are never teased. CLAUDE.md's change workflow repeats
-> this rule.
+> closes it**, so `grep -n "GAP-" SKILLY_SPEC.md` always lists exactly the open work. CLAUDE.md's
+> change workflow repeats this rule.
 >
-> **Roadmap-level sections.** A `new feature` may also be specified ahead at **roadmap level**: its
-> section pins the intent, the scope, the parts of skilly it builds on, the invariants it must keep
-> and a numbered list of **open decisions**, but not the detailed behaviour, data model or API. Its
-> marker says *"specified at roadmap level"*. Before any of it is built, the open decisions are
-> grilled and pinned by a **spec amendment** that passes CLAUDE.md's gate like any other change; the
-> amendment rewrites the section to full depth and keeps the marker, which is deleted only when the
-> feature ships. Where a roadmap-level section would reverse a decision recorded elsewhere, that
-> earlier text stays authoritative for today's behaviour and carries a one-line pointer to the new
-> section. §51–§59 are roadmap-level.
+> **The roadmap is not in this document.** Only features specified to full depth live here. Ideas
+> and planned features that are not yet specified are items on the What's new page's *Coming soon*
+> list (§60): database rows that people suggest, platform admins publish and edit, and everyone
+> upvotes. A spec-ahead marker does **not** need a *Coming soon* item, and nothing keeps the two in
+> step. (Roadmap-level sections were retired in v2.41.0. Their nine stubs, numbered §51–§59, were
+> deleted and became *Coming soon* items, migration 0101; the numbers stay unused.)
 
 ---
 
@@ -285,7 +280,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -363,9 +358,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`ai_prereview_links`** — binds a run to a subject: a proposal revision **or** a skill version (CASCADE); `cached` marks a link that reused an existing run; the latest link is the subject's current run.
 - **`ai_prereview_dispositions`** — append-only Agree/Dismiss per finding `fingerprint`, keyed to a proposal **or** a version; `decided_by` (FK → `users`, SET NULL), `reason` (≤ 500). The same migration adds `skill_versions.ai_prereview_notified_at` and `users.ai_prereview_notifications` (default true).
 
-### `feature_ideas` / `feature_idea_votes` / `upcoming_votes` (migration 0100, detailed in §60)
-- **`feature_ideas`** — a user's feature suggestion: `pending` → `published` (into What's new *Coming soon*) → `closed` with an outcome, or `rejected` / `withdrawn`; the proposer's own text is kept beside the admin-edited one (§60.2).
-- **`feature_idea_votes`** / **`upcoming_votes`** — one upvote per user per published idea / per *Coming soon* teaser `key`; mutable personal rows, CASCADE on the user (§60.6).
+### `feature_ideas` / `feature_idea_votes` (migrations 0100 and 0101, detailed in §60)
+- **`feature_ideas`** — every What's new *Coming soon* item: a feature suggestion goes `pending` → `published` (on *Coming soon*) → `closed` with an outcome, or `rejected` / `withdrawn`; the proposer's own text is kept beside the admin-edited one. Items seeded by migration 0101 have no proposer (§60.2).
+- **`feature_idea_votes`** — one upvote per user per published item; mutable personal rows, CASCADE on the user (§60.6). (Migration 0101 moved the former `upcoming_votes` rows here and dropped that table.)
 
 ---
 
@@ -415,8 +410,9 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Share a restricted skill with another namespace (§42) | ✅ (any) | ✅ (owner ns) | ❌ | explicit maintainers of that skill |
 | Revoke a namespace share (§42) | ✅ (any) | ✅ (owner ns **or** the receiving ns) | ❌ | explicit maintainers of that skill |
 | Draft quality improvements with AI (§44) — hosted skills, AI operational | ✅ (any) | ✅ (own ns) | explicit maintainers of that skill | explicit maintainers of that skill |
-| Suggest a feature; edit or withdraw an **own** pending idea; upvote *Coming soon* entries (§60) | ✅ | ✅ | ✅ | ✅ |
-| Publish / reject / edit / close feature ideas; switch the feature (§60) | ✅ | ❌ | ❌ | ❌ |
+| Suggest a feature (§60.4) | ✅ (always) | ✅ while `feature_ideas_enabled` | ✅ while `feature_ideas_enabled` | ✅ while `feature_ideas_enabled` |
+| Edit or withdraw an **own** pending idea; upvote *Coming soon* items (§60) | ✅ | ✅ | ✅ | ✅ |
+| Publish / reject / edit / close *Coming soon* items; switch suggestions for everyone else (§60) | ✅ | ❌ | ❌ | ❌ |
 
 > **Maintainers (§19)** are an ownership + notification concept and grant **no authority** (invariant #1 — all power stays in SCIM groups + `role_mappings`). The *single* exception is the row above: a skill's own maintainers may curate its co-maintainer list, bounded by the visibility eligibility gate (they can never add anyone who couldn't already see the skill). Drafting quality improvements with AI (§44) is **not authority** either: anyone may propose a new version; that row only limits who may spend AI calls on a skill, and the result is an ordinary proposal through the ordinary gate.
 
@@ -551,9 +547,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Directory profile (job title, office, department)
 - `users.job_title`, `users.office_location`, `users.department` (§3) mirror the Entra `jobTitle`,
   `officeLocation` and `department` attributes. They exist **solely to power the directory hover
-  card (§28)** — no role, gate, filter or notification reads them. *(§56, specified ahead at
-  roadmap level, would also read `department` as an aggregate discovery input, never as a role or
-  gate.)*
+  card (§28)** — no role, gate, filter or notification reads them.
 - **Two writers, and both overwrite unconditionally** — deliberately *unlike* `avatar`, which is
   only ever filled when missing (`setUserAvatarIfMissing`). A promotion, a re-org or an office move
   must propagate; a stale title must never survive. A Graph value that is absent or empty writes
@@ -624,8 +618,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     for that single skill; no `--skill`/`--all` flags appear (those are consumer-side flags for
     repos that contain multiple skills, which a skilly mirror never does). One proposal still
     produces **exactly one** skill — bulk-importing every skill in an upstream repo is out of
-    scope. *(§58, specified ahead at roadmap level, would add a batch import in which each folder
-    is still its own proposal and its own skill.)*
+    scope.
   - **skills-hub.ai origin (API-mirrored, not git).** A pointer may also originate from the
     skills-hub.ai registry (`npx @skills-hub-ai/cli install <slug>`). **Pinned from the CLI's
     source (v0.4.1)**: that tool does **no git clone and fetches no tarball** — it calls
@@ -1031,7 +1024,6 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Re-propose to global:** any member of the owning namespace initiates a proposal targeting `global`; **Platform Admins approve**.
 - On accept, materialized as an independent global skill with **provenance link** (`promoted_from_skill_version_id`). Team copy and global copy version independently (possible divergence; manual re-promotion to sync).
 - **Exempt from the slug-match redirect** (§8 above): a promotion is a same-slug new skill (or a re-version of the global copy) by design, so neither the submit-time match nor the accept-time re-check applies to it.
-- **The reverse direction** (copying a visible skill into another namespace with a recorded lineage) is specified ahead at roadmap level in §57.
 
 ---
 
@@ -1789,7 +1781,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `PUT /api/admin/ai/prereview { enabled }` — the AI pre-review switch (§46.2, platform-admin); `GET /api/admin/ai` gains `prereview`.
 - **Feedback survey (§36.10, all platform-admin):** `GET /api/admin/survey/summary`, `GET /api/admin/survey/comments`, `DELETE /api/admin/survey/responses/:id` (audited `survey.response_deleted`); `survey_enabled` and `bug_reports_enabled` (§36.17) on `GET|PATCH /api/admin/settings`.
-- **Feature ideas (§60.11):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/teasers/:key/vote`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
+- **Feature ideas (§60.11):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), **email digests** (`email_digests_enabled`, `email_digest_default_mode`, `email_digest_hour`, `email_digest_weekday`, `email_digest_types`, §48.11), …).
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
@@ -2053,24 +2045,20 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
       five notification types; the erasure additions.
     - **Minor** release (v2.40.0).
 
-**Roadmap — specified ahead at roadmap level, not built.** Each section below carries an open
-`new feature` marker and a list of open decisions that a spec amendment pins before any code (see
-*Implementation gaps* at the top). They are not numbered build items until that amendment lands.
-- **§51 Skill evals:** test cases in the bundle, run per version through §40, with pass rates and
-  regressions for reviewers.
-- **§52 Upstream release watch:** pointer maintainers learn of newer upstream releases and propose an
-  update in one click.
-- **§53 Playground:** try a skill with the configured model from its page before installing.
-- **§54 Reviewer assignment and review deadlines:** assignees, per-namespace targets, reminders,
-  escalation, and a review-time metric.
-- **§55 Search gaps:** an aggregate-only, floor-gated log of searches that found nothing.
-- **§56 Popular in your department:** a home-page row built from adoptions within the viewer's Entra
-  department.
-- **§57 Customize a skill:** copy a visible skill into your namespace with a recorded lineage and
-  source-update notices.
-- **§58 Bulk import:** one repository with many skill folders becomes a batch of pointer proposals.
-- **§59 Usage reporting:** an opt-in, skilly-owned marketplace hook that counts real use (open tension
-  with the no-CLI rule).
+42. **Coming soon lives in the database (§60):**
+    - **Data:** migration 0101 seeds the nine former `UPCOMING` teasers as `published`
+      `feature_ideas` rows with no proposer, moves their votes from `upcoming_votes` into
+      `feature_idea_votes`, and drops `upcoming_votes`.
+    - **Shared:** `comingSoonOrder` orders published items only (votes, then newest published);
+      the teaser item kind and `isUpcomingKey` go; `planned` is no longer accepted for a new close;
+      the two idea badges leave the "not available here" mapping (§31.12.4).
+    - **Web:** `upcoming.ts`, `upcomingSync.ts` and their spec-sync test are deleted; *Coming soon*
+      renders `GET /api/coming-soon` only; the teaser vote routes go; `feature_ideas_enabled` now
+      gates suggesting by users who are not platform admins, and nothing else; the admin Close
+      dialog loses *Planned*.
+    - **Spec:** §51–§59 and roadmap-level sections are deleted (the roadmap is the *Coming
+      soon* list now).
+    - **Minor** release (v2.41.0).
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -3160,55 +3148,33 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   closes any open update notice, whichever route brought the user here (the notice's link, the
   account menu, the Quick start footer, or a typed URL).
 - **Coming soon — what's next, greyed out.** The page opens with a **"Coming soon"** section,
-  **above** the release list (and above any *"New since your last visit"* divider), teasing the
-  features this spec already defines but that have **not shipped yet** — the open
-  `⚠ GAP-nn · new feature` markers (see *Implementation gaps* at the top of this document).
-  - **Source of truth.** A hand-maintained, client-safe list in `app/whats-new/upcoming.ts`, beside
-    `changelog.ts`: `UPCOMING: { ids: string[]; title: string; teaser: string; audience:
-    "everyone" | "admins" | "platform_admin" }[]`, in display order. `ids` lists the open
-    new-feature markers the entry covers (one teaser may cover a feature's several markers, e.g.
-    `["GAP-3", "GAP-4"]`); it is internal only and **never rendered**. `title` is a short
-    user-facing name, `teaser` one or two plain sentences on what the feature will do for the user.
-    **The list ships empty** — the section is hidden until the first feature is specified ahead.
-  - **Kept in step with the spec, by test.** A web unit test reads `SKILLY_SPEC.md` (repo root) and
-    fails when: an `UPCOMING` id has no open `⚠ GAP-nn · new feature` marker (a `code fix` id
-    counts as no match); an open new-feature marker belongs to **no** `UPCOMING` entry or to
-    **more than one**; an entry has an empty `ids` list; the same GAP id appears in more than one
-    marker; or a `title`/`teaser` contains `§` or `GAP-`, or is empty. So specifying a feature ahead
-    **forces** a teaser in, and shipping it (which deletes the marker) **forces** the teaser out —
-    the changelog entry then announces it instead. With no markers and an empty list the test passes.
-    A marker is recognised only as the literal `⚠ GAP-<digits> · new feature` (or `· code fix`) —
-    placeholder text such as `GAP-nn` and bare ids quoted as examples are never markers.
-  - **Audience.** An entry is shown only to viewers whose roles match: `everyone` → every
-    authenticated user; `admins` → `isPlatformAdmin || administersNamespace` (from `/api/me`);
-    `platform_admin` → `isPlatformAdmin`. A pure function `upcomingFor(entries, viewer)` does the
-    filtering (unit-tested). Nothing renders until `/api/me` has resolved, so an admin never sees
-    the count change after first paint. The filter is presentational: `upcoming.ts` is in the client
-    bundle, so a teaser's text is **not confidential** — the copy rules below keep it harmless.
+  **above** the release list (and above any *"New since your last visit"* divider), listing features
+  people want or the team plans, which have **not shipped yet**.
+  - **Source of truth: the database.** Every item is a `published` row of `feature_ideas` (§60).
+    Users suggest items, platform admins publish, edit and close them on `/admin/ideas`, and every
+    signed-in user upvotes them. No list of items exists in the code or in this document. Every
+    published item is shown to **every signed-in user**: there is no per-item audience. The
+    behaviour of the list (its order, the votes, *Suggest a feature*, *Your ideas*, and when the
+    section shows) is specified in §60.3.
   - **Collapsed by default, never remembered.** The section opens **collapsed on every visit**:
-    only its heading block shows — a compass glyph, **"Coming soon · N"** (N = the entries that
-    apply to this viewer), the sub-line *"Planned and specified, not available yet. Plans can
-    change."*, and a chevron. The whole heading block is one `<button>` (`aria-expanded`,
-    `aria-controls` the list) that expands and collapses the list in place; Enter and Space work as
-    on any button. The open state is **not stored** (no localStorage, no server state), so the
-    release history stays the first thing a visitor reads. While collapsed the list is **not
-    rendered** (neither visible nor read out). Expanding fades the list in; no motion under
-    `prefers-reduced-motion: reduce`.
-  - **Look — deliberately greyed out.** Each entry is a row shaped like a release row but muted:
+    only its heading block shows — a compass glyph, **"Coming soon · N"** (N = the published
+    items), the sub-line (§60.3), and a chevron. The heading block is one `<button>`
+    (`aria-expanded`, `aria-controls` the list) that expands and collapses the list in place; Enter
+    and Space work as on any button. The open state is **not stored** (no localStorage, no server
+    state), so the release history stays the first thing a visitor reads. While collapsed the list
+    is **not rendered** (neither visible nor read out). Expanding fades the list in; no motion under
+    `prefers-reduced-motion: reduce`. The one exception, arriving with `#coming-soon` or
+    `#your-ideas`, is in §60.3.
+  - **Look — deliberately greyed out.** Each item is a row shaped like a release row but muted:
     text in `--muted`, a **dashed** `--line` border, no accent, a neutral **"Coming soon"** chip in
     place of the version chip, and **no date, no version, no ETA** — nothing that reads as a
     promise. Rows are not links and not focusable; the list is a plain `<ul aria-label="Coming
-    soon">`. The section is **hidden entirely** when no entry applies to the viewer.
-  - **Copy rules.** Titles and teasers are product copy written when the feature is specified: no
-    `§`, no GAP ids, no person, skill or namespace named, described in user terms.
-  - **Not in the notice.** The update notice (below) lists only shipped releases; teasers appear on
-    the page alone, and the section has no effect on the `whats_new_seen_version` marker or the
-    read receipt.
-  - **Votes and community ideas (§60).** While the feature-ideas switch is on (the default),
-    §60.3 changes this section: every entry gets an upvote, the heading gains a *Suggest a
-    feature* button, published user ideas join the list, the list sorts by votes, the section
-    always shows, and a proposer sees their own ideas in a *Your ideas* sub-list. The rules above
-    describe the section with the switch off, and its fallback when the list cannot load.
+    soon">`. §60.3 adds the vote control and the *Suggested by* line.
+  - **Copy.** Platform admins are the editors: they title an item when they publish it and may
+    edit its text then or later (§60.5).
+  - **Not in the notice.** The update notice (below) lists only shipped releases; *Coming soon*
+    items appear on the page alone, and the section has no effect on the `whats_new_seen_version`
+    marker or the read receipt.
 - **Update notice — once per minor/major release, per user, after onboarding, until dismissed.**
   When a user's authenticated page load runs a **newer** app version than the one they last
   acknowledged, the app shell shows a single persistent floating card pointing at this page. It
@@ -3309,9 +3275,7 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     authenticated user gets the same behaviour.
   - **Tests.** Unit: the trigger rule (null / patch-only / minor / major / equal / rollback / invalid /
     not-onboarded) and the excerpt selector (null seen → current only; seen → newer entries, cap 3,
-    overflow count); the *Coming soon* spec-sync test (above — run against the real `SKILLY_SPEC.md`
-    and `UPCOMING`, plus fixture strings covering each failure case) and `upcomingFor` (each
-    audience × platform admin / namespace admin / plain user, order preserved). Integration: the stamp endpoint (null → set, lower → set, higher → unchanged with
+    overflow count). Integration: the stamp endpoint (null → set, lower → set, higher → unchanged with
     `previous == current`, invalid or future version → 400, unauthenticated → 401). e2e: with the dev
     user's marker seeded one minor below `APP_VERSION`, the notice appears with the expected heading
     and excerpt, **is still present after a reload** (not stamped on appearance), clicking the card
@@ -3324,10 +3288,9 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     clientHeight`) and carries `tabindex="0"`, and the ✕ and the "See what's new" link are both
     visible without scrolling; the same check at mobile width (≤ 560px). The e2e sign-in helper and `shots.mjs`
     **pre-stamp the marker** so smoke runs and screenshots stay free of the notice. **Coming soon
-    (e2e):** the spec derives the expectation from `upcomingFor(UPCOMING, <dev user>)` — when it is
-    empty (as at launch) the section is absent; otherwise the heading shows *"Coming soon · N"*
-    collapsed (`aria-expanded="false"`, no rows in the DOM), a click expands it to exactly N rows,
-    and a reload shows it collapsed again.
+    (e2e):** the spec reads N from `GET /api/coming-soon` for the dev user; the heading shows
+    *"Coming soon · N"* collapsed (`aria-expanded="false"`, no rows in the DOM), a click expands it
+    to exactly N rows, and a reload shows it collapsed again.
 
 ### Account menu (presentation)
 - The bottom-left account menu (name/avatar trigger in the sidebar) lists, top to bottom:
@@ -6327,7 +6290,6 @@ Every hook below is also a **Habits event** (§31.3) — the person acted at tha
   | `first_mcp` | `mcp_enabled` is off (§29) |
   | `first_marketplace` | no marketplace is reachable by the owner — the set `GET /api/marketplaces/directory` would list for them is empty (public marketplace off **and** no namespace marketplace open to them, §30) |
   | `triple_threat` | any of its three parts that the owner does **not** already hold is unavailable |
-| `idea_published`, `idea_shipped` (§60.8) | `feature_ideas_enabled` is off (§60.9) |
 
   Every other key is always available.
 - **Only locked tiles, only for the owner.** The marker applies to a badge the owner has **not**
@@ -7402,8 +7364,7 @@ popularity keys **within** each tier:
   `skilly_search_zero_results_total{surface}`; worker gauges `skilly_search_index_pending` and
   `skilly_search_index_failed`.
 - **No query text is stored or logged anywhere** — counts only (a zero-result query log is deferred,
-  §34.18; §55 specifies an aggregate-only one ahead at roadmap level). Structured request logs
-  already omit query strings (§22).
+  §34.18). Structured request logs already omit query strings (§22).
 
 ### 34.16 Tests (ship with the change — §16 discipline)
 - **Unit (`@skilly/shared`):** the parser — plain words, stop words, 1-character words, closed and
@@ -7479,7 +7440,7 @@ popularity keys **within** each tier:
 7. **A language change degrades matching** for the seconds its rebuild takes.
 8. **No "why it matched" in the UI** in v1 — `snippet` and `matchedIn` are MCP-only.
 9. **No query analytics** — counts only. A zero-result query log (the natural input for curating
-   synonyms) is **deferred**, not rejected. §55 picks it up ahead, at roadmap level.
+   synonyms) is **deferred**, not rejected.
 
 ---
 
@@ -12478,513 +12439,45 @@ sweep, and so **is** a Habits event. While `hype_enabled` is off, all three hype
 
 ---
 
-## 51. Skill evals
-
-> ⚠ GAP-4 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §51 is built, and its open decisions (§51.5) are pinned by a spec amendment before any
-> code. Today no bundle carries evals and nothing runs them.
-
-The quality rating (§41), the AI pre-review (§46) and policy rules (§47) all judge what a skill
-**says**. None of them checks how a model **behaves** with the skill loaded. **Evals** let an author
-ship test cases inside the bundle. skilly runs them for every new version through the AI integration
-(§40) and records a pass rate per version. Reviewers then see behaviour and **regressions**, not
-only text.
-
-### 51.1 What it does
-- **Evals travel in the bundle.** A bundle may carry an eval file at a fixed path (provisionally
-  `evals/evals.json`). It holds a list of cases, each a user prompt plus the expected behaviour in
-  plain language. Because the file is part of the bundle, it is part of the immutable version
-  (invariant #2) and goes through scanning, the bundle browser and the file-change view (§8) like
-  any other file. Changing an eval means proposing a new revision or version.
-- **One run per set of bytes.** The worker runs every case once per distinct set of reviewed bytes,
-  cached by content digest, exactly as §46.4 caches pre-review runs. Each case is two calls. The
-  **subject call** sends the skill's `SKILL.md` as system context plus the case prompt. The **judge
-  call** grades the answer against the expected behaviour and returns pass or fail with a one-line
-  reason.
-- **Where it shows.** Reviewers get an **Evals** panel on the review page: the pass rate, the
-  per-case results, and the **regressions** against the file-change view's baseline (the latest
-  stable active version). On the skill page, each version row gets a pass-rate chip
-  ("9/10 evals pass").
-- **Advisory, like §46.** Results never go in `scan_reports`, never trip the §37.4 override gate
-  and never hold the review queue.
-- **Pointer skills** are evaluated against their mirrored bytes.
-
-### 51.2 Builds on
-§40 (the helper, `ai_usage`, and new feature keys, provisionally `skill_eval`), §46.4–§46.5 (the
-worker run and its digest cache), §8 (the review page and the file-change baseline), §41.7 (the
-version-row chip pattern).
-
-### 51.3 Constraints
-- **Egress (§40.10).** The run sends `SKILL.md`, the eval prompts and the model's answers to the
-  provider. The feature must register that statement in `AI_FEATURES`. Lines the secret scanner
-  flags are redacted, as in §46 decision 5.
-- **Visibility.** Results inherit the visibility of their inputs (§40.10). Before accept, only the
-  people who may see the proposal (a reviewer of the target namespace or the submitter) see the
-  results.
-- **Nothing executes.** Scripts in the bundle are never run and the model gets no tools. Evals
-  measure instruction-following only, and the UI says so.
-- **A platform switch, off by default**, like §46 decision 9, because a run spends tokens on every
-  version.
-- **No new MCP tool** (§29's 25-tool ceiling). `get_skill` may carry the pass rate.
-
-### 51.4 Out of scope
-Running bundled scripts or giving the model tools; multi-turn cases; per-skill model choice;
-comparing several models; human grading.
-
-### 51.5 Open decisions
-1. **File format.** Adopt an existing community eval shape or define skilly's own? What is the
-   maximum number of cases per version?
-2. **Gate or advice.** Does a failing or regressing eval ever block accept or a direct publish? For
-   example, a namespace could set "no regressions" as an enforced rule, like §47.
-3. **Judge noise.** One run per case, or N runs with a majority vote? How does the UI show a flaky
-   case?
-4. **Cost.** §40 has no caps. What per-run case cap and per-day budget apply, and who may re-run?
-5. **Subject context.** `SKILL.md` only, or also the referenced text files (and at what size cap)?
-6. **Who sees the pass rate.** Owners and reviewers only, as with §46 decision 12, or consumers too?
-7. **Notification.** Does a regression on a direct publish notify maintainers? If so, what is the new
-   type's §48.3 digest tier?
-
----
-
-## 52. Upstream release watch for pointer skills
-
-> ⚠ GAP-5 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §52 is built, and its open decisions (§52.5) are pinned by a spec amendment before any
-> code. Today the pointer-refresh job only re-checks each pinned ref for drift and never looks for a
-> newer upstream release.
-
-The pointer-refresh job (`worker/git/pointerRefresh.ts`, §16 #13) re-checks each pointer version's
-**pinned ref** about once a day and raises `skill.drift` when the content at that ref changes (§12).
-It never looks for a **newer** ref. A pointer skill pinned to `v1.4.0` therefore stays there
-silently after upstream ships `v2.0.0`, and its maintainers find out only if they check the origin
-themselves.
-
-### 52.1 What it does
-- **Detect.** The refresh pass also lists the origin's refs, using the same lookup as
-  `GET /api/pointer/refs` and MCP `list_upstream_refs`. It compares them with the pinned ref of the
-  skill's latest pointer version. For a skills-hub.ai origin it compares the registry's latest
-  version instead.
-- **Notify.** When a newer stable release exists, the effective maintainers (§19) get one
-  notification per new release, deduplicated the same way drift onsets are (§12): *"v2.0.0 is
-  available upstream"*.
-- **Propose update.** The notification and an owner-only banner on the skill page offer **Propose
-  update**. It opens the propose form as a new-version proposal, pre-filled with the origin, the
-  folder, the new ref, a proposed semver derived from the tag when the tag parses, and the current
-  metadata. Submitting it takes the unchanged pointer path: submit-time verification (§8), mirroring,
-  scanning, AI pre-review (§46) and review.
-
-### 52.2 Builds on
-The pointer-refresh job, `GET /api/pointer/refs` / `list_upstream_refs`, the drift-onset dedup and
-the maintainer opt-outs (§12), the propose form's pointer prefill (§8).
-
-### 52.3 Constraints
-- **Never publishes and never re-pins.** A pinned ref stays immutable, and a person always submits
-  the proposal (the same rule as §29's "an agent authors, a human decides").
-- **Upstream contact** uses the existing SSRF-hardened transport (§22, §49).
-- **Visibility.** Only effective maintainers who can see the skill are notified.
-
-### 52.4 Out of scope
-Auto-publishing; hosted skills; tracking branches (a pointer pinned to a branch such as `main` is
-drift territory, §6).
-
-### 52.5 Open decisions
-1. **Notify only, or also draft?** §8 has no draft state today. Is a one-click prefill enough, or
-   should skilly create a proposal for the maintainer to submit?
-2. **Which refs count.** Stable semver tags only, or prereleases and non-semver tags too? How are
-   pointers pinned to a commit treated?
-3. **Dedup grain.** Notify once per new tag, or once per "behind" onset? When several tags land
-   between passes, notify for the highest only?
-4. **Opt-out and digests.** A new maintainer toggle ("Upstream releases of skills I maintain") and the
-   new type's §48.3 tier.
-5. **Consumers.** Should consumers also see "a newer upstream version exists"?
-6. **AI summary.** Should Propose update attach an AI-drafted change summary of the upstream diff
-   (a new feature key and egress statement, §40)?
-
----
-
-## 53. Try a skill before installing (playground)
-
-> ⚠ GAP-6 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §53 is built, and its open decisions (§53.5) are pinned by a spec amendment before any
-> code. Today a skill can only be judged from its page before it is installed.
-
-Today a user decides to install from a skill's description, usage examples, ratings and quality
-stars. The **playground** lets a signed-in user chat with the configured model, with the skill
-loaded, straight from the skill page. Reviewers get the same panel on a proposal.
-
-### 53.1 What it does
-- A **Try it** button on the skill page (for one version, by default the latest stable) opens a side
-  panel. It is a short chat whose system context is that version's `SKILL.md`. The user types
-  prompts and reads the model's answers. The panel is labelled as a preview: nothing runs, the model
-  has no tools, and no files are attached.
-- On a proposal's review page, the same panel runs against the proposed revision's bytes, for the
-  people who may see the proposal.
-- **Conversations are not stored.** §40.12 defers storing prompts and responses, and closing the
-  panel ends the chat. Each turn writes one `ai_usage` row under a new feature key (provisionally
-  `skill_playground`) with `userId` set.
-
-### 53.2 Builds on
-§40 (the helper and `ai_usage`), the skill page and review page access gates, §40.14 (the AI display
-name in the panel's copy).
-
-### 53.3 Constraints
-- **Egress (§40.10).** The panel sends `SKILL.md` and the user's own typed text. Free user text is a
-  new kind of egress, and the feature's registered statement must say so. Secret-scanner redaction
-  applies to the skill content.
-- **Visibility.** Only someone who can see the skill (or the proposal) can open the panel.
-- **A platform switch, off by default.**
-- **No new MCP tool** (§29). An agent can already read the skill itself.
-
-### 53.4 Out of scope
-Running scripts, tool use, file uploads, saving or sharing conversations, choosing a model.
-
-### 53.5 Open decisions
-1. **Limits.** §40 has no quotas. What per-user daily cap and maximum turns per chat apply?
-2. **Streaming.** §40's helper is non-streaming and §40.12 defers streaming. Accept the wait, or add
-   streaming?
-3. **Restricted skills.** Allowed, or `org`-visible skills only?
-4. **Context.** `SKILL.md` only, or referenced text files too (and at what size cap)?
-5. **Analytics.** Do tries count as a §21 metric next to views and installs?
-
----
-
-## 54. Reviewer assignment and review deadlines
-
-> ⚠ GAP-7 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §54 is built, and its open decisions (§54.5) are pinned by a spec amendment before any
-> code. Today the review queue is shared, unassigned and untimed.
-
-The §8 review queue is shared per namespace. Any reviewer (a namespace admin there, or any platform
-admin) may pick up any proposal, and nothing measures how long proposals wait. This section adds
-**assignment**, a per-namespace **review target**, reminders, escalation and a review-time metric.
-
-### 54.1 What it does
-- **Assign.** A reviewer of the target namespace can assign a proposal to a named reviewer of that
-  namespace, themselves included, and can reassign or unassign it. The queue gains an **Assigned to
-  me** filter, and the assignee is notified.
-- **Review target.** Each namespace may set a target time to a decision (for example 3 business
-  days). Namespace admins set it for their namespace and platform admins set it for `global`. The
-  clock runs while the proposal is `proposed` or `under_review` and pauses while it is
-  `changes_requested`, because then it waits on the proposer.
-- **Reminders and escalation.** When a proposal passes its target, the assignee is reminded, or
-  every reviewer of the namespace if it is unassigned. At a second threshold, platform admins are
-  notified.
-- **Metric.** Time to first action and time to decision per namespace, in the §21 analytics, under
-  §21's ownership matrix: per namespace for its admins, plus the platform aggregate for platform
-  admins.
-
-### 54.2 Builds on
-§8 (the state machine and the review dashboard), §12 (notifications), §21 (analytics and its
-ownership matrix), the Namespace administration page, §11 (audit).
-
-### 54.3 Constraints
-- **RBAC is unchanged (§4).** Assignment never grants review authority. The assignee must hold
-  reviewer authority, re-checked on assign, and an assignment clears when they lose it.
-- **Audited.** Assign, reassign and unassign are governance actions in `audit_log` (append-only,
-  invariant #5), as are changes to a namespace's target.
-- **Direct publish** (`require_review = false`) has no queue, so none of this applies to it.
-
-### 54.4 Out of scope
-External ticketing integration; reviewer workload balancing beyond what §54.5 decides.
-
-### 54.5 Open decisions
-1. **Hint or lock.** May other reviewers still act on an assigned proposal?
-2. **Auto-assignment.** Manual only, or round-robin / least-loaded per namespace?
-3. **Business days.** Whose time zone and working week? Are holidays out of scope?
-4. **Thresholds.** Defaults, who sets the escalation threshold, and whether the target is off until a
-   namespace sets one.
-5. **Notifications.** The new types and their §48.3 tier. Today the review-queue types are "always
-   immediate".
-6. **Proposer view.** Does the proposer see the assignee and the target?
-
----
-
-## 55. Search gaps
-
-> ⚠ GAP-8 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §55 is built, and its open decisions (§55.5) are pinned by a spec amendment before any
-> code. Today no search text is stored anywhere (§34.15).
-
-§34 stores no query text (§34.15) and defers a zero-result query log (§34.18 #9). As a result,
-nobody can see what people search for and do not find. That is the natural input for curating
-synonyms (§34.8), for Request a skill (§26), and for deciding what a team should build next.
-
-### 55.1 What it does
-- **An aggregate-only zero-result log.** When a search on a counted surface returns nothing, its
-  normalized query is counted per day: lowercased, whitespace-collapsed, in the §34 parser's
-  canonical form. It is stored **with no user id, session or namespace**: only the query, the day
-  and a distinct-searcher count that cannot be traced back to a person.
-- **A k-anonymity floor.** A query becomes visible only once at least *k* distinct people have
-  searched it within the window. Below the floor it is shown nowhere.
-- **The page.** An admin page, **Search gaps**, lists the qualifying queries by distinct searchers
-  over 7, 30 or 90 days, with three actions: **Add a synonym** (the §34.8 editor, pre-filled),
-  **Post a request** (§26, pre-filled) and **Dismiss**.
-- **Retention.** Rows older than the longest window are pruned.
-
-### 55.2 Builds on
-§34 (the engine, its counted surfaces and `skilly_search_zero_results_total`), §34.8 (the synonym
-editor), §26 (requests).
-
-### 55.3 Constraints
-- **It narrows §34.15's "no query text is stored anywhere"** to: zero-result queries only, aggregated
-  and floor-gated. §34.15 and §34.18 #9 are amended when this ships.
-- **Invariant #3.** The stored text is what searchers typed, never a skill name or count. It
-  therefore cannot reveal a restricted skill.
-- **Personal data.** A query can contain a name or an identifier. The floor mitigates that, and the
-  write path drops queries that look like email addresses or long digit runs.
-- **Request logs stay free of query strings** (§22).
-
-### 55.4 Out of scope
-Analytics on queries that did return results; per-user search history; click-through tracking.
-
-### 55.5 Open decisions
-1. **Audience.** Platform admins only, or namespace admins too? The log is org-wide, not
-   per-namespace.
-2. **The floor and the counting.** The value of *k*, the window, and how distinct searchers are
-   counted without storing who they are (for example a daily salted hash set that is discarded at day
-   end).
-3. **Surfaces.** Catalog, header dropdown and MCP `search_skills`? The dropdown sees every keystroke
-   prefix, so which query counts as final?
-4. **Near misses.** Also log queries with very few results?
-5. **Kill switch.** A platform setting, and whether it is on by default.
-
----
-
-## 56. Popular in your department
-
-> ⚠ GAP-9 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §56 is built, and its open decisions (§56.5) are pinned by a spec amendment before any
-> code. Today `users.department` is display-only (§5).
-
-"Skills you might like" (`related_skills`, §3) comes from co-installs. Nothing in discovery uses who
-the viewer **is**. Entra already syncs each user's `department` (§5), today only for the hover card
-(§28). This section adds a home-page row of the skills most adopted in the viewer's own department.
-
-### 56.1 What it does
-- A home-page row, **"Popular in ‹department›"**, lists the skills most adopted in the last 30 days by
-  active users who share the viewer's department. It reads the de-duplicated adoption ledger
-  `skill_installs` (§21) and leaves out skills the viewer already has installed.
-- **Floors.** A skill qualifies only when at least 3 distinct people in the department adopted it,
-  and the row appears only when the department has a minimum number of active users. Neither the
-  row nor its order can reveal one person's installs.
-- **Visibility.** Every listed skill passes the shared visibility predicate for the viewer
-  (invariant #3).
-- The worker computes the row nightly, next to `recomputeRelatedSkills`.
-
-### 56.2 Builds on
-`users.department` (§5), `skill_installs` (§21), the nightly related-skills recompute (§3), the home
-page (§10).
-
-### 56.3 Constraints
-- **It amends §5** ("no role, gate, filter or notification reads them"): `department` becomes an
-  aggregate **discovery** input. It never becomes a role, a gate or a filter on anything else, and
-  roles still resolve only from SCIM groups and `role_mappings` (invariant #1).
-- **Grouping** is by the exact synced value. Entra's department is free text.
-
-### 56.4 Out of scope
-Rows by office or job title, manager-chain rows, comparisons between departments, admin-curated
-department picks.
-
-### 56.5 Open decisions
-1. **Floors.** The installer floor and the minimum department size.
-2. **Visibility model.** `org`-visible skills only, which gives one row per department, or
-   per-viewer filtering of a wider list?
-3. **Opt-out.** Does `directory_hidden` or `leaderboard_hidden` remove a user's installs from the
-   aggregate?
-4. **Normalization.** Case and whitespace folding of department names, and aliases.
-5. **Other surfaces.** The catalog (as a sort or facet), email digests (§48), MCP?
-
----
-
-## 57. Customize a skill for your team (fork with lineage)
-
-> ⚠ GAP-10 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §57 is built, and its open decisions (§57.5) are pinned by a spec amendment before any
-> code. Today a copy of another skill keeps no link to its source.
-
-§8 *Promotion to global* copies a team skill **up** to `global`. The reverse, a team adapting a
-global or another team's skill to its own conventions, today means downloading the bundle and
-proposing it as a new skill. That copy loses its link to the original and silently falls behind it.
-This is §17 risk #6 (promotion divergence) seen from the other side.
-
-### 57.1 What it does
-- **Customize** on a skill page opens the propose form as a **new-skill** proposal, pre-filled with
-  the source version's bundle and metadata, targeting a namespace the user may propose to.
-- On accept, the new skill records **derived from** (source skill and version). Both pages show it:
-  "Derived from …" on the copy, and a count of visible derivatives on the source.
-- When the source ships a new stable version, the derivative's maintainers are notified with a link
-  to the file-change view (§8) between the version they derived from and the new one, so they can
-  bring changes over as a new version of their copy.
-
-### 57.2 Builds on
-The §8 propose form and *Keep current files* reuse, promotion provenance
-(`promoted_from_skill_version_id`), the file-change view, §12 notifications, §19 maintainers.
-
-### 57.3 Constraints
-- **Visibility (invariants #3 and #7).** Customizing copies bytes to a new audience. The proposer must
-  be able to see the source, and the copy must not reach anyone who could not already see the
-  source.
-- **The lineage link never reveals a restricted derivative.** The source's derivative count includes
-  only derivatives the viewer can see.
-- **Versions stay immutable (invariant #2).** The copy is a new skill and never changes the source.
-
-### 57.4 Out of scope
-Automatically merging source changes into a copy; lineage with several parents; showing chains
-deeper than one level.
-
-### 57.5 Open decisions
-1. **Which sources.** Only `org`-visible sources (the simplest way to keep 57.3), or restricted
-   sources into namespaces that already see them?
-2. **Slug.** May the copy keep the source's slug, exempt from the §8 slug-match redirect as promotion
-   is, or must it take a new one?
-3. **Pointer sources.** Copy as a pointer (same origin, its own pin) or as a hosted bundle?
-4. **Notification.** The update type, a maintainer toggle, and its §48.3 tier.
-5. **Opting out.** May a source's maintainers stop their skill from being customized?
-6. **Credit.** Do the copy's installs credit the source anywhere (the leaderboard, §21)?
-
----
-
-## 58. Bulk import from a multi-skill repository
-
-> ⚠ GAP-11 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §58 is built, and its open decisions (§58.5) are pinned by a spec amendment before any
-> code. Today one pointer proposal produces exactly one skill, and bulk import is out of scope (§6).
-
-Organizations adopting skilly often start from a repository that holds many skills, one per folder.
-Today each folder needs its own pointer proposal, typed in by hand. This section adds a guided import
-that turns one repository into a batch of proposals.
-
-### 58.1 What it does
-- **Import from repository** on the propose page. The user enters an origin URL and a ref. skilly
-  lists the folders that contain a `SKILL.md`, using the same SSRF-hardened checkout as pointer
-  review (§8). Each folder shows its frontmatter name and description and the §8 duplicate check
-  (slug, plus origin and folder).
-- The user ticks folders and picks the target namespace and visibility once for the batch.
-- **Submit creates one pointer proposal per ticked folder**, linked as a **batch**. Each proposal is
-  still verified, mirrored, scanned and pre-reviewed on its own.
-- **Reviewers see the batch together** and act on each proposal, with a batch action whose limits
-  §58.5 decides.
-
-### 58.2 Builds on
-Pointer proposals with `external_subdir` (§6), `list_upstream_refs`, the duplicate check (§8), the
-review dashboard (§8), the content-risk gate (§37).
-
-### 58.3 Constraints
-- **One skill = one repo is unchanged.** Each imported folder is mirrored into its own skilly repo,
-  so the install contract is untouched.
-- **No batch override.** Every proposal still passes the §37 gate on its own.
-- **Audit** records each proposal as today, plus one row for the batch.
-
-### 58.4 Out of scope
-Importing from several repositories at once; continuously syncing folders added upstream later.
-
-### 58.5 Open decisions
-1. **Size.** The maximum number of folders per batch.
-2. **Batch accept.** Allowed at all? If so, only for proposals with no findings that need an
-   override?
-3. **Per-skill edits.** Edit metadata and categories in the wizard, or only after submission?
-4. **Hosted variant.** A zip holding several skill folders?
-5. **Direct publish.** Does a batch into a `require_review = false` namespace publish directly?
-6. **Later folders.** Should §52 also suggest folders that appear upstream after the import?
-
----
-
-## 59. Usage reporting from the plugin marketplaces
-
-> ⚠ GAP-12 · new feature — specified at roadmap level only (see *Implementation gaps* at the top):
-> nothing in §59 is built, and its open decisions (§59.5) are pinned by a spec amendment before any
-> code. Today skilly sees installs and page views, never a skill being used.
-
-skilly counts installs (clones) and page views (§21). It never sees a skill being **used**. A skill
-installed by 300 people and invoked by five looks the same as one used every day. The plugins skilly
-synthesizes for its marketplaces (§30) already pass maintainer-supplied `hooks.json` through to the
-plugin root (§30.3). skilly could therefore add an **opt-in hook of its own** that reports when one
-of its skills runs.
-
-> **Recorded tension.** This ships code that runs on users' machines. CLAUDE.md pins "skilly ships
-> no CLI". A hook is plugin configuration, not a binary, but it is still client-side code authored
-> by skilly, and it produces telemetry about individuals. Both points must be settled in the grill
-> before anything is built, and the outcome may be to withdraw this section.
-
-### 59.1 What it would do
-- Each synthesized plugin may carry a **skilly-owned hook entry** that, when one of the plugin's
-  skills is invoked, calls a skilly usage endpoint with the skill's identity and nothing else: no
-  prompts, no files, no output.
-- **Opt-in** with a platform switch, off by default, plus whatever per-marketplace and per-user
-  consent §59.5 decides.
-- skilly aggregates the calls into **active use** per skill (invocations and distinct users per day
-  and week) and shows it in the §21 analytics next to installs, under §21's ownership matrix.
-
-### 59.2 Builds on
-§30.3 (plugin-component pass-through and merging), §30.4 (the marketplace token), §21 (analytics
-and its ownership matrix), `usage_events`.
-
-### 59.3 Constraints
-- **Marketplace installs only.** A skill installed with `npx skills add` has no plugin wrapper, so it
-  is not covered. The UI must say that the number is a floor.
-- **Credentials (invariant #6).** The hook must authenticate without a long-lived secret leaking into
-  shell history or logs, and the endpoint never logs credentials or query strings.
-- **Counts, not content.** Nothing about what the user asked or what the skill did is collected.
-- **Never in the way.** Fire-and-forget: the hook never slows down, blocks or breaks a skill, and it
-  fails silently offline or behind a proxy.
-- **Transparent.** The entry is visible in the plugin's `hooks.json`, and the marketplaces page
-  explains it in plain words.
-
-### 59.4 Out of scope
-Capturing content; per-prompt analytics; harnesses other than Claude Code.
-
-### 59.5 Open decisions
-1. **The no-CLI rule.** Accept a skilly-authored hook as configuration rather than a CLI, or withdraw
-   the feature?
-2. **Authentication.** How the hook proves it may report. The marketplace token sits in the
-   consumer's marketplace URL and is not available to a hook.
-3. **Consent.** Org-level opt-in only, or a per-user decline as well?
-4. **The trigger.** Which Claude Code hook event reliably signals a skill invocation (to be verified
-   against the current hook events), and how a plugin and skill folder map back to a skilly skill.
-5. **Attribution.** Per person, under §21's drill-down rules, or anonymous counts only?
-6. **Merge safety.** Under the §30.3 merge, a hook event's matcher lists concatenate, so skilly's
-   entry would sit beside maintainer hooks on the same event. Where does it go in that order, and can
-   a maintainer's hook on the same event stop it from running?
-7. **Downstream use.** Retention, and whether active use feeds ranking (§34.6), Hype eligibility
-   (§50) or the leaderboard (§21).
-
----
-
 ## 60. Feature ideas — vote on what's next, and suggest it
 
-The What's new page's *Coming soon* list (§23) tells users what is coming, but they cannot say what
-they want. This section lets every signed-in user **upvote** the entries on that list and
-**suggest a feature** of their own in a text box. A platform admin reviews each suggestion and
-publishes the good ones **into the same list**, where everyone can vote on them. The list is ordered
-by votes: **the most-voted entries are next in line**. Two new badges reward a suggestion that gets
-published and one that ships.
+The What's new page's *Coming soon* list (§23) is skilly's roadmap, and **every item on it is a
+database row**. A signed-in user **suggests a feature** in a text box, a platform admin reviews it
+and **publishes** the good ones to the list, and everyone **upvotes** them. The list is ordered by
+votes: **the most-voted items are next in line**. Platform admins edit published items and close
+them once they ship or are settled. Two badges reward a suggestion that gets published and one that
+ships. (Until v2.41.0 the list also held teasers written in code for spec-ahead features. Migration
+0101 turned them into ordinary items, §60.2.)
 
 ### 60.1 Decisions
 | # | Decision | Why |
 |---|---|---|
-| 1 | **One list.** Published ideas join the spec'd teasers in *Coming soon*, rendered as **identical rows**. The only visible difference is an idea's *Suggested by* line. | The user's call: one place to look and vote. |
-| 2 | **The whole list sorts by votes**, most-voted first, teasers and ideas together. Ties: teasers before ideas, teasers in `UPCOMING` order, ideas newest-published first. | "The most upvoted are the next to implement." |
-| 3 | **Publishing is moderation, not a commitment.** An admin publishes an idea so people can vote on it. What happened to it is recorded later, when the admin **closes** it as *Planned*, *Shipped*, *Duplicate* or *Won't do*. | Admins must be free to publish ideas they have not decided to build. |
+| 1 | **One list, held only in the database.** Every *Coming soon* item is a `published` `feature_ideas` row, and every row looks the same. The only visible difference is the *Suggested by* line on an item with a named proposer. No list of items exists in the code or in this spec. | The user's call: one place to look and vote, edited by platform admins without a release. |
+| 2 | **The list sorts by votes**, most-voted first. Ties: newest published first, then by id. | "The most upvoted are the next to implement." |
+| 3 | **Publishing is moderation, not a commitment.** An admin publishes an idea so people can vote on it. When it is settled, the admin **closes** it as *Shipped*, *Duplicate* or *Won't do*. Being on the list is what "coming" means, so there is **no *Planned* close**. Ideas closed as *Planned* before v2.41.0 keep that outcome and their *Mark shipped* action. | Admins must be free to publish ideas they have not decided to build. |
 | 4 | **Upvote only, one per user per entry, undo any time, no budget.** Counts are visible to everyone who sees the entry. | Simple, honest, and like a reaction. |
-| 5 | **The proposer writes only a description** (20–1,000 characters, plain text). On publishing, the admin **adds a title** and **may edit** the description. The proposer's own text is kept. | One box for the user; the list stays consistent with the teaser rows. |
+| 5 | **The proposer writes only a description** (20–1,000 characters, plain text). On publishing, the admin **adds a title** and **may edit** the description. The proposer's own text is kept. | One box for the user; every row on the list has a title and a text. |
 | 6 | Proposers may **edit or withdraw** a pending idea; once it is published, only platform admins change it. | The proposer owns the draft; the admin owns what is public. |
 | 7 | A published idea starts with **its proposer's vote** (count 1), which they can remove. | Their suggestion is their vote. |
 | 8 | **Named by default.** A published idea shows *Suggested by \<name\>*. A Profile toggle hides the name from users on all of the proposer's ideas. Platform admins always see it. | Credit and accountability, with an opt-out. |
 | 9 | Review happens on a **dedicated platform-admin page**, `/admin/ideas`, with a sidebar badge and a notification for each new idea. Rejection takes an optional reason and notifies the proposer. | A queue needs a home and a nudge. |
-| 10 | **No link between an idea and a teaser.** When an idea is specified (a GAP marker and a teaser), the admin closes the idea as *Planned* by hand. Its votes are deleted and the teaser starts at 0. A *Planned* idea can later be marked *Shipped* (one way). | The user's call. The teaser list stays code-owned (§23), the ideas DB-owned. |
-| 11 | **Limits:** at most **3 pending** ideas per user and **5 submissions per rolling 24 h**. | Keeps the queue reviewable. |
-| 12 | **One platform switch**, `feature_ideas_enabled`, on by default. Off, *Coming soon* is exactly the §23 list; ideas and votes are kept. | Org-wide policy, dormant rather than destructive. |
+| 10 | **One way onto the list, for platform admins too.** An admin who wants an item listed suggests it in the dialog and publishes it on `/admin/ideas`. There is no direct "add" action. The only items without a proposer are the nine that migration 0101 seeded from the former code teasers. | The user's call: everyone proposes, platform admins approve, everyone upvotes. |
+| 11 | **Limits:** at most **3 pending** ideas per user and **5 submissions per rolling 24 h**, platform admins included. | Keeps the queue reviewable. |
+| 12 | **One platform switch**, `feature_ideas_enabled`, on by default, decides only whether users **who are not platform admins** may suggest. Off, they cannot submit new ideas. Platform admins still can, and the list, votes, *Your ideas*, the admin page, notifications and badges all work as usual. | The user's call: the list and voting are never switched off; only who may propose is. |
 | 13 | **Two badges:** *Bright Idea* when an idea is published, *Made It Real* when one ships (§60.8). | Reward the outcome, not the typing; publication is the gate against farming. |
 | 14 | On **erasure**, published ideas stay but lose their name; every other idea of the user and every vote they cast is deleted. | The community's votes outlive the person; their personal trail does not. |
 | 15 | **No MCP tool, no leaderboard credit, no follower fan-out** beyond the achievement's own. Votes and the proposer's own actions are **not audited**; admin decisions are. | §29's "fold before adding surface"; §11's posture for personal rows. |
+| 16 | **No audience.** Every published item is shown to every signed-in user. | The user's call. (The code teasers could be limited to admins; the two that were became visible to everyone in v2.41.0.) |
 
-### 60.2 Data model (migration 0100)
-- **`feature_ideas`**: `id` (uuid PK), `author_id` (FK → `users`, `ON DELETE SET NULL`),
+### 60.2 Data model (migrations 0100 and 0101)
+- **`feature_ideas`**: `id` (uuid PK), `author_id` (FK → `users`, `ON DELETE SET NULL`; NULL on
+  the items migration 0101 seeded, which have no proposer),
   `status` (`pending` | `published` | `rejected` | `closed` | `withdrawn`), `description` (TEXT,
   20–1,000 characters; the text shown now), `submitted_description` (TEXT; the proposer's own
   latest text, frozen at the admin's decision), `title` (TEXT, 3–80, nullable; **required** once
   `published` or `closed`), `outcome` (`planned` | `shipped` | `duplicate` | `wont_do`, nullable;
-  **required exactly when** `status = 'closed'`), `admin_note` (TEXT ≤ 500, nullable; the rejection
+  **required exactly when** `status = 'closed'`; `planned` stays valid for rows closed before
+  v2.41.0, but a new close never writes it, decision 3), `admin_note` (TEXT ≤ 500, nullable; the rejection
   reason or the closing note), `created_at`, `updated_at`, `decided_by` / `decided_at` (the
   publish or reject; `decided_by` FK → `users`, SET NULL), `published_at`, `closed_by` /
   `closed_at`, `shipped_at` (set when the outcome becomes `shipped`). CHECK constraints enforce the
@@ -12992,50 +12485,60 @@ published and one that ships.
   and a partial index on `created_at` for `status = 'pending'`.
 - **`feature_idea_votes`**: `idea_id` (FK → `feature_ideas`, CASCADE), `user_id` (FK → `users`,
   CASCADE), `created_at`; **PK `(idea_id, user_id)`**, index on `user_id`.
-- **`upcoming_votes`**: `upcoming_key` (TEXT, kebab-case, ≤ 60), `user_id` (FK → `users`,
-  CASCADE), `created_at`; **PK `(upcoming_key, user_id)`**, index on `user_id`. The key is the
-  teaser's new **`key`** field (§60.3). It has no FK, because teasers live in code.
+- **Migration 0101: *Coming soon* moves to the database.** In one transaction it:
+  1. inserts the nine teasers that `app/whats-new/upcoming.ts` held as `published` rows:
+     `author_id` and `decided_by` NULL; `title` = the teaser's title; `description` =
+     `submitted_description` = the teaser's text; `created_at` = `decided_at` = `published_at`,
+     stamped one second apart in the old display order with the first item newest, so ties keep
+     today's order (decision 2);
+  2. copies every `upcoming_votes` row for those nine keys into `feature_idea_votes` against the
+     matching new row, keeping `created_at`, so no vote is lost;
+  3. drops `upcoming_votes` (migration 0100 created it). Votes on any other key were never counted
+     and are discarded with it.
+
+  The texts are copied unchanged. Two of the nine were shown only to admins, and they are now
+  shown to everyone (decision 16). From here on, the items exist only as rows: `upcoming.ts`, its
+  vote keys and its spec-sync test are gone.
 - **`users.idea_attribution_hidden`** (BOOLEAN NOT NULL DEFAULT false): hides the proposer's name
   from users on their ideas. **`users.idea_notifications`** (BOOLEAN NOT NULL DEFAULT true): a
   platform admin's opt-out of `idea.submitted`.
-- **`platform_settings.feature_ideas_enabled`**: default `true`.
+- **`platform_settings.feature_ideas_enabled`**: default `true`; whether users who are not
+  platform admins may suggest (§60.9).
 - Vote rows and ideas are ordinary **mutable rows**, never audit data (§11).
 - A client-safe shared module, **`@skilly/shared/ideas`**, holds the limits, the outcome and
-  status enums, the validators (`validateIdeaDescription`, `validateIdeaTitle`, `validateIdeaNote`)
-  and the ordering function `comingSoonOrder` (§60.3), so the server, the page and the admin page
-  can never disagree.
+  status enums (with the outcomes a new close accepts: `shipped`, `duplicate`, `wont_do`), the
+  validators (`validateIdeaDescription`, `validateIdeaTitle`, `validateIdeaNote`) and the ordering
+  function `comingSoonOrder` (§60.3), so the server, the page and the admin page can never
+  disagree.
 
 ### 60.3 Coming soon, with votes (`/whats-new`)
-While `feature_ideas_enabled` is on, §23's *Coming soon* section changes as follows. Everything
-§23 does not mention here stays as it is.
-- **Teaser keys.** Each `UPCOMING` entry gains a required **`key`**: kebab-case
-  (`^[a-z0-9]+(-[a-z0-9]+)*$`, ≤ 60 characters), unique within the list, **never reused** (like GAP
-  ids), and never rendered. Votes on a teaser are stored against its key. The spec-sync test
-  (§23) also fails on a missing, malformed or duplicate key.
-- **One merged list from the server.** `GET /api/coming-soon` returns the viewer's items already
-  merged and ordered: the teasers `upcomingFor` allows this viewer (§23 audiences are enforced on
-  the server too), plus every `published` idea. Each item carries `votes` and `voted` (whether the
-  caller has voted). The order comes from `comingSoonOrder` (decision 2). **Counts are computed only
-  for keys present in `UPCOMING`**, so a shipped teaser's leftover votes never surface.
-- **Rendering waits for both** `/api/me` and `/api/coming-soon`, so the count never changes after
-  first paint. If `/api/coming-soon` answers **404** (the switch is off) or fails, the section
-  falls back to exactly the §23 rendering: curated order, no votes, no button, no ideas.
-- **The section always shows** while the switch is on, even with no entries, because it carries the
-  *Suggest a feature* button. Heading: **"Coming soon · N"**, where N counts teasers plus published
-  ideas. New sub-line: *"Most-voted first: the most wanted are next in line. Nothing here is
-  available yet, and plans can change."* With no entries, the expanded list reads *"Nothing here
-  yet. Suggest a feature to get the list started."*
+§23 places the *Coming soon* section and sets its look. This subsection specifies what it lists and
+how it behaves.
+- **One list from the server.** `GET /api/coming-soon` returns every `published` item, ordered by
+  `comingSoonOrder` (decision 2). Each item carries `votes` and `voted` (whether the caller has
+  voted). The response also says whether the caller may suggest (`canSuggest`: always for a
+  platform admin, otherwise the value of `feature_ideas_enabled`).
+- **Rendering waits for** `/api/coming-soon`, so the count never changes after first paint. If it
+  fails, the section is not rendered at all (there is no fallback list), and the release history
+  renders as usual.
+- **When the section shows.** While the caller may suggest, there are published items, or the
+  caller has an idea in *Your ideas*; otherwise it is hidden. Heading: **"Coming soon · N"**, where
+  N counts the published items. Sub-line: *"Most-voted first: the most wanted are next in line.
+  Nothing here is available yet, and plans can change."* With no items, the expanded list reads
+  *"Nothing here yet. Suggest a feature to get the list started."*, or *"Nothing here yet."* for a
+  caller who may not suggest.
 - **Heading row.** The expand/collapse control stays one `<button>` (glyph, heading, sub-line,
   chevron). **Beside it**, never inside it, sits a separate **"Suggest a feature"** button that
-  works while the section is collapsed. On narrow screens (≤ 560px) it wraps below the heading.
+  works while the section is collapsed. It is shown only while the caller may suggest. On narrow
+  screens (≤ 560px) it wraps below the heading.
   The section still opens **collapsed on every visit** (§23), with one exception: arriving with
   the fragment `#coming-soon` or `#your-ideas` (the notification links, §60.7) opens it expanded and
   scrolls to that anchor.
-- **Rows.** Teaser and idea rows look the same (decision 1): the muted, dashed row with the neutral
-  *Coming soon* chip, a title and the text. An idea's description keeps its line breaks
-  (`white-space: pre-line`) and is rendered as **plain text** (no markdown, links or mentions). A
-  named idea adds a muted line **"Suggested by \<name\>"** with the directory hover card (§28).
-  Unnamed ideas (opted out, erased, or no author) show no line at all.
+- **Rows.** Every row looks the same (decision 1): the muted, dashed row with the neutral *Coming
+  soon* chip, a title and the text. The description keeps its line breaks (`white-space: pre-line`)
+  and is rendered as **plain text** (no markdown, links or mentions). An item with a named proposer
+  adds a muted line **"Suggested by \<name\>"** with the directory hover card (§28). Unnamed items
+  (opted out, erased, or no proposer, like the nine seeded by migration 0101) show no line at all.
 - **Vote control.** Every row carries an upvote button at its trailing edge: a ▲ glyph over the
   count. It is a `<button aria-pressed>` with an accessible name of the form *"Upvote \<title\>, N
   votes"*. The rows themselves stay non-interactive (§23). A click flips the vote
@@ -13046,13 +12549,18 @@ While `feature_ideas_enabled` is on, §23's *Coming soon* section changes as fol
   **"Your ideas"** sub-list (`id="your-ideas"`), newest first, at most 20. Each row shows the
   description, the submitted date (viewer's timezone, `useDateFmt()`) and a status chip:
   *Pending review* (with **Edit** and **Withdraw**), *Published* (with its vote count), *Not
-  published* (with the admin's reason, if any), or the outcome *Planned*, *Shipped*, *Duplicate* or
-  *Won't do* (with the admin's note, if any). Pending ideas appear **only** here and on the admin
-  page, never in the main list.
-- **Copy rules.** §23's copy rules still bind the teasers. For ideas, the admin is the editor: the
-  publish dialog reminds them that published ideas are visible to every signed-in user (§60.5).
+  published* (with the admin's reason, if any), or the outcome *Shipped*, *Duplicate*, *Won't do*
+  or, for an idea closed before v2.41.0, *Planned* (with the admin's note, if any). Pending ideas
+  appear **only** here and on the admin page, never in the main list.
+- **Copy rules.** The admin is the editor: the publish dialog reminds them that published items are
+  visible to every signed-in user (§60.5).
 
 ### 60.4 Suggesting a feature
+- **Who may suggest.** Platform admins, always. Every other signed-in user, while
+  `feature_ideas_enabled` is on (the default). While it is off, those users see no *Suggest a
+  feature* button, and `POST /api/coming-soon/ideas` answers them **403** `{ reason:
+  "suggestions_off" }`. Their pending ideas stay in the queue for a decision, and they can still
+  edit or withdraw them.
 - **The dialog.** *Suggest a feature* opens a modal dialog (`role="dialog"`, `aria-modal`, focus
   trapped and restored on close, Escape and **Cancel** close it), titled **"Suggest a feature"**. It
   holds one labelled textarea, **"Describe the feature"**, with the helper text *"What should skilly
@@ -13077,19 +12585,23 @@ While `feature_ideas_enabled` is on, §23's *Coming soon* section changes as fol
   confirm) sets `status = 'withdrawn'`. The row disappears everywhere but still counts toward the
   daily cap. Either action on an idea that is no longer pending → **409**, and the client reloads
   the list.
-- **Every signed-in user** may suggest and vote, whatever their roles (§4).
+- **Every signed-in user** may vote, whatever their roles (§4). Who may suggest is set out at the
+  top of this subsection.
 
 ### 60.5 Review: the *Feature ideas* page (`/admin/ideas`)
 - **Access.** Platform admins only. Anyone else gets the *Platform admins only* empty state, as on
   Monitoring (§32.7), and the APIs return **403**. Sidebar entry **"Feature ideas"** (lightbulb glyph), directly **below Monitoring**,
   carrying a superscript **1–9 / 9+** count of `pending` ideas from `GET /api/nav-badges` (`ideas`,
-  present only for platform admins while the switch is on). The count is a plain count of the
-  queue: it has no "seen" marker, and it drops as ideas are decided.
-- **Header.** Eyebrow *"Administration"*, title **"Feature ideas"**, sub-line *"Ideas
-  people suggested. Publish the good ones for voting, then close them once they're planned,
-  shipped or settled."* While the switch is off, a notice reads *"Feature ideas are switched off.
-  People can't see, suggest or vote on ideas."* and links to the Administration card. The lists
-  stay readable but every action is disabled.
+  present only for platform admins). The count is a plain count of the queue: it has no "seen"
+  marker, and it drops as ideas are decided.
+- **Header.** Eyebrow *"Administration"*, title **"Feature ideas"**, sub-line *"What's on Coming
+  soon, and the ideas waiting to join it. Publish the good ones for voting, then close them once
+  they ship or are settled."* While `feature_ideas_enabled` is off, a notice reads *"Only platform
+  admins can suggest features right now."* and links to the Administration card. Every action stays
+  available.
+- **Adding an item.** An admin who wants something on the list suggests it with the dialog on
+  `/whats-new`, like anyone else, then publishes it here (decision 10). Their own idea gets the usual
+  treatment: their vote, *Suggested by* (unless they hid their name) and *Bright Idea*.
 - **Three tabs**, each with its count:
   - **Pending**, oldest first. Each card shows the proposer (name and hover card, always, with a
     *"name hidden from users"* note when they opted out), the submitted time, the description and
@@ -13105,31 +12617,30 @@ While `feature_ideas_enabled` is on, §23's *Coming soon* section changes as fol
     - Both send back the card's `version` (its `updated_at`, rendered at full precision) as
       `expectedUpdatedAt`. If the proposer edited or withdrew the idea since the page loaded, the
       action answers **409** *"this idea changed since you opened it"* and the list reloads.
-  - **Published**, most-voted first. Each card shows the vote count, title, description, proposer
+  - **Published**: everything on *Coming soon*, most-voted first. Each card shows the vote count,
+    title, description, proposer (or a muted *"No proposer"* on the items seeded by migration 0101)
     and published date, with a **Show original** disclosure when the published text differs from
-    `submitted_description`. Two actions:
+    `submitted_description`. Two actions, on every published item, seeded ones included:
     - **Edit…**: title and description (same bounds), with no notification.
-    - **Close…**: an **Outcome** choice (*Planned*, *Shipped*, *Duplicate*, *Won't do*; required)
+    - **Close…**: an **Outcome** choice (*Shipped*, *Duplicate*, *Won't do*; required; decision 3)
       and an optional **Note** (≤ 500). Closing records the outcome and `closed_*` (`shipped_at`
       too for *Shipped*), **deletes the idea's votes** (their count goes into the audit row first)
-      and notifies the proposer. *Shipped* also awards *Made It Real*.
+      and notifies the proposer, if there is one. *Shipped* also awards them *Made It Real*.
   - **Closed**: rejected and closed ideas, newest decision first, 50 per page, read-only, with
-    outcome chip, note or reason and dates. An idea closed as **Planned** carries a **Mark
-    shipped** action: a one-way move to `shipped` that sets `shipped_at`, awards *Made It Real* and
-    notifies the proposer.
+    outcome chip, note or reason and dates. An idea closed as **Planned** before v2.41.0 carries a
+    **Mark shipped** action: a one-way move to `shipped` that sets `shipped_at`, awards *Made It
+    Real* and notifies the proposer.
 - Every admin write runs in a transaction that re-reads the row `FOR UPDATE` and checks its status,
   so two admins cannot decide one idea twice: the second gets **409**.
 
 ### 60.6 Votes
 - `PUT` upvotes and `DELETE` removes; both are **idempotent** and answer **200** `{ votes, voted }`
-  (the new count, so the optimistic flip settles on the server's number). A teaser vote
-  needs a key present in `UPCOMING` **and** allowed for the caller by `upcomingFor`; an idea vote
-  needs a `published` idea. Anything else → **404**, the same answer as for an unknown key, so the
-  route never reveals an admin-only teaser.
+  (the new count, so the optimistic flip settles on the server's number). A vote needs a
+  `published` item. Anything else → **404**, the same answer as for an unknown id, so the route
+  never reveals a pending or rejected idea.
 - Rate limit **120 / min** per user (the watch endpoint's limit). Votes are not audited and earn no
   badge.
-- Closing an idea deletes its votes. A shipped teaser's votes stay in `upcoming_votes` but are inert
-  (§60.3, §60.12).
+- Closing an idea deletes its votes.
 
 ### 60.7 Notifications (§12)
 The email subject is `Skilly - <label>` like every type (§12); the sentence, the optional second line
@@ -13141,10 +12652,11 @@ the worker's email renderer both call.
 | `idea.submitted` | Every **active platform admin** except the author, minus `idea_notifications` opt-outs. **Coalesced per recipient until read**, like `message.new`: a new submission bumps the unread row's `count` (a partial unique index, migration 0100). | "A new feature idea is waiting for review." / "{n} new feature ideas are waiting for review." | Review ideas → `/admin/ideas` |
 | `idea.published` | The author | "Your feature idea \"{title}\" is on the Coming soon list now. Everyone can upvote it." | See the list → `/whats-new#coming-soon` |
 | `idea.rejected` | The author | "Your feature idea wasn't published. Reason: {reason}" (or "No reason was given.") — then the first 140 characters of the description, quoted. | Your ideas → `/whats-new#your-ideas` |
-| `idea.closed` | The author (outcomes *Planned*, *Duplicate*, *Won't do*) | "Your feature idea \"{title}\" was closed: {Outcome}." — then the note, if any. | Your ideas → `/whats-new#your-ideas` |
-| `idea.shipped` | The author (closed as *Shipped*, or *Planned* → *Shipped*) | "A feature you suggested has shipped: \"{title}\" is now part of skilly." | What's new → `/whats-new` |
+| `idea.closed` | The author (outcomes *Duplicate*, *Won't do*) | "Your feature idea \"{title}\" was closed: {Outcome}." — then the note, if any. | Your ideas → `/whats-new#your-ideas` |
+| `idea.shipped` | The author (closed as *Shipped*, or a pre-v2.41.0 *Planned* → *Shipped*) | "A feature you suggested has shipped: \"{title}\" is now part of skilly." | What's new → `/whats-new` |
 
-- No row is created for an **inactive or erased** author. The four author types are **proposer
+- No row is created for an item with **no proposer**, or for an **inactive or erased** author.
+  `idea.submitted` goes out whatever `feature_ideas_enabled` says. The four author types are **proposer
   lifecycle**, with no per-type opt-out, like `proposal.*`. `NOTIFICATION_LABELS` gains five labels:
   *Feature idea submitted*, *Feature idea published*, *Feature idea not published*, *Feature idea
   closed*, *Feature idea shipped*.
@@ -13167,25 +12679,29 @@ catalog **from 31 to 33**:
   the hype sweep). The award call passes `noHabits: true`.
 - The usual `achievement.earned` row, toast and `follow.achievement` fan-out apply unchanged
   (§31.4, §35).
-- **No backfill.** Migration 0100 seeds nothing, because there is no history to prove.
-- **Not available here (§31.12.4).** Both keys are unavailable while `feature_ideas_enabled` is off.
+- **No backfill.** Migration 0100 seeds nothing, because there is no history to prove. The items
+  migration 0101 seeds have no proposer, so they award nothing.
+- **Always available.** Neither key is in the §31.12.4 "not available here" mapping: platform
+  admins can always suggest, and pending ideas can still be published while suggestions are off for
+  everyone else.
 - **Level (§31.10).** The denominator is the live catalog size, so the bar counts out of 33. Heroes
   keep the title through `hero_at` (permanent), as with every catalog growth.
 
 ### 60.9 Switch, profile, erasure
 - **Administration card "Feature ideas"** (collapsible, like every Administration card, §5) with
-  the shared `Switch` for `feature_ideas_enabled`, saved through `PATCH /api/admin/settings` and
-  audited as `settings.updated`. **Off:** every `/api/coming-soon*` route answers **404**; *Coming
-  soon* falls back to §23 exactly; the nav badge and the `idea.submitted` fan-out stop; the admin
-  page is read-only (§60.5); both badges show the locked "not available here" tile. Nothing is
-  deleted, and switching back on restores the list as it was.
+  the shared `Switch` for `feature_ideas_enabled`, labelled **"Everyone can suggest features"**,
+  with the help text *"Off: only platform admins can suggest. The Coming soon list and voting stay
+  on for everyone."* It is saved through `PATCH /api/admin/settings` and audited as
+  `settings.updated`. **Off:** users who are not platform admins lose the *Suggest a feature*
+  button, and the submit route answers them 403 (§60.4). Nothing else changes, and nothing is
+  deleted.
 - **Profile.** A toggle **"Show my name on feature ideas I suggest"** (on by default; it stores the
   inverse in `idea_attribution_hidden`). It applies **live** to all of the user's published ideas.
   Platform admins additionally get **"New feature ideas to review"** (`idea_notifications`) among
   their notification preferences. Both go through `PATCH /api/me` (`ideaAttributionHidden`,
   `ideaNotifications`) and are not audited.
 - **Erasure (§4).** The sweep **deletes** the user's `pending`, `rejected`, `closed` and `withdrawn`
-  ideas and **all of their votes** in both vote tables. **Published ideas stay**, rendered with no
+  ideas and **all of their votes**. **Published ideas stay**, rendered with no
   *Suggested by* line (the author is erased). The scrub resets `idea_attribution_hidden = false` and
   `idea_notifications = true`. Audit rows are untouched (invariant #5).
 - **Leavers** (deactivated, not erased) keep their ideas, name and votes. They simply get no
@@ -13197,58 +12713,71 @@ Audited, with `target_type = 'feature_idea'`: `idea.published` (before = the sub
 and after), `idea.closed` (outcome, note, and the vote count that was deleted) and
 `idea.marked_shipped`, plus `settings.updated` for `feature_ideas_enabled`. **Not audited:**
 submitting, editing or withdrawing an idea, votes, and the two profile toggles. These are personal,
-mutable rows, like ratings and hypes.
+mutable rows, like ratings and hypes. Migration 0101's inserts and vote moves are not audited
+either: a one-off schema migration with no actor.
 
 ### 60.11 API
-All routes are auth-required. While the switch is off, the user routes answer **404**.
-- `GET /api/coming-soon` → `{ items, mine, limits }`. `items` is the ordered merged list (§60.3):
-  `{ kind: "teaser", key, title, teaser, votes, voted }` or `{ kind: "idea", id, title,
-  description, votes, voted, suggestedBy: { id, displayName, avatar } | null, publishedAt }`. `mine` is
-  the caller's ideas (§60.3 *Your ideas*). `limits` is described in §60.4.
+All routes are auth-required.
+- `GET /api/coming-soon` → `{ items, mine, limits, canSuggest }`. `items` is the ordered list
+  (§60.3): `{ id, title, description, votes, voted, suggestedBy: { id, displayName, avatar } |
+  null, publishedAt }`. `mine` is the caller's ideas (§60.3 *Your ideas*). `limits` is described
+  in §60.4, `canSuggest` in §60.3.
 - `POST /api/coming-soon/ideas { description }` → **201** `{ idea }`; **422** for a bad length;
-  **429** at a limit (§60.4).
+  **403** `{ reason: "suggestions_off" }` for a caller who is not a platform admin while
+  `feature_ideas_enabled` is off; **429** at a limit (§60.4).
 - `PATCH /api/coming-soon/ideas/:id { description }` and `DELETE /api/coming-soon/ideas/:id`
-  (withdraw). The caller's own pending idea only: **404** when it is not theirs, **409** when it is
-  not pending.
-- `PUT | DELETE /api/coming-soon/teasers/:key/vote` and `PUT | DELETE
-  /api/coming-soon/ideas/:id/vote`: §60.6.
-- **Platform admin** (403 otherwise; writes answer 409 while the switch is off):
+  (withdraw), whatever the switch says. The caller's own pending idea only: **404** when it is not
+  theirs, **409** when it is not pending.
+- `PUT | DELETE /api/coming-soon/ideas/:id/vote`: §60.6. (The v2.40.0 teaser vote routes,
+  `/api/coming-soon/teasers/:key/vote`, are removed.)
+- **Platform admin** (403 otherwise):
   `GET /api/admin/ideas?status=pending|published|closed&offset=` ·
   `POST /api/admin/ideas/:id/publish { title, description, expectedUpdatedAt }` ·
   `POST /api/admin/ideas/:id/reject { reason?, expectedUpdatedAt }` ·
   `PATCH /api/admin/ideas/:id { title?, description? }` (published only) ·
-  `POST /api/admin/ideas/:id/close { outcome, note? }` (published only) ·
-  `POST /api/admin/ideas/:id/ship` (closed as *Planned* only).
+  `POST /api/admin/ideas/:id/close { outcome: "shipped" | "duplicate" | "wont_do", note? }`
+  (published only; any other outcome, `planned` included, → **422**) ·
+  `POST /api/admin/ideas/:id/ship` (closed as *Planned* before v2.41.0 only).
 - `GET /api/nav-badges` gains `ideas`; `GET | PATCH /api/me` gains `ideaAttributionHidden` and
   `ideaNotifications`; `GET | PATCH /api/admin/settings` gains `featureIdeasEnabled`.
 - Rate limits: submit and edit **30 / min**; votes **120 / min**; reads use the defaults.
 
 ### 60.12 Accepted trade-offs
-- **Inert votes on shipped teasers.** They are never counted, and keys are never reused, so they
-  never resurface. No cleanup job is built.
-- **No carry-over** from an idea to the teaser it becomes (decision 10).
+- **The roadmap is not reviewed like the spec.** Platform admins publish and edit *Coming soon*
+  items without a pull request. This spec holds a feature only once it is specified to full depth.
+- **No "planned" signal.** The list does not show which items the team has decided to build and
+  which are only up for a vote. The vote order is the only signal (decision 3).
+- **An admin's own items carry their name.** With one way onto the list (decision 10), an item a
+  platform admin adds shows *Suggested by \<admin\>* unless they hide their name, and earns them
+  *Bright Idea*.
 - **The admin is the guard against leaks.** A suggestion may name a restricted skill or a
   namespace. Before publishing, only platform admins see it, and the publish dialog asks them to
-  remove such names (invariant #3 relies on that moderation step).
+  remove such names (invariant #3 relies on that moderation step). Every published item is shown to
+  everyone (decision 16), so an admin-only plan must be worded for everyone or kept off the list.
 - **Counts invite bandwagoning.** Visible counts and the votes ordering favour early leaders. This
   is accepted, because the list exists to surface demand.
 
 ### 60.13 Tests (shipped with the change)
-- **Unit:** `comingSoonOrder` (votes, then the tie rules), the three validators, the limit
-  predicate, the teaser-key rules in the spec-sync test (missing, malformed, duplicate), the two
-  catalog entries and their unavailable mapping, and the notification copy for the five types.
-- **Integration:** submit (bounds, both limits under concurrent requests, `Retry-After`); edit and
-  withdraw (owner only, pending only); publish, reject, edit, close and ship (platform admin only,
-  stale `expectedUpdatedAt` → 409, a double decision → 409, the votes deleted on close, the
-  proposer's auto-vote, badge rows written, notifications created or skipped for an inactive
-  author); votes (idempotent, an admin-only teaser key → 404 for a plain user, an unpublished idea →
-  404); `GET /api/coming-soon` (audience filtering, ordering, inert keys ignored, attribution
-  hidden by the toggle and for an erased author); the switch (404s, admin writes → 409); erasure
+- **Unit:** `comingSoonOrder` (votes, then newest published, then id), the three validators, the
+  limit predicate, the close-outcome check (`planned` refused), the two catalog entries (absent from
+  the unavailable mapping), and the notification copy for the five types.
+- **Integration:** submit (bounds, both limits under concurrent requests, `Retry-After`; with
+  `feature_ideas_enabled` off, **403** for a plain user and **201** for a platform admin); edit and
+  withdraw (owner only, pending only, still allowed while the switch is off); publish, reject,
+  edit, close and ship (platform admin only, stale `expectedUpdatedAt` → 409, a double decision
+  → 409, `planned` → 422, the votes deleted on close, the proposer's auto-vote, badge rows
+  written, notifications created, or skipped for an inactive author or an item with no proposer);
+  votes (idempotent, an unpublished idea → 404); `GET /api/coming-soon` (ordering, `canSuggest`
+  for each role with the switch on and off, attribution hidden by the toggle, for an erased author
+  and for an item with no proposer); migration 0101 (after migrating, the nine seeded items are
+  `published` with no proposer, in the old order, and `upcoming_votes` no longer exists); erasure
   (what is deleted and what stays).
-- **e2e:** a new `feature-ideas` spec, classified **`exclusive`** because a published idea changes
+- **e2e:** the `feature-ideas` spec, classified **`exclusive`** because a published idea changes
   *Coming soon* for every user. A user suggests an idea through the dialog and sees it pending in
   *Your ideas*, then edits it. The dev admin sees the nav badge, publishes the idea with a title,
   and it appears in *Coming soon* with 1 vote. A second user upvotes (2) and un-votes (1). The admin
-  closes it as *Planned*: it leaves the list, and *Your ideas* shows *Planned*. *Mark shipped* then
-  leaves both badges in the proposer's hall. The existing *Coming soon* e2e (§23) reads its expected
-  count from `GET /api/coming-soon` instead of `upcomingFor(UPCOMING)` alone.
+  closes it as *Shipped*: it leaves the list, *Your ideas* shows *Shipped*, and both badges are in
+  the proposer's hall. With the switch turned off, the dev admin still sees *Suggest a feature* and
+  the Feature ideas page shows its notice; the spec turns the switch back on. (Every e2e user is a
+  platform admin, so the plain-user side, no button and a 403, is covered by the integration test.)
+  The *Coming soon* e2e (§23) reads its expected count from `GET /api/coming-soon`.
