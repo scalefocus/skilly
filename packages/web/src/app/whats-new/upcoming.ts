@@ -77,6 +77,12 @@ export const UPCOMING: UpcomingEntry[] = [
     teaser: "Opt-in reporting from the plugin marketplaces, so maintainers see how often a skill is actually used, not just installed.",
     audience: "everyone",
   },
+  {
+    ids: ["GAP-13"],
+    title: "Vote on what's next",
+    teaser: "Upvote the features on this list and suggest your own. Platform admins review each suggestion before it's opened for voting.",
+    audience: "everyone",
+  },
 ];
 
 export interface UpcomingViewer {

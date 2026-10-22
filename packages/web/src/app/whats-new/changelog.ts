@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.39.7",
+    date: "2026-10-22",
+    summary:
+      "The Coming soon list on this page now previews one more planned feature: voting on what's next. You'll be able to upvote the features listed here and suggest your own, which platform admins review before opening them for voting. Plans can change.",
+  },
+  {
     version: "2.39.6",
     date: "2026-10-22",
     summary:
