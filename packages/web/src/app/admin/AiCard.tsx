@@ -51,6 +51,8 @@ interface AiState {
   timeouts: AiTimeoutsView;
   /** §46.2 the AI pre-review switch and its queue. */
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
+  /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
+  try: { enabled: boolean; effective: boolean };
 }
 
 interface TestResult {
@@ -478,6 +480,7 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
       )}
 
       {data && <PrereviewRow state={data.prereview} providerLabel={data.providerLabel} onSaved={reload} />}
+      {data && <TryRow state={data.try} providerLabel={data.providerLabel} onSaved={reload} />}
       {data && <TimeoutsRow saved={data.timeouts} onSaved={reload} />}
       {data && <DisplayNameRow saved={data.displayName} onSaved={reload} />}
     </CollapsibleCard>
@@ -520,6 +523,49 @@ function PrereviewRow({ state, providerLabel, onSaved }: { state: AiState["prere
           {state.enabled && !state.effective ? "On — waiting for the AI integration · " : ""}
           {formatCount(state.pending)} pending · {formatCount(state.failed24h)} failed in the last 24 h
         </span>
+      </div>
+      {err && <p role="alert" style={{ fontSize: 13, margin: "8px 0 0", color: "var(--danger, crimson)" }}>{err}</p>}
+    </div>
+  );
+}
+
+/**
+ * §61.8 the Try skills switch: saved on toggle, independent of the provider form — usable with no
+ * provider configured and without AI_TOKEN_ENC_KEY, kept on Remove integration. Off by default
+ * because it sends the messages people type, not just skill files.
+ */
+function TryRow({ state, providerLabel, onSaved }: { state: AiState["try"]; providerLabel: string | null; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const provider = providerLabel ?? "the provider";
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/admin/ai/try", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: next }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      onSaved();
+    } catch (e) {
+      setErr(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }} data-testid="ai-try-row">
+      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Try skills</h3>
+      <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 8px", lineHeight: 1.5 }}>
+        Lets people chat with {provider} with a skill loaded. Sends the skill’s SKILL.md, scripts and references, and the
+        messages people type, to {provider}.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <Switch label="Try skills" checked={state.enabled} disabled={busy} onChange={(next) => void toggle(next)} />
+        {state.enabled && !state.effective && (
+          <span style={{ fontSize: 12.5, color: "var(--faint)" }} data-testid="ai-try-row-status">
+            On, hidden until the AI integration is operational
+          </span>
+        )}
       </div>
       {err && <p role="alert" style={{ fontSize: 13, margin: "8px 0 0", color: "var(--danger, crimson)" }}>{err}</p>}
     </div>

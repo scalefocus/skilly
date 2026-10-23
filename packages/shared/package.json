@@ -55,6 +55,10 @@
       "types": "./dist/ai-prereview.d.ts",
       "default": "./dist/ai-prereview.js"
     },
+    "./ai-try": {
+      "types": "./dist/ai-try.d.ts",
+      "default": "./dist/ai-try.js"
+    },
     "./quality": {
       "types": "./dist/quality-status.d.ts",
       "default": "./dist/quality-status.js"

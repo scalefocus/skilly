@@ -28,6 +28,7 @@ export const EXCLUSIVE: readonly string[] = [
   "ai-integration.spec.ts", // AI integration config + timeouts
   "ai-prereview.spec.ts", // AI pre-review on proposals
   "ai-quality-draft.spec.ts", // AI integration config
+  "ai-try.spec.ts", // AI integration config + the platform Try switch
   "chunked-upload.spec.ts", // platform settings: chunked upload switch (every upload)
   "deprecation.spec.ts", // deprecates the seeded global/lint-fixer
   "email-digests.spec.ts", // platform settings: digest switch and defaults

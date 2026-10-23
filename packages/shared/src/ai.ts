@@ -102,6 +102,13 @@ export const AI_FEATURES: readonly AiFeature[] = [
     egress: "When a maintainer assembles a quality draft: the skill's slug and title, and for each change they kept — its file path, whether it was modified or removed, the draft's one-line summary, and the findings and AI suggestions it addresses (rule id and hint, suggestion text). No file contents.",
     spec: "§44",
   },
+  {
+    key: "skill_try",
+    label: "Try a skill (chat with a skill loaded)",
+    egress: "For each message sent in the Try panel while the Try switch is on: the tried version's SKILL.md and the text files under scripts/ and references/ (up to 25 files, 100,000 characters each and 100,000 in total; secret-scanner lines redacted), the bundle's file paths (first 200), and the conversation so far (the messages the user typed and the earlier replies)",
+    spec: "§61",
+    timeoutMs: 120_000,
+  },
 ];
 /** The reserved feature key the admin connectivity test records its usage under. */
 export const AI_TEST_FEATURE = "test";
@@ -713,6 +720,16 @@ export async function aiAvailable(db: AiDb, env: Pick<AiEnv, "key">): Promise<bo
   return Boolean(row?.enabled && decryptAiToken(row, env.key) !== null);
 }
 
+/**
+ * True when the §40.8 status is Operational: enabled, the token decrypts, and the more recent of the
+ * last saved-config test and the last runtime call succeeded. §61 shows Try only then.
+ */
+export async function aiOperational(db: AiDb, env: Pick<AiEnv, "key">): Promise<boolean> {
+  const row = await loadAiConfig(db);
+  if (!row) return false;
+  return deriveAiStatus(row, decryptAiToken(row, env.key) !== null).status === "operational";
+}
+
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function bestEffort(p: Promise<unknown>): Promise<void> {
@@ -799,7 +816,10 @@ export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Pr
       errorCode: failure?.code ?? null,
     }),
   );
-  await bestEffort(noteCall(db, failure === null, failure ? `${failure.code}: ${failure.message}` : null));
+  // §61.10: a cancel says nothing about the provider's health, so it leaves the status pill alone.
+  if (failure?.code !== "ai_cancelled") {
+    await bestEffort(noteCall(db, failure === null, failure ? `${failure.code}: ${failure.message}` : null));
+  }
 
   if (failure) {
     await bestEffort(logAiFailure(db, { source: env.source, feature: o.feature, path: spec.path, userId, code: failure.code, message: failure.message, durationMs: latencyMs }));
