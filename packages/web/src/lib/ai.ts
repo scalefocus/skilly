@@ -1,15 +1,16 @@
 // Web-side helpers for the §40 AI integration: the Administration card's status, model list,
-import { aiHostGuard, aiAllowPrivateBaseUrl } from "@skilly/shared/ai-egress";
 // connectivity test, save-runs-test, enable/disable and remove — plus the pool-bound helper web
 // features call (aiComplete / aiAvailable). Every admin caller is a platform-admin-only route
 // (re-verified there). The provider token is handled only through @skilly/shared/ai: encrypted
 // at rest, never logged, never in audit payloads, never returned to the browser, and only ever
 // sent to the stored base URL. SKILLY_SPEC.md §40.
+import { aiHostGuard, aiAllowPrivateBaseUrl } from "@skilly/shared/ai-egress";
 import { loadPrereviewSetting, prereviewCounts } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { getAiTryEnabled, getPlatformSettings } from "./settings";
 import {
+  AI_ALLOW_PRIVATE_NETWORK_SETTING,
   AI_FEATURES,
   AI_PROVIDER_LABELS,
   AI_TEST_FEATURE,
@@ -17,6 +18,7 @@ import {
   aiAvailable as sharedAiAvailable,
   aiComplete as sharedAiComplete,
   aiOperational as sharedAiOperational,
+  aiPrivateHostPolicy,
   decryptAiToken,
   deriveAiStatus,
   encryptAiToken,
@@ -54,13 +56,28 @@ export function __setAiFetchForTests(f: typeof fetch | undefined): void {
   fetchImpl = f;
 }
 
+/** Override point for tests (a stub DNS answer for the egress guard); production uses dns.lookup. */
+let resolveImpl: ((host: string) => Promise<Array<{ address: string }>>) | undefined;
+export function __setAiResolveForTests(r: typeof resolveImpl): void {
+  resolveImpl = r;
+}
+
 function aiKey(): Buffer | null {
   return parseAiTokenKey(process.env.AI_TOKEN_ENC_KEY);
 }
 
-/** §49.11: the per-call egress guard (DNS re-check), honouring the operator's private-host opt-in. */
+/**
+ * §49.11 / §40.16: the per-call egress guard (DNS re-check). The operator's env var is read here;
+ * the platform-admin switch is passed per call (from the config row, or loadAiAllowPrivateNetwork).
+ */
 function hostGuard() {
-  return aiHostGuard({ allowPrivate: aiAllowPrivateBaseUrl() });
+  return aiHostGuard({ allowAll: aiAllowPrivateBaseUrl(), resolve: resolveImpl });
+}
+
+/** §40.16 the private-network switch, read uncached (like the config) so a change applies at once. */
+export async function loadAiAllowPrivateNetwork(): Promise<boolean> {
+  const { rows } = await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [AI_ALLOW_PRIVATE_NETWORK_SETTING]);
+  return rows[0]?.value === true;
 }
 
 // ── The helper, bound to the web pool (for future web AI tasks) ─────────────────────────────
@@ -117,6 +134,8 @@ export interface AiAdminStatus {
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
   /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
   try: { enabled: boolean; effective: boolean };
+  /** §40.16 the private-network switch; `operatorAllowed` = AI_ALLOW_PRIVATE_BASE_URL=1 on web. */
+  privateNetwork: { enabled: boolean; operatorAllowed: boolean };
 }
 
 function featureLabel(key: string): string {
@@ -180,6 +199,7 @@ export async function getAiAdminStatus(): Promise<AiAdminStatus> {
     timeouts: aiTimeoutsView(AI_FEATURES, await loadAiTimeouts()),
     prereview: await prereviewAdminState(row?.enabled === true && decryptable),
     try: await tryAdminState(st.status === "operational"),
+    privateNetwork: { enabled: row ? row.allowPrivateNetwork === true : await loadAiAllowPrivateNetwork(), operatorAllowed: aiAllowPrivateBaseUrl() },
   };
 }
 
@@ -237,6 +257,48 @@ export async function saveAiTimeouts(body: unknown, userId: string): Promise<AiT
   return afterView;
 }
 
+// ── Private-network providers (§40.16) ───────────────────────────────────────────────────────
+
+export interface AiPrivateNetworkResult {
+  enabled: boolean;
+  operatorAllowed: boolean;
+  /** The re-test of the saved config under the new setting; null when none ran. */
+  test: AiTestResult | null;
+}
+
+/**
+ * PUT /api/admin/ai/private-network: save the switch, then re-test the saved config under it so
+ * the status pill follows at once (§40.16). Independent of the provider form — works with no config
+ * and without AI_TOKEN_ENC_KEY (then no test runs). Unchanged ⇒ no write, no audit, no test;
+ * otherwise audited as settings.updated. The re-test is a manual Test of the saved config: it
+ * writes last_test_* and a `test` usage row, and is not audited.
+ */
+export async function setAiAllowPrivateNetwork(enabled: boolean, userId: string): Promise<AiPrivateNetworkResult> {
+  const operatorAllowed = aiAllowPrivateBaseUrl();
+  const before = await loadAiAllowPrivateNetwork();
+  if (before === enabled) return { enabled, operatorAllowed, test: null };
+  await pool.query(
+    `insert into platform_settings (key, value, updated_by, updated_at) values ($1, $2::jsonb, $3, now())
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [AI_ALLOW_PRIVATE_NETWORK_SETTING, JSON.stringify(enabled), userId],
+  );
+  await appendAudit(pool, {
+    actorUserId: userId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: AI_ALLOW_PRIVATE_NETWORK_SETTING,
+    before: { aiAllowPrivateNetwork: before },
+    after: { aiAllowPrivateNetwork: enabled },
+  });
+  const key = aiKey();
+  const row = await loadAiConfig(pool);
+  const token = row ? decryptAiToken(row, key) : null;
+  if (!row || token === null) return { enabled, operatorAllowed, test: null };
+  const test = await testAndRecord({ provider: row.provider, baseUrl: row.baseUrl, token, allowPrivateNetwork: enabled }, row.model, userId);
+  await writeLastTest(test);
+  return { enabled, operatorAllowed, test };
+}
+
 // ── Form input → a connection (shared by models / test / save) ───────────────────────────────
 
 export type AiApiError = { error: string; status: number; detail?: string };
@@ -248,6 +310,8 @@ interface ResolvedInput {
   /** True when the token came from the form (not the stored one). */
   tokenFromForm: boolean;
   row: AiConfigRow | null;
+  /** §40.16 the private-network switch at the time of the request. */
+  allowPrivateNetwork: boolean;
 }
 
 /**
@@ -258,19 +322,21 @@ interface ResolvedInput {
 async function resolveInput(body: Record<string, unknown>, key: Buffer): Promise<ResolvedInput | AiApiError> {
   if (!isAiProvider(body.provider)) return { error: "provider must be openwebui or anthropic", status: 422 };
   const provider = body.provider;
-  const url = normalizeAiBaseUrl(provider, typeof body.baseUrl === "string" ? body.baseUrl : null, { allowPrivate: aiAllowPrivateBaseUrl() });
+  const allowPrivateNetwork = await loadAiAllowPrivateNetwork();
+  const policy = aiPrivateHostPolicy({ operatorAllowsAll: aiAllowPrivateBaseUrl(), allowPrivateNetwork });
+  const url = normalizeAiBaseUrl(provider, typeof body.baseUrl === "string" ? body.baseUrl : null, { policy });
   if (!url.ok) return { error: url.code === "ai_base_url_private" ? "ai_base_url_private" : "invalid_base_url", detail: url.error, status: 422 };
   const rawToken = typeof body.token === "string" ? body.token.trim() : "";
   if (rawToken.length > AI_TOKEN_MAX) return { error: "invalid_token", detail: `the token must be at most ${AI_TOKEN_MAX} characters`, status: 422 };
   if (/\s/.test(rawToken)) return { error: "invalid_token", detail: "the token must not contain whitespace", status: 422 };
   const row = await loadAiConfig(pool);
-  if (rawToken) return { provider, baseUrl: url.url, token: rawToken, tokenFromForm: true, row };
+  if (rawToken) return { provider, baseUrl: url.url, token: rawToken, tokenFromForm: true, row, allowPrivateNetwork };
   if (!row || row.provider !== provider || row.baseUrl !== url.url) {
     return { error: "ai_token_required", detail: "enter the token — the stored one is only sent to the saved provider and base URL", status: 422 };
   }
   const stored = decryptAiToken(row, key);
   if (stored === null) return { error: "ai_token_required", detail: "the stored token can't be decrypted — enter a new one", status: 422 };
-  return { provider, baseUrl: url.url, token: stored, tokenFromForm: false, row };
+  return { provider, baseUrl: url.url, token: stored, tokenFromForm: false, row, allowPrivateNetwork };
 }
 
 function keyOrError(): Buffer | AiApiError {
@@ -290,7 +356,7 @@ export async function listModelsForForm(body: Record<string, unknown>): Promise<
   const input = await resolveInput(body, key);
   if (isAiApiError(input)) return input;
   try {
-    return { models: await listAiModels({ provider: input.provider, baseUrl: input.baseUrl, token: input.token }, { fetchImpl, hostGuard: hostGuard() }) };
+    return { models: await listAiModels({ provider: input.provider, baseUrl: input.baseUrl, token: input.token }, { fetchImpl, hostGuard: hostGuard(), allowPrivateNetwork: input.allowPrivateNetwork }) };
   } catch (err) {
     const e = err instanceof AiError ? err : new AiError("ai_provider_error", String(err));
     return { error: "ai_models_failed", detail: e.message, status: 422 };
@@ -299,8 +365,8 @@ export async function listModelsForForm(body: Record<string, unknown>): Promise<
 
 // ── POST /api/admin/ai/test ──────────────────────────────────────────────────────────────────
 
-async function testAndRecord(input: ResolvedInput, model: string, userId: string): Promise<AiTestResult> {
-  const result = await runAiTest({ provider: input.provider, baseUrl: input.baseUrl, token: input.token, model }, { fetchImpl, hostGuard: hostGuard() });
+async function testAndRecord(input: Pick<ResolvedInput, "provider" | "baseUrl" | "token" | "allowPrivateNetwork">, model: string, userId: string): Promise<AiTestResult> {
+  const result = await runAiTest({ provider: input.provider, baseUrl: input.baseUrl, token: input.token, model }, { fetchImpl, hostGuard: hostGuard(), allowPrivateNetwork: input.allowPrivateNetwork });
   // Every test costs tokens → one ai_usage row under the reserved `test` feature (§40.5).
   await recordAiUsage(pool, {
     feature: AI_TEST_FEATURE,

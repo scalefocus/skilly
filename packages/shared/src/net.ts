@@ -3,47 +3,78 @@
 // reach cloud metadata endpoints — so an unvalidated URL is an SSRF/RCE vector. We allow only
 // https:// to a public, fully-qualified host, and a conservative ref charset. SKILLY_SPEC.md §6.
 
-// IPv4 private / loopback / link-local / CGNAT / special ranges (dotted-decimal — the WHATWG
-// URL parser already normalizes decimal/octal/hex IPv4 to this form).
-const PRIVATE_V4 =
-  /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|192\.0\.2\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+// IPv4 non-public ranges (dotted-decimal — the WHATWG URL parser already normalizes
+// decimal/octal/hex IPv4 to this form), split into the two §40.16 classes:
+// private network = RFC 1918 + CGNAT; local = "this network", loopback, link-local, TEST-NET-1.
+const PRIVATE_NETWORK_V4 = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+const LOCAL_V4 = /^(0\.|127\.|169\.254\.|192\.0\.2\.)/;
 
 /**
- * Classify a resolved/literal IP as non-public (private/loopback/link-local/ULA/etc.).
- * Returns true if the address must NOT be reached. Handles IPv4, IPv6, and IPv4-mapped/compat
- * IPv6 (`::ffff:a.b.c.d`, `::ffff:7f00:1`) by extracting the embedded IPv4. Exported so the
- * worker can re-check every DNS-resolved address (DNS-rebinding defense), not just the literal.
+ * Which refused class a non-public address falls in (§40.16): `private` (a private network —
+ * RFC 1918, CGNAT, IPv6 unique-local) or `local` (loopback, link-local incl. the cloud metadata
+ * endpoint, unspecified, documentation). null = public, or not an IP literal at all.
  */
-export function isBlockedIp(ipRaw: string): boolean {
+export type BlockedClass = "private" | "local";
+
+function v4Class(v4: string): BlockedClass | null {
+  if (LOCAL_V4.test(v4)) return "local";
+  if (PRIVATE_NETWORK_V4.test(v4)) return "private";
+  return null;
+}
+
+/**
+ * Classify a resolved/literal IP (see BlockedClass). Handles IPv4, IPv6, and IPv4-mapped/compat
+ * IPv6 (`::ffff:a.b.c.d`, `::ffff:7f00:1`) by extracting the embedded IPv4.
+ */
+export function blockedIpClass(ipRaw: string): BlockedClass | null {
   let ip = ipRaw.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, ""); // strip brackets
   // Strip a zone id ("fe80::1%eth0") via indexOf rather than a /%.*$/ regex — on a long,
   // '%'-heavy resolved-address string an unanchored `.*$` after a literal can be walked from
   // every position, an O(n^2) DoS surface for attacker-influenced DNS results (js/polynomial-redos).
   const zoneIdx = ip.indexOf("%");
   if (zoneIdx >= 0) ip = ip.slice(0, zoneIdx);
-  if (!ip) return true;
+  if (!ip) return "local";
 
   // Pure dotted-decimal IPv4.
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return PRIVATE_V4.test(ip);
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return v4Class(ip);
 
   if (ip.includes(":")) {
     // IPv4-mapped / -compatible IPv6: trailing "a.b.c.d" or hex-packed "xxxx:xxxx" of the v4.
     const mapped = /^::(ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/.exec(ip);
-    if (mapped) return PRIVATE_V4.test(mapped[2]!);
+    if (mapped) return v4Class(mapped[2]!);
     const hexMapped = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
     if (hexMapped) {
       const a = parseInt(hexMapped[1]!, 16), b = parseInt(hexMapped[2]!, 16);
-      const v4 = `${a >> 8}.${a & 0xff}.${b >> 8}.${b & 0xff}`;
-      return PRIVATE_V4.test(v4);
+      return v4Class(`${a >> 8}.${a & 0xff}.${b >> 8}.${b & 0xff}`);
     }
-    // IPv6 loopback (::1), unspecified (::), link-local fe80::/10 (fe8/fe9/fea/feb),
-    // unique-local fc00::/7 (fc/fd). Anything else (global unicast) is allowed.
-    if (ip === "::1" || ip === "::") return true;
-    if (/^fe[89ab]/.test(ip)) return true;
-    if (/^f[cd]/.test(ip)) return true;
-    return false;
+    // IPv6 loopback (::1), unspecified (::), link-local fe80::/10 (fe8/fe9/fea/feb) are local;
+    // unique-local fc00::/7 (fc/fd) is a private network. Anything else (global unicast) is public.
+    if (ip === "::1" || ip === "::") return "local";
+    if (/^fe[89ab]/.test(ip)) return "local";
+    if (/^f[cd]/.test(ip)) return "private";
+    return null;
   }
-  return false; // not an IP literal → a hostname; resolution-time check happens in the worker
+  return null; // not an IP literal → a hostname; resolution-time check happens in the worker
+}
+
+/**
+ * Classify a resolved/literal IP as non-public (private/loopback/link-local/ULA/etc.).
+ * Returns true if the address must NOT be reached. Exported so the worker can re-check every
+ * DNS-resolved address (DNS-rebinding defense), not just the literal.
+ */
+export function isBlockedIp(ipRaw: string): boolean {
+  return blockedIpClass(ipRaw) !== null;
+}
+
+/**
+ * The §40.16 class of a host name: `local` for `localhost` / `*.localhost`, `private` for the
+ * internal zones `*.local` / `*.internal`, null otherwise. Expects a lower-cased host with brackets
+ * and the FQDN-root dot already stripped.
+ */
+export function localHostnameClass(host: string): BlockedClass | null {
+  if (host === "localhost" || host.endsWith(".localhost")) return "local";
+  if (host.endsWith(".local") || host.endsWith(".internal")) return "private";
+  return null;
 }
 
 /**
@@ -52,7 +83,7 @@ export function isBlockedIp(ipRaw: string): boolean {
  * (§49.11). Expects a lower-cased host with brackets and the FQDN-root dot already stripped.
  */
 export function isLocalHostname(host: string): boolean {
-  return host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal");
+  return localHostnameClass(host) !== null;
 }
 
 /** Returns an error string if the pointer URL is unsafe, or null if it's acceptable. */

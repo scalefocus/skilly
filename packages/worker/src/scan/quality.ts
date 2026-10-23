@@ -18,17 +18,14 @@ import {
   QUALITY_SCANNER, QUALITY_RULESET_VERSION, QUALITY_SWEEP_RULES_BATCH, QUALITY_SWEEP_AI_BATCH, QUALITY_AI_FEATURE, QUALITY_AI_MAX_TOKENS,
   type ScanFinding, type BundleEntry,
 } from "@skilly/shared";
-import { aiAvailable, aiComplete, parseAiTokenKey, AiError, type AiEnv } from "@skilly/shared/ai";
+import { aiAvailable, aiComplete, AiError, type AiEnv } from "@skilly/shared/ai";
+import { workerAiEnv as aiEnv } from "./aiEnv.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { extractAny } from "../git/contentBackfill.js";
 import { M } from "../metrics.js";
 
 /** Artifacts that failed to read/extract in this process — skipped so they can't starve the batch. */
 const failed = new Set<string>();
-
-function aiEnv(): AiEnv {
-  return { key: parseAiTokenKey(process.env.AI_TOKEN_ENC_KEY), source: "worker" };
-}
 
 interface RulesCandidate {
   version_id: string;

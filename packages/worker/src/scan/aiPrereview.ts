@@ -28,7 +28,8 @@ import {
   PREREVIEW_FEATURE, PREREVIEW_MAX_TOKENS, PREREVIEW_PROPOSAL_DAILY_CAP, PREREVIEW_OPEN_STATES,
   type BundleEntry, type PrereviewRunRow, type PrereviewSetting, type PrereviewTrigger, type PolicyRuleRow, type PolicySubject, type PrereviewSource,
 } from "@skilly/shared";
-import { aiAvailable, aiComplete, parseAiTokenKey, AiError, type AiEnv } from "@skilly/shared/ai";
+import { aiAvailable, aiComplete, AiError, type AiEnv } from "@skilly/shared/ai";
+import { workerAiEnv as aiEnv } from "./aiEnv.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { extractAny } from "../git/contentBackfill.js";
 import { fetchPointerFiles } from "../git/mirror.js";
@@ -39,10 +40,6 @@ import { M } from "../metrics.js";
 export const PREREVIEW_SWEEP_BATCH = 3;
 /** Subjects enqueued per pass. */
 const ENQUEUE_BATCH = 25;
-
-function aiEnv(): AiEnv {
-  return { key: parseAiTokenKey(process.env.AI_TOKEN_ENC_KEY), source: "worker" };
-}
 
 const REFUSED = new Set(["ai_disabled", "ai_not_configured", "ai_key_missing", "ai_unknown_feature"]);
 

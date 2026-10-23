@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.44.0",
+    date: "2026-10-23",
+    summary:
+      "Platform admins can now allow an AI provider on the private network, such as a self-hosted Open WebUI on 10.x, with the new Allow private-network base URLs switch on the AI integration card (off by default). Flipping it re-tests the saved configuration, so the status updates at once. Loopback and link-local hosts still need the operator's AI_ALLOW_PRIVATE_BASE_URL=1, and background AI work now runs the same host check.",
+  },
+  {
     version: "2.43.0",
     date: "2026-10-23",
     summary:

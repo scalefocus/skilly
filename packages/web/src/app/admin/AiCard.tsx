@@ -53,6 +53,8 @@ interface AiState {
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
   /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
   try: { enabled: boolean; effective: boolean };
+  /** §40.16 the private-network switch; `operatorAllowed` = AI_ALLOW_PRIVATE_BASE_URL=1. */
+  privateNetwork: { enabled: boolean; operatorAllowed: boolean };
 }
 
 interface TestResult {
@@ -479,11 +481,72 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
         </>
       )}
 
+      {data && <PrivateNetworkRow state={data.privateNetwork} onSaved={reload} />}
       {data && <PrereviewRow state={data.prereview} providerLabel={data.providerLabel} onSaved={reload} />}
       {data && <TryRow state={data.try} providerLabel={data.providerLabel} onSaved={reload} />}
       {data && <TimeoutsRow saved={data.timeouts} onSaved={reload} />}
       {data && <DisplayNameRow saved={data.displayName} onSaved={reload} />}
     </CollapsibleCard>
+  );
+}
+
+/**
+ * §40.16 the private-network switch: saved on toggle, then the server re-tests the saved config so
+ * the status pill follows. Independent of the provider form — usable with no provider configured
+ * and without AI_TOKEN_ENC_KEY (no re-test then), kept on Remove integration. Shown on and locked
+ * while the operator sets AI_ALLOW_PRIVATE_BASE_URL=1, which permits every class.
+ */
+function PrivateNetworkRow({ state, onSaved }: { state: AiState["privateNetwork"]; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch("/api/admin/ai/private-network", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: next }) });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; test?: TestResult | null };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      const t = j.test ?? null;
+      setMsg(
+        t === null
+          ? { tone: "ok", text: "Saved." }
+          : t.ok
+            ? { tone: "ok", text: "Saved — the test passed." }
+            : { tone: "danger", text: `Saved — the test failed: ${t.error ?? "unknown error"}` },
+      );
+      onSaved();
+    } catch (e) {
+      setMsg({ tone: "danger", text: String((e as Error).message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }} data-testid="ai-private-network-row">
+      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Private-network providers</h3>
+      <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 8px", lineHeight: 1.5 }}>
+        Lets the base URL point at a host on your private network (10.x, 172.16–31.x, 192.168.x, fc00::/7, .local and .internal
+        names). Loopback and link-local hosts, including the cloud metadata endpoint, stay refused.
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <Switch
+          label="Allow private-network base URLs"
+          checked={state.operatorAllowed || state.enabled}
+          disabled={busy || state.operatorAllowed}
+          onChange={(next) => void toggle(next)}
+        />
+        {state.operatorAllowed && (
+          <span style={{ fontSize: 12.5, color: "var(--faint)" }} data-testid="ai-private-network-operator">
+            Allowed by the operator (AI_ALLOW_PRIVATE_BASE_URL=1). Private-network, loopback and link-local hosts are all permitted.
+          </span>
+        )}
+      </div>
+      {msg && (
+        <p role="status" style={{ fontSize: 13, margin: "8px 0 0", color: msg.tone === "ok" ? "var(--ok, var(--muted))" : "var(--danger, crimson)" }} data-testid="ai-private-network-status">
+          {msg.text}
+        </p>
+      )}
+    </div>
   );
 }
 

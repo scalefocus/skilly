@@ -15,6 +15,7 @@ import {
   aiAvailable,
   aiComplete,
   aiOperational,
+  aiPrivateHostPolicy,
   buildCompletionRequest,
   buildModelsRequest,
   decryptAiToken,
@@ -674,12 +675,67 @@ test("aiComplete: without an override for this feature the registered default (6
   assert.deepEqual(await abortedAt({}, [59_999, 1]), [false, true]);
 });
 
-test("normalizeAiBaseUrl: private, loopback, link-local and local-zone hosts are refused unless allowed (§49.11)", () => {
-  for (const u of ["http://127.0.0.1:8080", "http://10.1.2.3", "http://169.254.169.254/latest", "http://localhost:3000", "http://owui.corp.local:8080", "http://ai.internal", "http://[::1]:8080"]) {
+const PRIVATE_URLS = ["http://10.1.2.3", "http://172.20.0.5:8080", "http://192.168.1.9", "http://100.64.0.1", "http://[fd00::1]:8080", "http://[::ffff:10.0.30.3]", "http://owui.corp.local:8080", "http://ai.internal"];
+const LOCAL_URLS = ["http://127.0.0.1:8080", "http://169.254.169.254/latest", "http://localhost:3000", "http://a.localhost", "http://[::1]:8080", "http://[fe80::1]", "http://0.0.0.0", "http://[::ffff:127.0.0.1]"];
+
+test("normalizeAiBaseUrl: private, loopback, link-local and local-zone hosts are refused by default (§49.11)", () => {
+  for (const u of [...PRIVATE_URLS, ...LOCAL_URLS]) {
     const r = normalizeAiBaseUrl("openwebui", u);
     assert.equal(r.ok, false, u);
     assert.equal((r as { code?: string }).code, "ai_base_url_private", u);
   }
-  assert.deepEqual(normalizeAiBaseUrl("openwebui", "http://owui.corp.local:8080/", { allowPrivate: true }), { ok: true, url: "http://owui.corp.local:8080" });
   assert.deepEqual(normalizeAiBaseUrl("openwebui", "https://ai.example.com/"), { ok: true, url: "https://ai.example.com" });
+});
+
+test("normalizeAiBaseUrl: the private-network switch lets private hosts through but never local ones (§40.16)", () => {
+  for (const u of PRIVATE_URLS) assert.equal(normalizeAiBaseUrl("openwebui", u, { policy: "private_network" }).ok, true, u);
+  assert.deepEqual(normalizeAiBaseUrl("openwebui", "http://owui.corp.local:8080/", { policy: "private_network" }), { ok: true, url: "http://owui.corp.local:8080" });
+  for (const u of LOCAL_URLS) {
+    const r = normalizeAiBaseUrl("openwebui", u, { policy: "private_network" });
+    assert.equal(r.ok, false, u);
+    assert.equal((r as { code?: string }).code, "ai_base_url_private", u);
+  }
+  // The operator's env var allows every class.
+  for (const u of [...PRIVATE_URLS, ...LOCAL_URLS]) assert.equal(normalizeAiBaseUrl("openwebui", u, { policy: "all" }).ok, true, u);
+});
+
+test("normalizeAiBaseUrl: the refusal names the switch for a private host and the env var for a local one (§40.16)", () => {
+  const priv = normalizeAiBaseUrl("openwebui", "http://10.0.30.3");
+  assert.ok(!priv.ok);
+  assert.match(priv.error, /private-network host\. A platform admin can allow private-network providers on the AI integration card\.$/);
+  assert.doesNotMatch(priv.error, /AI_ALLOW_PRIVATE_BASE_URL/);
+  for (const policy of ["none", "private_network"] as const) {
+    const local = normalizeAiBaseUrl("openwebui", "http://127.0.0.1", { policy });
+    assert.ok(!local.ok);
+    assert.match(local.error, /loopback, link-local or local host\. An operator can permit it with AI_ALLOW_PRIVATE_BASE_URL=1\.$/);
+  }
+});
+
+test("aiPrivateHostPolicy: the env var wins, then the switch (§40.16)", () => {
+  assert.equal(aiPrivateHostPolicy({ operatorAllowsAll: true, allowPrivateNetwork: false }), "all");
+  assert.equal(aiPrivateHostPolicy({ operatorAllowsAll: true, allowPrivateNetwork: true }), "all");
+  assert.equal(aiPrivateHostPolicy({ operatorAllowsAll: false, allowPrivateNetwork: true }), "private_network");
+  assert.equal(aiPrivateHostPolicy({ operatorAllowsAll: false, allowPrivateNetwork: false }), "none");
+});
+
+test("aiComplete: the config row's private-network switch reaches the host guard; a refusal is a failing call (§40.16)", async () => {
+  for (const [stored, expected] of [[true, true], [undefined, false]] as const) {
+    const st = stateWith(stored === undefined ? {} : { ai_allow_private_network: stored });
+    const seen: boolean[] = [];
+    const f = fakeFetch([json({ model: "claude-x", content: [{ type: "text", text: "hi" }], usage: {} })]);
+    const hostGuard = async (_host: string, allowPrivateNetwork: boolean) => {
+      seen.push(allowPrivateNetwork);
+    };
+    await aiComplete(fakeDb(st), env(f.impl, { hostGuard }), { feature: "summarize", messages: MSG, maxTokens: 5 });
+    assert.deepEqual(seen, [expected]);
+  }
+  const st = stateWith();
+  const f = fakeFetch([]);
+  const hostGuard = async () => {
+    throw new AiError("ai_base_url_private", "the AI base URL's host resolves to a private address (10.0.30.3), which is not allowed.");
+  };
+  await assert.rejects(aiComplete(fakeDb(st), env(f.impl, { hostGuard }), { feature: "summarize", messages: MSG, maxTokens: 5, retry: false }), { code: "ai_base_url_private" });
+  assert.equal(f.calls.length, 0, "never reaches the provider");
+  assert.equal(st.row!.last_call_ok, false);
+  assert.match(String(st.row!.last_call_error), /^ai_base_url_private: /);
 });

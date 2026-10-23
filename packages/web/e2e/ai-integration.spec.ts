@@ -5,6 +5,8 @@
 // "Set · ends …"); enabling flips the pill to Operational; Remove returns it to Not configured.
 // Also the §40.15 Timeouts row: set a per-call timeout → Save → it persists across a reload; a run cap
 // shorter than the draft call timeout is refused; Reset to defaults → Save → the placeholders return.
+// And the §40.16 Private-network providers row: locked on with the operator note while the dev server
+// has AI_ALLOW_PRIVATE_BASE_URL=1 (CI's), otherwise a toggle that saves.
 //
 // Needs AI_TOKEN_ENC_KEY on the dev server (CI sets a fixed test key); skipped without it. Serial:
 // the integration is one platform-wide row.
@@ -177,4 +179,38 @@ test("timeouts: save a per-call timeout, refuse a too-short run cap, reset to de
   await open();
   await expect(draft).toHaveValue("");
   await expect(draft).toHaveAttribute("placeholder", "360");
+});
+
+test("private-network providers: locked on while the operator allows every host, else saves on toggle", async ({ page }) => {
+  // The row works without AI_TOKEN_ENC_KEY and with no provider configured (§40.16).
+  await devSignIn(page);
+  await gotoLoaded(page, "/admin", "/api/admin/ai");
+  if ((await header(page).getAttribute("aria-expanded")) !== "true") await header(page).click();
+  await expect(header(page)).toHaveAttribute("aria-expanded", "true");
+  const row = card(page).getByTestId("ai-private-network-row");
+  const sw = row.getByRole("switch", { name: "Allow private-network base URLs" });
+  const st = (await (await page.request.get("/api/admin/ai")).json()) as { privateNetwork: { enabled: boolean; operatorAllowed: boolean } };
+
+  if (st.privateNetwork.operatorAllowed) {
+    // CI and the Playwright webServer set AI_ALLOW_PRIVATE_BASE_URL=1 for the loopback stub.
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+    await expect(sw).toBeDisabled();
+    await expect(row.getByTestId("ai-private-network-operator")).toContainText("Allowed by the operator (AI_ALLOW_PRIVATE_BASE_URL=1)");
+    return;
+  }
+
+  // Without the env var: with no config saved, a toggle saves without a test.
+  await page.request.delete("/api/admin/ai");
+  await page.request.put("/api/admin/ai/private-network", { data: { enabled: false } });
+  await gotoLoaded(page, "/admin", "/api/admin/ai");
+  if ((await header(page).getAttribute("aria-expanded")) !== "true") await header(page).click();
+  await expect(sw).toHaveAttribute("aria-checked", "false");
+  await expect(row.getByTestId("ai-private-network-operator")).toHaveCount(0);
+  try {
+    await clickAndAwait(page, () => sw.click(), "/api/admin/ai/private-network", { method: "PUT" });
+    await expect(row.getByTestId("ai-private-network-status")).toHaveText("Saved.");
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+  } finally {
+    await page.request.put("/api/admin/ai/private-network", { data: { enabled: false } }).catch(() => {});
+  }
 });
