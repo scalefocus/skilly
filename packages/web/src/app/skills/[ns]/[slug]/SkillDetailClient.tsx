@@ -23,6 +23,8 @@ import { AiPrereviewCard } from "./AiPrereviewCard";
 import { PolicyCard } from "./PolicyCard";
 import { PolicyChip } from "../../../../components/Policy";
 import { QualityCard, type QualityDetailView } from "./QualityCard";
+import { TryPanel } from "./TryPanel";
+import { useAiName } from "../../../../components/AiName";
 import { QualityBadge, QualityStars, type QualitySummaryView } from "../../../../components/QualityBadge";
 import { ContentRiskChip } from "../../../../components/ContentRisk";
 import type { ContentRiskStatus } from "@skilly/shared/content-risk-status";
@@ -179,6 +181,8 @@ interface Detail {
   skillId: string; collectible: boolean;
   namespaceSlug: string; skillSlug: string; visibility: "org" | "namespace";
   versions: VersionView[]; latest: string | null; latestInstallable: string | null; publishing: boolean; watching: boolean; watchers: number; rating: RatingView;
+  /** §61.2 the Try with ‹name› button: switch on, AI Operational, skill installable. */
+  tryAvailable?: boolean;
   usageExamples: string | null; archived: boolean;
   pointer: { originUrl: string; subdir: string | null } | null;
   meta: { toolHarness: string; title: string; description: string } | null;
@@ -223,7 +227,10 @@ export default function SkillDetail() {
   usePageLabelOverride(data ? `Skill: ${data.meta?.title || data.skillSlug}` : null);
   const { data: readme } = useApi<{ semver: string; content: string }>(ns && slug ? `/api/skills/${ns}/${slug}/readme` : null);
   // Admin-configured install-expiry horizon (calendar months) — bounds the picker; server re-validates. §23
-  const { data: me } = useApi<{ installMaxTtlMonths?: number; isPlatformAdmin?: boolean }>("/api/me");
+  const { data: me } = useApi<{ installMaxTtlMonths?: number; isPlatformAdmin?: boolean; userId?: string | null }>("/api/me");
+  const aiName = useAiName();
+  // §61 the Try panel (uses the Install picker's version).
+  const [tryOpen, setTryOpen] = useState(false);
   const [install, setInstall] = useState<MintedInstall | null>(null);
   // §23 already-installed prompt: the caller's claimed installs of this skill, set when a personal
   // mint (sent with onExisting "ask") came back 409 already_installed — the dialog is open while set.
@@ -749,6 +756,25 @@ export default function SkillDetail() {
                       {install.system ? "system install · " : ""}{install.semver ? `pinned v${install.semver}` : "latest"} · {install.expiresAt ? `expires ${fmt.dateTime(install.expiresAt)}` : "never expires"} · manage in Installed skills{install.system ? " → System installs" : ""}
                     </div>
                   </>
+                )}
+                {data.tryAvailable && (
+                  // §61.2 Try follows Install: same card, same version picker; hidden (no ghost) otherwise.
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
+                    <button type="button" className="btn" onClick={() => setTryOpen(true)} data-testid="try-button">
+                      Try with {aiName}
+                    </button>
+                    <span className="muted" style={{ fontSize: 12.5 }}>Chat with {aiName} with this skill loaded, before you install it.</span>
+                  </div>
+                )}
+                {tryOpen && (
+                  <TryPanel
+                    ns={ns}
+                    slug={slug}
+                    title={data.meta?.title || data.skillSlug}
+                    semver={selVersion}
+                    userId={me?.userId ?? null}
+                    onClose={() => setTryOpen(false)}
+                  />
                 )}
               </>
             ) : data.pendingMirror && !data.pendingMirror.failed ? (

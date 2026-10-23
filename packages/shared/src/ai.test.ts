@@ -14,6 +14,7 @@ import {
   AiError,
   aiAvailable,
   aiComplete,
+  aiOperational,
   buildCompletionRequest,
   buildModelsRequest,
   decryptAiToken,
@@ -556,7 +557,19 @@ test("AI_FEATURES registers skill_quality_draft_note (§44.7) with the defaults 
   assert.equal(f!.maxTokens, undefined);
   assert.equal(f!.timeoutMs, undefined);
   assert.match(f!.egress, /No file contents/);
-  assert.equal(AI_FEATURES.at(-1)!.key, "skill_quality_draft_note", "registered fifth (§40.7)");
+  assert.equal(AI_FEATURES[4]!.key, "skill_quality_draft_note", "registered fifth (§40.7)");
+});
+
+test("AI_FEATURES registers skill_try (§61.5) sixth, with the default token ceiling and a 120 s timeout", () => {
+  const f = AI_FEATURES.find((x) => x.key === "skill_try");
+  assert.ok(f);
+  assert.equal(f!.spec, "§61");
+  assert.equal(f!.maxTokens, undefined);
+  assert.equal(aiFeatureMaxTokens(f!), 8192);
+  assert.equal(f!.timeoutMs, 120_000);
+  assert.match(f!.egress, /100,000 in total/);
+  assert.match(f!.egress, /messages the user typed/);
+  assert.equal(AI_FEATURES[5]!.key, "skill_try", "registered sixth (§40.7)");
 });
 
 test("aiComplete: maxTokens above 8192 is allowed only for a feature that declares a higher ceiling", async () => {
@@ -588,6 +601,37 @@ test("aiComplete: an aborted signal ends the call as ai_cancelled — recorded, 
   assert.equal(st.usage.length, 1);
   assert.equal(st.usage[0]![8], "ai_cancelled");
   assert.equal(st.events.length, 0);
+  // §61.10: a cancel says nothing about the provider's health — the status pill is left alone.
+  assert.equal(st.row!.last_call_at, null);
+  assert.equal(st.row!.last_call_ok, null);
+});
+
+test("aiComplete: a timeout still marks the last call failed (§61.10 only spares cancels)", async () => {
+  const st = stateWith();
+  const f = fakeFetch([
+    (_url, init) => new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new Error("aborted")))),
+  ]);
+  await assert.rejects(
+    aiComplete(fakeDb(st), env(f.impl, { timeoutMs: 20 }), { feature: "summarize", messages: MSG, maxTokens: 5, retry: false }),
+    (e: unknown) => e instanceof AiError && e.code === "ai_timeout",
+  );
+  assert.equal(st.row!.last_call_ok, false);
+  assert.match(String(st.row!.last_call_error), /^ai_timeout/);
+});
+
+test("aiOperational: true only when the §40.8 status is Operational (§61.2)", async () => {
+  const none: FakeState = { row: null, usage: [], events: [], claimOpen: true };
+  assert.equal(await aiOperational(fakeDb(none), { key: KEY }), false, "not configured");
+  assert.equal(await aiOperational(fakeDb(stateWith({ enabled: false })), { key: KEY }), false, "off");
+  assert.equal(await aiOperational(fakeDb(stateWith()), { key: OTHER_KEY }), false, "failing: token can't be decrypted");
+  assert.equal(await aiOperational(fakeDb(stateWith()), { key: null }), false, "failing: no key");
+  const failedCall = stateWith({ last_test_at: new Date(Date.now() - 60_000), last_call_at: new Date(), last_call_ok: false, last_call_error: "ai_timeout: x" });
+  assert.equal(await aiOperational(fakeDb(failedCall), { key: KEY }), false, "failing: the more recent call failed");
+  const recovered = stateWith({ last_test_at: new Date(), last_call_at: new Date(Date.now() - 60_000), last_call_ok: false });
+  assert.equal(await aiOperational(fakeDb(recovered), { key: KEY }), true, "operational: a later test passed");
+  assert.equal(await aiOperational(fakeDb(stateWith()), { key: KEY }), true, "operational");
+  // aiAvailable stays looser: an enabled, decryptable but Failing integration is still "available".
+  assert.equal(await aiAvailable(fakeDb(failedCall), { key: KEY }), true);
 });
 
 // ── §40.15 admin timeout overrides ──────────────────────────────────────────────────────────────

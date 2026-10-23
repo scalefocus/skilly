@@ -1798,7 +1798,33 @@ a.mention-chip:hover { text-decoration: underline; }
 .modal-foot-start { margin-right: auto; }
 .modal.modal-wide { width: min(980px, 100%); }
 @media (max-width: 560px) { .modal { width: 100%; } }
+/* §61.3 the side variant: a full-height panel on the right, full screen below 768 px. */
+.modal-backdrop.modal-backdrop-side { justify-content: flex-end; align-items: stretch; padding: 0; }
+.modal.modal-side {
+  width: min(480px, 100%); height: 100%; border-radius: 0; border-width: 0 0 0 1px;
+  animation: modal-side-in 0.18s ease-out;
+}
+@keyframes modal-side-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@media (max-width: 767px) { .modal.modal-side { width: 100%; border-left: 0; } }
 @media (prefers-reduced-motion: reduce) { .modal-backdrop, .modal { animation: none; } }
+
+/* §61.3 Try a skill: a fixed header block over a scrolling conversation; the composer is the footer. */
+.modal-body.try-body { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding-bottom: 0; }
+.try-meta { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.try-meta p { margin: 0; }
+.try-files { margin: 4px 0 0; padding-left: 18px; font-size: 12px; }
+.try-flagged { color: var(--warn, #b45309); }
+.try-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 0; display: flex; flex-direction: column; gap: 10px; }
+.try-msg { max-width: 92%; padding: 9px 12px; border-radius: var(--radius); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.try-msg-user { align-self: flex-end; background: var(--accent-soft); color: var(--ink); white-space: pre-wrap; }
+.try-msg-assistant { align-self: flex-start; background: var(--surface-2); }
+.try-msg-assistant > :first-child { margin-top: 0; }
+.try-msg-assistant > :last-child { margin-bottom: 0; }
+.try-notice { font-size: 13px; color: var(--muted); }
+.try-notice[role="alert"] { color: var(--danger); }
+.try-composer { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.try-composer textarea { width: 100%; box-sizing: border-box; min-height: 64px; max-height: 200px; resize: vertical; font: inherit; font-size: 14px; }
+.try-composer-row { display: flex; align-items: center; gap: 8px; }
 
 /* Crop dialog. A square viewport (≤ 360 px) on --surface-2 in a --line border; the image is drawn on
    the canvas under a FIXED frame: a rounded square (20 % corners — what the 40 px catalog tile clips)

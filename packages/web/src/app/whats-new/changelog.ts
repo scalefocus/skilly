@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.43.0",
+    date: "2026-10-23",
+    summary:
+      "Try a skill before you install it: a Try with AI button in the Install card opens a chat with the skill loaded, to see how it behaves. Platform admins turn it on with the new Try skills switch on the AI integration card (off by default), and it shows only while the integration is working. The messages you type are sent to the AI provider, and the conversation is kept only in your browser tab.",
+  },
+  {
     version: "2.42.0",
     date: "2026-10-22",
     summary:

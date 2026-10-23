@@ -16,6 +16,7 @@ import { PageLabelOverrideProvider } from "./PageLabelOverride";
 import { SkillIcon } from "./SkillIcon";
 import { RumCollector, markRumNavIntent } from "./RumCollector";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
+import { clearTryConversations } from "../lib/tryStore";
 import { achievementDef } from "@skilly/shared/achievements";
 import { collectionPath } from "@skilly/shared/collections";
 import { bugButtonAction, bugButtonVisible, bugCardBlock, colophonFeedbackAction, type BugCardBlock, type SurveyOfferView, type SurveyVia } from "@skilly/shared/survey";
@@ -913,6 +914,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                       // Clear the session, then nuke any remaining auth cookies (CSRF + leftover
                       // transient OAuth cookies are httpOnly, so only the server can delete them),
                       // then land on the public home. signOut runs first — it needs the CSRF cookie.
+                      // §61.3: Try conversations live in this tab's sessionStorage — never hand them to the next user.
+                      clearTryConversations();
                       try {
                         await signOut({ redirect: false });
                         await fetch("/api/auth/clear-cookies", { method: "POST" });

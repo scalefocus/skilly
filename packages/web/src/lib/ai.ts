@@ -8,7 +8,7 @@ import { aiHostGuard, aiAllowPrivateBaseUrl } from "@skilly/shared/ai-egress";
 import { loadPrereviewSetting, prereviewCounts } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
-import { getPlatformSettings } from "./settings";
+import { getAiTryEnabled, getPlatformSettings } from "./settings";
 import {
   AI_FEATURES,
   AI_PROVIDER_LABELS,
@@ -16,6 +16,7 @@ import {
   AI_TOKEN_MAX,
   aiAvailable as sharedAiAvailable,
   aiComplete as sharedAiComplete,
+  aiOperational as sharedAiOperational,
   decryptAiToken,
   deriveAiStatus,
   encryptAiToken,
@@ -72,6 +73,11 @@ export function aiAvailable(): Promise<boolean> {
   return sharedAiAvailable(pool, { key: aiKey() });
 }
 
+/** §61.2: the stricter gate — the status pill reads Operational (Failing hides Try). */
+export function aiOperational(): Promise<boolean> {
+  return sharedAiOperational(pool, { key: aiKey() });
+}
+
 // ── Status (GET /api/admin/ai) ───────────────────────────────────────────────────────────────
 
 export interface AiUsageByFeature {
@@ -109,6 +115,8 @@ export interface AiAdminStatus {
   timeouts: AiTimeoutsView;
   /** §46.2 the AI pre-review switch and its queue (independent of the provider config). */
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
+  /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
+  try: { enabled: boolean; effective: boolean };
 }
 
 function featureLabel(key: string): string {
@@ -171,7 +179,14 @@ export async function getAiAdminStatus(): Promise<AiAdminStatus> {
     displayName: (await getPlatformSettings(pool)).aiDisplayName,
     timeouts: aiTimeoutsView(AI_FEATURES, await loadAiTimeouts()),
     prereview: await prereviewAdminState(row?.enabled === true && decryptable),
+    try: await tryAdminState(st.status === "operational"),
   };
+}
+
+/** §61.8 the Try row's state. `operational` = the status pill reads Operational right now. */
+async function tryAdminState(operational: boolean): Promise<AiAdminStatus["try"]> {
+  const enabled = await getAiTryEnabled();
+  return { enabled, effective: enabled && operational };
 }
 
 // ── Timeouts (§40.15) ────────────────────────────────────────────────────────────────────────

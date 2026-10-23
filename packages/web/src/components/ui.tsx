@@ -602,6 +602,10 @@ export function Modal({
   dismissOnBackdrop = false,
   initialFocusRef,
   wide = false,
+  side = false,
+  headExtra,
+  bodyClassName,
+  testId,
 }: {
   title: string;
   onCancel: () => void;
@@ -611,6 +615,13 @@ export function Modal({
   initialFocusRef?: React.RefObject<HTMLElement | null>;
   /** A wider panel (up to 980 px) for content like diffs. */
   wide?: boolean;
+  /** A full-height panel on the right (about 480 px; full screen below 768 px) — §61.3's Try panel. */
+  side?: boolean;
+  /** Extra header controls, between the title and the ✕. */
+  headExtra?: React.ReactNode;
+  /** Replaces the body's own scrolling, e.g. for a fixed header over a scrolling list. */
+  bodyClassName?: string;
+  testId?: string;
 }) {
   const backdrop = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -676,23 +687,32 @@ export function Modal({
   return createPortal(
     <div
       ref={backdrop}
-      className="modal-backdrop"
+      className={`modal-backdrop${side ? " modal-backdrop-side" : ""}`}
       onKeyDown={onKeyDown}
       onMouseDown={(e) => { pressedBackdrop.current = e.target === e.currentTarget; }}
       onClick={(e) => {
         if (dismissOnBackdrop && pressedBackdrop.current && e.target === e.currentTarget) cancel.current();
       }}
     >
-      <div ref={panel} className={`modal${wide ? " modal-wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <div
+        ref={panel}
+        className={`modal${wide ? " modal-wide" : ""}${side ? " modal-side" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        data-testid={testId}
+      >
         <div className="modal-head">
           <h2 id={titleId} className="modal-title">{title}</h2>
+          {headExtra}
           <button type="button" className="modal-close" aria-label="Close" onClick={() => cancel.current()}>
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
               <path d="M2 2l10 10M12 2L2 12" />
             </svg>
           </button>
         </div>
-        <div className="modal-body">{children}</div>
+        <div className={`modal-body${bodyClassName ? ` ${bodyClassName}` : ""}`}>{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>,

@@ -84,9 +84,13 @@ function priorityOf(path: string): number {
 /**
  * §46.6 input selection: SKILL.md, then text files under scripts/, then under references/ (by
  * path); 25 files, 100,000 characters each and 250,000 in total; secret-scanner lines redacted.
- * Every other text file is `out_of_scope`.
+ * Every other text file is `out_of_scope`. `totalMaxChars` lowers the total (§61.4 uses 100,000).
  */
-export function selectPrereviewInput(entries: BundleEntry[], opts: { isSecretLine: (line: string) => boolean }): PrereviewSelection {
+export function selectPrereviewInput(
+  entries: BundleEntry[],
+  opts: { isSecretLine: (line: string) => boolean; totalMaxChars?: number },
+): PrereviewSelection {
+  const totalMax = opts.totalMaxChars ?? PREREVIEW_TOTAL_MAX_CHARS;
   const real = entries.filter((e) => !isJunkEntry(e.path) && !e.path.endsWith("/"));
   const texts: { path: string; text: string; priority: number }[] = [];
   for (const e of real) {
@@ -101,7 +105,7 @@ export function selectPrereviewInput(entries: BundleEntry[], opts: { isSecretLin
   const files: PrereviewSentFile[] = [];
   let total = 0;
   for (const c of candidates) {
-    const budget = Math.min(PREREVIEW_FILE_MAX_CHARS, PREREVIEW_TOTAL_MAX_CHARS - total);
+    const budget = Math.min(PREREVIEW_FILE_MAX_CHARS, totalMax - total);
     if (files.length >= PREREVIEW_MAX_FILES || budget <= 0) {
       coverage.push({ path: c.path, status: "skipped" });
       continue;
