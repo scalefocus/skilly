@@ -262,11 +262,16 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     assert.deepEqual([fail.status, fail.body.error], [502, "try_failed"]);
     assert.ok(!JSON.stringify(fail.body).includes("secret-detail"), "provider text never reaches the caller");
     assert.equal(stub.state.hits - hits, 1, "retry: false — exactly one attempt");
+    // §61.11: that failed call turned the pill Failing, which hides Try until a later success.
+    assert.equal(await tryAvailability(live), false, "a failed Try call hides Try");
+    const hidden = await trySend(who(u4), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
+    assert.deepEqual([hidden.status, hidden.body.error], [409, "try_unavailable"]);
+    await operational();
     stub.state.mode = "empty";
     const empty = await trySend(who(u4), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
     assert.deepEqual([empty.status, empty.body.error], [502, "try_failed"]);
+    assert.equal(await tryAvailability(live), true, "an empty reply is a 502 to the user, but the provider answered — the pill stays Operational");
     stub.state.mode = "ok";
-    await operational(); // the 500 left the pill Failing — Try would be hidden (§61.11)
 
     // ── Per-minute limit: the 11th message in a minute is a 429 ────────────────────────────
     const uMin = await mkUser("umin");
