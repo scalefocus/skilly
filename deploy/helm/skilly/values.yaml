@@ -107,9 +107,11 @@ config:
 # ── AI integration (§40 / §49.11) ─────────────────────────────────────────────
 ai:
   # The AI provider base URL an admin saves is refused when it resolves to a private / loopback /
-  # link-local address (SSRF guard). true = render AI_ALLOW_PRIVATE_BASE_URL=1 on web + worker —
-  # set it ONLY for a provider that genuinely lives on your own network (e.g. a self-hosted
-  # Open WebUI); leave false for any public provider.
+  # link-local address (SSRF guard). A provider on a private network (e.g. a self-hosted Open
+  # WebUI on 10.x) can instead be allowed by a platform admin with the "Allow private-network base
+  # URLs" switch on the AI integration card (§40.16). true = render AI_ALLOW_PRIVATE_BASE_URL=1 on
+  # web + worker, which allows every non-public address, loopback and link-local included — set it
+  # ONLY when the provider must be reached there; leave false otherwise.
   allowPrivateBaseUrl: false
 
 # ── Migrations ────────────────────────────────────────────────────────────────

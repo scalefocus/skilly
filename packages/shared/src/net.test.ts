@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isLocalHostname, clientIpFromForwarded, trustProxyHops, isSameSiteFetch, validatePointerUrl, validateGitRef, validateSubdir, slugFromSubdir, isBlockedIp } from "./net.js";
+import { isLocalHostname, clientIpFromForwarded, trustProxyHops, isSameSiteFetch, validatePointerUrl, validateGitRef, validateSubdir, slugFromSubdir, isBlockedIp, blockedIpClass, localHostnameClass } from "./net.js";
 
 test("validatePointerUrl accepts public https hosts", () => {
   assert.equal(validatePointerUrl("https://github.com/acme/skill.git"), null);
@@ -53,6 +53,24 @@ test("isBlockedIp classifies resolved addresses (DNS-rebinding defense)", () => 
   for (const ip of ["8.8.8.8", "140.82.112.3", "2606:4700:4700::1111"]) {
     assert.equal(isBlockedIp(ip), false, `allow ${ip}`);
   }
+});
+
+test("blockedIpClass splits non-public addresses into private-network and local (§40.16)", () => {
+  for (const ip of ["10.0.30.3", "172.16.0.1", "172.31.255.254", "192.168.1.1", "100.64.0.1", "100.127.255.255", "fd12::1", "fc00::1", "::ffff:10.0.0.1", "::ffff:c0a8:101"]) {
+    assert.equal(blockedIpClass(ip), "private", ip);
+  }
+  for (const ip of ["127.0.0.1", "127.9.9.9", "169.254.169.254", "0.0.0.0", "192.0.2.7", "::1", "::", "fe80::abcd", "fe80::1%eth0", "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:a9fe:a9fe", ""]) {
+    assert.equal(blockedIpClass(ip), "local", ip);
+  }
+  for (const ip of ["8.8.8.8", "172.32.0.1", "100.128.0.1", "192.169.0.1", "2606:4700:4700::1111", "example.com"]) {
+    assert.equal(blockedIpClass(ip), null, ip);
+  }
+});
+
+test("localHostnameClass: localhost is local, .local / .internal zones are a private network (§40.16)", () => {
+  for (const h of ["localhost", "a.localhost"]) assert.equal(localHostnameClass(h), "local", h);
+  for (const h of ["printer.local", "db.internal"]) assert.equal(localHostnameClass(h), "private", h);
+  for (const h of ["example.com", "localhost.example.com", "internal.example.com"]) assert.equal(localHostnameClass(h), null, h);
 });
 
 test("isBlockedIp strips zone ids without regressing on the underlying address", () => {

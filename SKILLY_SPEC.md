@@ -1487,7 +1487,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
 - **§29 routing (new, and it splits across both processes):** `/mcp`, `/oauth/token`, `/oauth/revoke` and both `/.well-known/oauth-*` paths route to the **worker** (beside `/scim` and `*.git`); `/oauth/authorize` and `/oauth/register` route to **web** (the authorize leg needs the Auth.js/Entra session, which only web has). The dev Caddy sample and the Helm Ingress rules (§16 #19) both gain this split. No new service and no new port — MCP rides the worker's existing Express app and is **not** gated on its leader lock.
 - **Ops paths are internal-only at the proxy:** the dev Caddy sample answers **`404`** for `/healthz`, `/readyz` and `/metrics` (exact paths, matched before every other route) and never forwards them to web or worker. Probes and scrapes reach the containers directly — compose/Kubernetes probes and Prometheus never go through the proxy — so nothing legitimate breaks, and the public edge loses an unauthenticated path that runs a DB query (`/readyz`). Out-of-band readiness checks use the container network instead: the Jenkins deploy smoke check (and `deployment_manual.md` §8) runs `docker compose exec -T web wget -qO- http://localhost:3000/readyz` (busybox `wget` ships in the `node:20-alpine` web image), and the worker's `/readyz` likewise through `docker compose exec -T worker node -e "fetch('http://localhost:4000/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"` (the `node:20-slim` worker image has no `curl`/`wget`). The Helm chart is **not** changed: its Ingress is controller-agnostic (`className: ""`), so operators block these paths at their own ingress/edge (§22 *Rate limiting (worker HTTP surfaces)*).
 
-- **Hardening shipped with §49 (October 2026 OWASP review, round 2):** runtime images move to **Node 22** (`node:22-alpine` / `node:22-slim`, `engines.node >= 22`) and every third-party image in compose and Helm (Postgres, MinIO, ClamAV, Caddy, Alpine, Node) is **pinned by digest** and bumped through reviewed changes; the MinIO console port is bound to **`127.0.0.1:9001`** (never a host interface), and web/worker authenticate to MinIO with a **bucket-scoped service account** (`S3_ACCESS_KEY` / `S3_SECRET_KEY` are now distinct from `MINIO_ROOT_*` and created by a one-shot `minio-init` job — operators add the two new `.env` values); **`CLAMAV_HOST` is set on web as well as worker** so hosted uploads are AV-scanned (§49.2); the Caddy sample sets `X-Forwarded-Proto` / `X-Forwarded-Host` from its own `{scheme}` / `{host}` placeholders instead of forwarding the client's headers, and `TRUST_PROXY` is documented for **web** too (it keys the DCR rate limit, §49.9). `AI_ALLOW_PRIVATE_BASE_URL=1` is the explicit opt-in for an on-network AI provider (§49.11).
+- **Hardening shipped with §49 (October 2026 OWASP review, round 2):** runtime images move to **Node 22** (`node:22-alpine` / `node:22-slim`, `engines.node >= 22`) and every third-party image in compose and Helm (Postgres, MinIO, ClamAV, Caddy, Alpine, Node) is **pinned by digest** and bumped through reviewed changes; the MinIO console port is bound to **`127.0.0.1:9001`** (never a host interface), and web/worker authenticate to MinIO with a **bucket-scoped service account** (`S3_ACCESS_KEY` / `S3_SECRET_KEY` are now distinct from `MINIO_ROOT_*` and created by a one-shot `minio-init` job — operators add the two new `.env` values); **`CLAMAV_HOST` is set on web as well as worker** so hosted uploads are AV-scanned (§49.2); the Caddy sample sets `X-Forwarded-Proto` / `X-Forwarded-Host` from its own `{scheme}` / `{host}` placeholders instead of forwarding the client's headers, and `TRUST_PROXY` is documented for **web** too (it keys the DCR rate limit, §49.9). `AI_ALLOW_PRIVATE_BASE_URL=1` is the explicit opt-in for an on-network AI provider (§49.11); a platform admin can also allow private-network (but not loopback or link-local) AI hosts from the AI integration card (§40.16).
 
 ### Assumption to revisit
 - **Outbound network assumed available** (Pointer proxying + ClamAV signature updates). **Air-gapped operation would change both** — revisit if required.
@@ -9420,6 +9420,10 @@ pattern), with the **status pill** as its header accessory.
 - **Data egress notice:** "When enabled, the features below send data to **<provider>** at
   **<host>**." followed by the §40.7 registry — each feature's name, the data it sends and its spec
   §. With no feature registered (v1) it reads "No skilly features use the AI integration yet."
+- **Private-network providers** (§40.16): a separate row above *Pre-review proposals* with the
+  *Allow private-network base URLs* switch (off by default, saves on toggle, then re-tests the saved
+  config); independent of the provider form and kept on *Remove integration*. Shown on and locked
+  while the operator sets `AI_ALLOW_PRIVATE_BASE_URL=1`.
 - **Pre-review proposals** (§46.2): a separate row with the AI pre-review switch (off by default), its
   own Save and its pending/failed counts; independent of the provider form and kept on *Remove
   integration*.
@@ -9552,6 +9556,12 @@ pattern), with the **status pill** as its header accessory.
   invalid input; **not** subject to `ai_key_missing`. `GET /api/admin/ai` also returns
   `timeouts: { features: [{ key, label, defaultMs, overrideMs, effectiveMs }], draftRunCap:
   { defaultMs, overrideMs, effectiveMs } }` (`overrideMs` null when unset).
+- `PUT /api/admin/ai/private-network` `{ enabled }` → `{ enabled, operatorAllowed, test }` (§40.16),
+  where `test` is the re-test's result (the `POST /api/admin/ai/test` shape) or `null` when none
+  ran; **422** when `enabled` is not a boolean; **not** subject to `ai_key_missing` (without the
+  key it saves and returns `test: null`). `GET /api/admin/ai` also returns
+  `privateNetwork: { enabled, operatorAllowed }` (`operatorAllowed` = `AI_ALLOW_PRIVATE_BASE_URL=1`
+  on web).
 - Every write (`models`, `test`, `PUT`, `PATCH`, `DELETE`) returns **409 `ai_key_missing`** without a
   valid `AI_TOKEN_ENC_KEY`. All routes are wrapped in `withSystemLog` (§25) as usual; bodies
   carrying a token are never logged.
@@ -9575,13 +9585,16 @@ pattern), with the **status pill** as its header accessory.
   host so admins choose consciously.
 - **The base URL is SSRF-checked (§49.11):** `normalizeAiBaseUrl` refuses loopback, private,
   link-local, metadata and `.local`/`.localhost`/`.internal` hosts (the shared `net.ts` classifier),
-  and the helper re-resolves the host before every call and refuses a blocked address, unless the
-  operator sets `AI_ALLOW_PRIVATE_BASE_URL=1` for an on-network provider.
+  and the helper re-resolves the host before every call and refuses a blocked address. A platform
+  admin may allow **private-network** hosts with the card's switch (§40.16); **loopback and
+  link-local** hosts (the cloud metadata endpoint among them) stay refused unless the operator sets
+  `AI_ALLOW_PRIVATE_BASE_URL=1`, which still allows every class.
 
 ### 40.11 Audit (§11)
 `ai.config_updated` (`before`/`after`: provider, base URL, model; `after.token_rotated: bool` —
 **never the token or its last 4**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. The display
-name (§40.14) and timeouts (§40.15) are audited as `settings.updated` (before/after). Tests,
+name (§40.14), timeouts (§40.15) and the private-network switch (§40.16) are audited as
+`settings.updated` (before/after). Tests (including the §40.16 re-test),
 model-list calls and runtime calls are **not audited** (telemetry, in `ai_usage`).
 
 ### 40.12 Out of scope (deferred)
@@ -9702,6 +9715,99 @@ than the built-in waits. A platform admin may tune them.
   the override and the call uses it; a draft run started after an override uses the new cap. e2e:
   set the *Draft quality improvements* timeout → Save → reload shows it; **Reset to defaults** → Save
   → the placeholders show again.
+
+### 40.16 Private-network providers
+A self-hosted Open WebUI usually sits on the corporate network, so its host has a private address
+and the §49.11 egress guard refuses it (*Failing — ai_base_url_private: the AI base URL's host
+resolves to a private address (10.0.30.3), which is not allowed*). Until now only the operator could
+lift that, with `AI_ALLOW_PRIVATE_BASE_URL=1`. A platform admin may now allow private-network
+providers from the AI integration card. **Off by default.**
+
+- **Storage.** Platform setting **`ai_allow_private_network`** in `platform_settings`: boolean,
+  absent means **off**, no migration.
+- **Two address classes.** The set the guard refuses (the shared `net.ts` classifier) splits in two:
+
+  | Class | Addresses and names | Allowed by |
+  |---|---|---|
+  | **Private network** | IPv4 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`; IPv6 unique-local `fc00::/7`; the IPv4-mapped IPv6 forms of these; host names ending in `.local` or `.internal` | the switch **or** the env var |
+  | **Local** | IPv4 `127.0.0.0/8` (loopback), `169.254.0.0/16` (link-local, including the cloud metadata endpoint `169.254.169.254`), `0.0.0.0/8`, `192.0.2.0/24`; IPv6 `::1`, `::`, `fe80::/10`; the IPv4-mapped IPv6 forms of these; `localhost` and names ending in `.localhost` | the env var only |
+
+  Public addresses are always allowed. The pointer mirror (§22) keeps refusing both classes; the
+  setting applies to the AI integration only.
+- **Both checks honour it:** the save-time check of a literal host in `normalizeAiBaseUrl` (Load
+  models, Test, Save) and the DNS re-check before every provider request. A host that resolves to
+  several addresses is refused when **any** of them falls in a class that is not allowed.
+- **The worker runs the re-check too.** Its AI calls (§41 quality, §46 pre-review) skipped the
+  per-call DNS re-check until now, contrary to §49.11. They now run it under the same setting, so
+  a saved host that resolves to a private address fails in the worker the same way it already fails
+  in web, unless the switch or the env var allows it.
+- **Taking effect.** Web and worker read the setting on every call, with the config read (§40.7 —
+  no cache). A change applies to the next call; a call already in flight is unaffected.
+- **The env var still wins.** `AI_ALLOW_PRIVATE_BASE_URL=1` keeps turning both checks off for every
+  class. While it is set, the row shows the switch on and disabled, with *"Allowed by the operator
+  (AI_ALLOW_PRIVATE_BASE_URL=1). Private-network, loopback and link-local hosts are all
+  permitted."* The stored setting is kept and applies again once the env var is removed. This row
+  replaces the *"Private base URLs allowed by the operator"* note that §49.11 described.
+- **The row.** *Private-network providers*, on the AI integration card (§40.4) above *Pre-review
+  proposals*: a switch, **"Allow private-network base URLs"**, that saves on toggle, with the line
+  *"Lets the base URL point at a host on your private network (10.x, 172.16–31.x, 192.168.x,
+  fc00::/7, .local and .internal names). Loopback and link-local hosts, including the cloud metadata
+  endpoint, stay refused."* Like the other rows it works with no provider configured and without
+  `AI_TOKEN_ENC_KEY`, and it survives *Remove integration*.
+- **Flipping the switch re-tests the saved config.** Once the setting is saved, if a config is
+  saved, `AI_TOKEN_ENC_KEY` is valid and the stored token decrypts, the server runs the §40.5 test
+  of the saved provider, base URL, model and stored token under the new setting. This is exactly a
+  manual Test of the saved config: it writes `last_test_*` and one `ai_usage` row
+  (`feature='test'`), and it is not audited. The test becomes the most recent signal, so the status
+  pill (§40.8) follows its result:
+  - switching **on** clears a *Failing — ai_base_url_private* status as soon as the provider answers;
+  - switching **off** turns an enabled integration on a private host *Failing* at once.
+
+  The row then reads *"Saved — the test passed."* or *"Saved — the test failed: ‹error›"*. The
+  setting is saved whatever the test's outcome. With no config, no key or an undecryptable token,
+  no test runs and the row reads *"Saved."* The re-test runs whether or not the integration is
+  enabled, so a passing re-test also meets the enable toggle's gate (§40.6). Saving the current
+  value is a no-op: no write, no audit, no test.
+- **Messages.** The error code stays **`ai_base_url_private`**: a 422 on Load models, Test and Save,
+  and an `AiError` at call time. The message names what would lift the refusal:
+  - a private-network host while the switch is off: *"the AI base URL's host resolves to a private
+    address (10.0.30.3), which is not allowed. A platform admin can allow private-network
+    providers on the AI integration card."* The save-time literal check reads *"the base URL must
+    not point at a private-network host. A platform admin can allow private-network providers on
+    the AI integration card."*
+  - a local host, whatever the switch: *"the AI base URL's host resolves to a loopback or
+    link-local address (127.0.0.1), which is not allowed. An operator can permit it with
+    AI_ALLOW_PRIVATE_BASE_URL=1."* The save-time literal check reads *"the base URL must not point
+    at a loopback, link-local or local host. An operator can permit it with
+    AI_ALLOW_PRIVATE_BASE_URL=1."*
+- **Audit.** `settings.updated` (`key: 'ai_allow_private_network'`, before/after). The re-test is
+  not audited (§40.11).
+- **Accepted trade-off.** This hands part of the §49.11 (V10) SSRF control from the operator to
+  platform admins. They already choose the provider host with no allow-list (§40.2); the switch
+  lets that choice include the private network. With it on, a platform admin can make skilly send
+  requests carrying the stored token to any private-network host, and a failed test's error excerpt
+  (§40.5, ≤ 300 characters) can show a fragment of what that host answered. The exposure is
+  bounded: the switch is off by default and audited, loopback and link-local hosts (the cloud
+  metadata endpoint) stay operator-only, redirects are never followed (§40.2), and the stored token
+  only ever goes to the stored base URL (§40.1 #7).
+- **Tests.**
+  - **Unit** (`@skilly/shared`): the two-class classifier (each range, the IPv4-mapped forms,
+    `.local` / `.internal` versus `localhost` / `.localhost`); `normalizeAiBaseUrl` and the per-call
+    guard in the three modes (off, private network allowed, operator allows all), including a host
+    that resolves to one private and one loopback address (refused with the switch on); each
+    message names the switch or the env var as above.
+  - **Integration** (web + DB; the stub provider, with a stub resolver that maps its host name to a
+    `10.x` address): the `PUT` is platform-admin-only, answers 422 on a non-boolean, works with no
+    config and no key (no test), audits `settings.updated`, and is a no-op when unchanged; with a
+    saved config, switching on runs the saved-config test, writes `last_test_*` and one test usage
+    row, and turns the pill *Operational*; switching off re-tests and turns it *Failing*; `GET`
+    returns `privateNetwork` with `operatorAllowed` following the env var; the setting survives
+    `DELETE /api/admin/ai`.
+  - **Worker integration** (`integration/aiPrereview.test.ts`): a pre-review call to a host that
+    resolves to a private address fails with `ai_base_url_private` while the switch is off, and
+    reaches the stub once it is on.
+  - **e2e:** the e2e stack sets `AI_ALLOW_PRIVATE_BASE_URL=1` (its stub listens on `127.0.0.1`), so
+    the row shows the switch on and disabled, with the operator note.
 
 ---
 
@@ -12054,12 +12160,18 @@ notes, as one release. Each subsection names the finding it closes (V-numbers fr
   host ending in `.local`, `.localhost`, `.internal`, or equal to `localhost`, is refused with
   `ai_base_url_private` (422 on save/test). `providerFetch` resolves the host (`dns.lookup`,
   all addresses) before each call and refuses when any address is blocked (`AiError
-  ai_base_url_private`), the same DNS-rebinding defence as the mirror.
+  ai_base_url_private`), the same DNS-rebinding defence as the mirror. Web and worker both run
+  this re-check (the worker's calls were brought in line by §40.16).
 - **Operator opt-in:** `AI_ALLOW_PRIVATE_BASE_URL=1` (web + worker) disables both checks for
-  deployments whose Open WebUI lives on the private network. The Administration card shows
-  *Private base URLs allowed by the operator* when set. The error-body excerpt (§40.5) is unchanged:
-  with private hosts refused it can no longer carry internal service output, and with the opt-in
-  the operator has accepted that.
+  deployments whose Open WebUI lives on the private network. The AI integration card's
+  *Private-network providers* row shows it as the switch on and locked (§40.16). The error-body
+  excerpt (§40.5) is unchanged: with private hosts refused it can no longer carry internal service
+  output, and with the opt-in the operator has accepted that.
+- **Platform-admin opt-in (§40.16):** the *Allow private-network base URLs* switch lifts both checks
+  for the **private-network** class only (RFC 1918, CGNAT, IPv6 unique-local, `.local` /
+  `.internal`); loopback and link-local hosts stay operator-only. With the switch on, the platform
+  admin has accepted the error-body exposure for private-network hosts (§40.16 *Accepted
+  trade-off*).
 
 ### 49.12 Artifact integrity and deploy hardening (V8, V11, V13)
 

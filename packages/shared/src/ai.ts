@@ -8,7 +8,7 @@
 // audit payload, a system_event or an error message; it is only ever sent to the stored base URL.
 // SKILLY_SPEC.md §40.
 import { decryptToken, encryptToken, parseEmailTokenKey } from "./email-crypto.js";
-import { isBlockedIp, isLocalHostname } from "./net.js";
+import { blockedIpClass, localHostnameClass, type BlockedClass } from "./net.js";
 import {
   AI_CALL_TIMEOUT_DEFAULT_MS,
   AI_CALL_TIMEOUT_MAX_MS,
@@ -141,6 +141,57 @@ export class AiError extends Error {
   }
 }
 
+// ── Private hosts (§49.11, §40.16) ───────────────────────────────────────────────────────────
+
+/** §40.16 the platform-admin switch for private-network providers (`platform_settings`, boolean). */
+export const AI_ALLOW_PRIVATE_NETWORK_SETTING = "ai_allow_private_network";
+
+/**
+ * What the egress guard lets through beyond public hosts: `none` (the default), `private_network`
+ * (the §40.16 switch) or `all` (the operator's AI_ALLOW_PRIVATE_BASE_URL=1, which still wins).
+ */
+export type AiPrivateHostPolicy = "none" | "private_network" | "all";
+
+export function aiPrivateHostPolicy(o: { operatorAllowsAll: boolean; allowPrivateNetwork: boolean }): AiPrivateHostPolicy {
+  if (o.operatorAllowsAll) return "all";
+  return o.allowPrivateNetwork ? "private_network" : "none";
+}
+
+/** Does `policy` let a host of this class through? Loopback / link-local need the operator. */
+export function aiHostClassAllowed(cls: BlockedClass, policy: AiPrivateHostPolicy): boolean {
+  return policy === "all" || (cls === "private" && policy === "private_network");
+}
+
+/** The class of a URL hostname taken literally — an IP literal or a local/internal zone name. */
+export function aiLiteralHostClass(hostname: string): BlockedClass | null {
+  const host = hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
+  return localHostnameClass(host) ?? blockedIpClass(host);
+}
+
+const AI_PRIVATE_HINT = "A platform admin can allow private-network providers on the AI integration card.";
+const AI_LOCAL_HINT = "An operator can permit it with AI_ALLOW_PRIVATE_BASE_URL=1.";
+
+/**
+ * §40.16 the `ai_base_url_private` message, naming what would lift the refusal: the switch for a
+ * private-network host, the env var for a local one. `save` = the save-time literal check, `call` =
+ * the per-call literal check, `resolved` = a DNS answer (`address` is that address).
+ */
+export function aiPrivateHostMessage(where: "save" | "call" | "resolved", cls: BlockedClass, address?: string): string {
+  if (where === "save") {
+    return cls === "private"
+      ? `the base URL must not point at a private-network host. ${AI_PRIVATE_HINT}`
+      : `the base URL must not point at a loopback, link-local or local host. ${AI_LOCAL_HINT}`;
+  }
+  if (where === "call") {
+    return cls === "private"
+      ? `the AI base URL points at a private-network host, which is not allowed. ${AI_PRIVATE_HINT}`
+      : `the AI base URL points at a loopback, link-local or local host, which is not allowed. ${AI_LOCAL_HINT}`;
+  }
+  return cls === "private"
+    ? `the AI base URL's host resolves to a private address (${address}), which is not allowed. ${AI_PRIVATE_HINT}`
+    : `the AI base URL's host resolves to a loopback or link-local address (${address}), which is not allowed. ${AI_LOCAL_HINT}`;
+}
+
 // ── Validation ───────────────────────────────────────────────────────────────────────────────
 
 export const AI_BASE_URL_MAX = 500;
@@ -155,7 +206,7 @@ export const AI_MAX_TOKENS_LIMIT = 8192;
 export function normalizeAiBaseUrl(
   provider: AiProvider,
   raw: string | null | undefined,
-  opts: { allowPrivate?: boolean } = {},
+  opts: { policy?: AiPrivateHostPolicy } = {},
 ): { ok: true; url: string } | { ok: false; error: string; code?: "ai_base_url_private" } {
   const s = (raw ?? "").trim();
   if (!s) {
@@ -172,13 +223,11 @@ export function normalizeAiBaseUrl(
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return { ok: false, error: "the base URL must start with http:// or https://" };
   if (u.username || u.password) return { ok: false, error: "the base URL must not contain credentials" };
-  // §49.11: never a private, loopback, link-local, metadata or local-zone host — unless the
-  // operator has explicitly allowed on-network providers (AI_ALLOW_PRIVATE_BASE_URL=1).
-  if (!opts.allowPrivate) {
-    const host = u.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
-    if (isLocalHostname(host) || isBlockedIp(host)) {
-      return { ok: false, code: "ai_base_url_private", error: "the base URL must not point at a private, loopback or local host (an operator can allow on-network providers with AI_ALLOW_PRIVATE_BASE_URL=1)" };
-    }
+  // §49.11 / §40.16: never a private-network, loopback, link-local, metadata or local-zone host
+  // unless the policy allows its class (the platform-admin switch, or the operator's env var).
+  const cls = aiLiteralHostClass(u.hostname);
+  if (cls && !aiHostClassAllowed(cls, opts.policy ?? "none")) {
+    return { ok: false, code: "ai_base_url_private", error: aiPrivateHostMessage("save", cls) };
   }
   let path = u.pathname.replace(/\/+$/, "");
   // §40.2: skilly appends `/api/...` for Open WebUI itself, so a pasted `https://host/api` would
@@ -391,16 +440,19 @@ async function readCapped(res: Response, max: number): Promise<string> {
  * token elsewhere), the body is capped at 1 MB, and every failure is an AiError whose message is
  * already sanitized (token-redacted, one line).
  */
-/** Per-call egress check (§49.11): throws an AiError when the host must not be reached. */
-export type AiHostGuard = (hostname: string) => Promise<void>;
+/**
+ * Per-call egress check (§49.11): throws an AiError when the host must not be reached.
+ * `allowPrivateNetwork` = the §40.16 platform-admin switch, read with the config.
+ */
+export type AiHostGuard = (hostname: string, allowPrivateNetwork: boolean) => Promise<void>;
 
 export async function providerFetch(
   spec: AiRequestSpec,
-  opts: { timeoutMs: number; token: string; fetchImpl?: typeof fetch; signal?: AbortSignal; hostGuard?: AiHostGuard },
+  opts: { timeoutMs: number; token: string; fetchImpl?: typeof fetch; signal?: AbortSignal; hostGuard?: AiHostGuard; allowPrivateNetwork?: boolean },
 ): Promise<unknown> {
   const f = opts.fetchImpl ?? fetch;
   // §49.11: re-resolve the provider host before every call (DNS-rebinding defence).
-  if (opts.hostGuard) await opts.hostGuard(new URL(spec.url).hostname);
+  if (opts.hostGuard) await opts.hostGuard(new URL(spec.url).hostname, opts.allowPrivateNetwork === true);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
   const cancelled = () => opts.signal?.aborted === true;
@@ -478,7 +530,7 @@ export interface AiTestResult {
 /** §40.5: a minimal completion, 20 s timeout, no retry. Pass = a 2xx with a parseable response. */
 export async function runAiTest(
   c: AiConnection & { model: string },
-  opts: { fetchImpl?: typeof fetch; timeoutMs?: number; hostGuard?: AiHostGuard } = {},
+  opts: { fetchImpl?: typeof fetch; timeoutMs?: number; hostGuard?: AiHostGuard; allowPrivateNetwork?: boolean } = {},
 ): Promise<AiTestResult> {
   const started = Date.now();
   const spec = buildCompletionRequest(c, {
@@ -488,7 +540,7 @@ export async function runAiTest(
     maxTokens: AI_TEST_MAX_TOKENS,
   });
   try {
-    const body = await providerFetch(spec, { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl, hostGuard: opts.hostGuard });
+    const body = await providerFetch(spec, { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl, hostGuard: opts.hostGuard, allowPrivateNetwork: opts.allowPrivateNetwork });
     const parsed = parseCompletionResponse(c.provider, body);
     return { ok: true, latencyMs: Date.now() - started, model: parsed.model ?? c.model, error: null, errorCode: null, httpStatus: null };
   } catch (err) {
@@ -498,8 +550,8 @@ export async function runAiTest(
 }
 
 /** The provider's model ids (§40.2); throws AiError on failure. */
-export async function listAiModels(c: AiConnection, opts: { fetchImpl?: typeof fetch; timeoutMs?: number; hostGuard?: AiHostGuard } = {}): Promise<string[]> {
-  const body = await providerFetch(buildModelsRequest(c), { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl, hostGuard: opts.hostGuard });
+export async function listAiModels(c: AiConnection, opts: { fetchImpl?: typeof fetch; timeoutMs?: number; hostGuard?: AiHostGuard; allowPrivateNetwork?: boolean } = {}): Promise<string[]> {
+  const body = await providerFetch(buildModelsRequest(c), { timeoutMs: opts.timeoutMs ?? AI_TEST_TIMEOUT_MS, token: c.token, fetchImpl: opts.fetchImpl, hostGuard: opts.hostGuard, allowPrivateNetwork: opts.allowPrivateNetwork });
   return parseModelsResponse(body);
 }
 
@@ -523,6 +575,8 @@ export interface AiConfigRow {
   updatedAt: string;
   /** The raw §40.15 `ai_timeouts` platform setting, read in the same query (absent ⇒ defaults). */
   timeoutOverrides?: unknown;
+  /** The §40.16 `ai_allow_private_network` switch, read in the same query (absent ⇒ off). */
+  allowPrivateNetwork?: boolean;
 }
 
 function iso(v: unknown): string | null {
@@ -535,7 +589,8 @@ export async function loadAiConfig(db: AiDb): Promise<AiConfigRow | null> {
   const { rows } = await db.query(
     `select enabled, provider, base_url, model, token_enc, token_last4, last_test_at, last_test_ok, last_test_error,
             last_test_latency_ms, last_call_at, last_call_ok, last_call_error, updated_by_user_id, updated_at,
-            (select value from platform_settings where key = 'ai_timeouts') as ai_timeouts
+            (select value from platform_settings where key = 'ai_timeouts') as ai_timeouts,
+            (select value from platform_settings where key = 'ai_allow_private_network') as ai_allow_private_network
        from ai_integration where id = 1`,
   );
   const r = rows[0];
@@ -557,6 +612,7 @@ export async function loadAiConfig(db: AiDb): Promise<AiConfigRow | null> {
     updatedByUserId: r.updated_by_user_id,
     updatedAt: iso(r.updated_at)!,
     timeoutOverrides: r.ai_timeouts ?? null,
+    allowPrivateNetwork: r.ai_allow_private_network === true,
   };
 }
 
@@ -780,7 +836,7 @@ export async function aiComplete(db: AiDb, env: AiEnv, o: AiCompleteOptions): Pr
   let json: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const body = await providerFetch(spec, { timeoutMs, token, fetchImpl: env.fetchImpl, signal: o.signal, hostGuard: env.hostGuard });
+      const body = await providerFetch(spec, { timeoutMs, token, fetchImpl: env.fetchImpl, signal: o.signal, hostGuard: env.hostGuard, allowPrivateNetwork: row.allowPrivateNetwork === true });
       parsed = parseCompletionResponse(row.provider, body);
       failure = null;
       break;
