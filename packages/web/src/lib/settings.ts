@@ -170,6 +170,8 @@ export interface PlatformSettings {
   searchLanguage: string;
   /** §40.14 the end-user name for the AI (default "AI"). */
   aiDisplayName: string;
+  /** §61.8 the Try skills switch. Ships OFF: typed messages are egress admins opt into. */
+  aiTryEnabled: boolean;
   /** §48 email digests: the kill switch (dormant, not destructive). */
   emailDigestsEnabled: boolean;
   /** §48 the organization-default frequency for users who haven't chosen. */
@@ -201,7 +203,7 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, bugReportsEnabled: true, featureIdeasEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, ...digestFields(() => undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, bugReportsEnabled: true, featureIdeasEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, aiTryEnabled: false, ...digestFields(() => undefined) };
 
 /** §48.2 the five digest keys, flattened into the settings shape (defaults applied). */
 function digestFields(get: (key: string) => unknown): Pick<PlatformSettings, "emailDigestsEnabled" | "emailDigestDefaultMode" | "emailDigestHour" | "emailDigestWeekday" | "emailDigestTypes"> {
@@ -259,6 +261,7 @@ async function loadPlatformSettings(db: Pool): Promise<PlatformSettings> {
     featureIdeasEnabled: map.get("feature_ideas_enabled") !== false,
     searchLanguage: typeof map.get("search_language") === "string" ? (map.get("search_language") as string) : DEFAULTS.searchLanguage,
     aiDisplayName: coerceAiDisplayName(map.get("ai_display_name")),
+    aiTryEnabled: map.get("ai_try_enabled") === true,
     ...digestFields((k) => map.get(k)),
   };
 }
@@ -379,6 +382,30 @@ export async function setFeatureIdeasEnabled(enabled: boolean, actorUserId: stri
     targetId: "feature_ideas_enabled",
     after: { featureIdeasEnabled: enabled },
   });
+}
+
+/** Is the §61 Try skills switch on? (Try also needs an Operational integration — lib/aiTry.ts.) */
+export async function getAiTryEnabled(db: Pool = pool): Promise<boolean> {
+  return (await getPlatformSettings(db)).aiTryEnabled;
+}
+
+/**
+ * §61.8 the Try skills switch. Independent of the provider config (no test, no token, works with no
+ * provider and without AI_TOKEN_ENC_KEY). Unchanged ⇒ no-op; otherwise audited as settings.updated.
+ */
+export async function setAiTryEnabled(enabled: boolean, actorUserId: string): Promise<{ enabled: boolean }> {
+  const before = (await loadPlatformSettings(pool)).aiTryEnabled;
+  if (before === enabled) return { enabled };
+  await writeSetting("ai_try_enabled", enabled, actorUserId);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "ai_try_enabled",
+    before: { aiTryEnabled: before },
+    after: { aiTryEnabled: enabled },
+  });
+  return { enabled };
 }
 
 /** May everyone suggest features (§60.9)? Read by the submit path, Coming soon's `canSuggest` and the admin page. */

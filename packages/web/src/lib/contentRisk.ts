@@ -99,6 +99,12 @@ async function versionContentRisk(db: Db, skillId: string, v: VersionRow): Promi
 }
 
 /** What every viewer gets on the skill page: the displayed version's status, no findings (§37.11). */
+/** One active version's status — the §61.3 Try panel's flagged warning. Never findings. */
+export async function versionContentRiskStatus(skillId: string, semver: string): Promise<ContentRiskStatus | null> {
+  const v = (await activeVersions(pool, skillId)).find((r) => r.semver === semver);
+  return v ? (await versionContentRisk(pool, skillId, v)).status : null;
+}
+
 export async function skillContentRiskSummary(skillId: string): Promise<{ semver: string; status: ContentRiskStatus; ruleset: number } | null> {
   const v = displayedVersion(await activeVersions(pool, skillId));
   if (!v) return null;

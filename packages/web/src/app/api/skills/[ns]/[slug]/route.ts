@@ -14,6 +14,7 @@ import { qualitySummary } from "../../../../../lib/catalog";
 import { aiDraftAvailability } from "../../../../../lib/qualityDraft";
 import { deprecationDetail, listReplaces } from "../../../../../lib/deprecation";
 import { hypeDetail } from "../../../../../lib/hype";
+import { tryAvailability } from "../../../../../lib/aiTry";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, canShareSkill, seesViaGrantOnly, resolveLatest } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
@@ -87,6 +88,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     versions.filter((v) => v.status === "active" && v.gitPublished).map((v) => v.semver),
   );
   const publishing = latest != null && latestInstallable == null;
+  // §61.2: Try follows Install (active, installable) and needs the switch on + AI Operational.
+  const tryAvailable = await tryAvailability({ archived, latestInstallable });
   const deprecated = skill.deprecatedAt != null;
   const canDeprecate = !archived && canYankOrArchive(access, skill.namespaceId);
   return Response.json({
@@ -101,6 +104,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     latest,
     latestInstallable,
     publishing,
+    tryAvailable,
     watching,
     watchers,
     rating,
