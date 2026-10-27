@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.45.0",
+    date: "2026-10-27",
+    summary:
+      "Coming soon now re-sorts live: your upvote moves an item at once, and other people's votes show up within about 15 seconds while the list is open. Each item also shows who upvoted it, and you can open the full list. Votes you cast before are shown too; to hide your picture, set \"Show me on feature ideas I upvote\" to Hidden on your Profile. Your votes still count.",
+  },
+  {
     version: "2.44.0",
     date: "2026-10-23",
     summary:

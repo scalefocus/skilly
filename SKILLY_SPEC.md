@@ -136,7 +136,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `idea_votes_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's picture from others in the *Upvoted by* bubbles of *Coming soon* items; their votes still count; migration 0102, §60), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -359,9 +359,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`ai_prereview_links`** — binds a run to a subject: a proposal revision **or** a skill version (CASCADE); `cached` marks a link that reused an existing run; the latest link is the subject's current run.
 - **`ai_prereview_dispositions`** — append-only Agree/Dismiss per finding `fingerprint`, keyed to a proposal **or** a version; `decided_by` (FK → `users`, SET NULL), `reason` (≤ 500). The same migration adds `skill_versions.ai_prereview_notified_at` and `users.ai_prereview_notifications` (default true).
 
-### `feature_ideas` / `feature_idea_votes` (migrations 0100 and 0101, detailed in §60)
+### `feature_ideas` / `feature_idea_votes` (migrations 0100–0102, detailed in §60)
 - **`feature_ideas`** — every What's new *Coming soon* item: a feature suggestion goes `pending` → `published` (on *Coming soon*) → `closed` with an outcome, or `rejected` / `withdrawn`; the proposer's own text is kept beside the admin-edited one. Items seeded by migration 0101 have no proposer (§60.2). A platform admin may **hard-delete** any idea the admin page shows (§60.5).
-- **`feature_idea_votes`** — one upvote per user per published item; mutable personal rows, CASCADE on the user (§60.6). (Migration 0101 moved the former `upcoming_votes` rows here and dropped that table.)
+- **`feature_idea_votes`** — one upvote per user per published item; mutable personal rows, CASCADE on the user (§60.6). Voters appear as the item's *Upvoted by* bubbles unless they hid themselves (`users.idea_votes_hidden`, §60.3); migration 0102 adds an `(idea_id, created_at DESC)` index for the most recent voters. (Migration 0101 moved the former `upcoming_votes` rows here and dropped that table.)
 
 ---
 
@@ -474,7 +474,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. Likewise **`ai_usage.user_id` → NULL** (§40.3), keeping AI usage totals intact. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
-- **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false` and `idea_notifications = true`.
+- **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false`, `idea_notifications = true` and `idea_votes_hidden = false`.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
 - **Leaderboard credit transfer (same optional target):** with a "Replace maintainer to" target, the erased user's `install_credits` rows are **reassigned to the target** instead of deleted, so their contributor-leaderboard standing (installs + "skills adopted", §21) is retained under the successor. Two classes of row are **excepted and deleted** (as plain erasure would): **would-be self-credits** — credits for installs the *target* performed themselves; the no-self-credit rule (§21) holds even through transfer — and **duplicates** — the target already holds a credit for the same install (they co-maintained the skill); one install never counts twice for one person. Credit transfer is **independent of the maintainer-transfer eligibility check**: **all** remaining credits move, including those on restricted skills the target can't see — no leak, because the board exposes only per-person aggregates and never skill identities (invariant #3 holds); the target's "skills adopted" may therefore count skills their leaderboard "Skills" catalog link won't show (that link visibility-filters independently). Reassigned rows keep their original `access_log` timestamps, so both windows stay faithful (the target's 30d numbers may jump). **"Requests fulfilled" and "skills requested" are deliberately NOT transferred** — `fulfilled_by_user_id` / `requester_user_id` record who actually did the work / actually asked, and rewriting either would misattribute history on the request record itself (and change who appears as the requester in threads and detail pages); both stay on the tombstone, hidden from the board as today. **"Skills watched" needs no transfer** — it derives from *current* explicit maintainership, so it already follows the maintainer transfer for eligible skills. With **no target** (including the SCIM erasure path, which never has one), credits are deleted exactly as before (§21 "Erasure removes credit").
@@ -1790,7 +1790,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `PUT /api/admin/ai/prereview { enabled }` — the AI pre-review switch (§46.2, platform-admin); `GET /api/admin/ai` gains `prereview`.
 - `PUT /api/admin/ai/try { enabled }` — the Try skills switch (§61.8, platform-admin); `GET /api/admin/ai` gains `try`.
 - **Feedback survey (§36.10, all platform-admin):** `GET /api/admin/survey/summary`, `GET /api/admin/survey/comments`, `DELETE /api/admin/survey/responses/:id` (audited `survey.response_deleted`); `survey_enabled` and `bug_reports_enabled` (§36.17) on `GET|PATCH /api/admin/settings`.
-- **Feature ideas (§60.11):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
+- **Feature ideas (§60.11):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`, `GET /api/coming-soon/ideas/:id/voters`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` / `ideaVotesHidden` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), **email digests** (`email_digests_enabled`, `email_digest_default_mode`, `email_digest_hour`, `email_digest_weekday`, `email_digest_types`, §48.11), …).
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
@@ -2080,6 +2080,18 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
       conversation, Start over), and the *Try skills* switch row on the AI integration card with
       `PUT /api/admin/ai/try`.
     - No migration. **Minor** release.
+
+44. **Coming soon follows the votes live, and shows who upvoted (§60.3):**
+    - **Data:** migration 0102 (`users.idea_votes_hidden`, the `feature_idea_votes (idea_id,
+      created_at DESC)` index).
+    - **Shared:** `COMING_SOON_POLL_MS`, `VOTER_STRIP_MAX` and `VOTER_LIST_MAX` in
+      `@skilly/shared/ideas`; the client re-sorts with the existing `comingSoonOrder`.
+    - **Web:** the list re-sorts on every vote with a slide (none under reduced motion) and polls
+      `GET /api/coming-soon` every 15 s while expanded and visible, with an `ETag` / `304`; the
+      *Upvoted by* strip and its list popover; `GET /api/coming-soon/ideas/:id/voters`; voters on
+      the vote routes' answer; the Profile toggle *"Show me on feature ideas I upvote"*
+      (`ideaVotesHidden`); the erasure reset.
+    - **Minor** release (v2.45.0).
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -3175,8 +3187,8 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     Users suggest items, platform admins publish, edit and close them on `/admin/ideas`, and every
     signed-in user upvotes them. No list of items exists in the code or in this document. Every
     published item is shown to **every signed-in user**: there is no per-item audience. The
-    behaviour of the list (its order, the votes, *Suggest a feature*, *Your ideas*, and when the
-    section shows) is specified in §60.3.
+    behaviour of the list (its live order, the votes and who cast them, *Suggest a feature*, *Your
+    ideas*, and when the section shows) is specified in §60.3.
   - **Collapsed by default, never remembered.** The section opens **collapsed on every visit**:
     only its heading block shows — a compass glyph, **"Coming soon · N"** (N = the published
     items), the sub-line (§60.3), and a chevron. The heading block is one `<button>`
@@ -3190,7 +3202,8 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     text in `--muted`, a **dashed** `--line` border, no accent, a neutral **"Coming soon"** chip in
     place of the version chip, and **no date, no version, no ETA** — nothing that reads as a
     promise. Rows are not links and not focusable; the list is a plain `<ul aria-label="Coming
-    soon">`. §60.3 adds the vote control and the *Suggested by* line.
+    soon">`. §60.3 adds the vote control, the *Suggested by* line and the *Upvoted by* strip, and
+    lets rows slide when the order changes.
   - **Copy.** Platform admins are the editors: they title an item when they publish it and may
     edit its text then or later (§60.5).
   - **Not in the notice.** The update notice (below) lists only shipped releases; *Coming soon*
@@ -12586,7 +12599,8 @@ sweep, and so **is** a Habits event. While `hype_enabled` is off, all three hype
 The What's new page's *Coming soon* list (§23) is skilly's roadmap, and **every item on it is a
 database row**. A signed-in user **suggests a feature** in a text box, a platform admin reviews it
 and **publishes** the good ones to the list, and everyone **upvotes** them. The list is ordered by
-votes: **the most-voted items are next in line**. Platform admins edit published items, close
+votes: **the most-voted items are next in line**. It **re-sorts live** as votes come in, and each
+item shows **who upvoted it** as a strip of profile bubbles. Platform admins edit published items, close
 them once they ship or are settled, and may delete any idea outright. Two badges reward a suggestion that gets published and one that
 ships. (Until v2.41.0 the list also held teasers written in code for spec-ahead features. Migration
 0101 turned them into ordinary items, §60.2.)
@@ -12595,9 +12609,9 @@ ships. (Until v2.41.0 the list also held teasers written in code for spec-ahead 
 | # | Decision | Why |
 |---|---|---|
 | 1 | **One list, held only in the database.** Every *Coming soon* item is a `published` `feature_ideas` row, and every row looks the same. The only visible difference is the *Suggested by* line on an item with a named proposer. No list of items exists in the code or in this spec. | The user's call: one place to look and vote, edited by platform admins without a release. |
-| 2 | **The list sorts by votes**, most-voted first. Ties: newest published first, then by id. | "The most upvoted are the next to implement." |
+| 2 | **The list sorts by votes**, most-voted first. Ties: newest published first, then by id. It stays sorted while it is open (decision 18). | "The most upvoted are the next to implement." |
 | 3 | **Publishing is moderation, not a commitment.** An admin publishes an idea so people can vote on it. When it is settled, the admin **closes** it as *Shipped*, *Duplicate* or *Won't do*. Being on the list is what "coming" means, so there is **no *Planned* close**. Ideas closed as *Planned* before v2.41.0 keep that outcome and their *Mark shipped* action. | Admins must be free to publish ideas they have not decided to build. |
-| 4 | **Upvote only, one per user per entry, undo any time, no budget.** Counts are visible to everyone who sees the entry. | Simple, honest, and like a reaction. |
+| 4 | **Upvote only, one per user per entry, undo any time, no budget.** Counts are visible to everyone who sees the entry, and so are the voters who have not hidden themselves (decision 19). | Simple, honest, and like a reaction. |
 | 5 | **The proposer writes only a description** (20–1,000 characters, plain text). On publishing, the admin **adds a title** and **may edit** the description. The proposer's own text is kept. | One box for the user; every row on the list has a title and a text. |
 | 6 | Proposers may **edit or withdraw** a pending idea; once it is published, only platform admins change it. | The proposer owns the draft; the admin owns what is public. |
 | 7 | A published idea starts with **its proposer's vote** (count 1), which they can remove. | Their suggestion is their vote. |
@@ -12611,8 +12625,10 @@ ships. (Until v2.41.0 the list also held teasers written in code for spec-ahead 
 | 15 | **No MCP tool, no leaderboard credit, no follower fan-out** beyond the achievement's own. Votes and the proposer's own actions are **not audited**; admin decisions are. | §29's "fold before adding surface"; §11's posture for personal rows. |
 | 16 | **No audience.** Every published item is shown to every signed-in user. | The user's call. (The code teasers could be limited to admins; the two that were became visible to everyone in v2.41.0.) |
 | 17 | **Platform admins may delete any idea** the admin page shows (pending, published, rejected or closed, seeded items included), **one at a time**. It is a **hard delete**: the row and its votes go, the proposer is **not told**, and their earlier notifications about the idea go too. Badges stay. The reason is optional and lives only in the `idea.deleted` audit row, which keeps a snapshot of what was deleted. | The user's call: a way to remove junk, test data and anything that should never have been listed, beyond Reject and Close. |
+| 18 | **The open list follows the votes live.** The caller's own vote re-sorts it at once, with rows sliding to their new place, and the expanded section polls every 15 s while the tab is visible, so other people's votes and items published, edited, closed or deleted since appear without a reload. This replaces the v2.40.0 rule that voting never re-sorted the open list. Only `/whats-new` is live: the admin page's Published tab keeps its on-load order. | The user's call: "order the proposed features based on upvotes in real time". skilly has no push channel; polling is the house pattern (§24, the nav badges). |
+| 19 | **Each item shows who upvoted it**: the 5 most recent voters as overlapping profile bubbles, then **"+N"**, and the strip opens the full list. Voters are **shown by default, votes cast before v2.45.0 included**. A Profile toggle hides the user's bubble from **everyone, platform admins included**: their vote still counts, and they still see their own bubble, marked *only you*. | The user's call: social proof on the list, with the same kind of opt-out as the other Profile privacy toggles. |
 
-### 60.2 Data model (migrations 0100 and 0101)
+### 60.2 Data model (migrations 0100–0102)
 - **`feature_ideas`**: `id` (uuid PK), `author_id` (FK → `users`, `ON DELETE SET NULL`; NULL on
   the items migration 0101 seeded, which have no proposer),
   `status` (`pending` | `published` | `rejected` | `closed` | `withdrawn`), `description` (TEXT,
@@ -12645,25 +12661,32 @@ ships. (Until v2.41.0 the list also held teasers written in code for spec-ahead 
 - **`users.idea_attribution_hidden`** (BOOLEAN NOT NULL DEFAULT false): hides the proposer's name
   from users on their ideas. **`users.idea_notifications`** (BOOLEAN NOT NULL DEFAULT true): a
   platform admin's opt-out of `idea.submitted`.
+- **Migration 0102: who upvoted.** It adds **`users.idea_votes_hidden`** (BOOLEAN NOT NULL DEFAULT
+  false): hides the user's bubble from everyone else in the *Upvoted by* strips (decision 19). It
+  is false for every existing user, so votes cast before v2.45.0 show from the release on. It also
+  adds the index **`feature_idea_votes (idea_id, created_at DESC)`**, which serves "the most recent
+  voters of an item".
 - **`platform_settings.feature_ideas_enabled`**: default `true`; whether users who are not
   platform admins may suggest (§60.9).
 - Vote rows and ideas are ordinary **mutable rows**, never audit data (§11).
 - A client-safe shared module, **`@skilly/shared/ideas`**, holds the limits, the outcome and
   status enums (with the outcomes a new close accepts: `shipped`, `duplicate`, `wont_do`), the
-  validators (`validateIdeaDescription`, `validateIdeaTitle`, `validateIdeaNote`) and the ordering
-  function `comingSoonOrder` (§60.3), so the server, the page and the admin page can never
-  disagree.
+  validators (`validateIdeaDescription`, `validateIdeaTitle`, `validateIdeaNote`), the ordering
+  function `comingSoonOrder` (§60.3), which the page also uses to re-sort live, and the live-list
+  constants `COMING_SOON_POLL_MS` (15,000), `VOTER_STRIP_MAX` (5) and `VOTER_LIST_MAX` (100), so the
+  server, the page and the admin page can never disagree.
 
 ### 60.3 Coming soon, with votes (`/whats-new`)
 §23 places the *Coming soon* section and sets its look. This subsection specifies what it lists and
 how it behaves.
 - **One list from the server.** `GET /api/coming-soon` returns every `published` item, ordered by
-  `comingSoonOrder` (decision 2). Each item carries `votes` and `voted` (whether the caller has
-  voted). The response also says whether the caller may suggest (`canSuggest`: always for a
-  platform admin, otherwise the value of `feature_ideas_enabled`).
-- **Rendering waits for** `/api/coming-soon`, so the count never changes after first paint. If it
-  fails, the section is not rendered at all (there is no fallback list), and the release history
-  renders as usual.
+  `comingSoonOrder` (decision 2). Each item carries `votes`, `voted` (whether the caller has
+  voted) and its *Upvoted by* strip (`voters`, `votersTotal`, below). The response also says
+  whether the caller may suggest (`canSuggest`: always for a platform admin, otherwise the value of
+  `feature_ideas_enabled`) and whether the caller hides their own bubble (`votesHidden`).
+- **Rendering waits for** the first `/api/coming-soon`, so the first paint already shows the real
+  counts. If it fails, the section is not rendered at all (there is no fallback list), and the
+  release history renders as usual. Later changes arrive through the live updates below.
 - **When the section shows.** While the caller may suggest, there are published items, or the
   caller has an idea in *Your ideas*; otherwise it is hidden. Heading: **"Coming soon · N"**, where
   N counts the published items. Sub-line: *"Most-voted first: the most wanted are next in line.
@@ -12685,9 +12708,62 @@ how it behaves.
 - **Vote control.** Every row carries an upvote button at its trailing edge: a ▲ glyph over the
   count. It is a `<button aria-pressed>` with an accessible name of the form *"Upvote \<title\>, N
   votes"*. The rows themselves stay non-interactive (§23). A click flips the vote
-  **optimistically** and calls the vote route. On failure it reverts and shows the error toast.
-  **Voting never re-sorts the open list**: rows stay where they are until the next load, so nothing
-  jumps under the pointer.
+  **optimistically** (count, ▲ state and the caller's own bubble) and calls the vote route, then
+  settles on the server's answer (§60.6). On failure it reverts and shows the error toast. Either
+  way the list **re-sorts at once** (below).
+- **Live order (decision 18).** The rows are always in `comingSoonOrder`.
+  - **Re-sort on every change**: after the caller's optimistic vote, after the vote route's answer,
+    and after every poll. A poll replaces the items (counts, voters, titles and texts, items added
+    or gone), `mine`, `limits`, `canSuggest` and the heading's N in one step.
+  - **Motion.** A row that changes place **slides** to it (a FLIP transform, about 250 ms); a new
+    item fades in and a removed one fades out. Under `prefers-reduced-motion: reduce` rows move
+    instantly. Keyboard focus stays on the control that had it, which moves with its row. If the
+    focused row is removed, focus goes to the list. **For 400 ms after its row moves, a vote button
+    ignores clicks**, so a quick second click cannot land on a row that just slid under the
+    pointer.
+  - **Polling.** While the section is **expanded** and the tab is **visible**, the page re-fetches
+    `GET /api/coming-soon` every **15 s** (`COMING_SOON_POLL_MS`, fixed, not an admin setting). It
+    also fetches **at once** when the section is expanded and when the tab becomes visible again.
+    It does not poll while collapsed (the rows are not rendered then, §23) or while the tab is
+    hidden, so a collapsed heading keeps the N it last loaded. Each poll sends `If-None-Match` with
+    the last `ETag`; an unchanged list answers **304** with no body (§60.11), so an idle open list
+    costs one empty answer per 15 s.
+  - **The caller's votes win.** A poll answer is discarded if the caller voted after it was
+    requested, or has a vote in flight; the next poll catches up. A failed poll changes nothing,
+    shows no toast, and the next tick tries again.
+  - **Once shown, the section stays** for the visit. A poll that empties the list shows the empty
+    text, even if the section would not be shown on a fresh load. An open *Suggest* or *Edit* dialog
+    keeps working on what it opened with; its 403, 409 and 429 answers work as in §60.4.
+  - **Screen readers.** A polite live region announces the caller's own vote once it settles:
+    *"Upvoted ‹title›: N votes, now number K of M."* or *"Removed your upvote from ‹title›: N
+    votes, now number K of M."* Moves caused by polls are not announced.
+- **Upvoted by (decision 19).** Below the text and the *Suggested by* line, a row with at least
+  one listed voter shows a muted **"Upvoted by"** label and a strip of up to **5** overlapping
+  `UserBubble`s (size 20), then a **"+N"** chip when more voters are listed.
+  - **Who is listed**, for a given viewer: every voter of the item whose `idea_votes_hidden` is
+    false, **newest vote first** (vote `created_at` descending, then user id). Leavers stay listed
+    (§60.9); erased users have no votes. **The viewer themself** is listed whenever they voted,
+    even with `idea_votes_hidden` on, at their vote's place in the order and marked **only you**.
+    No one else, platform admins included, ever sees a hidden voter: they count in the ▲ number
+    only. `votersTotal` counts the listed voters, and N = `votersTotal` − 5.
+  - **The proposer's vote** (decision 7) and the votes migration 0101 moved are ordinary votes and
+    are listed like any other.
+  - **The strip is one `<button>`** (`aria-haspopup="dialog"`, `aria-expanded`) with an accessible
+    name of the form *"Upvoted by Ana, Ben, you (only you see this) and 12 others"*. The bubbles
+    inside it are decorative: they show the person's name as a tooltip and open no hover card, so
+    a row adds one tab stop. The viewer's *only you* bubble is drawn at reduced opacity with a
+    dashed ring, and its tooltip reads *"You: only you see this"*.
+  - **The list.** Clicking the strip opens a popover anchored to it (`role="dialog"`, labelled
+    **"Upvoted by"** with the ▲ count; Escape, a click outside or the strip again closes it, and
+    focus returns to the strip). It loads `GET /api/coming-soon/ideas/:id/voters` and shows the
+    listed voters in the same order, each as a `UserBubble` (with the directory hover card, §28) and
+    their name; the viewer's line reads *"You"*, plus *"· only you see this"* when hidden. At most
+    **100** lines (`VOTER_LIST_MAX`), then *"and N more"*. When some voters are hidden, a last muted
+    line reads *"K more keep their upvotes private"* (K = votes − `votersTotal`). The list is a
+    snapshot: it does not poll while open. If the item is gone by then (404), the popover says
+    *"This item is no longer on the list."*
+  - **No voters listed** (no votes, or every voter hidden): no *Upvoted by* row.
+  - **Your ideas** rows keep their plain vote count; the strip appears only on the main list.
 - **"Your ideas".** For a viewer with any non-withdrawn idea, the expanded section ends with a
   **"Your ideas"** sub-list (`id="your-ideas"`), newest first, at most 20. Each row shows the
   description, the submitted date (viewer's timezone, `useDateFmt()`) and a status chip:
@@ -12760,7 +12836,8 @@ how it behaves.
     - Both send back the card's `version` (its `updated_at`, rendered at full precision) as
       `expectedUpdatedAt`. If the proposer edited or withdrew the idea since the page loaded, the
       action answers **409** *"this idea changed since you opened it"* and the list reloads.
-  - **Published**: everything on *Coming soon*, most-voted first. Each card shows the vote count,
+  - **Published**: everything on *Coming soon*, most-voted first **as loaded** (it neither polls
+    nor re-sorts, and shows no *Upvoted by* strip; decision 18). Each card shows the vote count,
     title, description, proposer (or a muted *"No proposer"* on the items seeded by migration 0101)
     and published date, with a **Show original** disclosure when the published text differs from
     `submitted_description`. Two actions, plus **Delete…** (below), on every published item, seeded
@@ -12800,8 +12877,9 @@ how it behaves.
   so two admins cannot decide one idea twice: the second gets **409**.
 
 ### 60.6 Votes
-- `PUT` upvotes and `DELETE` removes; both are **idempotent** and answer **200** `{ votes, voted }`
-  (the new count, so the optimistic flip settles on the server's number). A vote needs a
+- `PUT` upvotes and `DELETE` removes; both are **idempotent** and answer **200** `{ votes, voted,
+  voters, votersTotal }` (the new count and the caller's view of the strip, so the optimistic flip
+  settles on the server's numbers). A vote needs a
   `published` item. Anything else → **404**, the same answer as for an unknown id, so the route
   never reveals a pending or rejected idea.
 - Rate limit **120 / min** per user (the watch endpoint's limit). Votes are not audited and earn no
@@ -12865,15 +12943,21 @@ catalog **from 31 to 33**:
   deleted.
 - **Profile.** A toggle **"Show my name on feature ideas I suggest"** (on by default; it stores the
   inverse in `idea_attribution_hidden`). It applies **live** to all of the user's published ideas.
+  Below it, in the same *Feature ideas* section, a second **Shown / Hidden** toggle, **"Show me on
+  feature ideas I upvote"** (on by default; it stores the inverse in `idea_votes_hidden`), with the
+  text *"Your picture appears among the people who upvoted an item on the Coming soon list.
+  Hidden: your upvotes still count, but only you see your picture."* It applies **live** to every
+  vote of the user, past and future (decision 19).
   Platform admins additionally get **"New feature ideas to review"** (`idea_notifications`) among
-  their notification preferences. Both go through `PATCH /api/me` (`ideaAttributionHidden`,
-  `ideaNotifications`) and are not audited.
+  their notification preferences. All three go through `PATCH /api/me` (`ideaAttributionHidden`,
+  `ideaVotesHidden`, `ideaNotifications`) and are not audited.
 - **Erasure (§4).** The sweep **deletes** the user's `pending`, `rejected`, `closed` and `withdrawn`
   ideas and **all of their votes**. **Published ideas stay**, rendered with no
-  *Suggested by* line (the author is erased). The scrub resets `idea_attribution_hidden = false` and
-  `idea_notifications = true`. Audit rows are untouched (invariant #5).
-- **Leavers** (deactivated, not erased) keep their ideas, name and votes. They simply get no
-  notifications or badges.
+  *Suggested by* line (the author is erased). Their bubbles leave every *Upvoted by* strip with
+  their votes. The scrub resets `idea_attribution_hidden = false`, `idea_notifications = true` and
+  `idea_votes_hidden = false`. Audit rows are untouched (invariant #5).
+- **Leavers** (deactivated, not erased) keep their ideas, name, votes and *Upvoted by* bubbles.
+  They simply get no notifications or badges.
 
 ### 60.10 Audit (§11)
 Audited, with `target_type = 'feature_idea'`: `idea.published` (before = the submitted text; after
@@ -12884,16 +12968,26 @@ description, submitted description, outcome, admin note, proposer id, created an
 after = the reason and the vote count that was deleted), plus `settings.updated` for
 `feature_ideas_enabled`. The `idea.deleted` snapshot is the only record left of a deleted idea, and
 it keeps the proposer's text even after their erasure (invariant #5). **Not audited:**
-submitting, editing or withdrawing an idea, votes, and the two profile toggles. These are personal,
+submitting, editing or withdrawing an idea, votes, and the three profile toggles. These are personal,
 mutable rows, like ratings and hypes. Migration 0101's inserts and vote moves are not audited
 either: a one-off schema migration with no actor.
 
 ### 60.11 API
 All routes are auth-required.
-- `GET /api/coming-soon` → `{ items, mine, limits, canSuggest }`. `items` is the ordered list
-  (§60.3): `{ id, title, description, votes, voted, suggestedBy: { id, displayName, avatar } |
-  null, publishedAt }`. `mine` is the caller's ideas (§60.3 *Your ideas*). `limits` is described
-  in §60.4, `canSuggest` in §60.3.
+- `GET /api/coming-soon` → `{ items, mine, limits, canSuggest, votesHidden }`. `items` is the
+  ordered list (§60.3): `{ id, title, description, votes, voted, suggestedBy: { id, displayName,
+  avatar } | null, publishedAt, voters, votersTotal }`, where `voters` is the first 5 listed
+  voters, `{ id, displayName, avatar, onlyYou? }` (`onlyYou: true` only on the caller's own entry
+  while they hide it), and `votersTotal` counts every listed voter. `mine` is the caller's ideas
+  (§60.3 *Your ideas*). `limits` is described in §60.4, `canSuggest` in §60.3, `votesHidden` is the
+  caller's `idea_votes_hidden`. The answer carries a weak **`ETag`** (a hash of this caller's body);
+  a request whose `If-None-Match` matches gets **304** with no body. The `/api` default
+  `Cache-Control: no-store` stays, so no cache keeps the body: the page holds the last tag and sends
+  `If-None-Match` itself.
+- `GET /api/coming-soon/ideas/:id/voters` → `{ voters, votersTotal, hiddenCount }`: the listed
+  voters for the caller (§60.3), at most 100, in strip order, same shape as above. `hiddenCount` =
+  votes − `votersTotal`. **404** unless the idea is `published`, the same answer as for an unknown
+  id.
 - `POST /api/coming-soon/ideas { description }` → **201** `{ idea }`; **422** for a bad length;
   **403** `{ reason: "suggestions_off" }` for a caller who is not a platform admin while
   `feature_ideas_enabled` is off; **429** at a limit (§60.4).
@@ -12913,9 +13007,11 @@ All routes are auth-required.
   `POST /api/admin/ideas/:id/delete { reason?, expectedUpdatedAt? }` (any status the admin page
   shows; `expectedUpdatedAt` required for a pending idea; **404** for an unknown, withdrawn or
   already-deleted idea, **409** for a stale pending version, **422** for a reason over 500).
-- `GET /api/nav-badges` gains `ideas`; `GET | PATCH /api/me` gains `ideaAttributionHidden` and
-  `ideaNotifications`; `GET | PATCH /api/admin/settings` gains `featureIdeasEnabled`.
-- Rate limits: submit and edit **30 / min**; votes **120 / min**; reads use the defaults.
+- `GET /api/nav-badges` gains `ideas`; `GET | PATCH /api/me` gains `ideaAttributionHidden`,
+  `ideaVotesHidden` and `ideaNotifications`; `GET | PATCH /api/admin/settings` gains
+  `featureIdeasEnabled`.
+- Rate limits: submit and edit **30 / min**; votes **120 / min**; reads use the defaults (a live
+  list makes about 4 polls a minute per open tab, §60.3).
 
 ### 60.12 Accepted trade-offs
 - **The roadmap is not reviewed like the spec.** Platform admins publish and edit *Coming soon*
@@ -12930,7 +13026,23 @@ All routes are auth-required.
   remove such names (invariant #3 relies on that moderation step). Every published item is shown to
   everyone (decision 16), so an admin-only plan must be worded for everyone or kept off the list.
 - **Counts invite bandwagoning.** Visible counts and the votes ordering favour early leaders. This
-  is accepted, because the list exists to surface demand.
+  is accepted, because the list exists to surface demand. Faces in the *Upvoted by* strip and a list
+  that re-sorts live make it stronger; that is accepted too.
+- **Votes that were anonymous become visible.** Votes cast before v2.45.0 were cast when no one
+  could see them, and they show from the release on (decision 19). The release's changelog entry
+  says so and points to the Profile toggle, which hides every vote of the user at once.
+- **Hidden voters are counted, not named.** The popover's *"K more keep their upvotes private"* and
+  the gap between the ▲ count and the strip reveal how many voters are hidden, never who. Platform
+  admins do not see them either, so no one can audit who voted for what (votes are not audited,
+  decision 15).
+- **The list moves.** Rows can change place while someone reads, including under the pointer.
+  The slide, the 400 ms click guard and keeping focus soften it; it is the price of decision 18.
+- **Near real time, not push.** Other people's votes show within about 15 s, not instantly, and a
+  collapsed section or a hidden tab does not update until it is opened again. skilly has no push
+  channel, and polling with `ETag` / `304` keeps the cost to one empty answer per 15 s per open
+  list.
+- **Leavers keep their faces.** A deactivated user's bubble stays in the strips until they are
+  erased (§60.9), as their name stays on their ideas.
 - **Deleting frees limit room.** A deleted pending idea stops counting toward its proposer's
   pending and daily caps, so someone whose three junk ideas were deleted can submit again at once.
   This is accepted: proposers are named Entra accounts, and an admin who wants the caps to hold
@@ -12942,7 +13054,10 @@ All routes are auth-required.
 ### 60.13 Tests (shipped with the change)
 - **Unit:** `comingSoonOrder` (votes, then newest published, then id), the three validators, the
   limit predicate, the close-outcome check (`planned` refused), the two catalog entries (absent from
-  the unavailable mapping), and the notification copy for the five types.
+  the unavailable mapping), and the notification copy for the five types. **v2.45.0:** the live
+  list's client logic: re-sorting after an optimistic vote and after a poll, discarding a poll
+  answer older than the caller's latest vote, the optimistic own bubble (added first, marked
+  *only you* while `votesHidden`, removed on un-vote) and the *Upvoted by* accessible name.
 - **Integration:** submit (bounds, both limits under concurrent requests, `Retry-After`; with
   `feature_ideas_enabled` off, **403** for a plain user and **201** for a platform admin); edit and
   withdraw (owner only, pending only, still allowed while the switch is off); publish, reject,
@@ -12958,7 +13073,14 @@ All routes are auth-required.
   notifications are removed, other ideas' and `idea.submitted` rows untouched; badges kept; no
   notification created; the audit snapshot and vote count; a pending idea without or with a stale
   `expectedUpdatedAt` → 409; withdrawn, unknown or deleted twice → 404; a reason over 500 → 422;
-  a deleted pending idea no longer counts toward the caps).
+  a deleted pending idea no longer counts toward the caps). **v2.45.0:** the strip in `GET
+  /api/coming-soon` and the vote answers (newest first; at most 5; `votersTotal`; a hidden voter
+  absent for every other viewer, a platform admin included, and present with `onlyYou` for
+  themself; a leaver listed; the proposer's auto-vote listed); `ETag` stable for an unchanged list,
+  different after another user's vote, and **304** on a matching `If-None-Match`; `GET
+  /api/coming-soon/ideas/:id/voters` (order, the 100 cap, `hiddenCount`, **404** for a pending,
+  closed or unknown idea); `PATCH /api/me { ideaVotesHidden }` round-trips and applies to earlier
+  votes; erasure resets `idea_votes_hidden`.
 - **e2e:** the `feature-ideas` spec, classified **`exclusive`** because a published idea changes
   *Coming soon* for every user. A user suggests an idea through the dialog and sees it pending in
   *Your ideas*, then edits it. The dev admin sees the nav badge, publishes the idea with a title,
@@ -12970,6 +13092,16 @@ All routes are auth-required.
   Published tab and *Your ideas*. (Every e2e user is a
   platform admin, so the plain-user side, no button and a 403, is covered by the integration test.)
   The *Coming soon* e2e (§23) reads its expected count from `GET /api/coming-soon`.
+  **v2.45.0, a second test in the same spec** (it needs `DATABASE_URL`, set on every CI stack):
+  outside Jenkins only one user can sign in, so "someone else" is a fixed user row that never signs
+  in, whose vote and opt-out are written straight to the database. The user publishes two ideas, B
+  then A, and takes back their own votes, so at 0 each the newer A sits above B. They upvote B and
+  see it move above A **without a reload**, with their bubble first in B's strip and the
+  announcement read out. The other user's vote on A ties them at 1, and the open page shows A back
+  on top, with that user's bubble, after one poll (the test waits up to 20 s). A's strip opens the
+  *Upvoted by* list with that user's name. The user then hides their votes on Profile: their bubble
+  on B shows *only you*. Last, the other user hides theirs: after the next poll A shows no strip
+  while its ▲ count stays 1.
 
 ---
 

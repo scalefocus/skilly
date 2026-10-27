@@ -1,5 +1,5 @@
-// Feature ideas — the web tier (SKILLY_SPEC.md §60): the Coming soon list with its votes (every
-// item is a published `feature_ideas` row), the proposer's own suggestions (who may suggest, and the
+// Feature ideas — the web tier (SKILLY_SPEC.md §60): the Coming soon list with its votes and its
+// "Upvoted by" voters (every item is a published `feature_ideas` row), the proposer's own suggestions (who may suggest, and the
 // two caps under a per-user advisory lock), the votes, and the platform-admin review actions with
 // their notifications, badges and audit rows. The pure rules — limits, validators, who may suggest,
 // the order and the notification wording — live in @skilly/shared/ideas.
@@ -13,6 +13,8 @@ import {
   IDEA_DAILY_MAX,
   IDEA_MINE_LIMIT,
   IDEA_PENDING_MAX,
+  VOTER_LIST_MAX,
+  VOTER_STRIP_MAX,
   comingSoonOrder,
   dailyRetryAfterSeconds,
   ideaExcerpt,
@@ -23,6 +25,7 @@ import {
   validateIdeaNote,
   validateIdeaTitle,
   type ComingSoonItem,
+  type ComingSoonVoter,
   type IdeaLimitRefusal,
   type IdeaOutcome,
   type IdeaStatus,
@@ -69,6 +72,8 @@ export interface ComingSoonView {
   limits: ComingSoonLimits;
   /** May the caller suggest right now? Platform admins always, everyone else while the switch is on. */
   canSuggest: boolean;
+  /** The caller's own `idea_votes_hidden`: their bubble shows to them alone, marked "only you". */
+  votesHidden: boolean;
 }
 
 /** §60.4 who may suggest, against the live switch. */
@@ -78,9 +83,9 @@ export async function canSuggest(viewer: IdeaViewer): Promise<boolean> {
 
 const iso = (d: Date | string | null): string | null => (d == null ? null : new Date(d).toISOString());
 
-/** Every published item, ordered; the caller's own ideas; where they stand against the caps. */
+/** Every published item, ordered, with its strip; the caller's own ideas; where they stand against the caps. */
 export async function getComingSoon(viewer: IdeaViewer, db: Db = pool): Promise<ComingSoonView> {
-  const [items, mine, limits, suggest] = await Promise.all([
+  const [items, strips, mine, limits, suggest, hidden] = await Promise.all([
     db.query<{
       id: string; title: string; description: string; published_at: Date; author_id: string | null;
       display_name: string | null; avatar: string | null; attributed: boolean; votes: number; voted: boolean;
@@ -95,9 +100,11 @@ export async function getComingSoon(viewer: IdeaViewer, db: Db = pool): Promise<
         where i.status = 'published'`,
       [viewer.userId],
     ),
+    listedVoters(db, viewer.userId, null, VOTER_STRIP_MAX),
     listMyIdeas(viewer.userId, db),
     limitCounts(db, viewer.userId),
     canSuggest(viewer),
+    db.query<{ hidden: boolean }>(`select idea_votes_hidden as hidden from users where id = $1`, [viewer.userId]),
   ]);
   return {
     items: comingSoonOrder(
@@ -109,12 +116,66 @@ export async function getComingSoon(viewer: IdeaViewer, db: Db = pool): Promise<
         voted: r.voted,
         suggestedBy: r.attributed && r.author_id ? { id: r.author_id, displayName: r.display_name ?? "", avatar: r.avatar } : null,
         publishedAt: iso(r.published_at)!,
+        voters: strips.get(r.id)?.voters ?? [],
+        votersTotal: strips.get(r.id)?.total ?? 0,
       })),
     ),
     mine,
     limits: { pending: limits.pending, pendingMax: IDEA_PENDING_MAX, today: limits.today, dailyMax: IDEA_DAILY_MAX },
     canSuggest: suggest,
+    votesHidden: hidden.rows[0]?.hidden === true,
   };
+}
+
+/**
+ * The "Upvoted by" voters of published ideas as `viewerId` sees them (§60.3 decision 19): everyone
+ * who did not hide their votes, plus the viewer themself (marked `onlyYou` while they hide theirs),
+ * newest vote first, then user id. At most `limit` per idea; `total` counts them all. Hidden voters
+ * count only in the item's vote count — nobody else, platform admins included, ever sees them.
+ * `ideaId` null → every published idea.
+ */
+async function listedVoters(
+  db: Db,
+  viewerId: string,
+  ideaId: string | null,
+  limit: number,
+): Promise<Map<string, { voters: ComingSoonVoter[]; total: number }>> {
+  const { rows } = await db.query<{ idea_id: string; user_id: string; display_name: string | null; avatar: string | null; only_you: boolean; total: number }>(
+    `select idea_id, user_id, display_name, avatar, only_you, total
+       from (select v.idea_id, v.user_id, ${nameSql("u.display_name", "u.email")} as display_name, u.avatar,
+                    (v.user_id = $1 and u.idea_votes_hidden) as only_you,
+                    row_number() over (partition by v.idea_id order by v.created_at desc, v.user_id) as rn,
+                    (count(*) over (partition by v.idea_id))::int as total
+               from feature_idea_votes v
+               join feature_ideas i on i.id = v.idea_id and i.status = 'published'
+               join users u on u.id = v.user_id
+              where (not u.idea_votes_hidden or v.user_id = $1)
+                and ($2::uuid is null or v.idea_id = $2)) listed
+      where rn <= $3
+      order by idea_id, rn`,
+    [viewerId, ideaId, limit],
+  );
+  const out = new Map<string, { voters: ComingSoonVoter[]; total: number }>();
+  for (const r of rows) {
+    const strip = out.get(r.idea_id) ?? { voters: [], total: r.total };
+    strip.voters.push({ id: r.user_id, displayName: r.display_name ?? "", avatar: r.avatar, ...(r.only_you ? { onlyYou: true as const } : {}) });
+    out.set(r.idea_id, strip);
+  }
+  return out;
+}
+
+export type IdeaVotersResult = { ok: true; voters: ComingSoonVoter[]; votersTotal: number; hiddenCount: number } | { ok: false; status: 404 };
+
+/** The "Upvoted by" list of one published idea (§60.11): at most `VOTER_LIST_MAX`, in strip order. */
+export async function getIdeaVoters(viewerId: string, id: string, db: Db = pool): Promise<IdeaVotersResult> {
+  const { rows } = await db.query<{ votes: number }>(
+    `select (select count(*) from feature_idea_votes v where v.idea_id = i.id)::int as votes
+       from feature_ideas i where i.id = $1 and i.status = 'published'`,
+    [id],
+  );
+  if (!rows[0]) return { ok: false, status: 404 };
+  const strip = (await listedVoters(db, viewerId, id, VOTER_LIST_MAX)).get(id) ?? { voters: [], total: 0 };
+  return { ok: true, voters: strip.voters, votersTotal: strip.total, hiddenCount: Math.max(0, rows[0].votes - strip.total) };
 }
 
 async function listMyIdeas(userId: string, db: Db): Promise<MyIdeaView[]> {
@@ -265,11 +326,14 @@ export async function withdrawOwnIdea(userId: string, id: string): Promise<OwnId
 
 // ── Votes (§60.6) ──────────────────────────────────────────────────────────────────────────────
 
-export type VoteResult = { ok: true; votes: number; voted: boolean } | { ok: false; status: 404 };
+export type VoteResult =
+  | { ok: true; votes: number; voted: boolean; voters: ComingSoonVoter[]; votersTotal: number }
+  | { ok: false; status: 404 };
 
 /**
  * Upvote or un-vote a published idea. Idempotent. The idea row is read FOR SHARE, which waits for a
- * concurrent close (FOR UPDATE) — so a vote can never land on an idea that was just closed.
+ * concurrent close (FOR UPDATE) — so a vote can never land on an idea that was just closed. The
+ * answer carries the caller's view of the strip, so the optimistic flip settles on it (§60.6).
  */
 export async function voteIdea(userId: string, id: string, on: boolean): Promise<VoteResult> {
   const client = await pool.connect();
@@ -286,8 +350,9 @@ export async function voteIdea(userId: string, id: string, on: boolean): Promise
       await client.query(`delete from feature_idea_votes where idea_id = $1 and user_id = $2`, [id, userId]);
     }
     const n = await client.query<{ votes: number }>(`select count(*)::int as votes from feature_idea_votes where idea_id = $1`, [id]);
+    const strip = (await listedVoters(client, userId, id, VOTER_STRIP_MAX)).get(id) ?? { voters: [], total: 0 };
     await client.query("commit");
-    return { ok: true, votes: n.rows[0]?.votes ?? 0, voted: on };
+    return { ok: true, votes: n.rows[0]?.votes ?? 0, voted: on, voters: strip.voters, votersTotal: strip.total };
   } catch (e) {
     await client.query("rollback").catch(() => {});
     throw e;

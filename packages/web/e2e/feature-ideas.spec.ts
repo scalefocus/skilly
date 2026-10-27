@@ -8,6 +8,10 @@
 // user is a platform admin, so the plain-user side — no button, 403 — is covered by
 // lib/ideas.dbtest.ts.)
 //
+// A second test (v2.45.0) watches the open list follow the votes live: an upvote moves an item at
+// once, another user's vote arrives through the 15 s poll, the strip opens its "Upvoted by" list,
+// and the Profile toggle marks the caller's own bubble "only you".
+//
 // EXCLUSIVE (groups.ts): a published idea changes Coming soon for every user, and the spec flips the
 // feature switch. One idea is closed and the other deleted by the end, so nothing is left in the
 // list, and the switch is turned back on. With DATABASE_URL set, the user's own ideas are cleared
@@ -151,4 +155,95 @@ test("feature ideas: suggest → edit → publish → vote → close as Shipped;
   const after = (await (await page.request.get("/api/coming-soon")).json()) as { items: { id: string }[]; mine: { id: string }[] };
   expect(after.items.some((i) => i.id === doomedId)).toBe(false);
   expect(after.mine.some((i) => i.id === doomedId)).toBe(false);
+});
+
+// ── v2.45.0: the list follows the votes live, and shows who upvoted (§60.3 decisions 18 and 19) ──
+// Outside Jenkins every e2e page is the same dev admin, so "someone else" is a fixed user row that
+// never signs in: its votes and its opt-out are written straight to the database (DATABASE_URL is
+// set on every CI stack), and the open page must pick them up through its 15 s poll.
+test("Coming soon re-sorts live and shows who upvoted; the Profile toggle hides your bubble", async ({ page }) => {
+  test.skip(!dbUrl, "needs DATABASE_URL to cast another user's vote");
+  test.setTimeout(180_000);
+  await devSignIn(page);
+  const pool = new Pool({ connectionString: dbUrl });
+  const published: string[] = [];
+  let otherId = "";
+  try {
+    await pool.query(`delete from feature_ideas where author_id = (select id from users where entra_object_id = $1)`, [signedInOid()]);
+    otherId = (
+      await pool.query<{ id: string }>(
+        `insert into users (entra_object_id, email, display_name, status) values ('e2e-live-voter-oid', 'e2e-live-voter@skilly.local', 'Live Voter', 'active')
+         on conflict (entra_object_id) do update set status = 'active', idea_votes_hidden = false returning id`,
+      )
+    ).rows[0]!.id;
+    expect((await page.request.patch("/api/me", { data: { ideaVotesHidden: false } })).ok()).toBeTruthy();
+    const me = ((await (await page.request.get("/api/me")).json()) as { userId: string }).userId;
+
+    // Publish B, then A, and take back the proposer's own votes: at 0 each, the newer A sits above B.
+    const publish = async (label: string) => {
+      const description = `${probe(`idea-live-${label}`)} — an idea that watches the list re-sort.`;
+      const submitted = await page.request.post("/api/coming-soon/ideas", { data: { description } });
+      expect(submitted.status()).toBe(201);
+      const id = ((await submitted.json()) as { idea: { id: string } }).idea.id;
+      const queue = (await (await page.request.get("/api/admin/ideas?status=pending")).json()) as { ideas: { id: string; version: string }[] };
+      const title = `Live ${label} ${Date.now()}`;
+      const r = await page.request.post(`/api/admin/ideas/${id}/publish`, { data: { title, description, expectedUpdatedAt: queue.ideas.find((i) => i.id === id)!.version } });
+      expect(r.status()).toBe(204);
+      published.push(id);
+      expect((await page.request.delete(`/api/coming-soon/ideas/${id}/vote`)).ok()).toBeTruthy();
+      return { id, title };
+    };
+    const b = await publish("B");
+    const a = await publish("A");
+
+    await gotoLoaded(page, "/whats-new#coming-soon", "/api/coming-soon");
+    const rows = page.getByTestId("coming-soon-row");
+    const order = async () => {
+      const texts = await rows.allTextContents();
+      return [a.title, b.title].sort((x, y) => texts.findIndex((t) => t.includes(x)) - texts.findIndex((t) => t.includes(y)));
+    };
+    const rowA = rows.filter({ hasText: a.title });
+    const rowB = rows.filter({ hasText: b.title });
+    await expect.poll(order).toEqual([a.title, b.title]);
+    await expect(rowB.getByTestId("upvoted-by")).toHaveCount(0);
+
+    // The caller's upvote moves B above A at once, with their bubble first in B's strip.
+    await clickAndAwait(page, () => rowB.getByTestId("vote-button").click(), /\/api\/coming-soon\/ideas\/[^/]+\/vote$/, { method: "PUT" });
+    await expect.poll(order).toEqual([b.title, a.title]);
+    await expect(rowB.getByTestId("voter-face").first()).toHaveAttribute("data-voter", me);
+    await expect(rowB.getByTestId("voter-face").first()).not.toHaveAttribute("data-only-you", "true");
+    await expect(page.getByTestId("vote-announcement")).toContainText(`Upvoted ${b.title}: 1 vote`);
+
+    // Someone else's vote on A: 1 – 1, so the newer A leads again, after one poll and without a reload.
+    await pool.query(`insert into feature_idea_votes (idea_id, user_id) values ($1, $2) on conflict do nothing`, [a.id, otherId]);
+    await expect.poll(order, { timeout: 20_000 }).toEqual([a.title, b.title]);
+    await expect(rowA.getByTestId("voter-face").first()).toHaveAttribute("data-voter", otherId);
+    await expect(rowA.getByTestId("vote-button")).toContainText("1");
+
+    // The strip opens the full list.
+    await clickAndAwait(page, () => rowA.getByTestId("voter-strip").click(), /\/api\/coming-soon\/ideas\/[^/]+\/voters$/);
+    const list = page.getByTestId("voters-list");
+    await expect(list).toContainText("Live Voter");
+    await page.keyboard.press("Escape");
+    await expect(list).toHaveCount(0);
+
+    // Hide my votes on Profile: my bubble on B is now marked only you.
+    await gotoLoaded(page, "/profile", "/api/me");
+    const toggle = page.getByTestId("idea-votes-toggle");
+    await clickAndAwait(page, () => toggle.getByRole("button", { name: /^Hidden/ }).click(), "/api/me", { method: "PATCH" });
+    await expect(toggle.getByRole("button", { name: /^Hidden/ })).toHaveAttribute("aria-pressed", "true");
+    await gotoLoaded(page, "/whats-new#coming-soon", "/api/coming-soon");
+    await expect(rowB.getByTestId("voter-face").first()).toHaveAttribute("data-only-you", "true");
+
+    // The other voter hides theirs: after the next poll A shows no strip, and its count stays.
+    await pool.query(`update users set idea_votes_hidden = true where id = $1`, [otherId]);
+    await expect(rowA.getByTestId("upvoted-by")).toHaveCount(0, { timeout: 20_000 });
+    await expect(rowA.getByTestId("vote-button")).toContainText("1");
+  } finally {
+    await page.request.patch("/api/me", { data: { ideaVotesHidden: false } });
+    if (otherId) await pool.query(`update users set idea_votes_hidden = false where id = $1`, [otherId]);
+    // Leave nothing on Coming soon; the votes go with the ideas.
+    for (const id of published) await page.request.post(`/api/admin/ideas/${id}/delete`, { data: { reason: "e2e cleanup" } });
+    await pool.end();
+  }
 });
