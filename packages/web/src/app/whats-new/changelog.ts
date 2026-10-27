@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.46.2",
+    date: "2026-10-27",
+    summary:
+      "The Behind latest chip on Installed skills now flips the list and the page address in the same instant, so switching it off no longer waits on the server (or gets stuck when the server is busy).",
+  },
+  {
     version: "2.46.1",
     date: "2026-10-27",
     summary:

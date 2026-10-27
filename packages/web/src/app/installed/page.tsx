@@ -89,23 +89,26 @@ function revealCaption(i: Install, system: boolean, date: (iso: string) => strin
 // this wrapper is all that re-renders urgently: the query reaches the (memoised) list deferred, and
 // the list re-filters and re-renders at a lower priority that typing can interrupt.
 function InstalledInner() {
-  const router = useRouter();
   // The app-shell header search mirrors its query into ?q= on /installed (§23). We read it here and
   // filter the already-loaded list client-side — no refetch. Empty query → full list.
   const params = useSearchParams();
   const q = useDeferredValue((params.get("q") ?? "").trim());
   // The "Behind latest" chip (§23 "Installed-version freshness"): default off, mirrored to
-  // ?filter=behind via router.replace (kept out of history, seeded from the URL on arrival — same
-  // treatment as ?q=), persists across the Mine/System toggle, and composes with the header search.
+  // ?filter=behind (kept out of history, seeded from the URL on arrival — same treatment as ?q=),
+  // persists across the Mine/System toggle, and composes with the header search.
   const behindOnly = params.get("filter") === "behind";
   // Built from the live URL at click time (which ?q= keeps current), so the callback stays stable
-  // across keystrokes and doesn't defeat the list's memo.
+  // across keystrokes and doesn't defeat the list's memo. Written with history.replaceState — the
+  // same way the header search writes ?q= — not router.replace: the chip filters an already-loaded
+  // list, so a server round-trip buys nothing, and Next syncs useSearchParams with the history API,
+  // so the chip and the list flip in the same tick instead of after an RSC fetch that a loaded
+  // server can hold up (or that a later ?q= rewrite can race).
   const setBehindOnly = useCallback((on: boolean) => {
     const next = new URLSearchParams(window.location.search);
     if (on) next.set("filter", "behind"); else next.delete("filter");
     const qs = next.toString();
-    router.replace(qs ? `/installed?${qs}` : "/installed", { scroll: false });
-  }, [router]);
+    window.history.replaceState(null, "", qs ? `/installed?${qs}` : "/installed");
+  }, []);
   return <InstalledList q={q} behindOnly={behindOnly} highlightParam={params.get("highlight")} setBehindOnly={setBehindOnly} />;
 }
 
