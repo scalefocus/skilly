@@ -353,3 +353,43 @@ export function storedGapDraft(v: unknown): GapDraft | null {
   const k = (v as { kind?: unknown }).kind;
   return k === "synonym" || k === "request" || k === "noise" ? (v as GapDraft) : null;
 }
+
+// ── Notifications (§62.9) ──────────────────────────────────────────────────────────────────────
+
+export const SEARCH_GAP_NOTIFICATION_TYPES = ["search_gaps.ready", "skill.search_gap_hidden_match"] as const;
+
+export interface SearchGapNotificationContent {
+  sentence: string;
+  ctaLabel: string;
+  path: string;
+}
+
+/**
+ * The §62.9 wording, shared by the in-app inbox and the worker's email renderer. Payload keys:
+ * `count` (ready); `query`, `namespaceSlug`, `skillSlug`, `searchers`, `days` (hidden match).
+ * Null for any other type.
+ */
+export function searchGapNotificationContent(type: string, payload: Record<string, unknown>): SearchGapNotificationContent | null {
+  if (type === "search_gaps.ready") {
+    const n = typeof payload.count === "number" && payload.count > 0 ? payload.count : 1;
+    return {
+      sentence: n === 1 ? "A search gap is waiting for review." : `${n} search gaps are waiting for review.`,
+      ctaLabel: "Review search gaps",
+      path: "/admin/search-gaps",
+    };
+  }
+  if (type === "skill.search_gap_hidden_match") {
+    const ns = typeof payload.namespaceSlug === "string" ? payload.namespaceSlug : "";
+    const slug = typeof payload.skillSlug === "string" ? payload.skillSlug : "";
+    const query = typeof payload.query === "string" ? payload.query : "";
+    const n = typeof payload.searchers === "number" ? payload.searchers : null;
+    const days = typeof payload.days === "number" ? payload.days : null;
+    const who = n !== null && days !== null ? ` Up to ${n} ${n === 1 ? "person" : "people"} in the last ${days} days.` : "";
+    return {
+      sentence: `People searched for "${query}" and couldn't find ${ns}/${slug}, because only its namespace can see it.${who} Consider sharing it with more namespaces or making it org-visible.`,
+      ctaLabel: "View the skill",
+      path: `/skills/${ns}/${slug}`,
+    };
+  }
+  return null;
+}

@@ -1031,11 +1031,13 @@ export async function callTool(
       params.push(Math.min(50, Math.max(1, n(args, "limit") ?? 20)));
       const { rows } = await pool.query<{
         id: string; title: string; description: string; state: string; tool_harness: string;
-        created_at: string; requester: string; via: string | null;
+        created_at: string; requester: string; via: string | null; origin: string;
       }>(
-        `select r.id, r.title, r.description, r.state, r.tool_harness, r.created_at,
-                u.display_name as requester, r.via_mcp_client as via
-           from skill_requests r join users u on u.id = r.requester_user_id
+        // A Platform request (§62.10) has no requester: it is listed as "Platform".
+        `select r.id, r.title, r.description, r.state, r.tool_harness, r.created_at, r.origin,
+                case when r.requester_user_id is null then 'Platform' else u.display_name end as requester,
+                r.via_mcp_client as via
+           from skill_requests r left join users u on u.id = r.requester_user_id
           ${where.length ? `where ${where.join(" and ")}` : ""}
           order by r.created_at desc limit $${params.length}`,
         params,
@@ -1048,6 +1050,7 @@ export async function callTool(
           state: r.state,
           toolHarness: r.tool_harness,
           requestedBy: r.requester,
+          origin: r.origin,
           createdAt: r.created_at,
           ...(r.via ? { viaMcpClient: r.via } : {}),
         })),

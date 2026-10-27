@@ -109,6 +109,12 @@ export const AI_FEATURES: readonly AiFeature[] = [
     spec: "§61",
     timeoutMs: 120_000,
   },
+  {
+    key: "search_gap_triage",
+    label: "Search gaps (draft a synonym or request from an unmatched search)",
+    egress: "For each search gap while search-gap collection is on: the normalized text people searched for and its counts; up to 30 org-visible skills (namespace, slug, title, the first 500 characters of the description, categories); the synonym groups sharing a word with the query; the category and tool vocabularies. Never restricted skills or anything about who searched.",
+    spec: "§62",
+  },
 ];
 /** The reserved feature key the admin connectivity test records its usage under. */
 export const AI_TEST_FEATURE = "test";

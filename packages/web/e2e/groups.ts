@@ -44,6 +44,7 @@ export const EXCLUSIVE: readonly string[] = [
   "quality.spec.ts", // AI integration config
   "rum.spec.ts", // platform settings: RUM switch; the shared rum_daily rollup
   "search-fts.spec.ts", // search synonyms: every catalog search
+  "search-gaps.spec.ts", // platform settings: the search-gap collection switch; posts an org-visible request
   "survey.spec.ts", // platform settings: survey + bug-report switches
 ];
 

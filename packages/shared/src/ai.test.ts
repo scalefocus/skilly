@@ -573,6 +573,17 @@ test("AI_FEATURES registers skill_try (§61.5) sixth, with the default token cei
   assert.equal(AI_FEATURES[5]!.key, "skill_try", "registered sixth (§40.7)");
 });
 
+test("AI_FEATURES registers search_gap_triage (§62.5) seventh, with the default limits", () => {
+  const f = AI_FEATURES.find((x) => x.key === "search_gap_triage");
+  assert.ok(f);
+  assert.equal(f!.spec, "§62");
+  assert.equal(f!.maxTokens, undefined);
+  assert.equal(f!.timeoutMs, undefined);
+  assert.match(f!.egress, /up to 30 org-visible skills/);
+  assert.match(f!.egress, /Never restricted skills/);
+  assert.equal(AI_FEATURES[6]!.key, "search_gap_triage", "registered seventh (§40.7)");
+});
+
 test("aiComplete: maxTokens above 8192 is allowed only for a feature that declares a higher ceiling", async () => {
   const big: AiFeature[] = [...FEATURES, { key: "big", label: "Big", egress: "x", spec: "§99", maxTokens: 32_768 }];
   const st = stateWith();

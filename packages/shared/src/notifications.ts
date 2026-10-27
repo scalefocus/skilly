@@ -63,6 +63,9 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "idea.rejected": { title: "Feature idea not published", tone: "danger" },
   "idea.closed": { title: "Feature idea closed", tone: "muted" },
   "idea.shipped": { title: "Feature idea shipped", tone: "ok" },
+  // Search gaps (§62.9) — the review queue for platform admins, and a restricted skill people missed.
+  "search_gaps.ready": { title: "Search gaps to review", tone: "warn" },
+  "skill.search_gap_hidden_match": { title: "Search for a restricted skill", tone: "muted" },
 };
 
 /** The subject-line title for a type; a generic fallback so no unknown type ever leaks its key. */

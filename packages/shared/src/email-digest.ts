@@ -36,6 +36,9 @@ export const DIGEST_DEFAULT_TYPES = [
   "follow.collection_created",
   // §60.7 the coalesced "feature ideas to review" row for platform admins.
   "idea.submitted",
+  // §62.9 the coalesced "search gaps to review" row, and a restricted skill people searched for.
+  "search_gaps.ready",
+  "skill.search_gap_hidden_match",
 ] as const;
 
 /** Proposer lifecycle, safety flags, deprecations, fulfilled requests: immediate by default; the

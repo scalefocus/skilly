@@ -13689,7 +13689,9 @@ A request with `origin = 'search_gap'` has no requester and shows **Platform** i
   `first_request` badge and its backfill; `follow.request_created` (no followee); and the request
   discussion's *Original Requester* tag and requester notification.
 - **Editing and removal.** Platform admins may **edit** an open Platform request (every field), to
-  fix wording or remove PII; audited as `request.updated` (before → after). Nobody withdraws one.
+  fix wording or remove PII; audited as `request.updated` with the title before and after and
+  whether the description or usage changed, never their text (the audit log is append-only, so it
+  must not keep the PII being removed). Nobody withdraws one.
   Platform admins **remove** it as any request (§26).
 - **Fulfilment** works through both §26 paths. There is **no** `request.fulfilled` notification and
   no `request_fulfilled` badge, because there is no requester. The fulfiller **does** get the usual
@@ -13716,7 +13718,9 @@ A request with `origin = 'search_gap'` has no requester and shows **Platform** i
     operational).
   - `DELETE /api/admin/search-gaps/:id { expectedUpdatedAt }` (dismiss).
   - `POST /api/admin/search-gaps/run`.
-- `PATCH /api/requests/:id` also accepts a platform admin on a Platform request.
+- `PATCH /api/requests/:id` also accepts a platform admin on a Platform request, and
+  `GET /api/requests/:id` gains `canEdit` (the requester on their own open request, a platform admin
+  on an open Platform request), which shows **Edit…** on the detail page.
 - `GET|PATCH /api/admin/settings` gains the four §62.8 keys and the read-only
   `search_gaps_last_run`; `GET /api/nav-badges` gains `searchGaps`.
 - `GET /api/skills` accepts `gap=1`. It never changes the response and is ignored unless §62.2
@@ -13728,8 +13732,8 @@ A request with `origin = 'search_gap'` has no requester and shows **Platform** i
   aiKind }`), plus `job.search_gaps_run_requested` and `settings.updated` for the four keys.
   **Never the query text**: the audit log is append-only, and a dismissed query must be erasable.
   The text an admin approved is recorded by the request's or synonym group's own events
-  (`request.created`, `search.synonym_group_*`), and admin edits of Platform requests by
-  `request.updated`.
+  (`request.created` keeps the title, `search.synonym_group_*` the terms), and admin edits of
+  Platform requests by `request.updated` (title, and which fields changed).
 - **Not audited:** hits, sweeps, drafts and redrafts.
 - **Metrics:** `skilly_search_gap_hits_total{surface, outcome="recorded|secret|tombstoned|failed"}`
   on both processes; on the worker `skilly_search_gap_runs_total{ok}`,

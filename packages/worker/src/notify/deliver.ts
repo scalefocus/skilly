@@ -22,6 +22,7 @@ import { GraphSendError } from "@skilly/shared/email";
 import {
   followNotificationContent,
   ideaNotificationContent,
+  searchGapNotificationContent,
   isFollowNotificationType,
   notificationTitle,
   contentRiskRuleLabel,
@@ -455,6 +456,17 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: `${idea.sentence}${idea.detail ? `\n\n${idea.detail}` : ""} ${cta(idea.ctaLabel, idea.path)}`,
       webhook: { event: n.type, title: s, ideaId: typeof p.ideaId === "string" ? p.ideaId : null, url: abs(idea.path) },
+    };
+  }
+
+  // search_gaps.ready / skill.search_gap_hidden_match (§62.9) — the shared wording.
+  const gap = searchGapNotificationContent(n.type, p);
+  if (gap) {
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${gap.sentence} ${cta(gap.ctaLabel, gap.path)}`,
+      webhook: { event: n.type, title: s, url: abs(gap.path) },
     };
   }
 
