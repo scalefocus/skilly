@@ -37,6 +37,7 @@ interface Me {
   directoryHidden: boolean;
   /** §60.9 feature ideas: the attribution opt-out and an admin's review-queue opt-out. */
   ideaAttributionHidden?: boolean;
+  ideaVotesHidden?: boolean;
   ideaNotifications?: boolean;
   isPlatformAdmin?: boolean;
   achievementsHidden: boolean;
@@ -204,27 +205,47 @@ function DirectoryPref() {
   );
 }
 
-// §60.9 "Show my name on feature ideas I suggest": on by default, applied live to every idea of yours
-// on the Coming soon list. Platform admins always see who suggested what.
+// §60.9 the Feature ideas section: "Show my name on feature ideas I suggest" and "Show me on feature
+// ideas I upvote", both on by default, stored inverted and applied live to every idea and vote of
+// yours on the Coming soon list. Platform admins always see who suggested what; hidden upvoters are
+// hidden from them too.
 function IdeaAttributionPref() {
   const { data, reload } = useApi<Me>("/api/me");
   const [busy, setBusy] = useState(false);
   if (!data) return <div className="skeleton" style={{ height: 70, borderRadius: "var(--radius)" }} />;
-  const hidden = data.ideaAttributionHidden ?? false;
+  const nameHidden = data.ideaAttributionHidden ?? false;
+  const votesHidden = data.ideaVotesHidden ?? false;
 
-  const choose = async (next: boolean) => {
-    if (next === hidden) return;
+  const choose = async (field: "ideaAttributionHidden" | "ideaVotesHidden", next: boolean) => {
+    if (next === (field === "ideaAttributionHidden" ? nameHidden : votesHidden)) return;
     setBusy(true);
     try {
-      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ideaAttributionHidden: next }) });
+      await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: next }) });
       reload();
     } finally { setBusy(false); }
   };
 
-  const opts: { label: string; hint: string; hidden: boolean }[] = [
-    { label: "Shown", hint: "suggested by you", hidden: false },
-    { label: "Hidden", hint: "no name", hidden: true },
-  ];
+  const toggle = (field: "ideaAttributionHidden" | "ideaVotesHidden", label: string, hidden: boolean, opts: { label: string; hint: string; hidden: boolean }[]) => (
+    <div className="sort-toggle" role="group" aria-label={label} data-testid={field === "ideaVotesHidden" ? "idea-votes-toggle" : undefined}>
+      {opts.map((o) => {
+        const active = o.hidden === hidden;
+        return (
+          <button
+            key={o.label}
+            type="button"
+            className={`sort-opt${active ? " sort-on" : ""}`}
+            aria-pressed={active}
+            disabled={busy}
+            title={o.hint}
+            onClick={() => choose(field, o.hidden)}
+          >
+            {o.label} <span className="muted mono" style={{ fontSize: 11 }}>{o.hint}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <section className="reveal" style={{ marginBottom: 30 }} data-testid="idea-attribution">
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Feature ideas</h2>
@@ -232,28 +253,27 @@ function IdeaAttributionPref() {
         Show my name on feature ideas I suggest. When a platform admin publishes one of your ideas to the Coming soon
         list on the What&rsquo;s new page, it reads &ldquo;Suggested by&rdquo; and your name.
       </p>
-      <div className="sort-toggle" role="group" aria-label="Show my name on feature ideas I suggest">
-        {opts.map((o) => {
-          const active = o.hidden === hidden;
-          return (
-            <button
-              key={o.label}
-              type="button"
-              className={`sort-opt${active ? " sort-on" : ""}`}
-              aria-pressed={active}
-              disabled={busy}
-              title={o.hint}
-              onClick={() => choose(o.hidden)}
-            >
-              {o.label} <span className="muted mono" style={{ fontSize: 11 }}>{o.hint}</span>
-            </button>
-          );
-        })}
-      </div>
+      {toggle("ideaAttributionHidden", "Show my name on feature ideas I suggest", nameHidden, [
+        { label: "Shown", hint: "suggested by you", hidden: false },
+        { label: "Hidden", hint: "no name", hidden: true },
+      ])}
       <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-        {hidden
+        {nameHidden
           ? "Your ideas show without a name. Platform admins still see who suggested them."
           : "Your name shows on the ideas you suggested, on every one of them."}
+      </p>
+      <p className="page-sub" style={{ margin: "22px 0 16px" }}>
+        Show me on feature ideas I upvote. Your picture appears among the people who upvoted an item on the Coming soon
+        list. Hidden: your upvotes still count, but only you see your picture.
+      </p>
+      {toggle("ideaVotesHidden", "Show me on feature ideas I upvote", votesHidden, [
+        { label: "Shown", hint: "in upvoted by", hidden: false },
+        { label: "Hidden", hint: "only you see it", hidden: true },
+      ])}
+      <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+        {votesHidden
+          ? "Nobody else sees your picture on the items you upvoted, platform admins included. Your votes still count."
+          : "Your picture shows on every item you upvoted, including the ones you upvoted before."}
       </p>
     </section>
   );

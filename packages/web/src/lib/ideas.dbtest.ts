@@ -8,8 +8,9 @@
 // idea), the list (ordering, attribution and its opt-out, `canSuggest`), the switch (only platform
 // admins may suggest while it is off; everything else carries on), an inactive author, the admin
 // list, the admin delete (every status, votes and the idea's own notifications go, nobody is told,
-// badges stay, the audit snapshot, the caps freed), and GDPR erasure (published ideas stay
-// unattributed, everything else and every vote goes).
+// badges stay, the audit snapshot, the caps freed), GDPR erasure (published ideas stay
+// unattributed, everything else and every vote goes), and the v2.45.0 "Upvoted by" voters (the
+// strip, hidden voters, the full list and its cap, the vote answer, the opt-out, the ETag).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pool } from "./db";
@@ -19,6 +20,7 @@ import {
   editOwnIdea,
   editPublishedIdea,
   getComingSoon,
+  getIdeaVoters,
   listAdminIdeas,
   markIdeaShipped,
   pendingIdeaCount,
@@ -30,7 +32,8 @@ import {
   type IdeaViewer,
 } from "./ideas";
 import { eraseUser } from "./eraseUser";
-import { getFeatureIdeasEnabled, setFeatureIdeasEnabled } from "./settings";
+import { getFeatureIdeasEnabled, setFeatureIdeasEnabled, setUserIdeaVotesHidden } from "./settings";
+import { conditionalJson } from "./etag";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
 
@@ -102,7 +105,7 @@ test("feature ideas: caps, notifications, review, votes, list, badges, erasure",
   await q(`delete from feature_idea_votes where user_id = any($1::uuid[])`, [mine]);
   await q(`delete from notifications where user_id = any($1::uuid[]) and type like 'idea.%'`, [mine]);
   await q(`delete from user_achievements where user_id = any($1::uuid[]) and key in ('idea_published', 'idea_shipped')`, [mine]);
-  await q(`update users set idea_attribution_hidden = false, idea_notifications = true where id = any($1::uuid[])`, [mine]);
+  await q(`update users set idea_attribution_hidden = false, idea_notifications = true, idea_votes_hidden = false where id = any($1::uuid[])`, [mine]);
 
   const viewer = (userId: string, isPlatformAdmin = false): IdeaViewer => ({ userId, isPlatformAdmin });
   // The suite expects suggestions on for everyone; the switch section below turns them off and back.
@@ -117,6 +120,8 @@ test("feature ideas: caps, notifications, review, votes, list, badges, erasure",
       `select before, after from audit_log where action = $1 and target_type = 'feature_idea' and target_id = $2 order by created_at desc limit 1`,
       [action, id],
     )).rows[0];
+  // The vote counts alone; the "Upvoted by" strip in the answer has its own test below.
+  const tally = (r: Awaited<ReturnType<typeof voteIdea>>) => (r.ok ? { ok: r.ok, votes: r.votes, voted: r.voted } : r);
   const pendingBefore = await pendingIdeaCount();
 
   // ── Submission: bounds, the coalesced admin notification, the two caps ────────────────────────
@@ -196,17 +201,17 @@ test("feature ideas: caps, notifications, review, votes, list, badges, erasure",
   const seeded = cs.items.filter((i) => SEEDED.some(([id]) => id === i.id));
   for (const s of seeded) assert.equal(s.suggestedBy, null, s.title);
 
-  assert.deepEqual(await voteIdea(voter, id1, true), { ok: true, votes: 2, voted: true });
-  assert.deepEqual(await voteIdea(voter, id1, true), { ok: true, votes: 2, voted: true }, "idempotent");
-  assert.deepEqual(await voteIdea(voter, id1, false), { ok: true, votes: 1, voted: false });
-  assert.deepEqual(await voteIdea(voter, id1, true), { ok: true, votes: 2, voted: true });
+  assert.deepEqual(tally(await voteIdea(voter, id1, true)), { ok: true, votes: 2, voted: true });
+  assert.deepEqual(tally(await voteIdea(voter, id1, true)), { ok: true, votes: 2, voted: true }, "idempotent");
+  assert.deepEqual(tally(await voteIdea(voter, id1, false)), { ok: true, votes: 1, voted: false });
+  assert.deepEqual(tally(await voteIdea(voter, id1, true)), { ok: true, votes: 2, voted: true });
   if (seeded[0]) {
     const before = seeded[0].votes;
-    assert.deepEqual(await voteIdea(voter, seeded[0].id, true), { ok: true, votes: before + 1, voted: true }, "a seeded item takes votes");
+    assert.deepEqual(tally(await voteIdea(voter, seeded[0].id, true)), { ok: true, votes: before + 1, voted: true }, "a seeded item takes votes");
     assert.equal((await getComingSoon(plain)).items.find((i) => i.id === seeded[0]!.id)?.voted, true);
-    assert.deepEqual(await voteIdea(voter, seeded[0].id, false), { ok: true, votes: before, voted: false });
+    assert.deepEqual(tally(await voteIdea(voter, seeded[0].id, false)), { ok: true, votes: before, voted: false });
   }
-  assert.deepEqual(await voteIdea(voter, "00000000-0000-4000-8000-000000000000", true), { ok: false, status: 404 });
+  assert.deepEqual(tally(await voteIdea(voter, "00000000-0000-4000-8000-000000000000", true)), { ok: false, status: 404 });
 
   await q(`update users set idea_attribution_hidden = true where id = $1`, [author]);
   const hidden = (await getComingSoon(plain)).items.find((i) => i.id === id1);
@@ -235,7 +240,7 @@ test("feature ideas: caps, notifications, review, votes, list, badges, erasure",
   assert.equal((await q(`select 1 from feature_idea_votes where idea_id = $1`, [id1])).rowCount, 0, "closing deletes the votes");
   assert.deepEqual((await audit("idea.closed", id1))?.after, { outcome: "duplicate", note: "Same as the export request.", votes: 2 });
   assert.deepEqual(await notes(author, "idea.closed"), [{ ideaId: id1, title: "Export installed skills", outcome: "duplicate", adminNote: "Same as the export request." }]);
-  assert.deepEqual(await voteIdea(voter, id1, true), { ok: false, status: 404 });
+  assert.deepEqual(tally(await voteIdea(voter, id1, true)), { ok: false, status: 404 });
   assert.equal(await hasBadge(author, "idea_shipped"), false);
   assert.deepEqual(await markIdeaShipped(admin, id1), { ok: false, status: 409, error: "only an idea closed as Planned can be marked shipped" });
 
@@ -414,15 +419,139 @@ test("feature ideas: caps, notifications, review, votes, list, badges, erasure",
   const idE2 = e2.ok ? e2.idea.id : "";
   assert.deepEqual(await publishIdea(admin, idE1, { title: "Erasure survivor", description: TEXT(9), expectedUpdatedAt: await version(idE1) }), { ok: true });
   if (seeded[0]) assert.equal((await voteIdea(erasee, seeded[0].id, true)).ok, true);
-  await q(`update users set idea_attribution_hidden = true where id = $1`, [erasee]);
+  await q(`update users set idea_attribution_hidden = true, idea_votes_hidden = true where id = $1`, [erasee]);
   const erased = await eraseUser(admin, erasee, null);
   assert.equal(erased.ok, true);
   assert.equal((await q(`select 1 from feature_ideas where id = $1`, [idE2])).rowCount, 0, "the pending idea is deleted");
   assert.equal((await q(`select 1 from feature_ideas where id = $1`, [idE1])).rowCount, 1, "the published idea stays");
   assert.equal((await q(`select 1 from feature_idea_votes where user_id = $1`, [erasee])).rowCount, 0, "every vote they cast goes");
   assert.equal((await q<{ h: boolean }>(`select idea_attribution_hidden as h from users where id = $1`, [erasee])).rows[0]!.h, false, "reset by the scrub");
+  assert.equal((await q<{ h: boolean }>(`select idea_votes_hidden as h from users where id = $1`, [erasee])).rows[0]!.h, false, "the upvoter opt-out is reset too");
   const survivor = (await getComingSoon(plain)).items.find((i) => i.id === idE1);
   assert.equal(survivor?.suggestedBy, null, "shown unattributed");
   // Leave no published survivor behind for other suites.
   await closeIdea(admin, idE1, { outcome: "wont_do", note: null });
+});
+
+test("Upvoted by (v2.45.0): the strip, hidden voters, the full list, the vote answer, the ETag", { skip: !enabled }, async () => {
+  const q = <T extends object = Record<string, unknown>>(sql: string, params: unknown[] = []) => pool.query<T>(sql, params);
+  const one = async (sql: string, params: unknown[] = []) => (await q<{ id: string }>(sql, params)).rows[0]!.id;
+  const mkUser = (oid: string) =>
+    one(
+      `insert into users (entra_object_id, email, display_name, status) values ($1, $1 || '@org', $1, 'active')
+       on conflict (entra_object_id) do update set status = 'active', erased_at = null, idea_votes_hidden = false returning id`,
+      [oid],
+    );
+  // Fixed actors (audit_log FK — never deleted, see the dbtest memory note).
+  const admin = await mkUser("ideas-platform-admin");
+  const proposer = await mkUser("voters-proposer");
+  const a = await mkUser("voters-a");
+  const b = await mkUser("voters-b");
+  const c = await mkUser("voters-c");
+  const d = await mkUser("voters-d");
+  const e = await mkUser("voters-e");
+  const f = await mkUser("voters-f");
+  const hider = await mkUser("voters-hider");
+  const leaver = await mkUser("voters-leaver");
+  const everyone = [proposer, a, b, c, d, e, f, hider, leaver];
+  await q(`delete from feature_ideas where author_id = $1`, [proposer]);
+  await q(`delete from feature_idea_votes where user_id = any($1::uuid[])`, [everyone]);
+
+  const viewer = (userId: string, isPlatformAdmin = false): IdeaViewer => ({ userId, isPlatformAdmin });
+  const version = async (id: string) => (await q<{ v: string }>(`select updated_at::text as v from feature_ideas where id = $1`, [id])).rows[0]!.v;
+  const s = await submitIdea(viewer(proposer), TEXT(60));
+  assert.ok(s.ok);
+  const id = s.ok ? s.idea.id : "";
+  assert.deepEqual(await getIdeaVoters(a, id), { ok: false, status: 404 }, "a pending idea has no list");
+  assert.deepEqual(await publishIdea(admin, id, { title: "Voters item", description: TEXT(60), expectedUpdatedAt: await version(id) }), { ok: true });
+  try {
+    // Votes a minute apart, oldest first: the proposer's auto-vote, then a … f, the hider, the leaver.
+    for (const u of [a, b, c, d, e, f, hider, leaver]) assert.equal((await voteIdea(u, id, true)).ok, true);
+    for (const [i, u] of [proposer, a, b, c, d, e, f, hider, leaver].entries()) {
+      await q(`update feature_idea_votes set created_at = now() - make_interval(mins => $3) where idea_id = $1 and user_id = $2`, [id, u, 100 - i]);
+    }
+    await q(`update users set idea_votes_hidden = true where id = $1`, [hider]);
+    await q(`update users set status = 'inactive' where id = $1`, [leaver]);
+    const strip = async (v: IdeaViewer) => (await getComingSoon(v)).items.find((i) => i.id === id)!;
+
+    // Everyone else: newest first, five at most, the hider absent (for a platform admin too), the leaver listed.
+    for (const v of [viewer(a), viewer(admin, true)]) {
+      const it = await strip(v);
+      assert.equal(it.votes, 9);
+      assert.deepEqual(it.voters.map((x) => x.id), [leaver, f, e, d, c]);
+      assert.equal(it.votersTotal, 8, "every voter but the hider");
+      assert.ok(it.voters.every((x) => !x.onlyYou));
+    }
+    // The hider sees themself, at their vote's place and marked only you.
+    const own = await getComingSoon(viewer(hider));
+    assert.equal(own.votesHidden, true);
+    const ownItem = own.items.find((i) => i.id === id)!;
+    assert.deepEqual(ownItem.voters.map((x) => x.id), [leaver, hider, f, e, d]);
+    assert.equal(ownItem.voters[1]!.onlyYou, true);
+    assert.equal(ownItem.votersTotal, 9);
+    assert.equal((await getComingSoon(viewer(a))).votesHidden, false);
+
+    // The full list: strip order, the proposer's auto-vote included, the hidden ones only counted.
+    const list = await getIdeaVoters(a, id);
+    assert.ok(list.ok);
+    assert.deepEqual(list.ok && list.voters.map((x) => x.id), [leaver, f, e, d, c, b, a, proposer]);
+    assert.equal(list.ok && list.votersTotal, 8);
+    assert.equal(list.ok && list.hiddenCount, 1);
+    const hiderList = await getIdeaVoters(hider, id);
+    assert.equal(hiderList.ok && hiderList.hiddenCount, 0, "the viewer is listed to themself");
+
+    // The vote answer carries the caller's view of the strip, their own bubble first.
+    await q(`delete from feature_idea_votes where idea_id = $1 and user_id = $2`, [id, a]);
+    const back = await voteIdea(a, id, true);
+    assert.ok(back.ok);
+    assert.deepEqual(back.ok && back.voters.map((x) => x.id), [a, leaver, f, e, d]);
+    assert.equal(back.ok && back.votersTotal, 8);
+    const gone = await voteIdea(a, id, false);
+    assert.equal(gone.ok && gone.votersTotal, 7);
+    assert.equal(gone.ok && gone.voters.some((x) => x.id === a), false);
+
+    // The opt-out applies live to earlier votes, both ways.
+    await setUserIdeaVotesHidden(f, true);
+    assert.equal((await strip(viewer(b))).voters.some((x) => x.id === f), false);
+    await setUserIdeaVotesHidden(f, false);
+    assert.equal((await strip(viewer(b))).voters[1]!.id, f);
+
+    // The ETag: the same for an unchanged list, another after someone else's vote, 304 when it matches.
+    const req = (tag?: string) => new Request("http://skilly.test/api/coming-soon", tag ? { headers: { "if-none-match": tag } } : {});
+    const tag1 = conditionalJson(req(), await getComingSoon(viewer(b))).headers.get("etag")!;
+    assert.equal(conditionalJson(req(), await getComingSoon(viewer(b))).headers.get("etag"), tag1);
+    const unchanged = conditionalJson(req(tag1), await getComingSoon(viewer(b)));
+    assert.equal(unchanged.status, 304);
+    assert.equal(await unchanged.text(), "");
+    assert.equal((await voteIdea(a, id, true)).ok, true);
+    const changed = conditionalJson(req(tag1), await getComingSoon(viewer(b)));
+    assert.equal(changed.status, 200);
+    assert.notEqual(changed.headers.get("etag"), tag1);
+
+    // The list stops at 100, newest first.
+    const bulk = (
+      await q<{ id: string }>(
+        `insert into users (entra_object_id, email, display_name, status)
+         select 'voters-bulk-' || lpad(n::text, 3, '0'), 'voters-bulk-' || n || '@org', 'Bulk ' || n, 'active' from generate_series(1, 101) n
+         on conflict (entra_object_id) do update set status = 'active', idea_votes_hidden = false returning id`,
+      )
+    ).rows.map((r) => r.id);
+    await q(
+      `insert into feature_idea_votes (idea_id, user_id, created_at)
+       select $1, u, now() + make_interval(secs => i::int) from unnest($2::uuid[]) with ordinality as t(u, i)`,
+      [id, bulk],
+    );
+    const big = await getIdeaVoters(a, id);
+    assert.ok(big.ok);
+    assert.equal(big.ok && big.voters.length, 100);
+    assert.equal(big.ok && big.votersTotal, 109);
+    assert.equal(big.ok && big.voters[0]!.id, bulk[bulk.length - 1], "the newest vote first");
+
+    assert.deepEqual(await getIdeaVoters(a, "00000000-0000-4000-8000-000000000000"), { ok: false, status: 404 });
+  } finally {
+    await q(`update users set status = 'active', idea_votes_hidden = false where id = any($1::uuid[])`, [everyone]);
+    // Leave nothing published for other suites; closing deletes the votes.
+    assert.deepEqual(await closeIdea(admin, id, { outcome: "wont_do", note: null }), { ok: true });
+  }
+  assert.deepEqual(await getIdeaVoters(a, id), { ok: false, status: 404 }, "a closed idea has no list");
 });
