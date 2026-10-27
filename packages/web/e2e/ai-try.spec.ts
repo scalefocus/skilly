@@ -112,12 +112,18 @@ test("try a skill: disclosure, Usage, a reply, kept across a reload, Start over;
   await clickAndAwait(page, () => tryButton(page).click(), "/api/skills/global/pdf-tools/try");
   await expect(page.getByTestId("try-message")).toHaveCount(2);
 
-  // Start over clears it (after a confirm).
+  // Start over clears it (after a confirm) and puts focus in the composer: the button goes disabled,
+  // which would otherwise drop focus to <body>.
   const confirmed = acceptNextDialog(page);
   await page.getByTestId("try-start-over").click();
   await confirmed;
   await expect(page.getByTestId("try-message")).toHaveCount(0);
   await expect(page.getByTestId("try-empty")).toBeVisible();
+  await expect(page.getByTestId("try-start-over")).toBeDisabled();
+  await expect(page.getByTestId("try-input")).toBeFocused();
+  // Esc closes the panel even with focus fallen out of it (§33's shared Modal).
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await expect(page.getByTestId("try-input")).not.toBeFocused();
   await page.keyboard.press("Escape");
   await expect(panel(page)).toHaveCount(0);
 

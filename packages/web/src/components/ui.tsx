@@ -594,6 +594,9 @@ function focusablesIn(root: HTMLElement): HTMLElement[] {
  * press AND the release on the backdrop, so a drag that merely ends there never dismisses. Key events
  * never leave the dialog, so page-level shortcuts (Enter, Ctrl+K) can't act behind it.
  */
+/** Open dialogs, outermost first; only the last one answers an Esc pressed outside any dialog. */
+const openDialogs: React.RefObject<HTMLDivElement | null>[] = [];
+
 export function Modal({
   title,
   onCancel,
@@ -629,6 +632,27 @@ export function Modal({
   const cancel = useRef(onCancel);
   cancel.current = onCancel;
   const titleId = useId();
+
+  // Esc must work even when focus has fallen out of the dialog: the browser moves focus to <body>
+  // when the focused control is disabled or removed (the focus fixup rule), and a keydown there never
+  // reaches the backdrop's handler. The topmost open dialog takes such an Esc at the document level.
+  useEffect(() => {
+    openDialogs.push(backdrop);
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (openDialogs[openDialogs.length - 1] !== backdrop) return;
+      const box = backdrop.current;
+      if (box && e.target instanceof Node && box.contains(e.target)) return; // the dialog's own handler took it
+      e.preventDefault();
+      cancel.current();
+    };
+    document.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onDocKeyDown);
+      const at = openDialogs.indexOf(backdrop);
+      if (at >= 0) openDialogs.splice(at, 1);
+    };
+  }, []);
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;

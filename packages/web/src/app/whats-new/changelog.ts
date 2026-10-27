@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.46.1",
+    date: "2026-10-27",
+    summary:
+      "Esc now closes a dialog even after the control you just clicked went disabled — Start over in the Try panel, for one, used to leave Esc dead until you clicked back inside. Start over also puts the cursor straight back in the message box.",
+  },
+  {
     version: "2.46.0",
     date: "2026-10-27",
     summary:
