@@ -26,13 +26,16 @@ test("search gaps: recording, folding, the sweep, drafting and the admin notific
        on conflict (key) do update set value = excluded.value, updated_at = now()`,
       [key, JSON.stringify(value)],
     );
+  // Made-up words, unique to this run: the database is shared with other suites (search.dbtest.ts
+  // uses its own fixture words), so nothing here may match another test's queries.
   const tag = `sgw${Date.now().toString(36)}`;
-  const qAnswered = `${tag} zebracorn`;
-  const qRestricted = `${tag} hushhush`;
-  const qOpen = `${tag} flumoxer`;
-  const qTomb = `${tag} tombword`;
+  const qAnswered = `${tag} sgwanswered`;
+  const qRestricted = `${tag} sgwhidden`;
+  const qOpen = `${tag} sgwopen`;
+  const qTomb = `${tag} sgwtomb`;
   const queries = [qAnswered, qRestricted, qOpen, qTomb];
 
+  let ns: string | null = null;
   try {
     // A platform admin to notify.
     const admin = await one(
@@ -48,7 +51,7 @@ test("search gaps: recording, folding, the sweep, drafting and the admin notific
     await q(`delete from notifications where user_id = $1 and type = 'search_gaps.ready'`, [admin]);
 
     // Skills: one org-visible that answers qAnswered, one namespace-visible that matches qRestricted.
-    const ns = await one(
+    ns = await one(
       `insert into namespaces (slug, display_name, require_review) values ('sgw-ns', 'SGW NS', true)
        on conflict (slug) do update set display_name = excluded.display_name returning id`,
     );
@@ -60,8 +63,8 @@ test("search gaps: recording, folding, the sweep, drafting and the admin notific
          returning id`,
         [ns, slug, title, visibility],
       );
-    await mkSkill(`${tag}-pub`, `${tag} zebracorn helper`, "org");
-    const hidden = await mkSkill(`${tag}-hid`, `${tag} hushhush helper`, "namespace");
+    await mkSkill(`${tag}-pub`, `${tag} sgwanswered helper`, "org");
+    const hidden = await mkSkill(`${tag}-hid`, `${tag} sgwhidden helper`, "namespace");
 
     // ── Recording: the switch gates it, and a hit stores a hash, never the user ──
     await setSetting("search_gaps_enabled", false);
@@ -156,6 +159,8 @@ test("search gaps: recording, folding, the sweep, drafting and the admin notific
     await q(`delete from search_gap_daily where query_norm like $1`, [`${tag}%`]);
     await q(`delete from search_gap_tombstones where query_hash = $1`, [gapQueryHash(qTomb)]);
     await q(`delete from ai_integration`);
+    // Leave no searchable skill behind for the suites that run after this one.
+    if (ns) await q(`delete from skills where namespace_id = $1 and slug like $2`, [ns, `${tag}-%`]);
     await pool.end();
   }
 });

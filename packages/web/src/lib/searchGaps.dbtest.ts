@@ -120,6 +120,8 @@ test("search gaps: accept as a Platform request, then its lifecycle", { skip: !e
     await pool.query(`delete from search_gap_tombstones where query_hash = $1`, [gapQueryHash(query)]);
     if (requestId) await pool.query(`delete from skill_requests where id = $1`, [requestId]);
     await pool.query(`delete from notifications where type = 'skill.search_gap_hidden_match' and payload->>'skillId' = $1`, [hidden]);
+    // Leave no searchable skill behind for the suites that run after this one.
+    await pool.query(`delete from skills where id = any($1::uuid[])`, [[hidden, open]]);
   }
 });
 
