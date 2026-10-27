@@ -30,6 +30,11 @@ export const M = {
   // §34.15 search — counts only; no query text is ever recorded.
   searchRequests: metrics.counter("skilly_search_requests_total", "Registry searches, by surface and match mode (all|any|none)"),
   searchZeroResults: metrics.counter("skilly_search_zero_results_total", "Registry searches with a query that returned nothing, by surface"),
+  // §62.12 search gaps — counts only; never the query text.
+  searchGapHits: metrics.counter("skilly_search_gap_hits_total", "Search-gap hit recordings, by surface and outcome (recorded|secret|tombstoned|failed)"),
+  searchGapRuns: metrics.counter("skilly_search_gap_runs_total", "Search-gap sweep runs, by ok"),
+  searchGapDrafts: metrics.counter("skilly_search_gap_drafts_total", "Search-gap AI drafts, by outcome (synonym|request|noise|failed)"),
+  searchGapsReviewable: metrics.gauge("skilly_search_gaps_reviewable", "Search gaps waiting for a platform admin"),
   searchIndexPending: metrics.gauge("skilly_search_index_pending", "Skill versions whose SKILL.md text awaits extraction"),
   searchIndexFailed: metrics.gauge("skilly_search_index_failed", "Skill versions whose SKILL.md text extraction gave up"),
   // §37.13 content risk.

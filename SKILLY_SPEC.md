@@ -50,6 +50,7 @@ Every decision below was explicitly confirmed.
 | AI pre-review | **Advisory LLM review of every submission** (§46): when a platform switch is on, the AI integration reads `SKILL.md`, scripts and references and reports prompt injection, overreaching tool permissions, unsafe shell, exposed secrets and description mismatches, with a severity, in a review-page section reviewers can agree with or dismiss per finding. **Never a gate**, never in `scan_reports`; owners keep the result after publish, consumers never see it — **except** admin-written policy rules judged in the same run (§47) |
 | Policy rules | **Policy-as-prompt** (§47): namespace admins (platform admins, org-wide) write rules in plain language; the §46 pre-review judges every proposal, direct publish and published latest version against them **in the same call**, citing the rule and server-verified evidence. A violated **enforced** rule — or one with no verdict (fail-closed) — trips the accept gate and needs the audited override (platform rules: platform admins only); members' direct publishes route to review; published violators are flagged, never yanked, and carry a status chip everyone sees. Rules start in Shadow |
 | Try before install | **Chat with the AI integration with a skill loaded** (§61), from the skill page's Install card: behind a platform switch (off by default) and only while the integration is *Operational*. The version's `SKILL.md`, scripts and references plus the user's typed messages go to the provider; no tools, no stored conversation, per-user caps |
+| Search gaps | **What people search for and don't find** (§62), with no identity attached: opt-in (off by default), recorded on an explicit search only, counted per day under a salt deleted after the day. A periodic sweep groups them into gaps; while the AI integration is operational it drafts a synonym or a skill request for each. Platform admins accept or dismiss every one on `/admin/search-gaps`; accepted requests are posted by *Platform*. |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
 | Deployment | **docker compose** (6 core services + git-perms init + dev proxy); **Helm/K8s now shipped** (§16 #19) |
@@ -281,7 +282,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -299,7 +300,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Precomputed "Skills you might like" neighbours: `skill_id`, `related_skill_id` (PK pair), `shared_count`. Rebuilt **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the co-install ledger `skill_installs`: `shared_count` = number of users who adopted both skills. Stores a wider top-N candidate list per skill (top ~12 by shared adopters, active **and non-deprecated** skills only as *neighbours* — a deprecated skill is never recommended, though it still has its own neighbours, §45) so the read path can drop any the viewer can't see and still fill the top 3 visible. Purely derived/advisory — rebuilt wholesale each run. Surfaced on the detail page (§10).
 
 ### `skill_requests` (+ `skill_request_categories`) (migration 0048; `skill_request_files` dropped in 0049; detailed in §26)
-- "Request a skill": org-visible wishes for skills that don't exist yet. `skill_requests`: `id`, `requester_user_id`, `title`, `description`, `usage_examples`, `tool_harness`, `state` (`open` | `fulfilled` | `withdrawn` | `removed`), `fulfilled_skill_id`, `fulfilled_by_user_id`, `fulfilled_at`, `created_at`, `updated_at`. Categories via `skill_request_categories` (FK to the shared `categories` vocabulary). Requests are **text-only** — no file attachments (the original `skill_request_files` table was dropped in migration 0049). Fulfilment fields are set once (a snapshot) when a linked proposal is accepted; the row is never deleted on fulfilment (state flips). §26.
+- "Request a skill": org-visible wishes for skills that don't exist yet. `skill_requests`: `id`, `requester_user_id` (nullable since migration 0103: null exactly when `origin = 'search_gap'`, a *Platform* request, §62.10), `origin` (`user` | `search_gap`, migration 0103), `title`, `description`, `usage_examples`, `tool_harness`, `state` (`open` | `fulfilled` | `withdrawn` | `removed`), `fulfilled_skill_id`, `fulfilled_by_user_id`, `fulfilled_at`, `created_at`, `updated_at`. Categories via `skill_request_categories` (FK to the shared `categories` vocabulary). Requests are **text-only** — no file attachments (the original `skill_request_files` table was dropped in migration 0049). Fulfilment fields are set once (a snapshot) when a linked proposal is accepted; the row is never deleted on fulfilment (state flips). §26.
 
 ### Messaging tables (migration 0031, detailed in §24)
 - **`conversations`** — `id`, `subject_type`, `subject_id` (polymorphic; partial unique on `(subject_type, subject_id)`), `created_at`, `updated_at`.
@@ -363,6 +364,11 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **`feature_ideas`** — every What's new *Coming soon* item: a feature suggestion goes `pending` → `published` (on *Coming soon*) → `closed` with an outcome, or `rejected` / `withdrawn`; the proposer's own text is kept beside the admin-edited one. Items seeded by migration 0101 have no proposer (§60.2). A platform admin may **hard-delete** any idea the admin page shows (§60.5).
 - **`feature_idea_votes`** — one upvote per user per published item; mutable personal rows, CASCADE on the user (§60.6). Voters appear as the item's *Upvoted by* bubbles unless they hid themselves (`users.idea_votes_hidden`, §60.3); migration 0102 adds an `(idea_id, created_at DESC)` index for the most recent voters. (Migration 0101 moved the former `upcoming_votes` rows here and dropped that table.)
 
+### `search_gap_salts` / `search_gap_hits` / `search_gap_daily` / `search_gaps` / `search_gap_tombstones` (migration 0103, detailed in §62)
+- **Searches that found nothing, with no identity attached** (§62.3). `search_gap_salts` holds one random salt per UTC day; `search_gap_hits` holds today's raw rows `(day, query_norm, surface, mode, searcher_hash, hits)`, where the hash is an HMAC of the user id under the day's salt (no timestamp, no user id); the housekeeping sweep folds each finished day into `search_gap_daily` `(day, query_norm, surface, mode, hits, searchers)`, kept 90 days, and deletes that day's hits and salt.
+- **`search_gaps`** — one row per query that crossed the admin-set threshold: counts over the lookback window, state (`new` | `suggested` | `failed` | `accepted`), up to 3 restricted matches, the AI draft and attempts, and the outcome (a skill request or a synonym group). Accepted rows are pruned 90 days after the decision; dismissing deletes the row.
+- **`search_gap_tombstones`** — the unsalted SHA-256 of every query that was accepted or dismissed, so it is never recorded or suggested again. Kept forever.
+
 ---
 
 ## 4. RBAC model & permission matrix
@@ -404,6 +410,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | View audit log | ✅ (all) | ✅ (own ns) | own proposals | own proposals |
 | Consume (search/install visible) | ✅ | ✅ | ✅ | ✅ |
 | Try a visible skill with AI before installing (§61) — while the Try switch is on and AI is operational | ✅ | ✅ | ✅ | ✅ |
+| Review search gaps, accept or dismiss them, set the search-gap settings, edit a *Platform* request (§62) | ✅ | ❌ | ❌ | ❌ |
 | Mint / manage **system installs** (§23) | ✅ | ❌ | ❌ | ❌ |
 | Rate a visible skill (§18) | ✅ | ✅ | ✅ | ✅ |
 | Manage skill maintainers (§19) | ✅ (any) | ✅ (own ns) | maintainers of that skill | maintainers of that skill |
@@ -474,6 +481,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Anonymised in place (telemetry):** the erasure sweep sets `rum_samples.user_id` → **NULL** explicitly (§32.3; both the admin and SCIM paths) — the rows are kept so per-route performance aggregates stay true; nothing else in RUM references the user. Likewise **`ai_usage.user_id` → NULL** (§40.3), keeping AI usage totals intact. (The column's `ON DELETE SET NULL` covers only a hard row delete, which erasure never performs.)
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
+- **Search gaps (§62.3):** nothing to erase — no search-gap row holds a searcher's user id.
 - **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false`, `idea_notifications = true` and `idea_votes_hidden = false`.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
@@ -1218,7 +1226,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*; plus `parentId`, `tombstoned`, `tombstoneRemoved` — §24 *Replies to discussion comments*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
-  - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15).
+  - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15), except the opt-in, identity-free search-gap log (§62), which the audit log never copies.
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **SCIM/reconcile provisioning events** (`user.provisioned`, `user.deactivated`, `user.reactivated`, `group.provisioned`, `group.deleted`, `group.membership_added`, `group.membership_removed` — source `scim`, system actor; §49.7), **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
@@ -1226,6 +1234,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Policy rules (§47.12):** `policy.rule_created`, `policy.rule_updated` (text before/after + revision numbers), `policy.rule_state_changed`, `policy.rule_deleted`, `proposal.policy_override`, `skill.policy_flagged` (system actor) and `skill.policy_flag_dismissed`; `proposal.routed_to_review` gains `reason: 'policy'`. Re-checks are `ai_prereview.rerun_requested`.
   - **AI pre-review (§46.12):** `ai_prereview.rerun_requested` (actor; proposal or skill+semver; run id) and `ai_prereview.finding_dispositioned` (actor; subject; fingerprint, category, severity, verdict, reason); the `ai_prereview_enabled` switch as `settings.updated`. Runs themselves are not audited.
   - **Try a skill (§61.8):** the `ai_try_enabled` switch as `settings.updated`. Try messages are **not audited** (telemetry in `ai_usage`).
+  - **Search gaps (§62.12):** `search_gap.accepted` (outcome, created request or synonym group id, query hash, searcher count, restricted-match count) and `search_gap.dismissed` (query hash, AI kind) — **never the query text**; `job.search_gaps_run_requested`; `request.updated` when a platform admin edits a *Platform* request; and `settings.updated` for the four §62.8 keys. Hits, sweeps and drafts are **not audited**.
   - **AI-drafted quality improvements (§44.8):** `skill.ai_draft_generated` (actor; skill, base semver, model, per-status file counts, call count — **never file contents or AI output**), written once per run however it ends; the proposal's creation audit (and a direct publish's) carries `aiDraftModel` when the §44 token was valid. The AI display name (§40.14) is audited as `settings.updated`.
   - **AI integration (§40.11):** `ai.config_updated` (provider / base URL / model before→after plus a `token_rotated` flag — **never the token or any part of it**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests, model-list calls and AI runtime calls are **not audited** (they are telemetry in `ai_usage`).
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
@@ -1295,6 +1304,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
   - To **effective maintainers** (minus `hype_notifications` opt-outs): `skill.hyped` when the worker's hype sweep sees their skill **enter the top N hyped skills** (§50.7, **at most once per skill per 7 days**); digestible by default (§48.3).
   - To **platform admins** and to a feature idea's **author** (§60.7): `idea.submitted` to platform admins (coalesced per recipient until read, gated by `idea_notifications`), and `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` to the author (proposer lifecycle, no per-type opt-out).
+  - To **platform admins** and to the **effective maintainers of a restricted skill** (§62.9): `search_gaps.ready` to every active platform admin when a search-gap sweep makes gaps reviewable (coalesced per recipient until read), and `skill.search_gap_hidden_match` when an admin accepts a search gap that only the recipient's restricted skill would have answered (once per recipient per skill, minus the deciding admin). No per-type opt-out; both digestible by default.
   - To a person's **followers** (§35): `follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, when the followed person publishes, earns a badge, or posts or fulfils a request. These are **in-app only** (the one exception: a digest-mode recipient gets them in the email digest, §48), have no per-type opt-out (the off-switch is unfollow), and are un-coalesced. They are **visibility-filtered at insert** (a follower never hears about a skill they can't see), suppressed while the followee has paused follows (`allow_follows = false`), and **deduped**: a follower who already gets `skill.new_version` or `request.fulfilled` for the same event gets no follow row. Recipients and content are in §35.6.
 - **Out of scope:** the header **system banner (§27)** is a separate, dedicated mechanism — it
   never creates a `notifications` row and never triggers email/webhook delivery.
@@ -1346,6 +1356,8 @@ current or future type can ever leak JSON to a user.
   | `skill.marked_official` | Skill marked official | {ns}/{slug} was marked official. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.deprecated` | Skill deprecated | {ns}/{slug} is deprecated — use {succNs}/{succSlug} instead. {note} *(without a visible successor: "{ns}/{slug} is deprecated. {note}")* | **Open the successor** → `/skills/{succNs}/{succSlug}` when the recipient can see it, else View the skill → `/skills/{ns}/{slug}` |
   | `request.fulfilled` | Skill request fulfilled | Your skill request "{requestTitle}" was fulfilled by {byName} with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
+  | `search_gaps.ready` | Search gaps to review | A search gap is waiting for review. *({n} search gaps are waiting for review.)* | Review search gaps → `/admin/search-gaps` |
+  | `skill.search_gap_hidden_match` | Search for a restricted skill | People searched for "{query}" and couldn't find {ns}/{slug}, because only its namespace can see it. Up to {n} people in the last {days} days. Consider sharing it with more namespaces or making it org-visible. | View the skill → `/skills/{ns}/{slug}` |
   | `proposal.submitted` | Proposal submitted | Your skill proposal was submitted and is awaiting review. | View it → `/proposals/{proposalId}` |
   | `proposal.needs_review` | New proposal to review | A new skill proposal is awaiting your review. | Review it → `/proposals/{proposalId}` |
   | `proposal.start_review` | Proposal under review | Your skill proposal is now under review. | View it → `/proposals/{proposalId}` |
@@ -1791,6 +1803,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `PUT /api/admin/ai/try { enabled }` — the Try skills switch (§61.8, platform-admin); `GET /api/admin/ai` gains `try`.
 - **Feedback survey (§36.10, all platform-admin):** `GET /api/admin/survey/summary`, `GET /api/admin/survey/comments`, `DELETE /api/admin/survey/responses/:id` (audited `survey.response_deleted`); `survey_enabled` and `bug_reports_enabled` (§36.17) on `GET|PATCH /api/admin/settings`.
 - **Feature ideas (§60.11):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`, `GET /api/coming-soon/ideas/:id/voters`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` / `ideaVotesHidden` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
+- **Search gaps (§62.11):** platform-admin `GET /api/admin/search-gaps?tab=`, `POST /api/admin/search-gaps/:id/request|synonym|redraft`, `DELETE /api/admin/search-gaps/:id`, `POST /api/admin/search-gaps/run`; the four `search_gaps_*` keys on `GET|PATCH /api/admin/settings`, `searchGaps` on `GET /api/nav-badges`; `gap=1` on `GET /api/skills`; `PATCH /api/requests/:id` for a platform admin on a *Platform* request.
 - `GET/PATCH /api/admin/settings` (platform settings: duplicate enforcement, max upload size, **upload chunk size** (`upload_chunk_bytes`, §6), date format, **install URL expiry horizon** (`install_max_ttl_months`), **Featured-skills cap** (`max_featured_skills`, §7), **plugin-marketplace settings** (`marketplace_public_enabled`, `marketplace_sync_minutes`, `marketplace_name_prefix`, §30), **email digests** (`email_digests_enabled`, `email_digest_default_mode`, `email_digest_hour`, `email_digest_weekday`, `email_digest_types`, §48.11), …).
 - **Plugin marketplaces (§30):** `GET /api/namespaces/administered` (the Namespace administration page's list) · `GET|PATCH /api/namespaces/:id/settings` (`marketplace_enabled`, `require_review`, `maintainer_contact`; namespace admin for own / platform admin for any; `global.require_review` → 422; a `maintainer_contact` that is neither empty nor a valid email address → 422) · `POST /api/marketplaces/tokens` (mint) · `GET /api/marketplaces` (the caller's marketplace tokens) · `PATCH|DELETE /api/marketplaces/tokens/:id` (reactivate / remove) · `GET /api/marketplaces/directory` (the Marketplaces page, §30.6: the public marketplace when enabled plus every **enabled** namespace marketplace the caller may mint for, each with its payload skill count, `syncedAt`, resolved contact — `none` / `user` / `email` — and the caller's `added` state; never a namespace the caller has no role in). `GET /api/skills` gains **`?ns=<slug>`** (the catalog's namespace view, §10; viewer-visibility-scoped).
 - **Search (§34, all platform-admin):** `GET|POST /api/admin/search/synonyms` and `PUT|DELETE /api/admin/search/synonyms/:id` (audited `search.synonym_group_*`; 422 on validation), `GET /api/admin/search/languages` (the server's built-in text-search configurations, §34.9), `GET /api/admin/jobs/search-index` (index counts + rebuild progress), `POST /api/admin/jobs/search-index/retry` (resets `failed` rows; audited `job.search_retry_requested`). `GET|PATCH /api/admin/settings` gains `search_language` (validated against `pg_ts_config`, 422 otherwise).
@@ -2092,6 +2105,19 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
       the vote routes' answer; the Profile toggle *"Show me on feature ideas I upvote"*
       (`ideaVotesHidden`); the erasure reset.
     - **Minor** release (v2.45.0).
+
+45. **Search gaps (§62):**
+    - **Data:** migration 0103 (`search_gap_salts`, `search_gap_hits`, `search_gap_daily`,
+      `search_gaps`, `search_gap_tombstones`; nullable `skill_requests.requester_user_id` and
+      `skill_requests.origin`).
+    - **Shared:** `normalizeGapQuery`, the recording predicate, the `search_gap_triage` AI
+      feature with its prompt builder and draft validator.
+    - **Web:** recording on `gap=1` catalog loads, the one-shot marker from the header box,
+      `/admin/search-gaps` and its APIs, the Search card's *Search gaps* subsection, the
+      *Platform* requester on request surfaces, the two notification types.
+    - **Worker:** recording on MCP `search_skills`, `searchGapSweep`, the housekeeping fold and
+      retention.
+    - **Minor** release.
 
 **Explicitly deferred / out of scope (with rationale):**
 - **Per-version visibility** — *not implemented by design*: it contradicts the pinned invariant "visibility is per-skill, no per-version visibility" (CLAUDE.md #7). Revisit only with an explicit spec change.
@@ -4133,11 +4159,12 @@ skill that **already** satisfies it.
   audit entry, since the row itself won't exist afterwards to inspect. Only an `open` request can
   be withdrawn or removed; fulfilled requests are immutable.
 - Requests never expire in v1 (revisit if the list goes stale).
+- **Platform requests** (§62.10) — created by a platform admin from a search gap, with no requester and shown as *Requested by Platform* — have their own rules: platform admins edit them, nobody withdraws them, and fulfilling one notifies no requester but credits the fulfiller as usual.
 - GDPR erasure (§4): an erased requester's open requests are deleted, same as a self-withdrawal.
 
 ### Leaderboard (§21 extension)
 - A third stat per row: **"requests fulfilled"** — the number of `fulfilled` requests where
-  `fulfilled_by_user_id` = the user **and the requester is someone else** (no self-credit,
+  `fulfilled_by_user_id` = the user **and the requester is someone else** — `IS DISTINCT FROM`, so a *Platform* request (§62.10) always counts — (no self-credit,
   consistent with install credits). Snapshotted at acceptance (`fulfilled_at`), so later user
   changes never move past credit; the all/30d window filters on `fulfilled_at`.
 - A fourth stat per row: **"skills watched"** — the count of **distinct skills this user
@@ -4647,7 +4674,7 @@ authors; a human decides. The tool descriptions say so, so the boundary isn't a 
 | `rate_skill` | Set (1–5) or clear (`null`) the caller's own rating (§18). |
 | `get_skill_discussion` | Paginated skill discussion (§24): top-level comments newest-first, each with its `id`, `replyCount` and replies (oldest-first); a tombstone carries `removed: true` and no author or body. |
 | `post_skill_comment` | Post to a skill discussion, optionally with `contextSemver` (§24), or reply with `parentId` (normalised to the thread's root; a reply omits `contextSemver`). |
-| `list_skill_requests` | The §26 Requested-skills list, with its own filters. |
+| `list_skill_requests` | The §26 Requested-skills list, with its own filters. A *Platform* request (§62.10) carries `origin: "search_gap"` and the requester name `Platform`, with no user id. |
 | `request_skill` | File a skill request (§26). |
 
 #### Excluded surface (explicit, and enforced server-side — these tools do not exist)
@@ -7366,6 +7393,8 @@ popularity keys **within** each tier:
   - **Synonym groups** — one row per group with its terms as chips and **Edit** / **Delete**; **Add
     group** takes comma-separated terms; the server's 422 messages render inline under the field;
     collision warnings (§34.8) render on the affected rows; the empty state shows the example groups.
+  - **Search gaps** (§62.8) — the collection switch, the schedule, threshold and lookback spinners,
+    *Run now*, and a link to `/admin/search-gaps` with the reviewable count.
 - **Maintenance card** gains the §34.10 line and button.
 
 ### 34.13 One implementation, shared
@@ -7397,8 +7426,9 @@ popularity keys **within** each tier:
   `skilly_search_requests_total{surface="catalog|suggest|mcp", mode="all|any|none"}` and
   `skilly_search_zero_results_total{surface}`; worker gauges `skilly_search_index_pending` and
   `skilly_search_index_failed`.
-- **No query text is stored or logged anywhere** — counts only (a zero-result query log is deferred,
-  §34.18). Structured request logs already omit query strings (§22).
+- **No query text is stored or logged anywhere** — counts only — **except the opt-in search-gap log
+  (§62)**: while `search_gaps_enabled` is on, explicit searches that find nothing are kept by
+  normalized text, with no identity attached. Structured request logs still omit query strings (§22).
 
 ### 34.16 Tests (ship with the change — §16 discipline)
 - **Unit (`@skilly/shared`):** the parser — plain words, stop words, 1-character words, closed and
@@ -7473,8 +7503,8 @@ popularity keys **within** each tier:
 6. **Only `SKILL.md`, and only its first 64 KB**, is searchable text.
 7. **A language change degrades matching** for the seconds its rebuild takes.
 8. **No "why it matched" in the UI** in v1 — `snippet` and `matchedIn` are MCP-only.
-9. **No query analytics** — counts only. A zero-result query log (the natural input for curating
-   synonyms) is **deferred**, not rejected.
+9. **No query analytics** beyond counts. The zero-result query log deferred here shipped as
+   **search gaps (§62)**: opt-in, recorded on explicit searches only, with no identity attached.
 
 ---
 
@@ -9521,7 +9551,8 @@ pattern), with the **status pill** as its header accessory.
   **`proposal_prereview`** (§46.6 — `maxTokens` 16,384, `timeoutMs` 180,000), which also judges the
   §47 policy rules (its egress statement names them; no separate feature key), and its fifth
   **`skill_quality_draft_note`** (§44.7 — the defaults: 8192 tokens, 60 s), and its sixth
-  **`skill_try`** (§61.5 — 8192 tokens, `timeoutMs` 120,000).
+  **`skill_try`** (§61.5 — 8192 tokens, `timeoutMs` 120,000), and its seventh
+  **`search_gap_triage`** (§62.5 — the defaults: 8192 tokens, 60 s).
 - **Recording:** every call that reaches the provider (success or failure) writes **one**
   `ai_usage` row with its final outcome — a retried call is still one row — and updates `last_call_*`. Calls
   refused before the network (`ai_not_configured`, `ai_disabled`, `ai_key_missing`,
@@ -11744,7 +11775,7 @@ all read it, so they can never disagree.
 | Tier | Types | Admin can change? |
 |---|---|---|
 | **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.revise`, `proposal.resubmit` — the review queue | No |
-| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`), and `idea.submitted` (§60.7) | Yes — each can be switched off |
+| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`), `idea.submitted` (§60.7), and `search_gaps.ready` and `skill.search_gap_hidden_match` (§62.9) | Yes — each can be switched off |
 | **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled`; the feature-idea lifecycle (§60.7): `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` | Yes — each can be switched on |
 | **Never emailed** | `system.error`, `achievement.earned` | No (not candidates) |
 
@@ -13370,3 +13401,392 @@ run. Every other failure updates `last_call_*` as before.
 - **e2e** (stub provider, operational, switch on): open a skill → **Try with AI** → the Usage shows →
   send a message → the reply renders → reload and reopen: the conversation is still there → **Start
   over** clears it. With the switch off, the button is absent.
+
+## 62. Search gaps
+
+Platform admins see **what people search for and don't find**, with no one's identity attached, and
+turn it into a **synonym group** (§34.8) or a **skill request** (§26). Searches that end in nothing
+are counted per normalized query. A periodic worker sweep groups them into **gaps** and, when the
+§40 AI integration is operational, drafts a suggestion for each one. A platform admin accepts or
+dismisses every suggestion: nothing changes search or the Requested skills page without them. It is
+the **seventh registered AI task** (§40.7). For the gap log only, this section **supersedes** the
+"no query text is stored" rule of §34.15 and the deferral in §34.18 item 9.
+
+### 62.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Off by default** (`search_gaps_enabled`). It is the only way query text is ever stored. | It reverses the standing §34 rule that no query text is kept. Admins opt in deliberately. |
+| 2 | **Recorded only on an explicit act**: Enter or *See all results* in the header box, Enter in the catalog page's box, and the first page of an MCP `search_skills` call. Only when the result is empty or the any-word fallback. | The dropdown and the live filter fire on every keystroke. Recording them would log typing, not intent. |
+| 3 | **No user identity is stored.** A searcher appears only as a keyed hash under a **salt that lives for one UTC day**. After the day ends, the hashes are folded into counts and the salt is deleted. No time of day is stored. | Admins can tell "4 people" from "one person 4 times", but no row can be tied to a person, and hashes can't be linked across days. |
+| 4 | **Suggestions only.** The AI drafts; a platform admin accepts (through an editable form) or dismisses. | Synonyms change search for everyone. Requests are public and may carry PII copied from a query. |
+| 5 | **The gap list works without AI.** With AI off or not operational, admins see the raw gaps and can create a request or a synonym by hand. | Collecting is useful on its own; AI only saves typing. |
+| 6 | **The AI sees org-visible skills only**, never a restricted one. | A platform-wide synonym or a public request must never be drawn from a skill most people can't see (invariant #3). |
+| 7 | **A query whose only matches are restricted still becomes a request**, and the request never names the restricted skill. On acceptance, that skill's maintainers and namespace admins are told that people looked for it. | Widening visibility is the owners' call, and the public must not learn the skill exists. |
+| 8 | **Requests created here are posted by "Platform"**, not a person. Nobody gets the fulfilment notification; the fulfiller gets the usual credit. | The admin approved the request but didn't ask for it. A stand-in requester would distort the leaderboard. |
+| 9 | **One outcome per query, ever.** Accepting or dismissing tombstones the query: it is never recorded or suggested again. A created request follows the normal §26 lifecycle. | No re-suggestion churn, and nothing auto-resolves behind an admin's back. |
+| 10 | **The schedule, threshold and lookback are admin-set** (every 6 h, 2 people, 30 days by default), with *Run now*. | Traffic and catalog size differ per organization. |
+
+### 62.2 What is recorded
+- **Where.** A **hit** is recorded only from:
+  - **the catalog grid** (`GET /api/skills?q=`) when the request carries **`gap=1`**. The catalog
+    page sets it for **one load**: when the page was reached by Enter or *See all results* in the
+    header box (a one-shot marker the page removes from the URL with `router.replace`, so a reload,
+    back navigation or shared link records nothing), and when the user presses Enter in the box on
+    the catalog page. Live-filter keystrokes never set it. Surface **`web`**.
+  - **MCP `search_skills`** (§29), on every call that asks for the **first page**. Surface **`mcp`**.
+  - Never from the header dropdown on its own, people mode (`@`), or any box §34.2 lists as keeping
+    its own matcher (Requested skills, Installed, usage dashboard, pickers).
+- **When.** All of the following hold:
+  - `search_gaps_enabled` is on;
+  - the parsed query (§34.4) has **at least one positive unit** and passes the 2-character floor.
+    Exclusion-only queries are not gaps;
+  - **no facet or scoped view narrows the result**: no category, tool, source or `minQuality`
+    facet, and none of the scoped views (My Skills, Official, archived, namespace, maintained-by,
+    `collection`, `collectionsBy`). The sort doesn't matter. An empty filtered result says the
+    filter is narrow, not that the words are missing;
+  - the result is **empty** (mode `none`) or the **any-word fallback** (mode `any`, §34.5);
+  - the raw query **passes the §6 secret scanner**. A query that looks like a credential is dropped
+    whole, never redacted and kept;
+  - the normalized query is **not tombstoned** (§62.6).
+- **Normalized form** (`query_norm`): the §34.4 parse tree serialized canonically and lowercased.
+  Positive units come first, in typed order, then the exclusions as `-unit`, all joined by single
+  spaces; a phrase is double-quoted (a one-word phrase is written as a bare word); `OR` stays
+  uppercase between its members. NFC,
+  whitespace collapsed, with the §34.4 caps of 200 characters and 12 units. It is **not stemmed**, so
+  admins read what people typed: `PDF`, `"pdf"` and ` pdf ` are one gap, `pdfs` is another. One pure
+  function in `@skilly/shared` (`normalizeGapQuery`) serves both processes.
+- **Fire-and-forget.** Recording runs after the response is computed. It never delays or fails a
+  search; a failure is only counted (§62.12).
+- **What a hit stores** (`search_gap_hits`, §62.3): the UTC day, `query_norm`, surface, mode, and
+  **`searcher_hash` = HMAC-SHA256(the day's salt, user id)**. There is one row per (day, query,
+  surface, mode, searcher), with a `hits` counter bumped on each repeat. **No timestamp, no serial
+  id, no user id, no namespace, no IP, no request id.** The day is taken from the database clock
+  (`(now() AT TIME ZONE 'UTC')::date`) in the same statement.
+- **The day's salt** (`search_gap_salts`): 32 random bytes per UTC day, created on the day's first
+  hit (`INSERT … ON CONFLICT DO NOTHING`, then read). A salt is only ever created for the current
+  day. A process may cache today's salt in memory keyed by the day, and drops it when the day
+  changes.
+- **Visibility.** A hit records what the caller typed and what *they* got back. Whether a
+  restricted skill would have matched is decided later by the sweep (§62.4), and only platform
+  admins see it.
+- **Why the threshold counts people.** `gap=1` is set by the client, so one person can inflate
+  `hits`, but they add at most one searcher per day.
+
+### 62.3 Data model (migration 0103)
+- **`search_gap_salts`**: `day date PRIMARY KEY`, `salt bytea NOT NULL`.
+- **`search_gap_hits`** (today's raw rows): `day date`, `query_norm text` (≤ 200), `surface`
+  (`web` | `mcp`), `mode` (`none` | `any`), `searcher_hash bytea`, `hits int NOT NULL DEFAULT 1`;
+  **PK `(day, query_norm, surface, mode, searcher_hash)`**.
+- **`search_gap_daily`** (folded counts): `day`, `query_norm`, `surface`, `mode`, `hits int`,
+  `searchers int` (distinct hashes that day); **PK `(day, query_norm, surface, mode)`**. Kept
+  **90 days**.
+- **`search_gaps`** (one row per query that crossed the threshold): `id` (uuid), `query_norm`
+  (unique), `query_hash` (bytea, unique), `mode` (`none` when any hit in the window was empty, else
+  `any`), `surfaces` (text[]), `hits` and `searchers` (sums over the lookback window, refreshed by
+  each sweep), `first_day`, `last_day`, `state` (`new` | `suggested` | `failed` | `accepted`),
+  `restricted_matches` (jsonb, up to 3 `{ skillId }`, §62.4), `ai_kind` (`synonym` | `request` |
+  `noise`, nullable), `ai_draft` (jsonb, nullable), `ai_model`, `ai_attempts` (int, default 0),
+  `ai_last_error`, `ai_next_attempt_at`, `outcome` (`request` | `synonym`, nullable),
+  `outcome_request_id` (FK → `skill_requests`, `ON DELETE SET NULL`), `outcome_synonym_group_id`
+  (FK → `search_synonym_groups`, `ON DELETE SET NULL`), `decided_by_user_id` (FK → `users`,
+  `ON DELETE SET NULL`; provenance only), `decided_at`, `created_at`, `updated_at`. The two
+  timestamps are sweep times, never search times.
+  - **States:** `new` (no draft yet: waiting for the AI step, retrying, or AI unavailable) →
+    `suggested` (a draft is stored) or `failed` (drafting gave up after 3 attempts) → `accepted`.
+    Dismissing deletes the row. **Reviewable** = `new`, `failed`, or `suggested` with an `ai_kind`
+    other than `noise`.
+- **`search_gap_tombstones`**: `query_hash bytea PRIMARY KEY` (SHA-256 of `query_norm`, unsalted so
+  it stays stable), `outcome` (`request` | `synonym` | `dismissed`), `created_at`. Kept forever.
+- **`skill_requests`** (§26): `requester_user_id` becomes **nullable**, and a new
+  `origin text NOT NULL DEFAULT 'user'` (`user` | `search_gap`) carries
+  `CHECK ((origin = 'user') = (requester_user_id IS NOT NULL))`. Existing rows are `user`.
+- **Folding and retention** run in the worker's leader-only **housekeeping sweep**, **whatever the
+  switch says**:
+  - for every day before today (UTC), in one transaction: insert its `search_gap_hits` into
+    `search_gap_daily` (sum of hits, count of distinct hashes), then delete that day's hits and its
+    salt. A straggler written just after midnight for the previous day is folded on the next pass;
+  - delete `search_gap_daily` rows older than 90 days;
+  - delete `accepted` gaps decided more than 90 days ago. Their tombstones stay.
+
+  A searcher hash, and the salt that made it, therefore last at most until the first housekeeping
+  pass after their day.
+- **GDPR erasure (§4):** nothing to erase. No row holds a searcher's user id. `decided_by_user_id`
+  is an admin's provenance and stays, like other provenance columns.
+
+### 62.4 The sweep
+- **`searchGapSweep`**, worker, **leader-only**. It wakes every minute and runs when
+  `search_gaps_enabled` is on and either **`search_gaps_sweep_hours`** have passed since the last
+  run started, or a *Run now* is pending (§62.8). Runs never overlap: the loop runs one at a time.
+  With the switch off, neither scheduled nor requested runs happen; housekeeping (§62.3) continues.
+- **Each run:**
+  1. **Count.** For every `query_norm` with hits in the lookback window
+     (`search_gaps_lookback_days`, today included): `searchers` is the sum of each day's distinct
+     searchers (today from `search_gap_hits`, earlier days from `search_gap_daily`), and `hits`
+     likewise, with first and last day, mode and surfaces. Tombstoned queries are skipped.
+  2. **Threshold.** A query with **`searchers ≥ search_gaps_min_searchers`** becomes a gap (inserted
+     as `new`) or refreshes its counts. A `new`, `suggested` or `failed` gap that has fallen below
+     the threshold, because its hits aged out of the window, is deleted. It can come back.
+  3. **Re-check the catalog.** Each `new`, `suggested` or `failed` gap's query runs through the §34
+     engine twice, server-side, in **strict mode** (no any-word fallback):
+     - against **org-visible**, active, non-archived skills. A match means the catalog now answers
+       the query for everyone (a skill was published or a synonym added since). The gap is deleted
+       with **no** tombstone, so it returns only if the query starts failing again;
+     - with **no visibility filter**. The top 3 matches that are **not** org-visible (§42
+       namespace-visible skills) are stored in `restricted_matches`. Archived skills are ignored.
+  4. **Draft** (§62.5), only while the AI integration is **Operational** (`aiOperational()`, §40.7):
+     up to **20** `new` gaps whose `ai_next_attempt_at` is null or past, ordered by searchers desc,
+     hits desc, `last_day` desc, 3 at a time.
+  5. **Notify** platform admins when the run made at least one gap newly reviewable (§62.9).
+  6. **Record the run** in `search_gaps_last_run` (§62.8).
+- **Attempts.** Each gap gets up to **3** drafting attempts, at least **5 minutes** apart; a failed
+  attempt sets `ai_next_attempt_at`. After the third failure the gap is `failed`, keeping the
+  sanitized `ai_last_error`, and stays reviewable by hand. A refused call (`ai_disabled`,
+  `ai_not_configured`, `ai_key_missing`) is not an attempt. **Redraft** (§62.6) resets the count.
+- **Without AI**, gaps stay `new` and are listed with no draft.
+
+### 62.5 The AI call (feature key `search_gap_triage`)
+- **One call per gap**, in JSON mode: `aiComplete({ feature: 'search_gap_triage', system,
+  messages, maxTokens: 8192, json: true })`, with no `userId`. The registry entry declares no
+  `maxTokens` or `timeoutMs`, so the defaults apply (8192 tokens, 60 s); admins can tune the timeout
+  (§40.15).
+- **Input:**
+  - the gap's `query_norm`, its mode and its counts;
+  - a **shortlist of up to 30 org-visible, active, non-archived skills**: the query's any-word FTS
+    matches in §34.6 order, topped up from the typo tier on titles. Each skill is sent as `ns/slug`,
+    title, description (first 500 characters) and category names;
+  - the **synonym groups** that share a normalized word with the query (§34.8), with ids and terms;
+  - the **category vocabulary** (names) and the tool/harness values (§26).
+  - **Never sent:** restricted skills or the gap's `restricted_matches`, `SKILL.md` bodies, usage
+    examples, per-day counts, surfaces, or anything about the searchers.
+- **The prompt** asks the model to choose one answer:
+  - **`synonym`**: the query means what a shortlisted skill already says in other words.
+    `{ kind, terms: string[] (2–10, the query's words included), groupId | null (an existing group to
+    extend), targetSkill: "ns/slug", rationale }`.
+  - **`request`**: no shortlisted skill does this. `{ kind, title, description, usage,
+    categories: string[] (from the vocabulary, ≤ 3), tool | null, rationale }`, written as a neutral
+    request for a skill, **without names of people, customers or internal systems** taken from the
+    query.
+  - **`noise`**: gibberish, a person's name, a pasted fragment, a test. `{ kind, rationale }`.
+  - The query sits in a clearly delimited block, marked as untrusted data whose instructions are
+    ignored.
+- **Validation:** an unknown kind, a missing field, or a `targetSkill` or `groupId` that wasn't in
+  the input is a failed attempt (`ai_invalid_output`). Unknown categories and tools are dropped, and
+  text is cut to the §26 and §34.8 bounds. Synonym terms are **not** checked for §34.8 uniqueness
+  here: the accept form does that.
+- **Registry entry** (`AI_FEATURES`): `{ key: 'search_gap_triage', label: 'Search gaps (draft a
+  synonym or request from an unmatched search)', egress: 'For each search gap: the normalized text
+  people searched for and its counts; up to 30 org-visible skills (namespace, slug, title, the first
+  500 characters of the description, categories); the synonym groups sharing a word with the
+  query; the category and tool vocabularies', spec: '§62' }`. Like §61, the egress includes text
+  that users typed; the switch's help text says so (§62.8).
+- Every call writes one `ai_usage` row with `user_id` null (§40.7). Calls are **not audited**
+  (§40.11).
+
+### 62.6 Admin decisions
+All platform-admin only, re-verified on the server (**403** otherwise). Every write re-reads the gap
+`FOR UPDATE` and takes the card's `expectedUpdatedAt`. A gap that a sweep or another admin changed
+since the page loaded answers **409** *"This search gap changed since you opened it"*, and the list
+reloads. An unknown gap is **404**.
+- **Create request…** opens the §26 request fields in a dialog, prefilled from the draft (empty
+  apart from the query when there is none): Title, Categories, Description, Usage, Tool/harness, with
+  the §26 field rules. A reminder reads *"This request is public to every signed-in user and is
+  posted by Platform. Remove names of people, customers, and restricted skills or namespaces."* The
+  §26 similar-check runs on the first click and shows its advisory banner; the second click posts
+  anyway. When the gap has restricted matches the dialog adds *"N restricted skills match this
+  search. Their maintainers and namespace admins will be told that people looked for them, and will
+  see the search text."* Posting does, in one transaction:
+  - insert the `skill_requests` row (`origin = 'search_gap'`, no requester, `open`) and its
+    categories;
+  - audit `request.created` (actor = the admin; `after` carries `origin: 'search_gap'` and the gap
+    id);
+  - set the gap `accepted` with `outcome = 'request'`, `outcome_request_id` and `decided_*`, and
+    insert the tombstone;
+  - delete the query's `search_gap_hits` and `search_gap_daily` rows;
+  - send the restricted-match notifications (§62.9).
+- **Add synonym…** opens the §34.12 group editor, prefilled: the draft's group with the new terms
+  added, or a new group of the draft's terms (the query's words are always a member). Saving goes
+  through the existing synonym write, with its 422s, audit events and immediate propagation, and in
+  the same transaction accepts the gap (`outcome = 'synonym'`, `outcome_synonym_group_id`),
+  tombstones it, deletes its hit and daily rows, and sends the restricted-match notifications.
+- **Dismiss…** asks *"Dismiss this search? It's deleted and never suggested again."* Confirming
+  writes the audit row, inserts the tombstone (`dismissed`), and deletes the gap and its hit and
+  daily rows. It can't be undone.
+- **Redraft** (shown while AI is operational, on a gap with a draft or a failure) clears the draft,
+  resets `ai_attempts` and returns the gap to `new`. The next run, or *Run now*, drafts it again.
+- **The draft is advice.** An admin may create a request from a `synonym` or `noise` draft, or a
+  synonym from a `request` draft. The form then starts empty apart from the query.
+
+### 62.7 The page: `/admin/search-gaps`
+- **Access.** Platform admins only. Anyone else gets the *Platform admins only* empty state, and
+  the APIs return **403**. Sidebar entry **"Search gaps"** (magnifier glyph), directly **below
+  Feature ideas**, with a superscript **1–9 / 9+** count of reviewable gaps from
+  `GET /api/nav-badges` (`searchGaps`, present only for platform admins).
+- **Header.** Eyebrow *"Administration"*, title **"Search gaps"**, sub-line *"Searches that found
+  nothing, with no one's identity attached. Turn them into a synonym or a skill request, or dismiss
+  them."* Below it, a status line, e.g. *"Collecting · every 6 h · at least 2 people in the last 30
+  days · last run ‹time› (3 new)"*, with **Run now** and a link to the settings in the Search card.
+  - Collection off: *"Collection is off."* with the link. Existing gaps stay actionable; *Run now* is
+    disabled.
+  - AI not operational: *"‹name› is unavailable, so new gaps get no drafts. You can still act on
+    them."*
+- **Three tabs**, each with its count:
+  - **To review**: reviewable gaps, most searchers first. Each card shows:
+    - the query in a monospace chip, and a mode chip: *No results* or *Partial matches only*;
+    - *"up to N people · M searches · last searched ‹day›"* (the day in the viewer's date style,
+      no time). *Up to N people* has the tooltip *"Counted per day: one person searching on three
+      days counts three times."*;
+    - surface chips (*Web*, *MCP*);
+    - when present, *"Would have matched: ‹ns/slug›, ‹ns/slug› (visible only in their
+      namespaces)"*, each a link;
+    - the draft (kind, rationale and fields), or *"Drafting…"* (`new`, AI operational), *"No
+      draft"* (AI unavailable), or *"Drafting failed: ‹error›"*;
+    - actions **Create request…**, **Add synonym…**, **Redraft** and **Dismiss…**.
+  - **Probably noise**: `suggested` gaps with a `noise` draft, with the same card and actions.
+  - **Accepted**: the last 90 days, newest first, read-only. Outcome chip, a link to the request or
+    the synonym group, who decided and when.
+
+### 62.8 Settings (Administration → Search)
+A **Search gaps** subsection in the §34.12 Search card, for platform admins, saved through
+`PATCH /api/admin/settings`. Each changed key is audited as `settings.updated` (before → after).
+- **Collect searches that find nothing**: switch, `search_gaps_enabled` (absent ⇒ **off**). Help
+  text: *"Keeps the text of searches that find nothing, without who searched. While ‹name› is
+  available, the text is sent to ‹provider› to draft suggestions."*
+- **Run every**: a number spinner in hours, `search_gaps_sweep_hours`, integer **1–168**, default
+  **6**.
+- **Minimum people**: a spinner, `search_gaps_min_searchers`, integer **1–50**, default **2**.
+  Caption: *"A search becomes a gap once this many people made it (counted per day)."*
+- **Look back**: a spinner in days, `search_gaps_lookback_days`, integer **1–90**, default **30**.
+- **Run now** and **Open search gaps (N)**, the link with the reviewable count.
+- **422** for a value that is not an integer or is outside its range. The card's summary line gains
+  *"· gaps on"* while collection is on.
+- **Run now** (`POST /api/admin/search-gaps/run`) stores `search_gaps_run_requested_at = now()`;
+  the sweep picks it up within a minute. Clicks before the run starts coalesce. Audited as
+  `job.search_gaps_run_requested`. **409** while the switch is off.
+- **`search_gaps_last_run`**, written by the worker: `{ startedAt, finishedAt, ok, gaps, newGaps,
+  drafted, error }`, shown on the page and the card.
+- **Turning the switch off** stops recording at once and stops runs. It deletes nothing: counts age
+  out through housekeeping, and gaps stay until an admin decides them. **Turning it on** records
+  from then on; nothing is retroactive.
+
+### 62.9 Notifications (§12)
+| Type | Recipients | Sentence | CTA |
+|---|---|---|---|
+| `search_gaps.ready` | Every **active platform admin**. **Coalesced per recipient until read**, like `idea.submitted`: a run bumps the unread row's `count` by the number of gaps it made newly reviewable. | "A search gap is waiting for review." / "{n} search gaps are waiting for review." | Review search gaps → `/admin/search-gaps` |
+| `skill.search_gap_hidden_match` | The **effective maintainers** of each restricted skill in the accepted gap's `restricted_matches` (explicit maintainers and the owning namespace's admins), active, minus the deciding admin. One row per recipient per skill. | "People searched for \"{query}\" and couldn't find {ns}/{slug}, because only its namespace can see it. Up to {n} people in the last {days} days. Consider sharing it with more namespaces or making it org-visible." | View the skill → `/skills/{ns}/{slug}` |
+
+- `skill.search_gap_hidden_match` fires **only when an admin accepts** a gap (either outcome), never
+  at sweep time, so unvetted query text reaches no one but platform admins. Its recipients govern the
+  skill, so naming it leaks nothing.
+- Neither type has a per-type opt-out. Both are **digestible by default** (§48.3), sent over the
+  usual channels. `NOTIFICATION_LABELS` gains *Search gaps to review* and *Search for a restricted
+  skill*.
+
+### 62.10 Platform requests (§26)
+A request with `origin = 'search_gap'` has no requester and shows **Platform** instead of a person.
+- Cards, rows and the detail page read *"Requested by Platform"* with the skilly mark as the avatar:
+  no hover card, no Reach out, no Follow.
+- **Left out of:** "Mine" and the Requested-by view; the leaderboard's *skills requested* stat; the
+  `first_request` badge and its backfill; `follow.request_created` (no followee); and the request
+  discussion's *Original Requester* tag and requester notification.
+- **Editing and removal.** Platform admins may **edit** an open Platform request (every field), to
+  fix wording or remove PII; audited as `request.updated` (before → after). Nobody withdraws one.
+  Platform admins **remove** it as any request (§26).
+- **Fulfilment** works through both §26 paths. There is **no** `request.fulfilled` notification and
+  no `request_fulfilled` badge, because there is no requester. The fulfiller **does** get the usual
+  credit: the leaderboard's *requests fulfilled* stat, the `first_fulfilment` badge and the
+  `follow.request_fulfilled` fan-out. The "someone else" rule reads
+  `fulfilled_by_user_id IS DISTINCT FROM requester_user_id`, so a Platform request always counts.
+- The *new items* nav badge and corner tag apply as to any new request.
+- **API.** Request rows carry `origin`, and `requester: null` for a Platform request. MCP
+  `list_skill_requests` (§29) returns `origin` and the requester name `Platform` with no user id.
+  Users can't create one: `POST /api/requests` and MCP `request_skill` always write `origin =
+  'user'`.
+
+### 62.11 API
+- **Platform admin** (**403** otherwise):
+  - `GET /api/admin/search-gaps?tab=review|noise|accepted` → `{ gaps, counts: { review, noise,
+    accepted }, status: { enabled, sweepHours, minSearchers, lookbackDays, lastRun, aiOperational
+    } }`. Each gap carries its counts, days, mode, surfaces, restricted matches (`ns`, `slug`,
+    `title`), state, draft, error, outcome and `version` (`updated_at` at full precision).
+  - `POST /api/admin/search-gaps/:id/request { title, description, usage, categories, tool,
+    expectedUpdatedAt }` → `{ requestId }`.
+  - `POST /api/admin/search-gaps/:id/synonym { groupId | null, terms, expectedUpdatedAt }` →
+    `{ groupId }`; the §34.8 422s apply.
+  - `POST /api/admin/search-gaps/:id/redraft { expectedUpdatedAt }` (**409** while AI is not
+    operational).
+  - `DELETE /api/admin/search-gaps/:id { expectedUpdatedAt }` (dismiss).
+  - `POST /api/admin/search-gaps/run`.
+- `PATCH /api/requests/:id` also accepts a platform admin on a Platform request.
+- `GET|PATCH /api/admin/settings` gains the four §62.8 keys and the read-only
+  `search_gaps_last_run`; `GET /api/nav-badges` gains `searchGaps`.
+- `GET /api/skills` accepts `gap=1`. It never changes the response and is ignored unless §62.2
+  holds.
+
+### 62.12 Audit, metrics and privacy
+- **Audited** (`target_type = 'search_gap'`): `search_gap.accepted` (after = `{ outcome, requestId
+  | groupId, queryHash, searchers, restrictedMatchCount }`) and `search_gap.dismissed` (`{ queryHash,
+  aiKind }`), plus `job.search_gaps_run_requested` and `settings.updated` for the four keys.
+  **Never the query text**: the audit log is append-only, and a dismissed query must be erasable.
+  The text an admin approved is recorded by the request's or synonym group's own events
+  (`request.created`, `search.synonym_group_*`), and admin edits of Platform requests by
+  `request.updated`.
+- **Not audited:** hits, sweeps, drafts and redrafts.
+- **Metrics:** `skilly_search_gap_hits_total{surface, outcome="recorded|secret|tombstoned|failed"}`
+  on both processes; on the worker `skilly_search_gap_runs_total{ok}`,
+  `skilly_search_gap_drafts_total{outcome="synonym|request|noise|failed"}` and the gauge
+  `skilly_search_gaps_reviewable`.
+- **Logs:** query text never reaches structured logs or the System log. A recording failure logs
+  its error code only.
+- **What someone with database access can learn.** During the day, someone holding today's salt
+  and the users table can hash every user id and match today's rows. After housekeeping, nothing
+  links a query to a person. Query text may still name a person or project, which is why it stays
+  admin-only until an admin rewrites it into a request.
+- **Tombstones** are unsalted SHA-256 hashes of normalized queries, so a guessed query can be tested
+  against them. Accepted: they carry no identity.
+
+### 62.13 Accepted trade-offs
+- *Up to N people* over-counts a person who searches on several days.
+- Only explicit acts count, so a dropdown search that ended in "Nothing found" is never seen.
+  Faceted searches are never recorded either.
+- A tombstoned query is never counted again, even if the request created from it is later removed.
+- The AI step needs *Operational*. One failing call of any feature pauses drafting until a later
+  call or an admin **Test** succeeds (as in §61.11). Gaps stay actionable by hand meanwhile.
+- A query answered by a restricted skill the searcher couldn't see becomes a public request that the
+  skill may already meet. Its owners are told; widening visibility is their call.
+- The normalized form is not stemmed, so singular and plural forms are separate gaps until a
+  synonym or request covers them.
+
+### 62.14 Out of scope (deferred)
+- Gaps from the dropdown without Enter, from faceted searches, or from the other boxes §34.2 lists.
+- Applying any suggestion automatically.
+- A per-namespace gap list for namespace admins.
+- Un-tombstoning a query; exporting the gap log.
+
+### 62.15 Tests (ship with the change)
+- **Unit** (`@skilly/shared`): `normalizeGapQuery` (case, whitespace, a one-word phrase,
+  exclusions, `OR`, the caps, no stemming); the recording predicate (the explicit flag, each facet
+  and scoped view, both modes, exclusion-only, the 2-character floor, people mode); the draft
+  validator (each kind, an unknown target, dropped categories, the bounds); the prompt builder (the
+  delimited query, no restricted skill in the input).
+- **Integration** (web API + worker + DB, provider stubbed):
+  - recording: `gap=1` with no results writes one hit row with a hash and no user id or
+    timestamp, and a repeat bumps `hits`; nothing is written without `gap=1`, with a facet, for a
+    secret-looking query, for a tombstoned query, or with the switch off; MCP records the first page
+    only;
+  - housekeeping folds yesterday into `search_gap_daily` and deletes its hits and salt, prunes
+    after 90 days, and runs with the switch off;
+  - the sweep applies the threshold and lookback, refreshes counts, deletes a gap an org-visible
+    skill now answers, stores restricted matches, drafts only while AI is operational, retries 3
+    times 5 minutes apart, and notifies platform admins once per run (coalesced);
+  - the stub receives exactly the §62.5 egress, with no restricted skill;
+  - accept-request creates a Platform request, audits with no query text, tombstones, deletes the
+    hit and daily rows, and notifies the restricted skill's maintainers and namespace admins;
+    accept-synonym applies the §34.8 422s; dismiss tombstones and deletes; 409 on a stale version;
+    403 for anyone but a platform admin;
+  - Platform requests: absent from "Mine" and *skills requested*; fulfilment credits the fulfiller
+    (`first_fulfilment`, *requests fulfilled*) and notifies no requester; a platform admin can edit
+    one and a user can't withdraw it;
+  - settings 422s; *Run now* 409 while off and audited when on.
+- **e2e** (stub provider, collection on, minimum 1): search a nonsense word and press Enter →
+  *Run now* → the gap appears on `/admin/search-gaps` → **Create request…** → the request shows
+  *Requested by Platform* on `/requests`.

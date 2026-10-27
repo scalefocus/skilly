@@ -7,7 +7,7 @@
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
 // from a description — absent from the code.
 import type { Pool } from "pg";
-import { parseMinQuality, deprecationWarning, findSlugMatches, loadPrereviewView, proposalPolicyPayload, PREREVIEW_OPEN_STATES } from "@skilly/shared";
+import { parseMinQuality, deprecationWarning, findSlugMatches, loadPrereviewView, proposalPolicyPayload, PREREVIEW_OPEN_STATES, maybeRecordGapHit } from "@skilly/shared";
 import { aiAvailable, parseAiTokenKey } from "@skilly/shared/ai";
 import {
   MCP_TOOL_NAMES,
@@ -534,9 +534,23 @@ export async function callTool(
         limit: n(args, "limit"),
         offset: n(args, "offset"),
       });
-      // §34.15: counts only — the query text is never recorded.
+      // §34.15: counts only — the query text is never logged, except the opt-in, identity-free
+      // search-gap log (§62.2): a first-page call with no facet that found nothing or only partial
+      // matches. Fire-and-forget; it never delays or fails the tool call.
       M.searchRequests.inc({ surface: "mcp", mode: res.matchMode ?? "none" });
       if (res.matchMode && res.total === 0) M.searchZeroResults.inc({ surface: "mcp" });
+      const offset = n(args, "offset");
+      void maybeRecordGapHit(pool, {
+        userId: caller.userId,
+        surface: "mcp",
+        rawQuery: s(args, "query"),
+        explicit: !offset,
+        narrowed: !!(s(args, "category") || s(args, "tool") || s(args, "type") || args.minQuality !== undefined && args.minQuality !== null),
+        total: res.total,
+        matchMode: res.matchMode,
+      }).then((outcome) => {
+        if (outcome !== "skipped") M.searchGapHits.inc({ surface: "mcp", outcome });
+      });
       return toolJson(res);
     }
 
