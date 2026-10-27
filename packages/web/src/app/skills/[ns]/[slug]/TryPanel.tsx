@@ -93,18 +93,19 @@ export function TryPanel({
     if (key) setMessages(loadTryConversation(key));
   }, [key]);
 
-  // The composer only renders once the version resolves — focus it then.
+  const turnsLeft = AI_TRY_MAX_TURNS - tryUserTurns(messages);
+  const isFull = full || !tryCanSendMore(messages);
+  const stopped = !!err?.stop || !!ctxErr;
+
+  // The composer only renders once the version resolves, and again after Start over on a full
+  // conversation — focus it then.
   useEffect(() => {
-    if (ctx) input.current?.focus();
-  }, [ctx]);
+    if (ctx && !isFull) input.current?.focus();
+  }, [ctx, isFull]);
 
   useEffect(() => {
     scroll.current?.scrollTo({ top: scroll.current.scrollHeight });
   }, [messages, pending, err]);
-
-  const turnsLeft = AI_TRY_MAX_TURNS - tryUserTurns(messages);
-  const isFull = full || !tryCanSendMore(messages);
-  const stopped = !!err?.stop || !!ctxErr;
 
   const persist = (next: TryMessage[]) => {
     setMessages(next);
@@ -189,6 +190,10 @@ export function TryPanel({
     setErr(null);
     setFull(false);
     setDraft("");
+    // The button goes disabled on an empty conversation, which would drop focus to <body> (§61.3):
+    // move it to the composer first. On a full conversation the composer mounts on this commit and
+    // the effect above focuses it.
+    input.current?.focus();
   };
 
   const loadedLine = (() => {

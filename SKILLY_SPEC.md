@@ -6963,7 +6963,9 @@ minted by a signed-in user who can see the skill — and keeps every plain URL e
   What's new notice and the directory hover card. It uses `role="dialog"` + `aria-modal="true"`,
   labelled by its title, with a header **✕** that runs the dialog's cancel. Focus moves in on open,
   **Tab is trapped** inside, **Esc** runs the dialog's cancel, and focus returns to the control that
-  opened it. While it is open the page behind is
+  opened it. **Esc works even when focus has fallen out of the dialog** — the browser drops focus to
+  the page body when the focused control is disabled or removed (a button that disables itself after
+  a click, say); the **topmost open dialog** still takes an Esc pressed there. While it is open the page behind is
   **inert** and its **scroll is locked**, with no layout shift. Backdrop-click dismissal is **opt-in per
   dialog** (the crop dialog opts out). It opens with the shared `.menu-pop` fade + scale, with no
   animation under `prefers-reduced-motion`. At phone width (≤ 560 px) the panel spans the viewport
@@ -13209,7 +13211,9 @@ is cloned, no install token is minted, and the conversation is kept only in the 
   messages, or when the next message would push the transcript past 200,000 characters, the
   composer is replaced by *"This conversation is full. Start over to keep trying."* with **Start
   over**.
-- **Start over** clears the conversation, after a confirm when it isn't empty.
+- **Start over** clears the conversation, after a confirm when it isn't empty, and puts focus in the
+  composer (the button itself goes disabled on an empty conversation, so focus must not stay on it —
+  Esc keeps closing the panel either way, §33's shared `Modal`).
 - **Keeping the conversation.** The transcript is stored in `sessionStorage`, keyed by **user id,
   skill and resolved version**. It survives closing and reopening the panel and reloading the page
   in the same tab, and is gone when the tab closes. Sign-out clears every Try key. Nothing reaches
