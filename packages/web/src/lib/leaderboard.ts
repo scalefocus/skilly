@@ -136,7 +136,7 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
        select fulfilled_by_user_id as user_id, count(*) as requests_fulfilled
          from skill_requests
         where state = 'fulfilled' and fulfilled_by_user_id is not null
-          and fulfilled_by_user_id <> requester_user_id ${sinceFulfilled}
+          and fulfilled_by_user_id is distinct from requester_user_id ${sinceFulfilled}
         group by fulfilled_by_user_id
      ), watched as (
        select sm.user_id, count(distinct sm.skill_id) as skills_watched

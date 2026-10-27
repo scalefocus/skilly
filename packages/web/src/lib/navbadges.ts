@@ -12,6 +12,7 @@ import { pool } from "./db";
 import { skillVisibilityWhere, type EffectiveAccess } from "@skilly/shared";
 import { getNavSeen } from "./settings";
 import { pendingIdeaCount } from "./ideas";
+import { reviewableGapCount } from "./searchGaps";
 
 export interface NavBadges {
   catalog: number;
@@ -25,10 +26,12 @@ export interface NavBadges {
   /** §60.5 the feature-ideas review queue: a plain count of pending ideas (no "seen" marker).
    *  0 for non-admins. */
   ideas: number;
+  /** §62.7 search gaps waiting for a platform admin (a plain count). 0 for non-admins. */
+  searchGaps: number;
 }
 
 export async function getNavBadges(access: EffectiveAccess & { userId: string | null }, db: Pool = pool): Promise<NavBadges> {
-  if (!access.userId) return { catalog: 0, review: 0, systemLog: 0, requests: 0, ideas: 0 };
+  if (!access.userId) return { catalog: 0, review: 0, systemLog: 0, requests: 0, ideas: 0, searchGaps: 0 };
   const seen = await getNavSeen(access.userId, db);
 
   // Catalog: active skills visible to the caller, created after they last looked. A new VERSION
@@ -122,6 +125,7 @@ export async function getNavBadges(access: EffectiveAccess & { userId: string | 
   );
 
   const ideas = access.isPlatformAdmin ? await pendingIdeaCount(db) : 0;
+  const searchGaps = access.isPlatformAdmin ? await reviewableGapCount(db) : 0;
 
-  return { catalog, review, systemLog, requests, ideas };
+  return { catalog, review, systemLog, requests, ideas, searchGaps };
 }

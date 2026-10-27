@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useApi, useEnterKey, SkeletonGrid, EmptyState, ScrollToTop, Pill, ViaMcp } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
-import { UserBubble } from "../../components/UserBubble";
+import { RequesterBubble } from "../../components/RequesterBubble";
 import { useDateFmt } from "../../components/DateFormat";
 import { agentLabel } from "@skilly/shared/agents";
 import { plainText, descTooltip } from "../../lib/cardText";
@@ -26,7 +26,8 @@ export interface RequestEntry {
   usageExamples: string | null;
   toolHarness: string;
   categories: string[];
-  requesterUserId: string;
+  /** Null for a Platform request (§62.10), shown as "Platform" with the skilly mark. */
+  requesterUserId: string | null;
   requesterName: string;
   viaMcpClient?: string | null;
   requesterAvatar: string | null;
@@ -74,7 +75,7 @@ function RequestCard({ r, index, showState }: { r: RequestEntry; index: number; 
       </div>
       <div className="meta skill-card-stats" style={{ paddingTop: 10, borderTop: "1px solid var(--line)" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12.5 }}>
-          <UserBubble name={r.requesterName} avatar={r.requesterAvatar} userId={r.requesterUserId} size={20} />
+          <RequesterBubble name={r.requesterName} avatar={r.requesterAvatar} userId={r.requesterUserId} size={20} />
           {r.requesterName}
         </span>
         {/* §29 attribution: a request an agent filed on someone's behalf says so. */}

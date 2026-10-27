@@ -28,7 +28,13 @@ export const GET = withSystemLog("/api/requests/[id]", async function GET(_req: 
   // Withdrawn/removed/fulfilled requests stay readable (the fulfilment notification links here
   // indirectly via the skill; direct opens of a closed request show its state).
   if (!request) return Response.json({ error: "not found" }, { status: 404 });
-  return Response.json({ request, isRequester: request.requesterUserId === g.userId, isPlatformAdmin: g.access.isPlatformAdmin });
+  return Response.json({
+    request,
+    isRequester: request.requesterUserId !== null && request.requesterUserId === g.userId,
+    isPlatformAdmin: g.access.isPlatformAdmin,
+    // §62.10: the requester edits their own open request; platform admins edit a Platform request.
+    canEdit: request.state === "open" && (request.requesterUserId === null ? g.access.isPlatformAdmin : request.requesterUserId === g.userId),
+  });
 });
 
 export const PATCH = withSystemLog("/api/requests/[id]", async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -46,7 +52,7 @@ export const PATCH = withSystemLog("/api/requests/[id]", async function PATCH(re
     usageExamples: body.usageExamples ?? null,
     toolHarness: body.toolHarness ?? "generic",
     categories: Array.isArray(body.categories) ? body.categories : [],
-  });
+  }, g.access.isPlatformAdmin); // platform admins edit Platform requests (§62.10)
   if ("error" in result) return Response.json({ error: result.error }, { status: result.status });
   return Response.json({ ok: true });
 });

@@ -47,9 +47,10 @@ import { sweepAiPrereview, pruneAiPrereviews } from "./scan/aiPrereview.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
 import { sweepSearchIndex, reindexSearchLanguage } from "./searchIndex.js";
 import { sweepHype, HYPE_SWEEP_INTERVAL_MS } from "./hype.js";
+import { sweepSearchGaps, reviewableGapCount, SEARCH_GAP_TICK_MS } from "./searchGaps.js";
 import { mcpRouter } from "./mcp/server.js";
 import { mcpOAuthRouter, mcpHousekeeping } from "./mcp/oauthRouter.js";
-import { metrics, METRICS_CONTENT_TYPE, constantTimeEqual } from "@skilly/shared";
+import { metrics, METRICS_CONTENT_TYPE, constantTimeEqual, foldSearchGapDays } from "@skilly/shared";
 import { M } from "./metrics.js";
 
 const PORT = Number(process.env.WORKER_PORT ?? 4000);
@@ -552,6 +553,49 @@ async function leaderLoops(): Promise<void> {
   };
   await rumPrune();
   setInterval(rumPrune, Number(process.env.RUM_PRUNE_INTERVAL_MS ?? 21_600_000)); // 6h
+
+  // Search gaps (§62.4): wakes every minute, runs when collection is on and the admin-set interval
+  // has passed or a platform admin pressed Run now. Never overlaps itself (flag + advisory lock).
+  let searchGapRunning = false;
+  const searchGapTick = async () => {
+    if (!isLeader || searchGapRunning) return;
+    searchGapRunning = true;
+    try {
+      const r = await sweepSearchGaps(pool);
+      if (r.ran) {
+        M.searchGapRuns.inc({ ok: "true" });
+        console.log(JSON.stringify({ level: "info", msg: "search gap sweep", gaps: r.gaps, newGaps: r.newGaps, answered: r.answered, drafted: r.drafted, failed: r.failed }));
+      }
+      M.searchGapsReviewable.set(await reviewableGapCount(pool));
+    } catch (err) {
+      M.searchGapRuns.inc({ ok: "false" });
+      console.error(JSON.stringify({ level: "error", msg: "search gap sweep failed", err: String(err) }));
+    } finally {
+      searchGapRunning = false;
+    }
+  };
+  void searchGapTick();
+  setInterval(searchGapTick, Number(process.env.SEARCH_GAP_TICK_MS ?? SEARCH_GAP_TICK_MS)); // 1 min
+
+  // Search-gap housekeeping (§62.3), whatever the switch says: fold each finished UTC day's hits into
+  // daily counts and delete those hits and that day's salt (so no searcher hash outlives its day),
+  // then prune daily counts and decided gaps past 90 days. Hourly, so a day is folded soon after it ends.
+  const searchGapHousekeeping = async () => {
+    if (!isLeader) return;
+    const client = await pool.connect();
+    try {
+      const r = await foldSearchGapDays(client);
+      if (r.foldedDays > 0 || r.prunedDaily > 0 || r.prunedGaps > 0) {
+        console.log(JSON.stringify({ level: "info", msg: "search gap housekeeping", ...r }));
+      }
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "search gap housekeeping failed", err: String(err) }));
+    } finally {
+      client.release();
+    }
+  };
+  await searchGapHousekeeping();
+  setInterval(searchGapHousekeeping, Number(process.env.SEARCH_GAP_HOUSEKEEPING_INTERVAL_MS ?? 3_600_000)); // 1h
 
   // AI usage housekeeping (§40.3): ai_usage rows older than 365 days.
   const aiUsagePrune = async () => {

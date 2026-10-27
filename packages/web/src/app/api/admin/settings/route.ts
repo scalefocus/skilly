@@ -5,6 +5,7 @@ import { setSearchLanguage, SearchAdminError } from "../../../../lib/searchAdmin
 import { hasDigestSettings, updateDigestSettings } from "../../../../lib/emailDigest";
 import { getHypeSettings, updateHypeSettings } from "../../../../lib/hype";
 import { hasHypeSettings, HYPE_SETTING_FIELDS, type HypeSettings } from "@skilly/shared/hype";
+import { getSearchGapSettings, hasSearchGapSettings, searchGapSettingFields, updateSearchGapSettings } from "../../../../lib/searchGaps";
 import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, setRumFlushIntervals, setSurveyEnabled, setBugReportsEnabled, setFeatureIdeasEnabled, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const access = await currentAccess();
   if (!access?.isPlatformAdmin) return Response.json({ error: "platform admin required" }, { status: 403 });
-  return Response.json({ ...(await getPlatformSettings(pool)), ...hypeFields(await getHypeSettings(pool)) });
+  return Response.json({ ...(await getPlatformSettings(pool)), ...hypeFields(await getHypeSettings(pool)), ...searchGapSettingFields(await getSearchGapSettings(pool)) });
 }
 
 /** §50.8 the five hype settings, flattened under their API field names. */
@@ -32,6 +33,11 @@ export async function PATCH(req: Request) {
   // §50.8 hype: all five keys validated before any is written (422), each change audited.
   if (hasHypeSettings(raw)) {
     const r = await updateHypeSettings(access, raw);
+    if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
+  }
+  // §62.8 search gaps: all four keys validated before any is written (422), each change audited.
+  if (hasSearchGapSettings(raw)) {
+    const r = await updateSearchGapSettings(access.userId, raw);
     if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
   }
   const body = raw as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number; rumFlushIntervals?: string | number[]; surveyEnabled?: boolean; bugReportsEnabled?: boolean; featureIdeasEnabled?: boolean; searchLanguage?: string };
@@ -152,5 +158,5 @@ export async function PATCH(req: Request) {
       throw e;
     }
   }
-  return Response.json({ ...(await getPlatformSettings(pool)), ...hypeFields(await getHypeSettings(pool)), publicTokensRevoked });
+  return Response.json({ ...(await getPlatformSettings(pool)), ...hypeFields(await getHypeSettings(pool)), ...searchGapSettingFields(await getSearchGapSettings(pool)), publicTokensRevoked });
 }

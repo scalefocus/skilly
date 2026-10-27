@@ -175,7 +175,44 @@ function Catalog() {
   else if (sort === "quality") qs.set("sort", "quality");
 
   // Hold the grid while a `?collection=` banner is still resolving, so it never flashes the full catalog.
-  const skillsUrl = collection === "loading" ? null : `/api/skills${qs.toString() ? `?${qs}` : ""}`;
+  const baseUrl = collection === "loading" ? null : `/api/skills${qs.toString() ? `?${qs}` : ""}`;
+  // §62.2 explicit searches: Enter / "See all results" in the header box arrives with a one-shot
+  // `?gap=1` (dropped from the URL at once, so a reload, back navigation or shared link records
+  // nothing), and Enter in the box on this page fires `skilly:catalog-search-submit`. The next load
+  // for that query carries `gap=1`, and only while the filters stay as they were; the server decides
+  // whether it is a search gap. Live-filter keystrokes never set it.
+  const [gapQ, setGapQ] = useState<string | null>(null);
+  const [gapBase, setGapBase] = useState<string | null>(null);
+  const arrivalGap = params.get("gap") === "1";
+  useEffect(() => {
+    if (!arrivalGap) return;
+    setGapQ((params.get("q") ?? "").trim());
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("gap");
+      window.history.replaceState(window.history.state, "", `${u.pathname}${u.search}${u.hash}`);
+    } catch { /* ignore */ }
+  }, [arrivalGap, params]);
+  useEffect(() => {
+    const onSubmit = (e: Event) => setGapQ(String((e as CustomEvent<string>).detail ?? "").trim());
+    window.addEventListener("skilly:catalog-search-submit", onSubmit);
+    return () => window.removeEventListener("skilly:catalog-search-submit", onSubmit);
+  }, []);
+  useEffect(() => {
+    if (gapQ === null) return;
+    // The box writes `?q=` after its debounce; give up if the query never matches.
+    const t = window.setTimeout(() => setGapQ(null), 3000);
+    return () => window.clearTimeout(t);
+  }, [gapQ]);
+  useEffect(() => {
+    if (gapQ === null || !prefsLoaded || !baseUrl || gapQ !== submitted.trim()) return;
+    setGapBase(baseUrl);
+    setGapQ(null);
+  }, [gapQ, prefsLoaded, baseUrl, submitted]);
+  useEffect(() => {
+    if (gapBase && gapBase !== baseUrl) setGapBase(null);
+  }, [gapBase, baseUrl]);
+  const skillsUrl = baseUrl && gapBase === baseUrl ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}gap=1` : baseUrl;
   const { data, loading, error, reload } = useApi<{ skills: CatalogEntry[]; matchMode?: "all" | "any" | null; collections?: { id: string; name: string; skillCount: number }[] }>(skillsUrl);
   // The owner's "Remove from collection" (§38.5): the same request as the popup's untick.
   const [removing, setRemoving] = useState<string | null>(null);

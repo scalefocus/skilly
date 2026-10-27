@@ -53,6 +53,8 @@ export * from "./ai-prereview-run.js";
 export * from "./ai-prereview-db.js";
 export * from "./ai-try.js";
 export * from "./ai-try-run.js";
+export * from "./search-gaps.js";
+export * from "./search-gaps-db.js";
 export * from "./policy.js";
 export * from "./policy-prompt.js";
 export * from "./policy-db.js";

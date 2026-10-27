@@ -23,6 +23,7 @@ const STATIC_ROUTES: { prefix: string; label: string; exact?: boolean }[] = [
   // Longest-prefix match keeps this from being swallowed by /admin (§32.7).
   { prefix: "/admin/rum", label: "Real user monitoring" },
   { prefix: "/admin/ideas", label: "Feature ideas" }, // §60.5
+  { prefix: "/admin/search-gaps", label: "Search gaps" }, // §62.7
   { prefix: "/quick-start", label: "Quick start" },
   { prefix: "/whats-new", label: "What's new" },
   { prefix: "/skills", label: "Skill" },
