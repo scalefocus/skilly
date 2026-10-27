@@ -2,7 +2,7 @@
 # The gated Playwright e2e suite on ONE stack with parallel workers (SKILLY_SPEC.md §16 item 18): an
 # ephemeral Postgres + MinIO (Docker-assigned loopback ports), one serving-git root, ONE `next dev`
 # on a free port, and Playwright driving it with E2E_WORKERS workers. The Jenkins `E2E tests` stage
-# runs this beside ci/e2e-prepare.sh.
+# runs this on its own: it installs the browser and waits for the Typecheck branch itself.
 #
 # The suite runs in two phases against the same server and database (projects: e2e/groups.ts):
 #   1. exclusive — specs that change state every other spec can see (platform settings, AI config,
@@ -56,6 +56,10 @@ host_port() {
   if [ -z "$_hp" ]; then echo "no host port published for $1:$2" >&2; return 1; fi
   echo "$_hp"
 }
+
+# Fetch the Chromium browser (+ its OS deps) before anything else: a missing browser fails the stage
+# here, before a stack is provisioned. On a warm agent Playwright's cache makes this a no-op.
+pnpm --filter @skilly/web exec playwright install --with-deps chromium
 
 PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
 MINIO_IMAGE="$(resolve_image "${CI_MINIO_IMAGES}")"
@@ -144,13 +148,13 @@ rm -rf "${GIT_REPO_ROOT}" && mkdir -p "${GIT_REPO_ROOT}"
   node scripts/publish-once.mjs
 )
 
-# Hold the dev server until ci/e2e-prepare.sh is done: browser installed, Typecheck finished.
-until [ -f "${WORKSPACE}/.ci-e2e-prepare.done" ]; do
-  if [ -f "${WORKSPACE}/.ci-e2e-prepare.failed" ]; then
-    echo "[e2e] e2e preparation failed (see the prepare branch) — not starting the suite" >&2
-    exit 1
-  fi
-  echo "[e2e] stack ready; waiting for the prepare branch (browser install + Typecheck)…"
+# Hold the dev server until the parallel Typecheck branch is done: `next dev` rewrites
+# packages/web/next-env.d.ts (and generates the types folder it imports) on start, and the web
+# `tsc --noEmit` reads both. The e2e dev server rewrites it to point at its own build folder
+# (.next-e2e), so it may not start before Typecheck is done. Typecheck touches the marker when it
+# finishes, pass or fail (a red Typecheck aborts this branch via failFast anyway).
+until [ -f "${WORKSPACE}/.ci-typecheck.done" ]; do
+  echo "[e2e] stack ready; waiting for the Typecheck branch before the dev server may start…"
   sleep 5
 done
 
