@@ -5,9 +5,9 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useApi, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../../components/ui";
+import { useApi, Pill, EmptyState, ScrollToTop, ViaMcp, Modal } from "../../../components/ui";
 import { RequireAuth } from "../../../components/RequireAuth";
-import { UserBubble } from "../../../components/UserBubble";
+import { RequesterBubble } from "../../../components/RequesterBubble";
 import { useDateFmt } from "../../../components/DateFormat";
 import { Markdown } from "../../../components/Markdown";
 import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
@@ -25,7 +25,8 @@ interface RequestView {
   toolHarness: string;
   categories: string[];
   state: "open" | "fulfilled" | "withdrawn" | "removed";
-  requesterUserId: string;
+  /** Null for a Platform request (§62.10), shown as "Requested by Platform". */
+  requesterUserId: string | null;
   requesterName: string;
   viaMcpClient?: string | null;
   requesterAvatar: string | null;
@@ -34,11 +35,52 @@ interface RequestView {
   fulfilled: { namespaceSlug: string; skillSlug: string; byName: string | null } | null;
 }
 
+/** §62.10 a platform admin edits a Platform request's text; categories and tool stay as they are. */
+function PlatformRequestEdit({ request, onClose, onSaved }: { request: RequestView; onClose: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(request.title);
+  const [description, setDescription] = useState(request.description);
+  const [usage, setUsage] = useState(request.usageExamples ?? "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => {
+    setBusy(true); setErr(null);
+    const res = await fetch(`/api/requests/${request.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title, description, usageExamples: usage.trim() ? usage : null, toolHarness: request.toolHarness, categories: request.categories }),
+    }).catch(() => null);
+    setBusy(false);
+    if (res?.ok) { onSaved(); return; }
+    setErr(((await res?.json().catch(() => ({}))) as { error?: string } | undefined)?.error ?? "Couldn't save. Try again.");
+  };
+  const label = { display: "block", fontWeight: 600, fontSize: 14, margin: "10px 0 6px" } as const;
+  return (
+    <Modal
+      title="Edit Platform request"
+      onCancel={onClose}
+      wide
+      footer={
+        <>
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={busy || !title.trim() || !description.trim()} data-testid="platform-request-save">Save</button>
+        </>
+      }
+    >
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>This request is public. Remove names of people, customers, and restricted skills or namespaces.</p>
+      <label style={label}>Title<input className="input" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} style={{ width: "100%", marginTop: 6, fontWeight: 400 }} /></label>
+      <label style={label}>Description<textarea className="input" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} style={{ width: "100%", marginTop: 6, resize: "vertical", fontWeight: 400 }} /></label>
+      <label style={label}>Usage<textarea className="input" rows={3} value={usage} onChange={(e) => setUsage(e.target.value)} style={{ width: "100%", marginTop: 6, resize: "vertical", fontWeight: 400 }} /></label>
+      {err && <p role="alert" style={{ color: "var(--danger)", fontSize: 13 }}>{err}</p>}
+    </Modal>
+  );
+}
+
 function RequestDetailInner() {
   const fmt = useDateFmt();
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
-  const { data, loading, error, reload } = useApi<{ request: RequestView; isRequester: boolean; isPlatformAdmin: boolean }>(id ? `/api/requests/${id}` : null);
+  const { data, loading, error, reload } = useApi<{ request: RequestView; isRequester: boolean; isPlatformAdmin: boolean; canEdit?: boolean }>(id ? `/api/requests/${id}` : null);
+  const [editing, setEditing] = useState(false);
   usePageLabelOverride(data ? `Request: ${data.request.title}` : null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -99,8 +141,8 @@ function RequestDetailInner() {
           {(r.state === "withdrawn" || r.state === "removed") && <Pill tone="danger">{r.state}</Pill>}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontSize: 13 }}>
-          <UserBubble name={r.requesterName} avatar={r.requesterAvatar} userId={r.requesterUserId} size={24} />
-          <span>{r.requesterName}</span>
+          <RequesterBubble name={r.requesterName} avatar={r.requesterAvatar} userId={r.requesterUserId} size={24} />
+          <span data-testid="request-requester">{r.requesterUserId ? r.requesterName : `Requested by ${r.requesterName}`}</span>
           <span className="muted mono" style={{ fontSize: 11.5 }}>· asked {fmt.date(r.createdAt)}</span>
           <ViaMcp client={r.viaMcpClient} />
         </div>
@@ -131,6 +173,10 @@ function RequestDetailInner() {
             <Link href={`/propose?fromRequest=${r.id}`} className="btn btn-primary">Propose a skill →</Link>
           )}
           <ExistingSkillPicker selected={existingSkill} onSelect={setExistingSkill} onClear={() => setExistingSkill(null)} />
+          {/* §62.10 a Platform request has no requester: platform admins edit it (e.g. to remove PII). */}
+          {data.canEdit && r.requesterUserId === null && (
+            <button className="btn" disabled={busy} onClick={() => setEditing(true)} data-testid="platform-request-edit">Edit…</button>
+          )}
           {(data.isRequester || data.isPlatformAdmin) && (
             <button className="btn" disabled={busy} onClick={close} title={data.isRequester ? "Withdraw your request — permanently deletes it, can't be undone" : "Permanently delete this request (moderation) — can't be undone"}>
               {data.isRequester ? "Withdraw" : "Delete"}
@@ -139,6 +185,7 @@ function RequestDetailInner() {
         </div>
       )}
       {err && <div style={{ color: "var(--danger)", fontSize: 13.5, marginBottom: 14 }}>{err}</div>}
+      {editing && <PlatformRequestEdit request={r} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); reload(); }} />}
 
       <section className="card card-pad" style={{ marginBottom: 20 }}>
         <div className="nav-label" style={{ padding: "0 0 10px" }}>What’s wanted</div>

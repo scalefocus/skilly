@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.46.0",
+    date: "2026-10-27",
+    summary:
+      "Search gaps: platform admins can see what people search for and don't find, with no one's identity attached, and turn each search into a synonym or a skill request posted by Platform. When the AI integration is working, it drafts a suggestion for each. It's off by default: turn it on in Administration → Search, then review on the new Search gaps page.",
+  },
+  {
     version: "2.45.0",
     date: "2026-10-27",
     summary:

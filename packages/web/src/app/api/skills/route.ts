@@ -9,6 +9,8 @@ import { getNavSeen } from "../../../lib/settings";
 import { listNonEmptyCollectionsOf } from "../../../lib/collections";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { M } from "../../../lib/metrics";
+import { pool } from "../../../lib/db";
+import { maybeRecordGapHit } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -80,9 +82,29 @@ export async function GET(req: Request) {
     collectionsByUserId,
     catalogSeenAt,
   });
-  // §34.15: counts only — the query text is never recorded.
+  // §34.15: counts only — the query text is never logged. The one exception is the opt-in,
+  // identity-free search-gap log (§62.2): an explicit search (`gap=1`, set once by the catalog page
+  // on Enter / "See all results") with no facet or scoped view that found nothing or only partial
+  // matches. Fire-and-forget, after the response is computed; it never delays or fails the search.
   M.searchRequests.inc({ surface: "catalog", mode: matchMode ?? "none" });
   if (matchMode && skills.length === 0) M.searchZeroResults.inc({ surface: "catalog" });
+  if (url.searchParams.get("gap") === "1") {
+    const sp = url.searchParams;
+    const narrowed =
+      ["category", "tool", "type", "minQuality", "maintainer", "ns", "collection", "collectionsBy"].some((k) => !!sp.get(k)) ||
+      sp.get("archived") === "1" || sp.get("mine") === "1" || sp.get("official") === "1";
+    void maybeRecordGapHit(pool, {
+      userId: access.userId,
+      surface: "web",
+      rawQuery: sp.get("q"),
+      explicit: true,
+      narrowed,
+      total: skills.length,
+      matchMode,
+    }).then((outcome) => {
+      if (outcome !== "skipped") M.searchGapHits.inc({ surface: "web", outcome });
+    });
+  }
   // matchMode ("all" | "any", null without a query) drives the catalog's partial-matches notice (§34.12).
   // `?collectionsBy=` also carries the banner's per-collection chips (§38.5): that person's non-empty
   // collections. Every member is org-visible, so the chips are the same for every viewer.

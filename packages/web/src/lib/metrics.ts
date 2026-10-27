@@ -13,6 +13,8 @@ export const M = {
   // §34.15 — counts only; no query text is ever recorded.
   searchRequests: metrics.counter("skilly_search_requests_total", "Registry searches, by surface and match mode (all|any|none)"),
   searchZeroResults: metrics.counter("skilly_search_zero_results_total", "Registry searches with a query that returned nothing, by surface"),
+  // §62.12 search gaps — the outcome of each recording attempt; never the query text.
+  searchGapHits: metrics.counter("skilly_search_gap_hits_total", "Search-gap hit recordings, by surface and outcome (recorded|secret|tombstoned|failed)"),
   rateLimited: metrics.counter("skilly_rate_limited_total", "Requests rejected by the rate limiter"),
   cspReports: metrics.counter("skilly_csp_reports_total", "CSP violation reports received (§22)"),
   // §37.13 content risk — findings recorded at hosted upload.

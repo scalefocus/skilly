@@ -92,6 +92,9 @@ jobs:
       - run: pnpm --filter @skilly/shared build
       - run: pnpm --filter @skilly/worker build
       - run: node --test packages/worker/dist/integration/publishFlow.test.js packages/worker/dist/integration/searchIndex.test.js
+      # §62 search gaps — its own step: it rewrites the ai_integration singleton, so it must not run
+      # in parallel with other live-DB files.
+      - run: node --test packages/worker/dist/integration/searchGapSweep.test.js
       - run: pnpm --filter @skilly/web test:db
 
   build:

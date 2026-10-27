@@ -46,6 +46,8 @@ const SYSLOG_NAV = { href: "/system-log", label: "System log", icon: "M4 5h16v14
 const RUM_NAV = { href: "/admin/rum", label: "Monitoring", icon: "M3 17l5-6 4 4 5-8 4 5M3 21h18" };
 // §60.5 Feature ideas — platform admins only, directly under Monitoring, with the pending-queue count.
 const IDEAS_NAV = { href: "/admin/ideas", label: "Feature ideas", icon: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z" };
+// §62.7 Search gaps — platform admins only, directly under Feature ideas, with the reviewable count.
+const SEARCH_GAPS_NAV = { href: "/admin/search-gaps", label: "Search gaps", icon: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4M8 11h6" };
 const ADMIN_NAV = { href: "/admin", label: "Administration", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" };
 const NS_ADMIN_NAV = { href: "/namespaces", label: "Namespace administration", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" };
 
@@ -100,7 +102,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [badgeToast, setBadgeToast] = useState<{ id: string; name: string; glyph: string; level: string | null } | null>(null);
   const [unread, setUnread] = useState(0);
   // "New since you last looked" counts for the Catalog / Review queue / Requested skills nav items.
-  const [navBadges, setNavBadges] = useState<{ catalog: number; review: number; systemLog: number; requests: number; ideas: number }>({ catalog: 0, review: 0, systemLog: 0, requests: 0, ideas: 0 });
+  const [navBadges, setNavBadges] = useState<{ catalog: number; review: number; systemLog: number; requests: number; ideas: number; searchGaps: number }>({ catalog: 0, review: 0, systemLog: 0, requests: 0, ideas: 0, searchGaps: 0 });
   // The header system banner (§27) — a platform-admin-set, org-wide announcement pill. Piggybacks
   // the same poll as the nav badges below rather than a dedicated transport.
   const [systemBanner, setSystemBanner] = useState<{ message: string; expiresAt: string } | null>(null);
@@ -642,6 +644,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             requests: here === "requests" ? 0 : Number(j.requests ?? 0),
             // §60.5 a plain count of the queue — never zeroed on visit, it drops as ideas are decided.
             ideas: Number(j.ideas ?? 0),
+            // §62.7 likewise a plain count: it drops as gaps are decided.
+            searchGaps: Number(j.searchGaps ?? 0),
           });
         })
         .catch(() => {});
@@ -808,6 +812,15 @@ export function AppShell({ children }: { children: ReactNode }) {
             {IDEAS_NAV.label}
             {navBadges.ideas > 0 && (
               <sup className="nav-badge" aria-label={`${navBadges.ideas > 9 ? "9+" : navBadges.ideas} pending`}>{navBadges.ideas > 9 ? "9+" : navBadges.ideas}</sup>
+            )}
+          </Link>
+        )}
+        {isPlatformAdmin && (
+          <Link href={SEARCH_GAPS_NAV.href} className={`nav-item${isActive(SEARCH_GAPS_NAV.href) ? " active" : ""}`}>
+            <Icon d={SEARCH_GAPS_NAV.icon} />
+            {SEARCH_GAPS_NAV.label}
+            {navBadges.searchGaps > 0 && (
+              <sup className="nav-badge" aria-label={`${navBadges.searchGaps > 9 ? "9+" : navBadges.searchGaps} to review`}>{navBadges.searchGaps > 9 ? "9+" : navBadges.searchGaps}</sup>
             )}
           </Link>
         )}
@@ -1017,7 +1030,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                 }
                 // On a live-filter page (catalog/installed/usage/requests) the box already filters
                 // the list — Enter just dismisses focus (no jump to the catalog).
-                if (liveFilter) { searchRef.current?.blur(); return; }
+                if (liveFilter) {
+                  // §62.2 Enter on the catalog is an explicit search: the catalog page sends its next
+                  // load for this query with `gap=1` (a search-gap hit if it finds nothing).
+                  if (onCatalog && q.trim()) window.dispatchEvent(new CustomEvent("skilly:catalog-search-submit", { detail: q.trim() }));
+                  searchRef.current?.blur();
+                  return;
+                }
                 // Enter on a highlighted suggestion jumps straight to that skill (the "see all"
                 // footer sits at index === suggestions.length and falls through to the catalog).
                 if (acOpen && acHi >= 0 && acHi < suggestions.length && suggestions[acHi]) {
@@ -1036,7 +1055,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   return;
                 }
                 setAcOpen(false);
-                go(`/catalog?q=${encodeURIComponent(q)}`);
+                // `gap=1` marks an explicit search (§62.2); the catalog page drops it from the URL.
+                go(`/catalog?q=${encodeURIComponent(q)}&gap=1`);
               }}
               onBlur={(e) => {
                 // Close the menu unless focus moved to something inside the form (a suggestion).
@@ -1157,7 +1177,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       type="button"
                       className={`search-ac-item search-ac-all${acHi === suggestions.length + collectionHits.length ? " hi" : ""}`}
                       onMouseEnter={() => setAcHi(suggestions.length + collectionHits.length)}
-                      onClick={() => { setAcOpen(false); go(`/catalog?q=${encodeURIComponent(q.trim())}`); }}
+                      onClick={() => { setAcOpen(false); go(`/catalog?q=${encodeURIComponent(q.trim())}&gap=1`); }}
                     >
                       See all results in catalog →
                     </button>
