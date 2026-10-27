@@ -32,10 +32,11 @@ const cmp = (a: string, b: string) => {
 };
 
 /** A marker for the OVERFLOW tests: at least one minor below APP_VERSION (so the notice appears)
- *  AND old enough that at least `minEntries` changelog entries are newer than it. Seeding exactly
- *  one minor below is not enough on its own — right after a minor bump that window can hold just
- *  one or two short entries, which never overflow the capped card (a test that then fails on every
- *  x.y.0 release is a false alarm, not a regression). */
+ *  AND old enough that at least `minEntries` changelog entries are newer than it, so the excerpt
+ *  always holds its full three lines (selectWhatsNewExcerpt's cap) plus a "+N more" fold. Right
+ *  after a minor bump a marker exactly one minor below can leave it a single short line. Whether
+ *  those three lines overflow the capped card is a matter of viewport height, which the overflow
+ *  tests settle for themselves (`expectOverflowContained`). */
 function overflowSeed(minEntries = 6): string | null {
   const minorBelow = oneMinorBelow(APP_VERSION);
   if (!minorBelow) return null;
@@ -165,14 +166,28 @@ test.describe("What's new update notice (§23)", () => {
 
   /** Overflow (§23): the card never leaves the viewport however long the excerpted summaries are —
    *  it is capped at 60vh, the list alone scrolls (and gains a Tab stop), and the ✕ + link stay in
-   *  view without scrolling. The marker comes from `overflowSeed()`, so at least six changelog
-   *  entries are newer than it — enough to overflow a 600px-tall desktop viewport and a 700px
-   *  mobile one regardless of how short the latest release notes happen to be. */
-  async function expectOverflowContained(page: import("@playwright/test").Page) {
+   *  view without scrolling. The excerpt is at most three changelog lines, so whether it overflows
+   *  the cap at a given height depends on how long the latest three summaries happen to be: at
+   *  390×700 three ordinary entries land within a few pixels of the cap either way, and after the
+   *  short v2.46.2 entry the mobile run fell just inside it on the CI agent's fonts and failed both
+   *  attempts. So the test starts at the viewport the spec set (`width`×`height`) and lowers it in
+   *  steps until the list really overflows — 60vh shrinks with the viewport, the content does
+   *  not — and asserts the containment there. Three real entries overflow well above the 240 px
+   *  floor; reaching it means the excerpt is too short to test and is reported as such. */
+  async function expectOverflowContained(page: import("@playwright/test").Page, width: number, height: number) {
     const notice = page.getByTestId("whats-new-notice");
     await expect(notice).toBeVisible({ timeout: 20_000 });
     const excerpt = notice.getByTestId("whats-new-notice-excerpt");
     await expect(excerpt).toBeVisible();
+    // Measured after a frame, so a just-resized viewport has laid out.
+    const overflows = () =>
+      excerpt.evaluate((el) => new Promise<boolean>((done) => requestAnimationFrame(() => done(el.scrollHeight > el.clientHeight))));
+    let h = height;
+    while (!(await overflows())) {
+      h -= 60;
+      expect(h, `the release notes fit even a ${width}×${h + 60} viewport; nothing left to shrink`).toBeGreaterThanOrEqual(240);
+      await page.setViewportSize({ width, height: h });
+    }
     // The list scrolls...
     await expect.poll(() => excerpt.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
     // ...and, because it does, is a labelled Tab stop.
@@ -201,7 +216,7 @@ test.describe("What's new update notice (§23)", () => {
     await devSignIn(page, { stampWhatsNew: false });
     await page.setViewportSize({ width: 1280, height: 600 });
     await page.goto("/");
-    await expectOverflowContained(page);
+    await expectOverflowContained(page, 1280, 600);
     // Keyboard reachability: Tab order is ✕ → list → link.
     const notice = page.getByTestId("whats-new-notice");
     await notice.getByRole("button", { name: "Dismiss" }).focus();
@@ -220,7 +235,7 @@ test.describe("What's new update notice (§23)", () => {
     await devSignIn(page, { stampWhatsNew: false });
     await page.setViewportSize({ width: 390, height: 700 });
     await page.goto("/");
-    await expectOverflowContained(page);
+    await expectOverflowContained(page, 390, 700);
   });
 
   test("patch-only bump advances the marker silently — no notice", async ({ page }) => {

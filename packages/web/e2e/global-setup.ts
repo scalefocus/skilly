@@ -60,12 +60,14 @@ const PAGES = [
   "/admin",
   "/admin/rum",
   "/admin/ideas",
+  "/admin/search-gaps",
   "/namespaces",
   "/installed",
   "/catalog",
   "/catalog?ns=team-a&nsName=Team%20A",
   "/catalog/marketplaces",
   "/requests",
+  "/requests/00000000-0000-0000-0000-000000000000",
   "/leaderboard",
   "/notifications",
   "/usage",
@@ -221,6 +223,18 @@ const CORE_API = [
   "/api/proposals/00000000-0000-0000-0000-000000000000/actions",
   "/api/proposals/00000000-0000-0000-0000-000000000000/messages",
   "/api/proposals/00000000-0000-0000-0000-000000000000/changes",
+  // /requests/[id] and the §62 Search gaps review (search-gaps.spec): the list, the dialog's §26
+  // similar-check (GET /api/requests?similarTo=), and the per-gap accept / synonym / redraft /
+  // dismiss writes. None of these were warmed, so the spec compiled every one of them mid-test.
+  // The writes are POST- or DELETE-only: a GET answers 405 and compiles them all the same.
+  "/api/requests",
+  "/api/requests/00000000-0000-0000-0000-000000000000",
+  "/api/admin/search-gaps?tab=review",
+  "/api/admin/search-gaps/run",
+  "/api/admin/search-gaps/00000000-0000-0000-0000-000000000000",
+  "/api/admin/search-gaps/00000000-0000-0000-0000-000000000000/request",
+  "/api/admin/search-gaps/00000000-0000-0000-0000-000000000000/synonym",
+  "/api/admin/search-gaps/00000000-0000-0000-0000-000000000000/redraft",
   // /profile
   "/api/users/00000000-0000-0000-0000-000000000000/achievements",
 ];

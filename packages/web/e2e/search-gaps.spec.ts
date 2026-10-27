@@ -10,7 +10,7 @@
 import { Pool } from "pg";
 import { createHash } from "node:crypto";
 import { test, expect, devSignIn } from "./fixtures";
-import { clickAndAwait, gotoLoaded, gotoReady } from "./helpers/ready";
+import { NAV_TIMEOUT, clickAndAwait, gotoLoaded, gotoReady } from "./helpers/ready";
 
 const dbUrl = process.env.DATABASE_URL;
 
@@ -54,13 +54,28 @@ test("search gaps: an explicit search is recorded, a seeded gap becomes a Platfo
     await card.getByTestId("search-gap-request").click();
     const dialog = page.getByRole("dialog", { name: "Create a skill request" });
     await expect(dialog.getByTestId("search-gap-title")).toHaveValue(`Do ${word} things`);
-    const posted = page.waitForResponse((r) => /\/api\/admin\/search-gaps\/[^/]+\/request$/.test(r.url()) && r.request().method() === "POST");
+    // The first click runs the §26 similar-check; when that warns, the second click posts anyway.
+    // Race the POST against the warning instead of peeking at it once: on a slow agent the warning
+    // lands after an immediate isVisible() has already answered no, and the POST never happens.
+    const posted = page.waitForResponse(
+      (r) => /\/api\/admin\/search-gaps\/[^/]+\/request$/.test(r.url()) && r.request().method() === "POST",
+      { timeout: NAV_TIMEOUT },
+    );
+    const similar = dialog.getByTestId("search-gap-similar");
     await dialog.getByTestId("search-gap-dialog-submit").click();
-    // The similar-check may warn first; the second click posts anyway.
-    if (await dialog.getByTestId("search-gap-similar").isVisible().catch(() => false)) await dialog.getByTestId("search-gap-dialog-submit").click();
+    const first = await Promise.race([
+      posted.then(() => "posted" as const),
+      similar.waitFor({ state: "visible", timeout: NAV_TIMEOUT }).then(() => "similar" as const, () => "gone" as const),
+    ]);
+    if (first === "similar") await dialog.getByTestId("search-gap-dialog-submit").click();
     const res = await posted;
     expect(res.ok()).toBeTruthy();
-    requestId = ((await res.json()) as { requestId: string }).requestId;
+    // The id comes from the row the POST settled, not from the response body: on the Jenkins agent
+    // `res.json()` hung until the test timeout on both attempts (Chromium never reported the body of
+    // this response as finished) while the page had long closed the dialog. The handler commits
+    // before it answers, so the row is final once `posted` resolves.
+    requestId = (await pool.query<{ id: string | null }>(`select outcome_request_id as id from search_gaps where query_norm = $1`, [word])).rows[0]?.id ?? null;
+    expect(requestId).toBeTruthy();
     await expect(dialog).toHaveCount(0);
 
     // ── The request is posted by Platform ──
