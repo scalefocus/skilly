@@ -253,9 +253,9 @@ pipeline {
               def plan = sh(script: "sh ci/e2e-worker-plan.sh ${workers}", returnStdout: true).trim().split(' ')
               String plannedWorkers = plan[0]
               String heapMb = plan[1]
-              // Clear what a previous build may have left in the workspace: the prepare → run handoff
-              // markers, and old JUnit/evidence (it would otherwise be reported again by the junit glob below).
-              sh 'rm -rf "${WORKSPACE}/.ci-e2e-prepare.done" "${WORKSPACE}/.ci-e2e-prepare.failed" packages/web/e2e/results packages/web/e2e/test-results'
+              // Clear the JUnit/evidence a previous build may have left in the workspace (it would
+              // otherwise be reported again by the junit glob below).
+              sh 'rm -rf packages/web/e2e/results packages/web/e2e/test-results'
               // Quick run: draw this build's sample (ci/e2e-quick-list.mjs) up front, so a listing
               // failure stops the stage before any stack is provisioned. The run executes only the
               // tests in this Playwright --test-list file; it is archived with the evidence below.
@@ -264,21 +264,13 @@ pipeline {
                 sh '. "${HOME}/.asdf/asdf.sh" && node ci/e2e-quick-list.mjs packages/web/e2e/results/quick-test-list.txt'
                 runEnv << "E2E_TEST_LIST=${env.WORKSPACE}/packages/web/e2e/results/quick-test-list.txt"
               }
-              // `prepare` does the once-per-build work (browser install, wait for Typecheck —
-              // ci/e2e-prepare.sh) while `run` provisions Postgres + MinIO; `run` then waits for
-              // prepare's marker before it starts the dev server (ci/e2e-run.sh). The run's two phases
+              // ci/e2e-run.sh installs the browser, provisions Postgres + MinIO, then waits for the
+              // Typecheck branch's marker before it starts the dev server. The run's two phases
               // (exclusive specs alone, then everything else) always both run, so a red build reports
               // all of its failures.
-              parallel(
-                'e2e prepare': {
-                  sh 'sh ci/e2e-prepare.sh'
-                },
-                'e2e run': {
-                  withEnv(runEnv) {
-                    sh 'sh ci/e2e-run.sh'
-                  }
-                }
-              )
+              withEnv(runEnv) {
+                sh 'sh ci/e2e-run.sh'
+              }
             }
           }
           post {
