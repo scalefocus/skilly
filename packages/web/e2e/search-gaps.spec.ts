@@ -29,7 +29,8 @@ test("search gaps: an explicit search is recorded, a seeded gap becomes a Platfo
 
     // ── Recording: Enter in the header box is explicit; the catalog then drops `gap=1` from the URL ──
     await gotoReady(page, "/");
-    const box = page.getByRole("combobox").first();
+    // The header <form> carries role=combobox; the editable element is the textbox inside it.
+    const box = page.getByRole("textbox", { name: "Search skills" });
     await box.fill(word);
     await clickAndAwait(page, () => box.press("Enter"), /\/api\/skills\?.*gap=1/);
     await expect(page).toHaveURL(new RegExp(`/catalog\\?q=${word}$`));
