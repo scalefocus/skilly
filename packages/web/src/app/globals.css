@@ -1897,6 +1897,33 @@ a.mention-chip:hover { text-decoration: underline; }
 .vote-btn:hover { border-color: var(--muted); color: var(--ink); }
 .vote-btn.vote-on { border-color: var(--accent); color: var(--accent); }
 .vote-count { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The live list (§60.3): rows slide to their new place and fade in (both in JS); a row that left
+   fades out where it was. The list takes focus only when the focused row is gone. */
+.coming-soon-list:focus { outline: none; }
+.coming-soon-row-out { animation: coming-soon-leave 0.2s ease forwards; pointer-events: none; }
+@keyframes coming-soon-leave { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .coming-soon-row-out { animation: none; } }
+/* "Upvoted by" (§60.3): one button holding the overlapping bubbles and "+N"; the list pops below it. */
+.upvoted-by-anchor { position: relative; display: inline-flex; }
+.voter-strip {
+  display: inline-flex; align-items: center; padding: 2px 6px 2px 4px; border: 1px solid transparent;
+  border-radius: 999px; background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.voter-strip:hover, .voter-strip[aria-expanded="true"] { border-color: var(--line); color: var(--ink); }
+.voter-face { display: inline-flex; border-radius: 50%; box-shadow: 0 0 0 2px var(--paper); }
+.voter-face + .voter-face { margin-left: -6px; }
+.voter-only-you { opacity: 0.6; outline: 1px dashed var(--muted); outline-offset: 1px; }
+.voter-more { margin-left: 5px; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.voters-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: min(300px, 80vw); max-height: 320px;
+  overflow: auto; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow); color: var(--ink);
+}
+.voters-pop:focus { outline: none; }
+.voters-pop-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.voters-pop-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.voters-pop-list li { display: flex; align-items: center; gap: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.voters-pop-note { margin: 8px 0 0; font-size: 12px; }
 .your-ideas { margin-top: 18px; }
 .your-ideas-title { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
 .your-ideas-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }

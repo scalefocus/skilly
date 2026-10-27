@@ -213,7 +213,7 @@ admin. `SKILLY_DEV_AUTH` is **dev-only** and must never be enabled in production
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | minio, minio-init (compose) | yes | Bundled MinIO root credentials — used only to bootstrap the bucket + scoped account |
 | `CLAMAV_HOST` / `CLAMAV_PORT` | web, worker | recommended | clamd address (compose: `clamav` / `3310`). Set on web too so hosted uploads are scanned at ingest |
 | `TRUST_PROXY` | web, worker | behind a proxy | Proxy hop count for the real client IP (install IPs + per-IP rate limits; on web the DCR limiter) |
-| `AI_ALLOW_PRIVATE_BASE_URL` | web, worker | no | `1` = allow an AI provider base URL on a private/on-network address (SSRF guard opt-in) |
+| `AI_ALLOW_PRIVATE_BASE_URL` | web, worker | no | `1` = allow an AI provider base URL on any non-public address, loopback and link-local included (SSRF guard opt-in). For a provider on a private network (10.x, 172.16–31.x, 192.168.x, `.local` / `.internal`), a platform admin can use the AI integration card's *Allow private-network base URLs* switch instead |
 | `GIT_REPO_ROOT` | worker | yes | Filesystem path where skill git repos are synthesized (persist it!) |
 | `WORKER_PORT` | worker | no | Worker HTTP port (default 4000) |
 | `ONE_TIME_TOKEN_TTL_SECONDS` | web | no | Legacy/no-op — install tokens don't use it (kept for compatibility) |

@@ -276,8 +276,10 @@ With no email or webhook configured, notifications still land in the in-app inbo
 > `.env.example` also documents `TRUST_PROXY` (the number of reverse proxies in front of skilly,
 > e.g. `1` — passed to **both** web and worker so rate limits and `/installed` see the real client
 > address instead of the proxy's), `CLAMAV_HOST` / `CLAMAV_PORT` (set on both tiers so hosted
-> uploads are anti-virus scanned at upload), `AI_ALLOW_PRIVATE_BASE_URL=1` (only for an AI provider
-> on your private network) and `SMTP_SECURE` (`1` for implicit TLS).
+> uploads are anti-virus scanned at upload), `AI_ALLOW_PRIVATE_BASE_URL=1` (allows an AI provider on
+> any non-public address, loopback included; for one on your private network a platform admin can
+> flip *Allow private-network base URLs* on the AI integration card instead) and `SMTP_SECURE` (`1`
+> for implicit TLS).
 
 <details>
 <summary><b>Advanced: tuning knobs read by the apps (not in <code>.env.example</code>)</b></summary>

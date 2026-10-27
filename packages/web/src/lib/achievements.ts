@@ -296,7 +296,7 @@ async function historicalEventTimes(db: Db, userId: string): Promise<Date[]> {
         union all select created_at from tokens where user_id = $1 and type = 'marketplace' and last_served_commit is not null
         union all select created_at from oauth_grants where user_id = $1 and last_used_at is not null
         union all select created_at from skill_requests where requester_user_id = $1
-        union all select fulfilled_at from skill_requests where fulfilled_by_user_id = $1 and fulfilled_at is not null and requester_user_id <> $1
+        union all select fulfilled_at from skill_requests where fulfilled_by_user_id = $1 and fulfilled_at is not null and requester_user_id is distinct from $1
         union all select created_at from proposals where submitted_by = $1
         union all select created_at from skill_versions where created_by = $1
         union all select created_at from skill_maintainers where user_id = $1

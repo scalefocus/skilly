@@ -1,6 +1,6 @@
 // Feature ideas (SKILLY_SPEC.md §60) — the SINGLE SOURCE OF TRUTH for the limits, the status and
-// outcome enums, the validators, who may suggest, the "Coming soon" order and the notification
-// wording. The web routes, the What's new page, the admin page and the worker email renderer all
+// outcome enums, the validators, who may suggest, the "Coming soon" order, the live list's pure steps
+// and the notification wording. The web routes, the What's new page, the admin page and the worker email renderer all
 // read it, so they can never disagree. Client-safe (no node deps); subpath export `@skilly/shared/ideas`.
 
 // ── Limits (§60.2, §60.4) ──────────────────────────────────────────────────────────────────────
@@ -125,6 +125,26 @@ export const IDEA_LIMIT_MESSAGES: Record<IdeaLimitRefusal, string> = {
 
 // ── The Coming soon list (§60.3) ───────────────────────────────────────────────────────────────
 
+/** How often an expanded, visible list re-fetches itself (§60.3 decision 18). Fixed, not a setting. */
+export const COMING_SOON_POLL_MS = 15_000;
+/** Bubbles in a row's "Upvoted by" strip before the "+N" chip (§60.3 decision 19). */
+export const VOTER_STRIP_MAX = 5;
+/** Lines in the "Upvoted by" list before "and N more". */
+export const VOTER_LIST_MAX = 100;
+/** A vote button ignores clicks this long after its row moved, so a second click can't land on a row that slid under the pointer. */
+export const VOTE_MOVE_GUARD_MS = 400;
+
+/**
+ * One listed voter (§60.3): someone who did not hide their votes, or the viewer themself, who is
+ * always listed and marked `onlyYou` while they hide their votes from everyone else.
+ */
+export interface ComingSoonVoter {
+  id: string;
+  displayName: string;
+  avatar: string | null;
+  onlyYou?: true;
+}
+
 /** One published item: every Coming soon row is a `feature_ideas` row (§60.1 decision 1). */
 export interface ComingSoonItem {
   id: string;
@@ -135,6 +155,10 @@ export interface ComingSoonItem {
   /** Null when the proposer opted out, was erased, or there is none (the items migration 0101 seeded). */
   suggestedBy: { id: string; displayName: string; avatar: string | null } | null;
   publishedAt: string;
+  /** The strip: the first `VOTER_STRIP_MAX` listed voters, newest vote first. */
+  voters: ComingSoonVoter[];
+  /** Every listed voter for this viewer; hidden voters count only in `votes`. */
+  votersTotal: number;
 }
 
 /** §60.1 decision 2: most votes first. Ties: newest published first, then id. */
@@ -147,6 +171,54 @@ export function comingSoonOrder(items: readonly ComingSoonItem[]): ComingSoonIte
       (a.item.id < b.item.id ? -1 : a.item.id > b.item.id ? 1 : 0),
   );
   return ranked.map((r) => r.item);
+}
+
+// ── The live list (§60.3 decisions 18 and 19) ──────────────────────────────────────────────────
+
+/**
+ * The caller's vote, applied optimistically: the count, the ▲ state and their own bubble, which goes
+ * first in the strip (theirs is now the newest vote), marked `onlyYou` while they hide their votes.
+ * The viewer is always listed to themself while they have voted, so the listed total moves with
+ * the vote. Without `me` (not loaded yet) only the count and the ▲ change; the vote route's answer
+ * settles the strip. Re-sort the list with `comingSoonOrder` afterwards.
+ */
+export function applyOwnVote(
+  item: ComingSoonItem,
+  on: boolean,
+  me: { id: string; displayName: string; avatar: string | null } | null,
+  votesHidden: boolean,
+): ComingSoonItem {
+  if (item.voted === on) return item;
+  const votes = Math.max(0, item.votes + (on ? 1 : -1));
+  if (!me) return { ...item, votes, voted: on };
+  const others = item.voters.filter((v) => v.id !== me.id);
+  if (!on) return { ...item, votes, voted: false, voters: others, votersTotal: Math.max(0, item.votersTotal - 1) };
+  const self: ComingSoonVoter = votesHidden ? { ...me, onlyYou: true } : { ...me };
+  return { ...item, votes, voted: true, voters: [self, ...others].slice(0, VOTER_STRIP_MAX), votersTotal: item.votersTotal + 1 };
+}
+
+/**
+ * A poll answer may replace the list only if nothing of the caller's moved since it was asked for:
+ * no vote started after the request (`voteSeqAtRequest` is the counter then), and none in flight.
+ * Otherwise it is dropped and the next poll catches up.
+ */
+export function pollAnswerApplies(voteSeqAtRequest: number, voteSeqNow: number, votesInFlight: number): boolean {
+  return voteSeqAtRequest === voteSeqNow && votesInFlight === 0;
+}
+
+/** "Upvoted by Ana, Ben, you (only you see this) and 12 others": the strip button's accessible name. */
+export function upvotedByLabel(voters: readonly ComingSoonVoter[], votersTotal: number, viewerId: string | null): string {
+  const names = voters.map((v) => (v.id === viewerId ? (v.onlyYou ? "you (only you see this)" : "you") : v.displayName));
+  const rest = Math.max(0, votersTotal - voters.length);
+  if (rest > 0) return `Upvoted by ${names.join(", ")} and ${rest} ${rest === 1 ? "other" : "others"}`;
+  if (names.length <= 1) return `Upvoted by ${names.join("")}`;
+  return `Upvoted by ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The polite announcement once the caller's own vote settles: where the item now stands. */
+export function ownVoteAnnouncement(on: boolean, title: string, votes: number, position: number, of: number): string {
+  const count = `${votes} ${votes === 1 ? "vote" : "votes"}, now number ${position} of ${of}.`;
+  return on ? `Upvoted ${title}: ${count}` : `Removed your upvote from ${title}: ${count}`;
 }
 
 // ── Notifications (§60.7) ──────────────────────────────────────────────────────────────────────

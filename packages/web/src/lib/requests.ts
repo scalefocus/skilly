@@ -13,6 +13,9 @@ import { awardAchievement } from "./achievements";
 import { fanOutToFollowers } from "@skilly/shared/follows";
 
 export type RequestState = "open" | "fulfilled" | "withdrawn" | "removed";
+export type RequestOrigin = "user" | "search_gap";
+/** The requester label of a request with no requester (§62.10). */
+export const PLATFORM_REQUESTER_NAME = "Platform";
 
 export interface SkillRequestView {
   id: string;
@@ -22,9 +25,13 @@ export interface SkillRequestView {
   toolHarness: string;
   categories: string[];
   state: RequestState;
-  requesterUserId: string;
+  /** Null for a *Platform* request (§62.10): posted by a platform admin from a search gap. */
+  requesterUserId: string | null;
+  /** "Platform" for a Platform request. */
   requesterName: string;
   requesterAvatar: string | null;
+  /** `user`, or `search_gap` for a Platform request (§62.10). */
+  origin: RequestOrigin;
   createdAt: string;
   updatedAt: string;
   /** Set on fulfilled requests: where the built skill lives + who built it. */
@@ -40,21 +47,22 @@ export interface SkillRequestView {
 
 const VIEW_SELECT = `
   select r.id, r.title, r.description, r.usage_examples, r.tool_harness, r.state,
-         r.requester_user_id, u.display_name as requester_name, u.avatar as requester_avatar,
+         r.requester_user_id, u.display_name as requester_name, u.avatar as requester_avatar, r.origin,
          r.created_at, r.updated_at, r.via_mcp_client,
          fs.slug as fulfilled_slug, fn.slug as fulfilled_ns, fu.display_name as fulfilled_by_name,
          coalesce((select array_agg(c.name order by c.name)
                      from skill_request_categories rc join categories c on c.id = rc.category_id
                     where rc.request_id = r.id), '{}') as categories
     from skill_requests r
-    join users u on u.id = r.requester_user_id
+    left join users u on u.id = r.requester_user_id
     left join skills fs on fs.id = r.fulfilled_skill_id
     left join namespaces fn on fn.id = fs.namespace_id
     left join users fu on fu.id = r.fulfilled_by_user_id`;
 
 interface Row {
   id: string; title: string; description: string; usage_examples: string | null; tool_harness: string;
-  state: RequestState; requester_user_id: string; requester_name: string; requester_avatar: string | null;
+  state: RequestState; requester_user_id: string | null; requester_name: string | null; requester_avatar: string | null;
+  origin: RequestOrigin;
   created_at: string; updated_at: string; categories: string[] | null; via_mcp_client: string | null;
   fulfilled_slug: string | null; fulfilled_ns: string | null; fulfilled_by_name: string | null;
 }
@@ -69,8 +77,9 @@ function toView(r: Row): SkillRequestView {
     categories: r.categories ?? [],
     state: r.state,
     requesterUserId: r.requester_user_id,
-    requesterName: r.requester_name,
-    requesterAvatar: r.requester_avatar,
+    requesterName: r.requester_user_id ? r.requester_name ?? "" : PLATFORM_REQUESTER_NAME,
+    requesterAvatar: r.requester_user_id ? r.requester_avatar : null,
+    origin: r.origin === "search_gap" ? "search_gap" : "user",
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     fulfilled: r.fulfilled_slug && r.fulfilled_ns
@@ -283,24 +292,65 @@ export async function createRequest(
   }
 }
 
-/** Requester-only edit of an OPEN request (fulfilled/withdrawn/removed are immutable). §26. */
+/**
+ * A *Platform* request (§62.10), posted by a platform admin accepting a search gap (§62.6). Runs on
+ * the caller's transaction (the gap accept). No requester, so no first_request badge and no
+ * follow.request_created fan-out; audited as request.created by the admin, carrying the origin.
+ */
+export async function createPlatformRequest(
+  client: PoolClient,
+  adminUserId: string,
+  input: RequestInput,
+  gapId: string,
+): Promise<{ id: string } | { error: string }> {
+  const err = validate(input) ?? (await categoryListError(client, input.categories));
+  if (err) return { error: err };
+  const { rows } = await client.query<{ id: string }>(
+    `insert into skill_requests (requester_user_id, origin, title, description, usage_examples, tool_harness)
+     values (null, 'search_gap', $1, $2, $3, $4) returning id`,
+    [input.title.trim(), input.description, input.usageExamples ?? null, input.toolHarness],
+  );
+  const id = rows[0]!.id;
+  await setCategories(client, id, input.categories);
+  await appendAudit(client, {
+    actorUserId: adminUserId,
+    action: "request.created",
+    targetType: "skill_request",
+    targetId: id,
+    after: { title: input.title.trim(), toolHarness: input.toolHarness, categories: input.categories, origin: "search_gap", searchGapId: gapId },
+  });
+  return { id };
+}
+
+/** Requester-only edit of an OPEN request (fulfilled/withdrawn/removed are immutable). §26. A
+ *  *Platform* request has no requester: platform admins edit it instead (§62.10), audited with the
+ *  text before and after. */
 export async function updateRequest(
   actorUserId: string,
   id: string,
   input: RequestInput,
+  isPlatformAdmin = false,
 ): Promise<{ ok: true } | { error: string; status: number }> {
   const err = validate(input) ?? (await categoryListError(pool, input.categories));
   if (err) return { error: err, status: 422 };
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const { rows } = await client.query<{ requester_user_id: string; state: RequestState }>(
-      `select requester_user_id, state from skill_requests where id = $1 for update`,
+    const { rows } = await client.query<{
+      requester_user_id: string | null; state: RequestState; title: string; description: string;
+      usage_examples: string | null; tool_harness: string;
+    }>(
+      `select requester_user_id, state, title, description, usage_examples, tool_harness
+         from skill_requests where id = $1 for update`,
       [id],
     );
     const r = rows[0];
     if (!r) { await client.query("rollback"); return { error: "not found", status: 404 }; }
-    if (r.requester_user_id !== actorUserId) { await client.query("rollback"); return { error: "only the requester can edit", status: 403 }; }
+    const platformEdit = r.requester_user_id === null && isPlatformAdmin;
+    if (r.requester_user_id !== actorUserId && !platformEdit) {
+      await client.query("rollback");
+      return { error: r.requester_user_id === null ? "only platform admins can edit a Platform request" : "only the requester can edit", status: 403 };
+    }
     if (r.state !== "open") { await client.query("rollback"); return { error: "only open requests can be edited", status: 409 }; }
     await client.query(
       `update skill_requests set title = $2, description = $3, usage_examples = $4, tool_harness = $5, updated_at = now()
@@ -313,7 +363,17 @@ export async function updateRequest(
       action: "request.updated",
       targetType: "skill_request",
       targetId: id,
-      after: { title: input.title.trim(), toolHarness: input.toolHarness, categories: input.categories },
+      // A platform admin editing a Platform request (§62.10) may be removing PII, and the audit log is
+      // append-only: keep the title before and after, and only WHETHER the description or usage
+      // changed — never their text.
+      ...(platformEdit ? { before: { title: r.title, toolHarness: r.tool_harness } } : {}),
+      after: platformEdit
+        ? {
+            title: input.title.trim(), toolHarness: input.toolHarness, categories: input.categories,
+            descriptionChanged: input.description !== r.description,
+            usageChanged: (input.usageExamples ?? null) !== r.usage_examples,
+          }
+        : { title: input.title.trim(), toolHarness: input.toolHarness, categories: input.categories },
     });
     await client.query("commit");
     return { ok: true };
@@ -337,7 +397,7 @@ export async function closeRequest(
   try {
     await client.query("begin");
     const { rows } = await client.query<{
-      requester_user_id: string; state: RequestState; title: string; description: string;
+      requester_user_id: string | null; state: RequestState; title: string; description: string;
       usage_examples: string | null; tool_harness: string;
     }>(
       `select requester_user_id, state, title, description, usage_examples, tool_harness
@@ -347,7 +407,8 @@ export async function closeRequest(
     const r = rows[0];
     if (!r) { await client.query("rollback"); return { error: "not found", status: 404 }; }
     if (r.state !== "open") { await client.query("rollback"); return { error: "request is not open", status: 409 }; }
-    const isRequester = r.requester_user_id === actorUserId;
+    // A Platform request (§62.10) has no requester: nobody withdraws it, platform admins remove it.
+    const isRequester = r.requester_user_id !== null && r.requester_user_id === actorUserId;
     if (!isRequester && !isPlatformAdmin) { await client.query("rollback"); return { error: "not allowed", status: 403 }; }
     // Snapshot the request in the audit entry first — the row won't exist afterwards to inspect.
     await appendAudit(client, {
@@ -393,7 +454,7 @@ export async function fulfilOriginRequest(
   client: PoolClient,
   opts: { originRequestId: string; skillId: string; fulfilledByUserId: string; actorUserId: string; via: "proposal" | "direct_publish" },
 ): Promise<void> {
-  const { rows } = await client.query<{ requester_user_id: string; title: string }>(
+  const { rows } = await client.query<{ requester_user_id: string | null; title: string }>(
     `update skill_requests
         set state = 'fulfilled', fulfilled_skill_id = $2, fulfilled_by_user_id = $3,
             fulfilled_at = now(), updated_at = now()
@@ -412,9 +473,11 @@ export async function fulfilOriginRequest(
   });
   // §31: Genie to the fulfiller, Wish Granted to the requester — two distinct people only. The
   // requester did nothing themselves, so their award carries no Habits evaluation.
+  // A Platform request (§62.10) has no requester: the fulfiller still earns Genie; nobody gets
+  // Wish Granted.
   if (r.requester_user_id !== opts.fulfilledByUserId) {
     await awardAchievement(client, opts.fulfilledByUserId, "first_fulfilment");
-    await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true });
+    if (r.requester_user_id) await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true });
   }
   // §35.6: the fulfiller's followers — gated on the fulfilling skill's visibility (a follower who
   // can't see a restricted skill hears nothing), and never the requester, who gets
@@ -429,10 +492,10 @@ export async function fulfilOriginRequest(
       actorId: opts.fulfilledByUserId,
       payload: { requestId: opts.originRequestId, requestTitle: r.title, namespaceSlug: gate[0].ns, skillSlug: gate[0].slug },
       skill: { id: opts.skillId, namespaceId: gate[0].namespace_id, visibility: gate[0].visibility },
-      excludeUserIds: [r.requester_user_id],
+      excludeUserIds: r.requester_user_id ? [r.requester_user_id] : [],
     });
   }
-  if (r.requester_user_id !== opts.fulfilledByUserId) {
+  if (r.requester_user_id && r.requester_user_id !== opts.fulfilledByUserId) {
     const { rows: sk } = await client.query<{ slug: string; ns: string; by_name: string }>(
       `select s.slug, n.slug as ns, (select display_name from users where id = $2) as by_name
          from skills s join namespaces n on n.id = s.namespace_id where s.id = $1`,
@@ -472,7 +535,7 @@ export async function fulfilWithExistingSkill(
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const { rows: reqRows } = await client.query<{ state: RequestState; requester_user_id: string; title: string }>(
+    const { rows: reqRows } = await client.query<{ state: RequestState; requester_user_id: string | null; title: string }>(
       `select state, requester_user_id, title from skill_requests where id = $1 for update`,
       [requestId],
     );
@@ -510,7 +573,8 @@ export async function fulfilWithExistingSkill(
     });
     if (r.requester_user_id !== actorUserId) {
       await awardAchievement(client, actorUserId, "first_fulfilment"); // §31 Genie
-      await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true }); // §31 Wish Granted
+      // §31 Wish Granted — not for a Platform request, which has no requester (§62.10).
+      if (r.requester_user_id) await awardAchievement(client, r.requester_user_id, "request_fulfilled", { noHabits: true });
     }
     // §35.6: the fulfiller's followers (the skill is org-visible by construction; gated anyway),
     // minus the requester, who gets request.fulfilled.
@@ -519,9 +583,9 @@ export async function fulfilWithExistingSkill(
       actorId: actorUserId,
       payload: { requestId, requestTitle: r.title, namespaceSlug, skillSlug },
       skill: { id: sk.id, namespaceId: sk.namespace_id, visibility: sk.visibility },
-      excludeUserIds: [r.requester_user_id],
+      excludeUserIds: r.requester_user_id ? [r.requester_user_id] : [],
     });
-    if (r.requester_user_id !== actorUserId) {
+    if (r.requester_user_id && r.requester_user_id !== actorUserId) {
       const { rows: byRows } = await client.query<{ display_name: string }>(
         `select display_name from users where id = $1`,
         [actorUserId],

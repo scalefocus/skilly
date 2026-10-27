@@ -9,15 +9,17 @@
 // a direct publish gets its own run and notifies the namespace admins once (minus the publisher and
 // opt-outs); an accepted proposal's version reuses the reviewed run without notifying; a pointer
 // whose mirror differs from what was reviewed gets a `mirror` run; re-run while pending is refused;
-// dispositions carry from the proposal to its version.
+// dispositions carry from the proposal to its version. Also (§40.16): the worker's own AI env runs the
+// per-call egress guard under the private-network switch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import AdmZip from "adm-zip";
 import {
   savePrereviewSetting, loadPrereviewView, requestPrereviewRerun, insertPrereviewDisposition, currentPrereviewRun,
-  PREREVIEW_PROPOSAL_DAILY_CAP, contentDigest, type BundleEntry,
+  PREREVIEW_FEATURE, PREREVIEW_PROPOSAL_DAILY_CAP, contentDigest, type BundleEntry,
 } from "@skilly/shared";
-import { encryptAiToken } from "@skilly/shared/ai";
+import { aiComplete, encryptAiToken } from "@skilly/shared/ai";
+import { __setAiResolveForTests, workerAiEnv } from "../scan/aiEnv.js";
 import { enqueueProposalPrereviews, enqueueVersionPrereviews, executePrereviewRun, sweepAiPrereview } from "../scan/aiPrereview.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
 
@@ -299,6 +301,71 @@ test("ai pre-review sweep: enqueue, cache, run, notify, versions, dispositions",
     }
     if (savedSetting === null) await pool.query(`delete from platform_settings where key = 'ai_prereview_enabled'`);
     else await pool.query(`update platform_settings set value = $1::jsonb where key = 'ai_prereview_enabled'`, [JSON.stringify(savedSetting)]);
+    await pool.end();
+  }
+});
+
+// §40.16: the worker's own AI env runs the per-call egress guard (it skipped it before), under the
+// platform-admin private-network switch read with the config. A made-up provider host answers
+// 10.0.30.3 from a stub resolver; the stub fetch stands in for the provider.
+test("ai pre-review: the worker's AI env refuses a private-network provider until the switch allows it", { skip: !enabled }, async () => {
+  const { Pool } = await import("pg");
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const savedAi = (await pool.query(`select * from ai_integration where id = 1`)).rows[0] ?? null;
+  const savedSwitch = (await pool.query(`select value from platform_settings where key = 'ai_allow_private_network'`)).rows[0]?.value ?? null;
+  const savedEnvKey = process.env.AI_TOKEN_ENC_KEY;
+  const savedOptIn = process.env.AI_ALLOW_PRIVATE_BASE_URL;
+  const started = new Date();
+  try {
+    process.env.AI_TOKEN_ENC_KEY = KEY.toString("base64");
+    delete process.env.AI_ALLOW_PRIVATE_BASE_URL;
+    __setAiResolveForTests(async (h) => {
+      if (h === "owui.corp.example") return [{ address: "10.0.30.3" }];
+      throw new Error(`ENOTFOUND ${h}`);
+    });
+    await pool.query(`delete from ai_integration`);
+    await pool.query(
+      `insert into ai_integration (id, enabled, provider, base_url, model, token_enc, token_last4, last_test_at, last_test_ok)
+       values (1, true, 'anthropic', 'https://owui.corp.example', 'stub-model', $1, 'tok9', now(), true)`,
+      [encryptAiToken("stubtok9", KEY)],
+    );
+    await pool.query(`delete from platform_settings where key = 'ai_allow_private_network'`);
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return new Response(JSON.stringify(answer([])), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const env = { ...workerAiEnv(), fetchImpl, sleep: async () => {} };
+    const call = () => aiComplete(pool, env, { feature: PREREVIEW_FEATURE, messages: [{ role: "user", content: "review" }], maxTokens: 64, retry: false });
+
+    // Switch off (absent): refused before the network, and the status pill turns Failing.
+    await assert.rejects(call(), (e: unknown) => (e as { code?: string }).code === "ai_base_url_private");
+    assert.equal(calls, 0);
+    const failed = (await pool.query<{ last_call_ok: boolean; last_call_error: string }>(`select last_call_ok, last_call_error from ai_integration`)).rows[0]!;
+    assert.equal(failed.last_call_ok, false);
+    assert.match(failed.last_call_error, /^ai_base_url_private: .*resolves to a private address \(10\.0\.30\.3\)/);
+
+    // Switch on: the same call reaches the provider.
+    await pool.query(
+      `insert into platform_settings (key, value, updated_at) values ('ai_allow_private_network', 'true'::jsonb, now())
+       on conflict (key) do update set value = excluded.value, updated_at = now()`,
+    );
+    const res = await call();
+    assert.equal(calls, 1);
+    assert.equal(res.model, "stub-model");
+  } finally {
+    __setAiResolveForTests(undefined);
+    if (savedEnvKey === undefined) delete process.env.AI_TOKEN_ENC_KEY;
+    else process.env.AI_TOKEN_ENC_KEY = savedEnvKey;
+    if (savedOptIn !== undefined) process.env.AI_ALLOW_PRIVATE_BASE_URL = savedOptIn;
+    await pool.query(`delete from ai_usage where feature = $1 and created_at >= $2`, [PREREVIEW_FEATURE, started]);
+    await pool.query(`delete from ai_integration`);
+    if (savedAi) {
+      const cols = Object.keys(savedAi);
+      await pool.query(`insert into ai_integration (${cols.join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")})`, cols.map((k) => savedAi[k]));
+    }
+    if (savedSwitch === null) await pool.query(`delete from platform_settings where key = 'ai_allow_private_network'`);
+    else await pool.query(`update platform_settings set value = $1::jsonb where key = 'ai_allow_private_network'`, [JSON.stringify(savedSwitch)]);
     await pool.end();
   }
 });

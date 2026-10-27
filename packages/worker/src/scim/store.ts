@@ -353,7 +353,7 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
               job_title = null, office_location = null, department = null, directory_hidden = false,
               achievements_hidden = false, time_zone = null, hero_at = null, allow_follows = true,
               surveys_enabled = true, survey_last_shown_at = null, survey_offer = null, survey_self_shown_at = null,
-              idea_attribution_hidden = false, idea_notifications = true,
+              idea_attribution_hidden = false, idea_notifications = true, idea_votes_hidden = false,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [userId, deletedLabel],

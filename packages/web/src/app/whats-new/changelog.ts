@@ -15,6 +15,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.46.0",
+    date: "2026-10-27",
+    summary:
+      "Search gaps: platform admins can see what people search for and don't find, with no one's identity attached, and turn each search into a synonym or a skill request posted by Platform. When the AI integration is working, it drafts a suggestion for each. It's off by default: turn it on in Administration → Search, then review on the new Search gaps page.",
+  },
+  {
+    version: "2.45.0",
+    date: "2026-10-27",
+    summary:
+      "Coming soon now re-sorts live: your upvote moves an item at once, and other people's votes show up within about 15 seconds while the list is open. Each item also shows who upvoted it, and you can open the full list. Votes you cast before are shown too; to hide your picture, set \"Show me on feature ideas I upvote\" to Hidden on your Profile. Your votes still count.",
+  },
+  {
+    version: "2.44.0",
+    date: "2026-10-23",
+    summary:
+      "Platform admins can now allow an AI provider on the private network, such as a self-hosted Open WebUI on 10.x, with the new Allow private-network base URLs switch on the AI integration card (off by default). Flipping it re-tests the saved configuration, so the status updates at once. Loopback and link-local hosts still need the operator's AI_ALLOW_PRIVATE_BASE_URL=1, and background AI work now runs the same host check.",
+  },
+  {
     version: "2.43.0",
     date: "2026-10-23",
     summary:

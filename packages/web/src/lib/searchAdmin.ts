@@ -140,7 +140,11 @@ async function inTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise
   }
 }
 
-export async function createSynonymGroup(input: unknown, actorUserId: string): Promise<SynonymGroupView> {
+/** Runs inside the synonym write's transaction after the group is saved — a search-gap accept (§62.6)
+ *  commits or rolls back together with the synonym change. Throwing rolls everything back. */
+export type SynonymWriteHook = (client: PoolClient, groupId: string) => Promise<void>;
+
+export async function createSynonymGroup(input: unknown, actorUserId: string, afterWrite?: SynonymWriteHook): Promise<SynonymGroupView> {
   const parsed = parseSynonymTerms(input);
   if (!parsed.ok) throw new SearchAdminError(422, parsed.error);
   return inTransaction(async (client) => {
@@ -162,11 +166,12 @@ export async function createSynonymGroup(input: unknown, actorUserId: string): P
       targetId: g.id,
       after: { terms: g.terms },
     });
+    if (afterWrite) await afterWrite(client, g.id);
     return { id: g.id, terms: g.terms, updatedAt: g.updated_at, collidesWith: [] };
   });
 }
 
-export async function updateSynonymGroup(id: string, input: unknown, actorUserId: string): Promise<SynonymGroupView> {
+export async function updateSynonymGroup(id: string, input: unknown, actorUserId: string, afterWrite?: SynonymWriteHook): Promise<SynonymGroupView> {
   const parsed = parseSynonymTerms(input);
   if (!parsed.ok) throw new SearchAdminError(422, parsed.error);
   return inTransaction(async (client) => {
@@ -187,6 +192,7 @@ export async function updateSynonymGroup(id: string, input: unknown, actorUserId
       before: { terms: cur[0].terms },
       after: { terms: g.terms },
     });
+    if (afterWrite) await afterWrite(client, g.id);
     return { id: g.id, terms: g.terms, updatedAt: g.updated_at, collidesWith: [] };
   });
 }

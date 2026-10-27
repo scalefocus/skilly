@@ -1,5 +1,6 @@
 // Upvote a Coming soon item — a published idea (SKILLY_SPEC.md §60.6). PUT votes, DELETE un-votes;
-// both idempotent → 200 { votes, voted }. 404 for anything but a published idea.
+// both idempotent → 200 { votes, voted, voters, votersTotal } (the caller's view of the "Upvoted by"
+// strip). 404 for anything but a published idea.
 import { voteIdea } from "../../../../../../lib/ideas";
 import { ideasCaller, isIdeaId, notFound } from "../../../../../../lib/ideasRoute";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
@@ -16,7 +17,7 @@ async function vote(ctx: Ctx, on: boolean): Promise<Response> {
   const { id } = await ctx.params;
   if (!isIdeaId(id)) return notFound();
   const r = await voteIdea(caller.viewer.userId, id, on);
-  return r.ok ? Response.json({ votes: r.votes, voted: r.voted }) : notFound();
+  return r.ok ? Response.json({ votes: r.votes, voted: r.voted, voters: r.voters, votersTotal: r.votersTotal }) : notFound();
 }
 
 export async function PUT(_req: Request, ctx: Ctx) {

@@ -648,6 +648,11 @@ export async function setUserIdeaAttributionHidden(userId: string, hidden: boole
   await pool.query(`update users set idea_attribution_hidden = $2, updated_at = now() where id = $1`, [userId, hidden]);
 }
 
+/** §60.9 "Show me on feature ideas I upvote" — stored inverted, applied live to every vote, past and future. */
+export async function setUserIdeaVotesHidden(userId: string, hidden: boolean): Promise<void> {
+  await pool.query(`update users set idea_votes_hidden = $2, updated_at = now() where id = $1`, [userId, hidden]);
+}
+
 /** §60.7 a platform admin's opt-out of `idea.submitted` (row-level, like the maintainer opt-outs). */
 export async function setUserIdeaNotifications(userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set idea_notifications = $2, updated_at = now() where id = $1`, [userId, enabled]);

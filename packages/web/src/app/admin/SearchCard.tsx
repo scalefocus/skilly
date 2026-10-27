@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { Pill, useApi, formatCount } from "../../components/ui";
 import { CollapsibleCard } from "./CollapsibleCard";
+import { SearchGapsSettings } from "./SearchGapsSettings";
 
 interface Languages { current: string; languages: { value: string; label: string }[]; skillCount: number }
 interface Group { id: string; terms: string[]; updatedAt: string; collidesWith: string[] }
@@ -90,6 +91,7 @@ export function SearchCard({ open, onToggle }: { open: boolean; onToggle: () => 
   const [busy, setBusy] = useState(false);
   const [addErr, setAddErr] = useState<string | null>(null);
   const [langErr, setLangErr] = useState<string | null>(null);
+  const [gapsOn, setGapsOn] = useState(false);
 
   const groups = syn?.groups ?? [];
   const current = langs?.languages.find((l) => l.value === langs.current);
@@ -121,7 +123,7 @@ export function SearchCard({ open, onToggle }: { open: boolean; onToggle: () => 
     <CollapsibleCard
       cardId="search"
       title="Search"
-      summary={langs && syn ? `${current?.label ?? langs.current} · ${formatCount(groups.length)} synonym ${groups.length === 1 ? "group" : "groups"}` : undefined}
+      summary={langs && syn ? `${current?.label ?? langs.current} · ${formatCount(groups.length)} synonym ${groups.length === 1 ? "group" : "groups"}${gapsOn ? " · gaps on" : ""}` : undefined}
       open={open}
       onToggle={onToggle}
     >
@@ -182,6 +184,7 @@ export function SearchCard({ open, onToggle }: { open: boolean; onToggle: () => 
         <button type="button" className="btn btn-sm" disabled={busy || !text.trim()} onClick={() => void add()}>Add group</button>
       </div>
       {addErr && <div role="alert" style={{ marginTop: 8, fontSize: 13, color: "var(--danger)" }}>{addErr}</div>}
+      <SearchGapsSettings onEnabledChange={setGapsOn} />
     </CollapsibleCard>
   );
 }

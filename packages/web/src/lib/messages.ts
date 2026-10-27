@@ -132,11 +132,12 @@ async function canAccessProposal(access: Access, c: ProposalCtx): Promise<boolea
 // namespace, no reviewers), so its thread is correspondingly open: any signed-in user may post.
 interface RequestCtx {
   kind: "request";
-  requestId: string; requesterId: string; title: string; state: RequestState;
+  /** Null for a Platform request (§62.10): there is no requester to notify or tag. */
+  requestId: string; requesterId: string | null; title: string; state: RequestState;
 }
 
 async function loadRequestCtx(requestId: string): Promise<RequestCtx | null> {
-  const { rows } = await pool.query<{ requester_user_id: string; title: string; state: RequestState }>(
+  const { rows } = await pool.query<{ requester_user_id: string | null; title: string; state: RequestState }>(
     `select requester_user_id, title, state from skill_requests where id = $1`,
     [requestId],
   );
@@ -166,7 +167,7 @@ function titleOfCtx(ctx: ConvCtx): string {
 function hrefOfCtx(ctx: ConvCtx): string {
   return ctx.kind === "proposal" ? `/proposals/${ctx.proposalId}` : `/requests/${ctx.requestId}`;
 }
-function ownerIdOfCtx(ctx: ConvCtx): string {
+function ownerIdOfCtx(ctx: ConvCtx): string | null {
   return ctx.kind === "proposal" ? ctx.submitterId : ctx.requesterId;
 }
 
@@ -397,7 +398,10 @@ async function fanOut(conversationId: string, authorId: string, ctx: ConvCtx | n
   const audience = new Set<string>();
   const parts = await pool.query<{ user_id: string }>(`select user_id from conversation_participants where conversation_id = $1`, [conversationId]);
   for (const p of parts.rows) audience.add(p.user_id);
-  if (ctx) audience.add(ownerIdOfCtx(ctx)); // submitter/requester is always a party, even before they engage
+  // The submitter/requester is always a party, even before they engage — a Platform request
+  // (§62.10) has none.
+  const owner = ctx ? ownerIdOfCtx(ctx) : null;
+  if (owner) audience.add(owner);
   audience.delete(authorId);
   for (const uid of mentionedUserIds) audience.delete(uid);
   if (audience.size === 0) return;
