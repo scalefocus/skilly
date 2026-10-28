@@ -54,7 +54,8 @@ test("upstream release: notice → pre-filled propose form → skip → un-skip"
     await expect(page.getByRole("button", { name: /point at a new ref/i })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByPlaceholder("https://github.com/anthropics/skills.git")).toHaveValue(seed.origin);
     await expect(page.locator("input[list='ref-options']")).toHaveValue("v1.3.0");
-    await expect(page.getByPlaceholder("1.0.0")).toHaveValue("1.3.0");
+    // exact: the ref field's "v1.0.0" placeholder contains "1.0.0" too.
+    await expect(page.getByPlaceholder("1.0.0", { exact: true })).toHaveValue("1.3.0");
     await expect(page.getByTestId("what-changed")).toHaveValue("Updates upstream from v1.2.0 to v1.3.0.");
 
     // Skip this release → the muted skipped line; un-skip → the notice is back.
