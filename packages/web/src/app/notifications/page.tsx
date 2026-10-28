@@ -10,6 +10,7 @@ import { NOTIFICATION_LABELS } from "@skilly/shared/notifications";
 import { followNotificationContent } from "@skilly/shared/follows";
 import { ideaNotificationContent } from "@skilly/shared/ideas";
 import { searchGapNotificationContent } from "@skilly/shared/search-gaps";
+import { driftProposeUpdatePath, upstreamReleaseNotificationContent } from "@skilly/shared/upstream-releases";
 
 const PAGE = 100;
 
@@ -183,7 +184,7 @@ export default function NotificationsPage() {
             // proposal's Policy section instead (its skill may not exist yet).
             // skill.discussion_reply opens its thread (#discussion-<root>, §24 Replies).
             const replyRoot = n.type === "skill.discussion_reply" && typeof n.payload.rootId === "string" ? n.payload.rootId : null;
-            const skillHref = nsSlug && skSlug && n.type !== "proposal.policy_violation" ? `/skills/${nsSlug}/${skSlug}${replyRoot ? `#discussion-${replyRoot}` : n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : n.type === "skill.policy_flag" ? "#policy" : n.type === "skill.ai_prereview_flagged" ? "#ai-prereview" : ""}` : null;
+            const skillHref = nsSlug && skSlug && n.type !== "proposal.policy_violation" ? `/skills/${nsSlug}/${skSlug}${replyRoot ? `#discussion-${replyRoot}` : n.type === "skill.discussion" || n.type === "message.mention" ? "#discussion" : n.type === "skill.content_risk" ? "#content-risk" : n.type === "skill.quality_low" ? "#quality" : n.type === "skill.policy_flag" ? "#policy" : n.type === "skill.ai_prereview_flagged" ? "#ai-prereview" : n.type === "skill.upstream_release" ? "#upstream" : ""}` : null;
             // A DIRECT-chat mention has no page of its own: deep-link to the topbar Messages
             // panel via ?conversation=<id> (§24 Mentions), like the email CTA.
             const conversationHref =
@@ -212,6 +213,10 @@ export default function NotificationsPage() {
             const idea = ideaNotificationContent(n.type, n.payload);
             // §62.9 search gaps — the same shared sentence and CTA the email uses.
             const gap = searchGapNotificationContent(n.type, n.payload);
+            // §63.5 skill.upstream_release — the shared sentence and the pre-filled propose form; §63.6
+            // the second CTA of a branch-drift row.
+            const upstream = upstreamReleaseNotificationContent(n.type, n.payload);
+            const driftPropose = driftProposeUpdatePath(n.type, n.payload);
             // §45.6 skill.deprecated: the successor (named only when THIS recipient could see it at insert).
             const succNs = n.type === "skill.deprecated" && typeof n.payload.successorNamespaceSlug === "string" ? n.payload.successorNamespaceSlug : null;
             const succSlug = n.type === "skill.deprecated" && typeof n.payload.successorSlug === "string" ? n.payload.successorSlug : null;
@@ -249,6 +254,14 @@ export default function NotificationsPage() {
                       <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-search-gap">{gap.sentence}</p>
                       <Link href={gap.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                         {gap.ctaLabel.toLowerCase()} →
+                      </Link>
+                    </>
+                  )}
+                  {upstream && (
+                    <>
+                      <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-upstream">{upstream.sentence}</p>
+                      <Link href={upstream.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginRight: 12 }}>
+                        {upstream.ctaLabel.toLowerCase()} →
                       </Link>
                     </>
                   )}
@@ -298,6 +311,11 @@ export default function NotificationsPage() {
                   {n.type === "skill.quality_low" && n.payload.aiDraft === true && nsSlug && skSlug && (
                     <Link href={`/skills/${nsSlug}/${skSlug}?draft=ai#quality`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginLeft: 12 }} data-testid="notification-ai-draft">
                       draft improvements with {typeof n.payload.aiName === "string" && n.payload.aiName ? n.payload.aiName : "AI"} →
+                    </Link>
+                  )}
+                  {driftPropose && (
+                    <Link href={driftPropose} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginLeft: 12 }} data-testid="notification-drift-propose">
+                      propose the update →
                     </Link>
                   )}
                   {conversationHref && (

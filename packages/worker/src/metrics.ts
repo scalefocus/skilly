@@ -17,6 +17,9 @@ export const M = {
   reconcile: metrics.counter("skilly_reconcile_runs_total", "Entra reconciliation sweeps"),
   pointerRefreshChecked: metrics.counter("skilly_pointer_refresh_checked_total", "Pointer refs re-verified"),
   pointerDrift: metrics.counter("skilly_pointer_drift_total", "Pointer refs whose upstream content drifted"),
+  // §63.11 upstream release alerts.
+  upstreamReleaseChecks: metrics.counter("skilly_upstream_release_checks_total", "Upstream release checks, by result (none|release|unchanged|error)"),
+  upstreamReleaseNotifications: metrics.counter("skilly_upstream_release_notifications_total", "skill.upstream_release notifications created"),
   // §29 MCP server.
   mcpToolCalls: metrics.counter("skilly_mcp_tool_calls_total", "MCP tool calls, by tool and outcome"),
   mcpResourceReads: metrics.counter("skilly_mcp_resource_reads_total", "Skill content reads served over MCP"),

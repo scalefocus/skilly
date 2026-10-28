@@ -60,3 +60,4 @@ export * from "./policy-prompt.js";
 export * from "./policy-db.js";
 export * from "./hype.js";
 export * from "./ideas.js";
+export * from "./upstream-releases.js";

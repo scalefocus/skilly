@@ -221,6 +221,9 @@ pipeline {
               # §62 search gaps — alone: it rewrites the ai_integration singleton.
               SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
                 node --test "packages/worker/dist/integration/searchGapSweep.test.js"
+              # §63 upstream release alerts — the sweep with a stubbed upstream, scoped to its own fixtures.
+              SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
+                node --test "packages/worker/dist/integration/upstreamReleaseSweep.test.js"
               SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
                 pnpm --filter @skilly/web test:db
             '''

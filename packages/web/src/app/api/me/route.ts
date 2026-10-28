@@ -18,6 +18,7 @@ import {
   setUserPolicyNotifications,
   setUserAiPrereviewNotifications,
   setUserHypeNotifications,
+  setUserUpstreamReleaseNotifications,
   setUserDirectoryHidden,
   setUserAchievementsHidden,
   setUserAllowFollows,
@@ -70,6 +71,7 @@ export async function GET() {
             policy_notifications: boolean;
             ai_prereview_notifications: boolean;
             hype_notifications: boolean;
+            upstream_release_notifications: boolean;
             idea_attribution_hidden: boolean;
             idea_votes_hidden: boolean;
             idea_notifications: boolean;
@@ -83,7 +85,7 @@ export async function GET() {
             onboarded_at: string | null;
             whats_new_seen_version: string | null;
           }>(
-            `select date_format, leaderboard_hidden, email_notifications, email_digest, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, hype_notifications, idea_attribution_hidden, idea_votes_hidden, idea_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
+            `select date_format, leaderboard_hidden, email_notifications, email_digest, drift_notifications, new_version_notifications, discussion_notifications, content_risk_notifications, quality_notifications, policy_notifications, ai_prereview_notifications, hype_notifications, upstream_release_notifications, idea_attribution_hidden, idea_votes_hidden, idea_notifications, directory_hidden, achievements_hidden, allow_follows, surveys_enabled, survey_offer is not null as has_survey_offer, survey_self_shown_at, time_zone, onboarded_at, whats_new_seen_version
                from users where id = $1`,
             [access.userId],
           )
@@ -149,6 +151,9 @@ export async function GET() {
     // §50.7 hype milestones on skills they maintain (row-level), and whether hype is on at all.
     hypeNotifications: prefs?.hype_notifications ?? true,
     hypeEnabled,
+    // §63.10 upstream releases of pointer skills they maintain (row-level), and whether the switch is on.
+    upstreamReleaseNotifications: prefs?.upstream_release_notifications ?? true,
+    upstreamReleasesEnabled: settings.upstreamReleasesEnabled,
     // §60.9 feature ideas: the "show my name" and "show me on ideas I upvote" toggles (both stored
     // inverted) and a platform admin's opt-out of the review-queue notification. All always apply:
     // the list, the votes and the queue never switch off.
@@ -223,6 +228,7 @@ export async function PATCH(req: Request) {
     policyNotifications?: boolean;
     aiPrereviewNotifications?: boolean;
     hypeNotifications?: boolean;
+    upstreamReleaseNotifications?: boolean;
     ideaAttributionHidden?: boolean;
     ideaVotesHidden?: boolean;
     ideaNotifications?: boolean;
@@ -273,6 +279,9 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.hypeNotifications === "boolean") {
     await setUserHypeNotifications(access.userId, body.hypeNotifications);
+  }
+  if (typeof body.upstreamReleaseNotifications === "boolean") {
+    await setUserUpstreamReleaseNotifications(access.userId, body.upstreamReleaseNotifications);
   }
   // §60.9 feature ideas: the attribution and upvoter opt-outs, and the admin's review-queue notification opt-out.
   if (typeof body.ideaAttributionHidden === "boolean") {

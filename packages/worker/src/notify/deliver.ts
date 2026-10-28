@@ -23,6 +23,8 @@ import {
   followNotificationContent,
   ideaNotificationContent,
   searchGapNotificationContent,
+  upstreamReleaseNotificationContent,
+  driftProposeUpdatePath,
   isFollowNotificationType,
   notificationTitle,
   contentRiskRuleLabel,
@@ -219,11 +221,13 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       sentence = `${slug} was marked official.`;
       label = "View the skill";
     }
+    // §63.6: drift on a branch-pinned baseline also offers the pre-filled propose form.
+    const proposePath = driftProposeUpdatePath(n.type, p);
     const s = subj(title);
     return {
       subject: s,
-      text: `${sentence} ${cta(label, path)}`,
-      webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, ref: p.ref ?? null, url: abs(path) },
+      text: `${sentence} ${cta(label, path)}${proposePath ? ` ${cta("Propose the update", proposePath)}` : ""}`,
+      webhook: { event: n.type, title: s, skill: slug, semver: p.semver ?? null, ref: p.ref ?? null, url: abs(path), ...(proposePath ? { proposeUrl: abs(proposePath) } : {}) },
     };
   }
 
@@ -456,6 +460,18 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: `${idea.sentence}${idea.detail ? `\n\n${idea.detail}` : ""} ${cta(idea.ctaLabel, idea.path)}`,
       webhook: { event: n.type, title: s, ideaId: typeof p.ideaId === "string" ? p.ideaId : null, url: abs(idea.path) },
+    };
+  }
+
+  // skill.upstream_release (§63.5) — the shared wording; the CTA opens the pre-filled propose form.
+  const upstream = upstreamReleaseNotificationContent(n.type, p);
+  if (upstream) {
+    const s = subj(title);
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug ?? ""}`;
+    return {
+      subject: s,
+      text: `${upstream.sentence} ${cta(upstream.ctaLabel, upstream.path)}`,
+      webhook: { event: n.type, title: s, skill: slug, currentRef: p.currentRef ?? null, releaseRef: p.releaseRef ?? null, bump: p.bump ?? null, url: abs(upstream.path) },
     };
   }
 

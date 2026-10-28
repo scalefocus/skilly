@@ -63,6 +63,10 @@
       "types": "./dist/search-gaps.d.ts",
       "default": "./dist/search-gaps.js"
     },
+    "./upstream-releases": {
+      "types": "./dist/upstream-releases.d.ts",
+      "default": "./dist/upstream-releases.js"
+    },
     "./quality": {
       "types": "./dist/quality-status.d.ts",
       "default": "./dist/quality-status.js"

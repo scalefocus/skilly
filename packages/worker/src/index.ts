@@ -47,6 +47,7 @@ import { sweepAiPrereview, pruneAiPrereviews } from "./scan/aiPrereview.js";
 import { backfillContentDigests } from "./git/contentBackfill.js";
 import { sweepSearchIndex, reindexSearchLanguage } from "./searchIndex.js";
 import { sweepHype, HYPE_SWEEP_INTERVAL_MS } from "./hype.js";
+import { sweepUpstreamReleases, UPSTREAM_RELEASES_INTERVAL_MS } from "./upstreamReleases.js";
 import { sweepSearchGaps, reviewableGapCount, SEARCH_GAP_TICK_MS } from "./searchGaps.js";
 import { mcpRouter } from "./mcp/server.js";
 import { mcpOAuthRouter, mcpHousekeeping } from "./mcp/oauthRouter.js";
@@ -364,6 +365,26 @@ async function leaderLoops(): Promise<void> {
   };
   void hypeSweep();
   setInterval(hypeSweep, Number(process.env.HYPE_SWEEP_INTERVAL_MS ?? HYPE_SWEEP_INTERVAL_MS)); // 3h
+
+  // Upstream release alerts (§63.3): check up to 25 pointer skills a pass for a newer stable upstream
+  // release, and notify their maintainers once per release. Hourly plus once at start; skips while
+  // upstream_releases_enabled is off; never overlaps itself (advisory lock). Not awaited at start —
+  // a pass lists and fetches upstream repositories.
+  let upstreamRunning = false;
+  const upstreamSweep = async () => {
+    if (!isLeader || upstreamRunning) return;
+    upstreamRunning = true;
+    try {
+      const r = await sweepUpstreamReleases(pool);
+      if (r.checked > 0) console.log(JSON.stringify({ level: "info", msg: "upstream release sweep", ...r }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "upstream release sweep failed", err: String(err) }));
+    } finally {
+      upstreamRunning = false;
+    }
+  };
+  void upstreamSweep();
+  setInterval(upstreamSweep, Number(process.env.UPSTREAM_RELEASES_INTERVAL_MS ?? UPSTREAM_RELEASES_INTERVAL_MS)); // 1h
 
   // Content-risk re-scan (§37.5): check every published version at the current ruleset — the
   // backfill after this ships, and again after any ruleset bump. Batched; never overlaps itself;

@@ -66,6 +66,8 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   // Search gaps (§62.9) — the review queue for platform admins, and a restricted skill people missed.
   "search_gaps.ready": { title: "Search gaps to review", tone: "warn" },
   "skill.search_gap_hidden_match": { title: "Search for a restricted skill", tone: "muted" },
+  // §63.5 — the upstream a pointer skill you maintain pins has a newer stable release.
+  "skill.upstream_release": { title: "Upstream release available", tone: "ok" },
 };
 
 /** The subject-line title for a type; a generic fallback so no unknown type ever leaks its key. */

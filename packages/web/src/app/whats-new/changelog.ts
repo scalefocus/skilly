@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.48.0",
+    date: "2026-10-28",
+    summary:
+      "Maintainers of an external skill now hear when its upstream repository or registry publishes a newer stable release that changes the skill's files, and can propose the update from a pre-filled form or skip that release. A moved branch's drift alert gets the same button; admins can switch the checks off under Upstream releases.",
+  },
+  {
     version: "2.47.2",
     date: "2026-10-28",
     summary:
