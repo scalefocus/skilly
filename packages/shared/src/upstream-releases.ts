@@ -92,9 +92,19 @@ export function suggestUpstreamVersion(latest: string | null | undefined, bump: 
   return `${p.major}.${p.minor}.${p.patch + 1}`;
 }
 
+/** Strip leading and trailing slashes. A loop, not a regex: `\/+$` backtracks polynomially on a
+ *  long run of slashes, and folder paths come from proposals (js/polynomial-redos). */
+function trimSlashes(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && s[start] === "/") start++;
+  while (end > start && s[end - 1] === "/") end--;
+  return s.slice(start, end);
+}
+
 /** Folder paths compare without surrounding slashes; null and "" are both the repo root. */
 function sameFolder(a: string | null | undefined, b: string | null | undefined): boolean {
-  const norm = (s: string | null | undefined) => (s ?? "").trim().replace(/^\/+|\/+$/g, "");
+  const norm = (s: string | null | undefined) => trimSlashes((s ?? "").trim());
   return norm(a) === norm(b);
 }
 

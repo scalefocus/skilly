@@ -117,6 +117,9 @@ test("proposalCovers: same source, and a release at or above / the same branch",
   assert.equal(proposalCovers(p("v1.2.9"), target), false);
   assert.equal(proposalCovers(p("main"), target), false);
   assert.equal(proposalCovers(p("v1.3.0", { subdir: "docx" }), target), false);
+  assert.equal(proposalCovers(p("v1.3.0", { subdir: "//pdf//" }), target), true, "surrounding slashes are ignored");
+  assert.equal(proposalCovers(p("v1.3.0", { subdir: `${"/".repeat(100_000)}x` }), target), false, "a long run of slashes is linear");
+  assert.equal(proposalCovers(p("v1.3.0", { subdir: "/" }), { ...target, subdir: null }), true, "a lone slash is the repo root");
   assert.equal(proposalCovers(p("v1.3.0", { originUrl: "https://github.com/fork/skills" }), target), false);
   const branch = { originUrl: "https://github.com/acme/skills", subdir: "pdf", branch: "main" };
   assert.equal(proposalCovers(p("main"), branch), true);
