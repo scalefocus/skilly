@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { toAbsoluteUrl } from "../lib/baseUrl";
 
 // Compact number formatting for display counts (15843 → "15.8K", 2_400_000 → "2.4M").
 // Values under 1000 render verbatim. Used across overview/catalog/usage so large counts
@@ -183,6 +184,8 @@ export function ShareButton({
     }
     target = target ?? (typeof window !== "undefined" ? window.location.href : "");
     if (!target) return;
+    // §33.6: never copy a bare path — the share endpoint returns one when no base URL is configured.
+    if (typeof window !== "undefined") target = toAbsoluteUrl(target, window.location.href);
     if (await copyToClipboard(target)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);

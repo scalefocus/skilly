@@ -4,7 +4,8 @@
 // tokens), then returns to the Administration page. Errors land back on /admin as a query
 // param the Email notifications card displays.
 import { currentAccess } from "../../../../../lib/guard";
-import { EMAIL_OAUTH_STATE_COOKIE as STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE as VERIFIER_COOKIE, finishConnect, webBaseUrl, webGraphMailEnv } from "../../../../../lib/email";
+import { EMAIL_OAUTH_STATE_COOKIE as STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE as VERIFIER_COOKIE, finishConnect, webGraphMailEnv } from "../../../../../lib/email";
+import { webBaseUrl } from "../../../../../lib/baseUrl";
 import { exchangeAuthCode, parseIdTokenClaims } from "@skilly/shared/email";
 
 export const dynamic = "force-dynamic";

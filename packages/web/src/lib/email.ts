@@ -4,6 +4,7 @@
 // never logged, never in audit payloads. SKILLY_SPEC.md §12.
 import { pool } from "./db";
 import { appendAudit } from "./audit";
+import { webBaseUrl } from "./baseUrl";
 import {
   disconnectEmailAccount,
   ensureFreshAccessToken,
@@ -21,10 +22,6 @@ import { renderEmailText, renderWrappedEmailHtml, validateWrapperHtml } from "@s
 /** One-shot cookies binding the connect redirect to this browser (state + PKCE verifier). */
 export const EMAIL_OAUTH_STATE_COOKIE = "skilly.email.state";
 export const EMAIL_OAUTH_VERIFIER_COOKIE = "skilly.email.verifier";
-
-export function webBaseUrl(): string {
-  return process.env.PUBLIC_BASE_URL ?? process.env.SKILLY_REGISTRY_URL ?? process.env.NEXTAUTH_URL ?? "";
-}
 
 /** Graph env for the web tier (connect flow + test send), or null when key/creds absent. */
 export function webGraphMailEnv(): GraphMailEnv | null {

@@ -1534,10 +1534,14 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
     card — the card's identity is carried by the **navy field + cyan diamond + layout**, not the
     typeface. Artwork = the skilly
     wordmark + mark (navy `#082773` field, cyan `#14ABE3` diamond) over the existing title/tagline
-    (`skilly — agent skills registry` and the §14 description). **`metadataBase` derives from
-    `PUBLIC_BASE_URL`** (an og:image URL must be absolute); **unset → the card degrades to a
-    relative reference** (same graceful-degradation posture as the §12 email CTA) — no absolute
-    social preview is emitted, nothing breaks. One card only: OG images are not theme-responsive, so
+    (`skilly — agent skills registry` and the §14 description). **`metadataBase` derives from the
+    web tier's external base URL** (an og:image URL must be absolute) — the first set of
+    **`PUBLIC_BASE_URL` → `SKILLY_REGISTRY_URL` → `NEXTAUTH_URL`**, the same chain the web tier's
+    email links use. The stock compose and Helm web containers receive only the latter two (both set
+    from `PUBLIC_BASE_URL`), so a configured deployment always yields an absolute card — the static
+    card here **and** the per-skill `/share-card/<token>.png` of §33.6, which resolves against the same
+    base. **None set → the card degrades to a relative reference** (same graceful-degradation posture
+    as the §12 email CTA) — no absolute social preview is emitted, nothing breaks. One card only: OG images are not theme-responsive, so
     the single navy treatment serves both light and dark. The generated image route (Next 16 serves
     it extension-less, e.g. `/opengraph-image?<hash>` / `/twitter-image?<hash>`) needs no auth and
     carries no per-skill data; whatever CSP the §22 middleware applies to it is inert for an image
@@ -1745,7 +1749,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `POST /api/skills/:ns/:slug/hype` — place a hype (**201**; **404** invisible / feature off; **409** `{ reason }`), `GET /api/skills/:ns/:slug/hypers` — the in-window hyper list, `GET /api/leaderboard/hyped` — the Hyped-skills board, §50.10.
 - `POST /api/skills/:ns/:slug/feature { featured }` — Featured spotlight toggle (platform-admin, re-verified; **409** at the `max_featured_skills` cap; rejected for a non-installable/archived/**deprecated** skill), §7.
 - `PUT /api/skills/:ns/:slug/deprecation { successor: "<ns>/<slug>" | null, note: string | null }` / `DELETE /api/skills/:ns/:slug/deprecation` — deprecate (or edit the deprecation) / un-deprecate a skill (§45.8). Platform admin or owning-namespace admin; **403** visible-but-unauthorized, **404** invisible, **409** archived skill, **422** ineligible successor (`not_found` · `self` · `archived` · `deprecated` · `audience`) or an over-long note. `GET /api/skills/suggest?scope=successor&for=<ns>/<slug>` — the successor picker (eligible candidates only, §45.3).
-- `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>`; audited `skill.share_link_created`. **404** for a skill the caller cannot see — **archived or not**; the visibility check precedes every status check (§49.4).
+- `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>` (`<base>` per §33.6; the bare path when none is configured); audited `skill.share_link_created`. **404** for a skill the caller cannot see — **archived or not**; the visibility check precedes every status check (§49.4).
 - `GET /api/skills/:ns/:slug/grants` — the skill's shared namespaces (§42): `{ grants: [{ namespaceId, slug, displayName, grantedAt, grantedBy }], canManage, canRevoke: namespaceId[] }` (`canRevoke` = the chips this caller may remove — every chip for a sharer, only their own namespace's chip for a receiving-namespace admin); visible to anyone who can see the skill (archived: owners only), **404** otherwise. `PUT|DELETE /api/skills/:ns/:slug/grants/:namespaceId` — add / revoke a grant, **idempotent**; authority per the §4 matrix (**403** when visible but unauthorized, **404** when invisible); **409** when the skill is `org`-visible, archived, or the target is the owning namespace or `global`; **422** for an unknown namespace. Audited (§11). `GET /api/namespaces/share-targets` — the share picker's directory: every namespace except `global` as `{ id, slug, displayName }`, any signed-in user (names only, never skills).
 
 **Proposals & publishing**
@@ -7024,8 +7028,11 @@ minted by a signed-in user who can see the skill — and keeps every plain URL e
 
 ### 33.6 Signed share links
 - **Minting.** The detail page's **Share** button calls `POST /api/skills/:ns/:slug/share` (§15) and
-  copies the returned `url` — `<PUBLIC_BASE_URL or request origin>/skills/<ns>/<slug>?s=<token>` — to the
-  clipboard (same copy-toast). The caller must be able to **see** the skill (visibility-checked; **404**
+  copies the returned `url` — `<base>/skills/<ns>/<slug>?s=<token>` — to the clipboard (same
+  copy-toast). `<base>` is the web tier's external base URL (§14's chain: `PUBLIC_BASE_URL` →
+  `SKILLY_REGISTRY_URL` → `NEXTAUTH_URL`). With **none** configured the endpoint returns the path
+  alone and the button resolves it against the **browser's current origin** before copying, so **the
+  clipboard always holds an absolute URL** — never a bare `/skills/…` path. The caller must be able to **see** the skill (visibility-checked; **404**
   otherwise). **Every click mints a fresh token** — the raw token is never stored (only its sha256
   hash, like every other token regime here), so the endpoint has nothing to hand back for a "reuse";
   multiple concurrent live links per (user, skill) are normal and harmless, each independently
