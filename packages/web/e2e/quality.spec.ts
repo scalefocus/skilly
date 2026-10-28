@@ -3,8 +3,9 @@
 //   1. the upload response and the review page's Quality section list FS-003 / DS-001 / DS-003
 //      with the rules-only stars;
 //   2. after publish the skill payload carries `quality` + `qualityDetail`, the detail page shows
-//      the Quality card with the findings, and Re-assess (the dev user is a platform admin)
-//      resets and re-scores it;
+//      the Quality card — collapsed by default with the score in its header, opened for one view
+//      by `#quality`, expanded-and-remembered across a reload — with the findings, and Re-assess
+//      (the dev user is a platform admin) resets and re-scores it;
 //   3. the catalog's "Highest quality" sort and the ★ 4+ chip reorder / filter the grid, and the
 //      shield badge sits beside the user rating on the card.
 // AI is not configured in the e2e stack, so every score is rules-only. Self-cleaning.
@@ -12,7 +13,7 @@ import AdmZip from "adm-zip";
 import { randomBytes } from "node:crypto";
 import { test, expect, devSignIn } from "./fixtures";
 import { deleteSkillFully } from "./helpers/skills";
-import { gotoReady, NAV_TIMEOUT } from "./helpers/ready";
+import { gotoReady, reloadReady, NAV_TIMEOUT } from "./helpers/ready";
 
 function bundle(slug: string, md: string, extra: Record<string, string>): Buffer {
   const zip = new AdmZip();
@@ -138,17 +139,45 @@ test.describe.serial("skill quality rating (§41)", () => {
       const v = await (await page.request.get(`/api/skills/global/${badSlug}/versions/1.0.0/quality`)).json();
       expect(v.quality.finalScore).toBe(skill.qualityDetail.finalScore);
 
-      await gotoReady(page, `/skills/global/${badSlug}`);
+      // The card is collapsed by default (§41.7). A `#quality` deep link opens it for that view
+      // only — it must not write the one global preference.
+      const storedOpen = () => page.evaluate(() => localStorage.getItem("skilly.qualityCardOpen"));
+      await gotoReady(page, `/skills/global/${badSlug}#quality`);
       const card = page.getByTestId("quality-card");
+      const toggle = card.getByTestId("quality-toggle");
       await expect(card).toBeVisible({ timeout: NAV_TIMEOUT });
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
       await expect(card.getByTestId("quality-mode")).toHaveText("Rules only");
       await expect(card.locator('[data-rule="FS-003"]').first()).toBeVisible();
       await expect(page.getByTestId("version-quality").first()).toBeVisible();
+      expect(await storedOpen()).toBeNull();
+
+      // Without the fragment: collapsed, the compact score in the header, the buttons still there.
+      await gotoReady(page, `/skills/global/${badSlug}`);
+      await expect(card).toBeVisible({ timeout: NAV_TIMEOUT });
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(card.getByTestId("quality-summary")).toContainText(`${skill.qualityDetail.finalScore} / 100`);
+      await expect(card.getByTestId("quality-reassess")).toBeVisible();
+      await expect(card.locator("#skill-quality-body")).toHaveAttribute("aria-hidden", "true");
+
+      // Expanding remembers it, and the choice survives a reload.
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(card.getByTestId("quality-summary")).toHaveCount(0);
+      await expect(card.locator('[data-rule="FS-003"]').first()).toBeVisible();
+      expect(await storedOpen()).toBe("1");
+      await reloadReady(page);
+      await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: NAV_TIMEOUT });
 
       // Re-assess: confirm dialog → fresh score, same value (nothing changed), audit on the server.
       page.once("dialog", (d) => d.accept());
       await card.getByTestId("quality-reassess").click();
       await expect(card.getByTestId("quality-score")).toContainText(`${skill.qualityDetail.finalScore} / 100`, { timeout: NAV_TIMEOUT });
+
+      // Collapsing clears the preference.
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(await storedOpen()).toBeNull();
 
       // ── 3. Catalog: a good skill outranks the bad one under "Highest quality"; ★ 4+ hides the bad one. ──
       await publish(page, goodSlug, GOOD_MD, { "scripts/run.py": "import json\n" });

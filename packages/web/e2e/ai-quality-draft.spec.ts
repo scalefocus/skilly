@@ -139,6 +139,8 @@ test("draft improvements with a branded AI: plan → generate → review → pro
     await expect(card).toBeVisible({ timeout: NAV_TIMEOUT });
     const btn = card.getByTestId("quality-ai-draft");
     await expect(btn).toHaveText(/Draft improvements with Aria/);
+    // §41.7: the card loads collapsed; the action sits in its header and works without expanding.
+    await expect(card.getByTestId("quality-toggle")).toHaveAttribute("aria-expanded", "false");
 
     // ── 2. Plan → generate → results. ──
     await clickAndAwait(page, () => btn.click(), `/quality/draft/plan`);

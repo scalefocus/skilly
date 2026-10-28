@@ -15,10 +15,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "2.47.1",
+    version: "2.47.2",
     date: "2026-10-28",
     summary:
       "Share on a skill's page now copies the whole link, host included, instead of just the /skills/… path, so it works when pasted into Teams, Slack or Outlook. Those shared links also show their preview card image again.",
+  },
+  {
+    version: "2.47.1",
+    date: "2026-10-28",
+    summary:
+      "The Quality card on a skill page now starts collapsed, with the score shown in its header and the Draft improvements and Re-assess buttons still to hand. Expand it once and your browser keeps it open on every skill page; links from a low-quality notification open it just for that visit.",
   },
   {
     version: "2.47.0",
