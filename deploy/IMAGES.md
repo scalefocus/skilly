@@ -37,6 +37,11 @@ Resolved 2026-10-16 from Docker Hub.
 > `CI_MINIO_IMAGE` override for its e2e stack, and the same mirror serves production. When a mirror
 > re-tags the image, the **digest stays the same** as long as the image is copied unmodified
 > (`crane copy` / `skopeo copy --all`), so the pin keeps working.
+>
+> GitHub CI's opt-in `e2e` job (`.github/workflows/ci.yml`) runs on a fresh runner with nothing
+> cached, so it uses Chainguard's source-built `cgr.dev/chainguard/minio` (anonymously pullable,
+> pinned by digest in the workflow) and creates its bucket with the runner's AWS CLI. That image is
+> CI-only; the deploy pins above are unchanged.
 
 ## Bump procedure
 
