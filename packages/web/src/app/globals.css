@@ -1029,9 +1029,16 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
 .quality-dim-fill { display: block; height: 100%; background: var(--accent-2); border-radius: 999px; transition: width 0.3s; }
 .quality-dim-n { font-size: 10.5px; color: var(--muted); text-align: right; }
 .quality-dim-remark { grid-column: 1 / -1; font-size: 12px; margin-top: -4px; }
+/* The skill page's collapsible Quality card: the compact score shown in the header while collapsed,
+   and the Draft / Re-assess buttons beside the toggle. On a phone the buttons drop to their own
+   line under the title (the chevron stays on the title line) so the toggle keeps its width. */
+.quality-card-summary { display: inline-flex; align-items: center; gap: 5px; }
+.quality-card-actions { gap: 8px; }
 @media (max-width: 640px) {
   .quality-dim { grid-template-columns: 1fr 32px; }
   .quality-dim-label { grid-column: 1 / -1; }
+  .quality-card-headrow { flex-wrap: wrap; }
+  .quality-card-actions { order: 3; flex-basis: 100%; flex-wrap: wrap; padding: 0 0 14px 22px; }
 }
 
 /* Sort toggle (catalog) */

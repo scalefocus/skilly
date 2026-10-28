@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.47.1",
+    date: "2026-10-28",
+    summary:
+      "The Quality card on a skill page now starts collapsed, with the score shown in its header and the Draft improvements and Re-assess buttons still to hand. Expand it once and your browser keeps it open on every skill page; links from a low-quality notification open it just for that visit.",
+  },
+  {
     version: "2.47.0",
     date: "2026-10-28",
     summary:

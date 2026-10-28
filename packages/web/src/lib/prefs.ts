@@ -44,6 +44,9 @@ export const adminCardPrefKey = (id: string): string => `skilly.admin.card.${id}
 // (including unset) = collapsed, the default. Only the open/closed choice is stored — the type
 // selection itself lasts one visit.
 export const PREF_NOTIFICATIONS_TYPES_OPEN = "skilly.notifications.types-open";
+// Skill page → the collapsible Quality card (§41.7): ONE key for every skill's card. Expanding
+// writes "1", collapsing removes it; anything else (including unset) = collapsed, the default.
+export const PREF_QUALITY_CARD_OPEN = "skilly.qualityCardOpen";
 
 export function removePref(key: string): void {
   if (typeof window === "undefined") return;
