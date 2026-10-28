@@ -8,7 +8,7 @@ import AdmZip from "adm-zip";
 import {
   canReviewNamespace, isSkillVisible, latestArtifactFindings, loadVersionQuality, bundleContentCap, diffLines,
   planDraft, buildQualityDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftReasonText, draftWhatChangedNote,
-  buildDraftNotePrompt, validateDraftNote, parseFrontmatter, decodeScanText, resolveLatest,
+  buildDraftNotePrompt, validateDraftNote, parseFrontmatter, decodeScanText, resolveLatest, isDraftSeed,
   DRAFT_AI_FEATURE, DRAFT_NOTE_AI_FEATURE, DRAFT_MAX_TOKENS, DRAFT_NOTE_MAX_TOKENS, DRAFT_CONCURRENCY, DRAFT_HEARTBEAT_MS, DRAFT_TOKEN_TTL_MS,
   DRAFT_SUMMARY_MAX, DRAFT_ADDRESSED_MAX,
   type EffectiveAccess, type BundleEntry, type ScanFinding, type QualityVerdict, type DraftPlanFile, type DraftFileResult,
@@ -143,10 +143,29 @@ async function readBundle(ctx: DraftContext, store: ArtifactStore): Promise<Bund
   return extractBundle(await store.get(ctx.artifactKey), undefined, bundleContentCap(await getMaxBundleBytes()));
 }
 
-export async function draftPlan(ctx: DraftContext, deps: { store?: ArtifactStore } = {}): Promise<{ files: BundleEntry[]; plan: PlanFileView[] }> {
+/** A fresh §44.3 pick seed: 16 random bytes, base64url. */
+export const newDraftSeed = () => randomBytes(16).toString("base64url");
+
+/** The plan for `seed` — a fresh one when absent; the result names the seed it used. */
+export async function draftPlan(ctx: DraftContext, deps: { store?: ArtifactStore; seed?: string } = {}): Promise<{ files: BundleEntry[]; plan: PlanFileView[]; seed: string }> {
   const files = await readBundle(ctx, deps.store ?? s3ArtifactStore());
-  const plan = planDraft({ files, findings: ctx.findings }).map((p) => (p.reason ? { ...p, reasonText: draftReasonText(p.reason) } : p));
-  return { files, plan };
+  const seed = deps.seed ?? newDraftSeed();
+  const plan = planDraft({ files, findings: ctx.findings, seed }).map((p) => (p.reason ? { ...p, reasonText: draftReasonText(p.reason) } : p));
+  return { files, plan, seed };
+}
+
+/**
+ * The run's request body (§44.5): `baseSemver` must still be the latest stable (409 `base_changed`)
+ * and `seed`, when present, well-formed (400).
+ */
+export function parseRunBody(body: unknown, ctx: DraftContext): { ok: true; seed?: string } | { ok: false; res: Response } {
+  const b = body && typeof body === "object" ? (body as { baseSemver?: unknown; seed?: unknown }) : null;
+  if (!b || b.baseSemver !== ctx.semver) {
+    return { ok: false, res: Response.json({ error: "base_changed", message: `the latest version is now v${ctx.semver} — reload the page`, baseSemver: ctx.semver }, { status: 409 }) };
+  }
+  if (b.seed === undefined) return { ok: true };
+  if (!isDraftSeed(b.seed)) return { ok: false, res: Response.json({ error: "invalid seed" }, { status: 400 }) };
+  return { ok: true, seed: b.seed };
 }
 
 // ── Tokens (§44.5 / §44.7) ──────────────────────────────────────────────────────────────────────
@@ -234,7 +253,7 @@ export function aiDraftModelFromToken(token: unknown, expect: { userId: string; 
 // ── The run (§44.5) ─────────────────────────────────────────────────────────────────────────────
 
 export type DraftEvent =
-  | { type: "plan"; baseSemver: string; files: PlanFileView[] }
+  | { type: "plan"; baseSemver: string; seed: string; files: PlanFileView[] }
   | { type: "start"; path: string }
   | {
       type: "file";
@@ -263,7 +282,8 @@ function failReason(err: unknown, capped: boolean): string {
 }
 
 /**
- * Run one draft: emit the plan, the deterministic deletes, then one AI call per queued file (at
+ * Run one draft: emit the plan (for `opts.seed`, the plan route's, so the previewed files are the
+ * ones sent), the deterministic deletes, then one AI call per queued file (at
  * most DRAFT_CONCURRENCY at a time) as each settles, a heartbeat every 15 s, and `done` with the
  * run token. Ends early (unfinished files `timed_out` / `cancelled`) at the run cap or when
  * `signal` aborts. Audits `skill.ai_draft_generated` once, however it ends.
@@ -272,10 +292,10 @@ export async function runDraft(
   access: EffectiveAccess & { userId: string },
   ctx: DraftContext,
   emit: (e: DraftEvent) => void,
-  opts: { signal?: AbortSignal; store?: ArtifactStore; capMs?: number; heartbeatMs?: number } = {},
+  opts: { signal?: AbortSignal; store?: ArtifactStore; capMs?: number; heartbeatMs?: number; seed?: string } = {},
 ): Promise<void> {
-  const { files, plan } = await draftPlan(ctx, { store: opts.store });
-  emit({ type: "plan", baseSemver: ctx.semver, files: plan });
+  const { files, plan, seed } = await draftPlan(ctx, { store: opts.store, seed: opts.seed });
+  emit({ type: "plan", baseSemver: ctx.semver, seed, files: plan });
   // §40.15: the admin-tunable cap, read once as the run starts; a run in progress keeps it.
   const capMs = opts.capMs ?? (await aiDraftRunCapMs());
   const heartbeat = setInterval(() => emit({ type: "heartbeat" }), opts.heartbeatMs ?? DRAFT_HEARTBEAT_MS);

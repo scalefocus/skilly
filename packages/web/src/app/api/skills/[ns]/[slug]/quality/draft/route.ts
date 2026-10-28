@@ -3,7 +3,7 @@
 // stored; closing the connection cancels the files not yet finished. Effective maintainers and
 // platform admins only; 10 runs per user per 10 minutes.
 import { currentAccess } from "../../../../../../../lib/guard";
-import { loadDraftContext, runDraft, type DraftEvent } from "../../../../../../../lib/qualityDraft";
+import { loadDraftContext, parseRunBody, runDraft, type DraftEvent } from "../../../../../../../lib/qualityDraft";
 import { enforceRateLimit } from "../../../../../../../lib/ratelimit";
 import { DRAFT_RATE_LIMIT, DRAFT_RATE_WINDOW_MS } from "@skilly/shared";
 
@@ -17,10 +17,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
   const { ns, slug } = await ctx.params;
   const r = await loadDraftContext(access, ns, slug);
   if (!r.ok) return Response.json({ error: r.status === 409 ? "ai_draft_unavailable" : r.error, reason: r.reason ?? null, message: r.error }, { status: r.status });
-  const body = (await req.json().catch(() => null)) as { baseSemver?: unknown } | null;
-  if (!body || body.baseSemver !== r.ctx.semver) {
-    return Response.json({ error: "base_changed", message: `the latest version is now v${r.ctx.semver} — reload the page`, baseSemver: r.ctx.semver }, { status: 409 });
-  }
+  const body = parseRunBody(await req.json().catch(() => null), r.ctx);
+  if (!body.ok) return body.res;
   const limited = enforceRateLimit("quality-draft", access.userId, DRAFT_RATE_LIMIT, DRAFT_RATE_WINDOW_MS);
   if (limited) return limited;
 
@@ -37,7 +35,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
           open = false;
         }
       };
-      runDraft(user, r.ctx, emit, { signal: req.signal })
+      runDraft(user, r.ctx, emit, { signal: req.signal, seed: body.seed })
         .catch((err) => {
           console.error(JSON.stringify({ level: "error", msg: "ai draft run failed", err: String((err as Error)?.message ?? err) }));
           emit({ type: "file", path: "", status: "failed", summary: "", addressed: [], reason: "run_failed", reasonText: "the draft could not be completed" });

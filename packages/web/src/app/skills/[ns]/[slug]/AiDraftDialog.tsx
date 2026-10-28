@@ -61,6 +61,8 @@ export function AiDraftDialog({
   const [phase, setPhase] = useState<Phase>("loading");
   const [plan, setPlan] = useState<PlanFile[]>([]);
   const [baseSemver, setBaseSemver] = useState(semver);
+  // The plan's §44.3 pick seed: the run reuses it so the files listed are the files sent.
+  const [seed, setSeed] = useState<string | undefined>(undefined);
   const [results, setResults] = useState<Map<string, FileResult>>(new Map());
   const [working, setWorking] = useState<Set<string>>(new Set());
   const [include, setInclude] = useState<Set<string>>(new Set());
@@ -81,6 +83,7 @@ export function AiDraftDialog({
         if (!r.ok) throw new Error(j.message ?? j.error ?? `HTTP ${r.status}`);
         setPlan(j.files ?? []);
         setBaseSemver(j.baseSemver ?? semver);
+        setSeed(typeof j.seed === "string" ? j.seed : undefined);
         setPhase("plan");
       })
       .catch((e) => {
@@ -114,7 +117,7 @@ export function AiDraftDialog({
       const r = await fetch(`${base}/quality/draft`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ baseSemver }),
+        body: JSON.stringify({ baseSemver, seed }),
         signal: ctrl.signal,
       });
       if (!r.ok || !r.body) {
@@ -165,7 +168,7 @@ export function AiDraftDialog({
     } finally {
       abort.current = null;
     }
-  }, [base, baseSemver]);
+  }, [base, baseSemver, seed]);
 
   const kept = [...results.values()].filter((f) => (f.status === "modified" || f.status === "deleted") && include.has(f.path));
   const requests = done?.calls ?? [...results.values()].filter((f) => f.status !== "deleted" || f.summary !== "Removed OS / tooling junk").length;

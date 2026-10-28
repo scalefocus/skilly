@@ -39,6 +39,12 @@ export const DRAFT_RATE_WINDOW_MS = 10 * 60_000;
 export const DRAFT_TOKEN_TTL_MS = 2 * 60 * 60_000;
 /** The §6 secret scanner's name — a file it flagged is never sent. */
 export const DRAFT_SECRET_SCANNER = "secret-scan";
+/** A well-formed §44.3 pick seed (the plan route issues 16 random bytes, base64url). */
+export const DRAFT_SEED_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isDraftSeed(v: unknown): v is string {
+  return typeof v === "string" && DRAFT_SEED_RE.test(v);
+}
 
 /** Why the action is shown disabled (§44.2). */
 export type DraftUnavailableReason = "quality_pending" | "nothing_to_draft" | "secret_in_skill_md";
@@ -56,7 +62,7 @@ export const DRAFT_REASON_TEXT: Record<string, string> = {
   secret: "contains a flagged secret — fix by hand",
   binary: "a binary file — fix by hand",
   too_large: `larger than ${DRAFT_FILE_MAX_CHARS.toLocaleString("en-US")} characters`,
-  over_limit: `over the ${DRAFT_MAX_FILES}-file limit`,
+  over_limit: `not picked this time — at most ${DRAFT_MAX_FILES} files per draft; run again to draft others`,
   invalid_response: "the answer was not usable",
   ai_invalid_json: "the answer was not valid JSON",
   skill_md_delete: "SKILL.md can't be removed",
@@ -114,11 +120,45 @@ export interface DraftPlanFile {
 }
 
 /**
+ * A seeded PRNG in [0, 1): cyrb128 hashes the seed into sfc32's state. The §44.3 pick needs
+ * fairness and reproducibility, not secrecy.
+ */
+function seededRandom(seed: string): () => number {
+  let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
+  for (let i = 0; i < seed.length; i++) {
+    const k = seed.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+  }
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+  h1 ^= h2 ^ h3 ^ h4;
+  let a = h1 >>> 0, b = (h2 ^ h1) >>> 0, c = (h3 ^ h1) >>> 0, d = (h4 ^ h1) >>> 0;
+  return () => {
+    let t = (a + b) | 0;
+    a = b ^ (b >>> 9);
+    b = (c + (c << 3)) | 0;
+    c = (c << 21) | (c >>> 11);
+    d = (d + 1) | 0;
+    t = (t + d) | 0;
+    c = (c + t) | 0;
+    return (t >>> 0) / 4294967296;
+  };
+}
+
+/**
  * The §44.3 file plan: SKILL.md ∪ every path with a quality finding, classified (OS junk → delete,
  * directory / secret / binary / too large → skipped, else queued), ordered SKILL.md first then by
- * worst level then path, with queued files beyond DRAFT_MAX_FILES skipped `over_limit`.
+ * worst level then path. At most DRAFT_MAX_FILES stay queued: SKILL.md keeps its slot, the others
+ * fill the rest tier by tier (error → warn → info) with a seeded random pick inside the first tier
+ * that does not fit whole; the queued files not picked are skipped `over_limit`. The same seed
+ * always gives the same plan.
  */
-export function planDraft(input: { files: BundleEntry[]; findings: QualityFindingLike[] }): DraftPlanFile[] {
+export function planDraft(input: { files: BundleEntry[]; findings: QualityFindingLike[]; seed?: string }): DraftPlanFile[] {
   const fileMap = new Map(input.files.map((f) => [f.path, f]));
   const isDir = (p: string) => p.endsWith("/") || (!fileMap.has(p) && input.files.some((f) => f.path.startsWith(`${p}/`)));
   const secretPaths = new Set(input.findings.filter((f) => f.scanner === DRAFT_SECRET_SCANNER && f.path).map((f) => f.path!));
@@ -162,11 +202,30 @@ export function planDraft(input: { files: BundleEntry[]; findings: QualityFindin
     const lb = b.worst ? LEVEL_RANK[b.worst] : 3;
     return la - lb || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   });
-  let queued = 0;
-  for (const p of out) {
-    if (p.status !== "queued") continue;
-    queued++;
-    if (queued > DRAFT_MAX_FILES) {
+  const queued = out.filter((p) => p.status === "queued");
+  const others = queued.filter((p) => p.path !== "SKILL.md");
+  const slots = DRAFT_MAX_FILES - (queued.length - others.length);
+  if (others.length > slots) {
+    const picked = new Set<DraftPlanFile>();
+    // `out` is sorted by level then path, so each tier is in path order before the shuffle.
+    for (const rank of [0, 1, 2, 3]) {
+      const tier = others.filter((p) => (p.worst ? LEVEL_RANK[p.worst] : 3) === rank);
+      const room = slots - picked.size;
+      if (tier.length <= room) {
+        for (const p of tier) picked.add(p);
+        continue;
+      }
+      // The first tier that does not fit whole: a partial Fisher–Yates draw of `room` files.
+      const rand = seededRandom(input.seed ?? "");
+      for (let i = 0; i < room; i++) {
+        const j = i + Math.floor(rand() * (tier.length - i));
+        [tier[i], tier[j]] = [tier[j]!, tier[i]!];
+        picked.add(tier[i]!);
+      }
+      break;
+    }
+    for (const p of others) {
+      if (picked.has(p)) continue;
       p.status = "skipped";
       p.reason = "over_limit";
     }
