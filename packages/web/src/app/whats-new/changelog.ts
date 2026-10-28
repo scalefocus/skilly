@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.47.1",
+    date: "2026-10-28",
+    summary:
+      "Share on a skill's page now copies the whole link, host included, instead of just the /skills/… path, so it works when pasted into Teams, Slack or Outlook. Those shared links also show their preview card image again.",
+  },
+  {
     version: "2.47.0",
     date: "2026-10-28",
     summary:

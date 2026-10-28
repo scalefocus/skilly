@@ -10,6 +10,7 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { withSystemLog } from "../../../../../../lib/apiLog";
 import { mintShareLink } from "../../../../../../lib/shareLinks";
+import { webBaseUrl } from "../../../../../../lib/baseUrl";
 import { isSkillVisible } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,7 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/share", async functio
 
   const { token: raw, expiresAt } = await mintShareLink(access.userId, skill);
 
-  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? "";
-  return Response.json({ url: `${base}/skills/${ns}/${slug}?s=${raw}`, expiresAt: expiresAt.toISOString() }, { status: 201 });
+  // §33.6: the external base URL; none configured → the bare path, which the Share button resolves
+  // against the browser's origin before copying.
+  return Response.json({ url: `${webBaseUrl()}/skills/${ns}/${slug}?s=${raw}`, expiresAt: expiresAt.toISOString() }, { status: 201 });
 });

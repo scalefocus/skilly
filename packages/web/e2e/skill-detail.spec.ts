@@ -96,4 +96,17 @@ test.describe("skill detail surfaces (@global/pdf-tools)", () => {
     await expect(row.getByText("vs v1.0.0")).toBeVisible();
     await expect(row.getByText("SKILL.md").first()).toBeVisible();
   });
+
+  // §33.6: the clipboard gets the whole signed link, host included — never a bare /skills/… path.
+  // Not self-cleaning: the minted link lingers until its 7-day expiry (it unlocks unfurl metadata
+  // only), and the first mint earns Word of Mouth, a one-time badge.
+  test("Share copies the whole signed link, host included", async ({ page }) => {
+    await devSignIn(page);
+    await gotoLoaded(page, SKILL, DETAIL);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await clickAndAwait(page, () => page.getByRole("button", { name: "Share", exact: true }).click(), `${API}/share`, { method: "POST" });
+    await expect(page.getByText("✓ Link copied")).toBeVisible();
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).toMatch(/^https?:\/\/[^/]+\/skills\/global\/pdf-tools\?s=[\w-]+$/);
+  });
 });

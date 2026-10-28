@@ -5,7 +5,8 @@
 // reusing their own SSO session. This is NOT a sign-in: no skilly session, no roles (§5).
 import { randomBytes } from "node:crypto";
 import { currentAccess } from "../../../../../lib/guard";
-import { EMAIL_OAUTH_STATE_COOKIE as STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE as VERIFIER_COOKIE, webBaseUrl, webGraphMailEnv } from "../../../../../lib/email";
+import { EMAIL_OAUTH_STATE_COOKIE as STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE as VERIFIER_COOKIE, webGraphMailEnv } from "../../../../../lib/email";
+import { webBaseUrl } from "../../../../../lib/baseUrl";
 import { buildAuthorizeUrl, createPkcePair } from "@skilly/shared/email";
 
 export const dynamic = "force-dynamic";

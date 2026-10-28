@@ -14,10 +14,11 @@ export const SITE_DESCRIPTION =
   "Self-hosted registry for governing SKILL.md agent skills, anchored in Microsoft Entra ID.";
 
 /**
- * Parse PUBLIC_BASE_URL into a `metadataBase` URL. Unset / blank / unparseable → undefined: Next
- * then emits relative image refs and nothing breaks (graceful degradation, mirroring the §12
- * email-CTA "no PUBLIC_BASE_URL → degrade" posture). An og:image URL must be absolute for external
- * unfurlers, so a configured PUBLIC_BASE_URL is what makes the social preview fully resolvable.
+ * Parse the external base URL (lib/baseUrl.ts `webBaseUrl`) into a `metadataBase` URL. Unset /
+ * blank / unparseable → undefined: Next then emits relative image refs and nothing breaks
+ * (graceful degradation, mirroring the §12 email-CTA "no base URL → degrade" posture). An og:image
+ * URL must be absolute for external unfurlers, so a configured base URL is what makes the social
+ * preview fully resolvable.
  */
 export function parseBaseUrl(raw: string | undefined): URL | undefined {
   if (!raw) return undefined;
@@ -31,9 +32,9 @@ export function parseBaseUrl(raw: string | undefined): URL | undefined {
 }
 
 /** Build the root-layout metadata from the environment. Pure (no I/O) for testability. */
-export function buildMetadata(publicBaseUrl: string | undefined): Metadata {
+export function buildMetadata(baseUrl: string | undefined): Metadata {
   return {
-    metadataBase: parseBaseUrl(publicBaseUrl),
+    metadataBase: parseBaseUrl(baseUrl),
     title: SITE_TITLE,
     description: SITE_DESCRIPTION,
     openGraph: {

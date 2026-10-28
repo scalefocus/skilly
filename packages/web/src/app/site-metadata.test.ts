@@ -16,13 +16,13 @@ test("parseBaseUrl: degrades to undefined on unset/blank/invalid — never throw
   assert.equal(parseBaseUrl("not a url"), undefined);
 });
 
-test("buildMetadata: sets metadataBase from PUBLIC_BASE_URL (so og:image is absolute)", () => {
+test("buildMetadata: sets metadataBase from the base URL (so og:image is absolute)", () => {
   const m = buildMetadata("https://skilly.example.com");
   assert.ok(m.metadataBase instanceof URL);
   assert.equal((m.metadataBase as URL).href, "https://skilly.example.com/");
 });
 
-test("buildMetadata: undefined metadataBase when PUBLIC_BASE_URL is unset (graceful degradation)", () => {
+test("buildMetadata: undefined metadataBase when no base URL is set (graceful degradation)", () => {
   assert.equal(buildMetadata(undefined).metadataBase, undefined);
   assert.equal(buildMetadata("").metadataBase, undefined);
 });
