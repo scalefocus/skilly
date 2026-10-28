@@ -6,7 +6,8 @@
 // an explicit maintainer and a platform admin), the file plan (OS junk → delete, a flagged secret
 // → skipped), the streamed run (plan → file events → done; one failing file leaves the others; a
 // file with a secret is never sent; one ai_usage row per call under the requester; the audit row),
-// the run cap (timed_out), assemble (the changes vouched for by the run token become a staged
+// the run cap (timed_out), the random pick (§44.3: a fresh seed per plan, the run with the plan's
+// seed sends exactly its queued files, the run body's seed checks), assemble (the changes vouched for by the run token become a staged
 // bundle through the upload pipeline; a tampered change or another user's token is refused; the
 // AI-written "What changed" note and its per-file fallback, §44.7), the
 // proposal provenance (ai_draft_model only with a matching aiDraftToken), the My Skills flags and
@@ -132,39 +133,44 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     const en = await ai.setAiEnabled(true, maintainer);
     assert.ok(!ai.isAiApiError(en), JSON.stringify(en));
 
+    // A scanned hosted skill at v1.0.0 with `maintainer` as its explicit maintainer.
+    const addHostedSkill = async (skillSlug: string, files: Record<string, string>) => {
+      const zip = new AdmZip();
+      for (const [p, c] of Object.entries(files)) zip.addFile(p, Buffer.from(c));
+      const artifactKey = `${tag}/${skillSlug}/v1.bundle`;
+      mem.set(artifactKey, zip.toBuffer());
+      const entries = Object.entries(files).map(([path, c]) => ({ path, bytes: new TextEncoder().encode(c) }));
+      const findings = await shared.runScanners(entries, shared.PURE_SCANNERS);
+      await pool.query(
+        `insert into scan_reports (subject_type, subject_id, scanner, findings, severity, status) values ('artifact', $1, 'pipeline', $2::jsonb, 'info', 'scanned')`,
+        [artifactKey, JSON.stringify(findings)],
+      );
+      const skillId = (await pool.query<{ id: string }>(
+        `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, status)
+         values ($1, $2, $2, 'd', 'generic', 'hosted', 'org', 'active') returning id`,
+        [nsId, skillSlug],
+      )).rows[0]!.id;
+      skillIds.push(skillId);
+      await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1, $2)`, [skillId, maintainer]);
+      const versionId = (await pool.query<{ id: string }>(
+        `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by, git_published)
+         values ($1, '1.0.0', false, 'active', $2, 'sha', $3, true) returning id`,
+        [skillId, artifactKey, maintainer],
+      )).rows[0]!.id;
+      await shared.upsertQualityRules(pool, { versionId, skillId, findings, aiOn: false });
+      await shared.refreshSkillQuality(pool, skillId);
+      return { skillId, findings };
+    };
+
     // A hosted skill whose latest version has quality findings in four files, a junk file and a secret.
-    const files: Record<string, string> = {
+    const { skillId, findings } = await addHostedSkill(slug, {
       "SKILL.md": SKILL_MD(slug),
       "README.md": "# readme\n",
       "references/notes.md": "notes\n",
       "node_modules/x/index.js": "module.exports = 1;\n",
       "scripts/leak.py": `TOKEN = "${SECRET}"\nprint(open("/Users/bob/data.txt").read())\n`,
-    };
-    const zip = new AdmZip();
-    for (const [p, c] of Object.entries(files)) zip.addFile(p, Buffer.from(c));
-    const artifactKey = `${tag}/v1.bundle`;
-    mem.set(artifactKey, zip.toBuffer());
-    const entries = Object.entries(files).map(([path, c]) => ({ path, bytes: new TextEncoder().encode(c) }));
-    const findings = await shared.runScanners(entries, shared.PURE_SCANNERS);
+    });
     assert.ok(findings.some((f) => f.scanner === "secret-scan" && f.path === "scripts/leak.py"), "the fixture's secret is flagged");
-    await pool.query(
-      `insert into scan_reports (subject_type, subject_id, scanner, findings, severity, status) values ('artifact', $1, 'pipeline', $2::jsonb, 'info', 'scanned')`,
-      [artifactKey, JSON.stringify(findings)],
-    );
-    const skillId = (await pool.query<{ id: string }>(
-      `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility, status)
-       values ($1, $2, $2, 'd', 'generic', 'hosted', 'org', 'active') returning id`,
-      [nsId, slug],
-    )).rows[0]!.id;
-    skillIds.push(skillId);
-    await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1, $2)`, [skillId, maintainer]);
-    const versionId = (await pool.query<{ id: string }>(
-      `insert into skill_versions (skill_id, semver, is_prerelease, status, artifact_object_key, artifact_sha256, created_by, git_published)
-       values ($1, '1.0.0', false, 'active', $2, 'sha', $3, true) returning id`,
-      [skillId, artifactKey, maintainer],
-    )).rows[0]!.id;
-    await shared.upsertQualityRules(pool, { versionId, skillId, findings, aiOn: false });
-    await shared.refreshSkillQuality(pool, skillId);
 
     // A pointer skill: hidden (409 not_hosted).
     const pointerId = (await pool.query<{ id: string }>(
@@ -297,6 +303,44 @@ test("AI quality drafts: eligibility, plan, run, cap, assemble, provenance, My S
     assert.equal(detail?.aiDraftModel, "stub-model");
     const created = await pool.query<{ after: Record<string, unknown> }>(`select after from audit_log where action = 'proposal.created' and target_id = $1`, [proposalId]);
     assert.equal(created.rows[0]!.after.aiDraftModel, "stub-model");
+
+    // ── The random pick (§44.3): 30 flagged files, so SKILL.md plus a random 24 ──
+    const wideSlug = `${tag}-wide`;
+    const wideFiles: Record<string, string> = { "SKILL.md": SKILL_MD(wideSlug) };
+    for (let i = 0; i < 30; i++) wideFiles[`references/ref-${String(i).padStart(2, "0")}.md`] = `# Reference ${i}\n`;
+    await addHostedSkill(wideSlug, wideFiles);
+    const wr = await draft.loadDraftContext(asMaintainer, `${tag}-ns`, wideSlug);
+    assert.ok(wr.ok, JSON.stringify(wr));
+    const wctx = wr.ok ? wr.ctx : (null as never);
+    const preview = await draft.draftPlan(wctx, { store });
+    assert.ok(shared.isDraftSeed(preview.seed), preview.seed);
+    assert.notEqual((await draft.draftPlan(wctx, { store })).seed, preview.seed, "every plan draws a fresh seed");
+    const previewQueued = preview.plan.filter((p) => p.status === "queued").map((p) => p.path).sort();
+    assert.equal(previewQueued.length, 25);
+    assert.ok(previewQueued.includes("SKILL.md"));
+    assert.equal(preview.plan.filter((p) => p.reason === "over_limit").length, 6);
+    // The run's body: the plan's seed passes through; absent is fine; malformed is 400; a stale base 409.
+    const withSeed = draft.parseRunBody({ baseSemver: "1.0.0", seed: preview.seed }, wctx);
+    assert.ok(withSeed.ok && withSeed.seed === preview.seed);
+    const noSeed = draft.parseRunBody({ baseSemver: "1.0.0" }, wctx);
+    assert.ok(noSeed.ok && noSeed.seed === undefined);
+    for (const seed of ["", "x".repeat(65), "a b", "../x", 42, null]) {
+      const bad = draft.parseRunBody({ baseSemver: "1.0.0", seed }, wctx);
+      assert.ok(!bad.ok && bad.res.status === 400, JSON.stringify(seed));
+    }
+    const staleBase = draft.parseRunBody({ baseSemver: "0.9.0", seed: preview.seed }, wctx);
+    assert.ok(!staleBase.ok && staleBase.res.status === 409);
+    // A run with the plan's seed sends exactly the previewed files.
+    stub.state.bodies.length = 0;
+    const wideEvents: Array<Record<string, unknown>> = [];
+    await draft.runDraft({ ...(asMaintainer as object), userId: maintainer } as never, wctx, (e) => wideEvents.push(e as never), { store, heartbeatMs: 10_000, seed: preview.seed });
+    assert.equal(wideEvents[0]!.type, "plan");
+    assert.equal(wideEvents[0]!.seed, preview.seed);
+    const sentPaths = stub.state.bodies
+      .map((b) => /^## File: (.+)$/m.exec(String((JSON.parse(b) as { messages: { content: string }[] }).messages[0]?.content ?? ""))?.[1])
+      .sort();
+    assert.deepEqual(sentPaths, previewQueued);
+    assert.equal(wideEvents.at(-1)!.outcome, "complete");
 
     // ── The run cap ──
     stub.state.mode = "slow";

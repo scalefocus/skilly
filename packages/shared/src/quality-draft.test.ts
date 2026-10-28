@@ -1,11 +1,11 @@
 // AI-drafted quality improvements — the pure parts (SKILLY_SPEC.md §44.12 unit): eligibility
-// reasons, the file plan, the prompt's egress, response validation, line endings, and the "What
+// reasons, the file plan and its seeded random pick (§44.3), the prompt's egress, response validation, line endings, and the "What
 // changed" note (§44.7: the note prompt's egress, its validation and the per-file fallback).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   planDraft, buildQualityDraftPrompt, validateDraftResponse, draftKnownIds, draftUnavailableReason, draftWhatChangedNote, matchLineEndings,
-  buildDraftNotePrompt, validateDraftNote,
+  buildDraftNotePrompt, validateDraftNote, draftReasonText, isDraftSeed,
   DRAFT_MAX_FILES, DRAFT_FILE_MAX_CHARS, DRAFT_OUTPUT_MAX_CHARS, DRAFT_PATHS_MAX, DRAFT_NOTE_MAX_CHARS,
 } from "./quality-draft.js";
 import { QUALITY_RULESET_VERSION, qualityRuleHint, type QualityFindingLike, type QualityVerdict } from "./quality-status.js";
@@ -101,14 +101,96 @@ test("planDraft: SKILL.md first, then by worst level, then path; queued beyond 2
     files.push(file(p, "x"));
     findings.push(q("RF-002", p, i === 29 ? "error" : "info"));
   }
-  const plan = planDraft({ files, findings });
+  const plan = planDraft({ files, findings, seed: "s1" });
   assert.equal(plan[0]!.path, "SKILL.md");
   assert.equal(plan[1]!.path, "references/f29.md"); // the error-level file jumps the queue
-  assert.equal(plan[2]!.path, "references/f00.md");
+  assert.equal(plan[2]!.path, "references/f00.md"); // the display order ignores the pick
+  assert.deepEqual(plan.slice(2).map((p) => p.path), [...plan.slice(2).map((p) => p.path)].sort());
   assert.equal(plan.filter((p) => p.status === "queued").length, DRAFT_MAX_FILES);
   const over = plan.filter((p) => p.reason === "over_limit");
   assert.equal(over.length, 31 - DRAFT_MAX_FILES);
-  assert.equal(over[0]!.path, "references/f23.md"); // SKILL.md + f29 + f00–f22 fill the 25
+  assert.equal(draftReasonText("over_limit"), "not picked this time — at most 25 files per draft; run again to draft others");
+});
+
+// A bundle of SKILL.md plus `n` flagged files per level; returns the files and findings.
+function wideBundle(counts: Partial<Record<"error" | "warn" | "info", number>>, skillMd: BundleEntry = file("SKILL.md", SKILL)) {
+  const files = [skillMd];
+  const findings: QualityFindingLike[] = [marker, q("DS-001")];
+  for (const level of ["error", "warn", "info"] as const) {
+    for (let i = 0; i < (counts[level] ?? 0); i++) {
+      const p = `references/${level}-${String(i).padStart(2, "0")}.md`;
+      files.push(file(p, "x"));
+      findings.push(q("RF-002", p, level));
+    }
+  }
+  return { files, findings };
+}
+const queuedPaths = (plan: ReturnType<typeof planDraft>) => plan.filter((p) => p.status === "queued").map((p) => p.path);
+const SEEDS = Array.from({ length: 40 }, (_, i) => `seed-${i}`);
+
+test("planDraft pick: 25 or fewer queued → all queued, whatever the seed", () => {
+  const { files, findings } = wideBundle({ warn: 10, info: 14 });
+  const all = files.map((f) => f.path).sort();
+  for (const seed of SEEDS.slice(0, 5)) {
+    const plan = planDraft({ files, findings, seed });
+    assert.deepEqual(queuedPaths(plan).sort(), all);
+    assert.equal(plan.filter((p) => p.reason === "over_limit").length, 0);
+  }
+});
+
+test("planDraft pick: one overflowing tier → SKILL.md plus a random 24 of it", () => {
+  const { files, findings } = wideBundle({ error: 30, info: 5 });
+  for (const seed of SEEDS) {
+    const plan = planDraft({ files, findings, seed });
+    const picked = queuedPaths(plan);
+    assert.equal(picked.length, DRAFT_MAX_FILES);
+    assert.ok(picked.includes("SKILL.md"), seed);
+    assert.equal(picked.filter((p) => p.includes("/error-")).length, DRAFT_MAX_FILES - 1);
+    assert.equal(picked.filter((p) => p.includes("/info-")).length, 0, "a lower tier gets nothing once a tier overflows");
+    const over = plan.filter((p) => p.reason === "over_limit");
+    assert.equal(over.length, 30 - (DRAFT_MAX_FILES - 1) + 5);
+    assert.ok(over.every((p) => p.status === "skipped"));
+  }
+});
+
+test("planDraft pick: tiers fill error → warn → info; randomness only in the first that overflows", () => {
+  const { files, findings } = wideBundle({ error: 5, warn: 40, info: 10 });
+  for (const seed of SEEDS) {
+    const picked = queuedPaths(planDraft({ files, findings, seed }));
+    assert.equal(picked.length, DRAFT_MAX_FILES);
+    assert.ok(picked.includes("SKILL.md"));
+    assert.equal(picked.filter((p) => p.includes("/error-")).length, 5, "every error file");
+    assert.equal(picked.filter((p) => p.includes("/warn-")).length, DRAFT_MAX_FILES - 1 - 5, "a random 19 warns");
+    assert.equal(picked.filter((p) => p.includes("/info-")).length, 0);
+  }
+  // 10 errors + 10 warns fit whole; the info tier overflows.
+  const mixed = wideBundle({ error: 10, warn: 10, info: 20 });
+  const picked = queuedPaths(planDraft({ ...mixed, seed: "x" }));
+  assert.equal(picked.filter((p) => p.includes("/error-")).length, 10);
+  assert.equal(picked.filter((p) => p.includes("/warn-")).length, 10);
+  assert.equal(picked.filter((p) => p.includes("/info-")).length, DRAFT_MAX_FILES - 1 - 20);
+});
+
+test("planDraft pick: 25 slots for the others when SKILL.md is not queued", () => {
+  const { files, findings } = wideBundle({ warn: 30 }, { path: "SKILL.md", bytes: new Uint8Array([1, 0, 2]) });
+  const plan = planDraft({ files, findings, seed: "s" });
+  assert.deepEqual([plan[0]!.path, plan[0]!.status, plan[0]!.reason], ["SKILL.md", "skipped", "binary"]);
+  assert.equal(queuedPaths(plan).length, DRAFT_MAX_FILES);
+  assert.equal(plan.filter((p) => p.reason === "over_limit").length, 30 - DRAFT_MAX_FILES);
+});
+
+test("planDraft pick: same seed → same plan; seeds vary the pick; every file is reachable", () => {
+  const { files, findings } = wideBundle({ warn: 30 });
+  assert.deepEqual(planDraft({ files, findings, seed: "abc" }), planDraft({ files, findings, seed: "abc" }));
+  const picks = SEEDS.map((seed) => queuedPaths(planDraft({ files, findings, seed })).sort().join("|"));
+  assert.ok(new Set(picks).size > SEEDS.length / 2, "different seeds give different picks");
+  const reached = new Set(SEEDS.flatMap((seed) => queuedPaths(planDraft({ files, findings, seed }))));
+  assert.equal(reached.size, 31, "every candidate is picked by some seed");
+});
+
+test("isDraftSeed: 1–64 characters of [A-Za-z0-9_-]", () => {
+  for (const ok of ["a", "AZaz09_-", "x".repeat(64), "q3v9X2-_Lm0aZr8yT1pW4g"]) assert.equal(isDraftSeed(ok), true, ok);
+  for (const bad of ["", "x".repeat(65), "a b", "../x", "a=b", "é", 42, null, undefined, {}]) assert.equal(isDraftSeed(bad), false, String(bad));
 });
 
 // ── The prompt ─────────────────────────────────────────────────────────────────────────────────

@@ -10400,7 +10400,7 @@ below.
 | 3 | **Hosted skills only**; hidden on pointer skills. | A re-version cannot change the delivery type (§8); a pointer's fix belongs upstream. |
 | 4 | Built from the **latest stable active version** only — the version the Quality card shows. | It is the scored version and the baseline the §8 file-change view diffs against. |
 | 5 | **Inputs:** that version's rule findings plus its stored §41.5 AI verdict (remarks, summary, suggestions) when present; rule findings alone otherwise. | Both are the "what to fix" the card already shows. |
-| 6 | **Files sent:** `SKILL.md` always, plus every text file with ≥ 1 rule finding — at most **25** files of at most **100,000** characters each. **Never:** a file with a secret-scanner finding, a binary, or a file without findings. | Bounded egress; a redacted file can't be rewritten without destroying the redacted line. |
+| 6 | **Files sent:** `SKILL.md` always, plus every text file with ≥ 1 rule finding — at most **25** files of at most **100,000** characters each. When more qualify, the other slots are **picked at random within severity tiers** (errors first), with a fresh pick each time the dialog opens. **Never:** a file with a secret-scanner finding, a binary, or a file without findings. | Bounded egress; a redacted file can't be rewritten without destroying the redacted line. A random pick stops repeated drafts of a large skill from rewriting the same 24 files every time. |
 | 7 | **Operations: modify or delete.** No new files, no renames. OS-junk entries (FS-004) are deleted **deterministically**, without an AI call. | Small blast radius; junk needs no judgement. |
 | 8 | **One call per file**, **5** in parallel, per-feature ceiling **32,768** output tokens and **360 s** per attempt, whole run capped at **30 min**. | A full-file rewrite does not fit the default 8192 / 60 s; per-file calls fail independently. |
 | 9 | Runs **synchronously in the web tier**, streaming per-file progress (NDJSON) with a 15 s heartbeat. Results are **ephemeral**. | No job table, no stored AI output; the user is watching anyway. |
@@ -10442,9 +10442,27 @@ Computed server-side from the base version's artifact and its latest scan report
    - a **binary** file (the §37 NUL-byte rule) → **skipped `binary`**;
    - more than **100,000** characters → **skipped `too_large`**;
    - otherwise → **queued** for the AI.
-3. **Order and cap:** `SKILL.md` first, then by worst finding level (*error* → *warn* → *info*), then
-   path; queued files beyond the **25th** → **skipped `over_limit`**.
-4. A skipped file is listed in the dialog with its findings and reason (*"not drafted — contains a
+3. **Order:** the plan lists `SKILL.md` first, then by worst finding level (*error* → *warn* →
+   *info*), then path.
+4. **Cap and random pick:** at most **25** files are queued. `SKILL.md` always takes one slot when it
+   is queued; the rest — **24**, or **25** when `SKILL.md` is not queued (binary or too large) — go to
+   the other queued files:
+   - if they all fit, they are all queued and nothing is random;
+   - otherwise the slots are filled **tier by tier** by each file's worst finding level — every
+     *error* file, then every *warn* file, then every *info* file — and in the **first tier that does
+     not fit whole**, the files that get the remaining slots are **chosen uniformly at random**; lower
+     tiers get none. (30 error files → a random 24 of them; 5 errors and 40 warns → all 5 errors plus a
+     random 19 warns.)
+   - every queued file not picked → **skipped `over_limit`**, shown as *"not picked this time — at
+     most 25 files per draft; run again to draft others"*.
+5. **The seed.** The pick is a deterministic function of a **seed**: the same seed over the same base
+   version and findings always yields the same plan. The plan route draws a **fresh random seed** on
+   every request and returns it; the run reuses it, so the run sends **exactly the files the preview
+   listed**. Each opening of the dialog requests a new plan, so repeated drafts rotate through the
+   skill's files. The seed is neither secret nor signed — any value only chooses among the skill's own
+   eligible files, under the same cap. The shuffle lives in `@skilly/shared` (a seeded PRNG over the
+   candidates in path order; it needs fairness, not cryptographic strength).
+6. A skipped file is listed in the dialog with its findings and reason (*"not drafted — contains a
    flagged secret; fix by hand"*, etc.) so the user knows what remains.
 
 ### 44.4 The AI call (feature key `skill_quality_draft`)
@@ -10484,14 +10502,16 @@ Computed server-side from the base version's artifact and its latest scan report
   (model output about possibly hostile content, as §41.5).
 
 ### 44.5 Running a draft
-- **`GET /api/skills/:ns/:slug/quality/draft/plan`** → `{ baseSemver, files: [{ path, status:
+- **`GET /api/skills/:ns/:slug/quality/draft/plan`** → `{ baseSemver, seed, files: [{ path, status:
   'queued' | 'delete' | 'skipped', reason?, findings: string[] }] }` — eligibility as §44.2 (404
-  visibility first, 403 role, **409 `ai_draft_unavailable`** with the reason); no AI call.
-- **`POST /api/skills/:ns/:slug/quality/draft`** `{ baseSemver }` — same checks, plus
+  visibility first, 403 role, **409 `ai_draft_unavailable`** with the reason); no AI call. `seed` is
+  the §44.3 pick's seed, freshly drawn per request (16 random bytes, base64url).
+- **`POST /api/skills/:ns/:slug/quality/draft`** `{ baseSemver, seed? }` — same checks, plus
   `baseSemver` must still be the latest stable (**409 `base_changed`**), plus
-  `enforceRateLimit("quality-draft", userId, 10 per 10 min)` (**429**). Responds
-  `200 application/x-ndjson`:
-  - `{ type: 'plan', baseSemver, files }` — as the plan route;
+  `enforceRateLimit("quality-draft", userId, 10 per 10 min)` (**429**). `seed` is the plan route's
+  seed, so the run drafts the previewed files; absent, the server draws its own; anything other than
+  1–64 characters of `[A-Za-z0-9_-]` → **400**. Responds `200 application/x-ndjson`:
+  - `{ type: 'plan', baseSemver, seed, files }` — as the plan route, for the seed actually used;
   - `{ type: 'start', path }` — a queued file's call has begun (progress only);
   - `{ type: 'file', path, status: 'modified' | 'deleted' | 'unchanged' | 'failed', summary,
     addressed, reason?, reasonText?, content?, diff? }` — one per planned delete (immediately) and per
@@ -10517,7 +10537,8 @@ Computed server-side from the base version's artifact and its latest scan report
   **`?draft=ai`** and the action is enabled (otherwise a toast with the §44.2 reason).
 - **Before running:** the plan — files that will be sent, files that will be removed, files skipped
   with reasons — and the line *"These files will be sent to &lt;AI name&gt;. Each file is one
-  request."* Buttons **Generate draft** / **Cancel**.
+  request."* Buttons **Generate draft** / **Cancel**. **Generate draft** sends the plan's `seed`, so
+  the files listed as sent are exactly the files sent; reopening the dialog draws a new pick (§44.3).
 - **While running:** one row per file (*queued* / *working* / settled), elapsed time, **Cancel**.
 - **Results:** per file — a status chip (*Modified* · *Remove* · *Unchanged* · *Failed — reason* ·
   *Skipped — reason*), the findings and suggestions it addresses, the AI summary, and for *Modified*
@@ -10634,8 +10655,8 @@ Computed server-side from the base version's artifact and its latest scan report
 
 ### 44.11 API surface
 - `GET /api/skills/:ns/:slug` → `qualityDetail.aiDraft: { available, reason }` (§44.2).
-- `GET /api/skills/:ns/:slug/quality/draft/plan` → the file plan (§44.5).
-- `POST /api/skills/:ns/:slug/quality/draft` → NDJSON stream (§44.5).
+- `GET /api/skills/:ns/:slug/quality/draft/plan` → the file plan and its `seed` (§44.5).
+- `POST /api/skills/:ns/:slug/quality/draft` `{ baseSemver, seed? }` → NDJSON stream (§44.5).
 - `POST /api/skills/:ns/:slug/quality/draft/assemble` (changes may carry `summary` / `addressed`) →
   upload response + `aiDraftToken` + `whatChanged` + `whatChangedSource` (§44.7).
 - `POST /api/proposals`, `POST /api/publish` accept `aiDraftToken`; `GET /api/proposals/:id` returns
@@ -10645,7 +10666,11 @@ Computed server-side from the base version's artifact and its latest scan report
 
 ### 44.12 Tests (ship with the change)
 - **Unit** (`@skilly/shared`): the file plan — candidate set, every classification (OS junk,
-  directory, secret, binary, too large), ordering and the 25-file cap; the prompt builder's egress
+  directory, secret, binary, too large), ordering and the 25-file cap; the random pick (25 or fewer
+  queued → no randomness; `SKILL.md` never dropped; 25 slots when `SKILL.md` is not queued; tiers
+  fill error → warn → info with randomness only in the first tier that overflows; same seed → same
+  plan; different seeds over a large enough candidate set → different picks; every candidate is
+  reachable); the prompt builder's egress
   (only planned files, path list capped at 200, `SKILL.md` gets other files' findings and the verdict,
   others do not); response validation (each action, identical content → keep, SKILL.md delete,
   changed `name`, broken frontmatter, caps, unknown ids); line-ending preservation; `runToken` /
@@ -10656,7 +10681,9 @@ Computed server-side from the base version's artifact and its latest scan report
   characters, control characters stripped) and the per-file fallback list.
 - **Integration** (web API + DB, provider stubbed): eligibility — 404 for an invisible skill, 403 for
   a non-maintainer member, 200 for explicit maintainer / namespace admin / platform admin, hidden for
-  pointer and archived, each 409 reason; rate limit 429; `base_changed`; the stream emits plan,
+  pointer and archived, each 409 reason; rate limit 429; `base_changed`; with more than 25 queued
+  files, a run given the plan route's `seed` sends exactly that plan's queued files, and a malformed
+  `seed` is 400; the stream emits plan,
   per-file events, heartbeat and `done`; one failing file leaves the others intact; the 30-minute cap
   (with a shortened test cap) ends unfinished files `timed_out`; one `ai_usage` row per call with the
   requester's id; audit written once per run including a cancelled one; `assemble` rejects a change

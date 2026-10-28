@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.47.0",
+    date: "2026-10-28",
+    summary:
+      "Draft improvements no longer sends the same files every time on a skill with more than 25 flagged files: SKILL.md always goes, error files come first, and the remaining slots are picked at random, so repeated drafts work through the rest. Files left out are marked \"not picked this time\".",
+  },
+  {
     version: "2.46.2",
     date: "2026-10-27",
     summary:
