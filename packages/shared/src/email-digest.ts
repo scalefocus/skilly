@@ -39,6 +39,8 @@ export const DIGEST_DEFAULT_TYPES = [
   // §62.9 the coalesced "search gaps to review" row, and a restricted skill people searched for.
   "search_gaps.ready",
   "skill.search_gap_hidden_match",
+  // §63.5 a newer upstream release of a pointer skill the recipient maintains.
+  "skill.upstream_release",
 ] as const;
 
 /** Proposer lifecycle, safety flags, deprecations, fulfilled requests: immediate by default; the

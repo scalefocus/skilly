@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { parseInstallCommand } from "@skilly/shared/external-tool";
 import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
+import { isUpstreamBump, suggestUpstreamVersion, upstreamWhatChanged } from "@skilly/shared/upstream-releases";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
 import { SLUG_EXISTS_CODE, normalizeMatchSlug, slugMatchClashes, slugClashMessage, type SlugMatchView } from "@skilly/shared/slug-match";
 import { Modal, Pill, ScrollToTop } from "../../components/ui";
@@ -402,6 +403,30 @@ function ProposeForm() {
     setQuality(qualityDraft.upload.quality ?? null);
     setBundleIcon(qualityDraft.upload.bundleIcon ?? null);
   }, [qualityDraft, ready]);
+  // §63.9 "Propose the update" (an upstream release, or a moved branch): once the new-version
+  // pre-fill has run, the hint takes over the source — the new ref as an EXPLICITLY supplied pointer
+  // source, so Keep current files is off and every submit-time gate runs — the semver (the next `bump`
+  // above the current latest) and the What changed note. Pointer skills only; hints grant nothing.
+  const upstreamRef = isNewVersion && !forcedNV ? params.get("upstreamRef")?.trim() || null : null;
+  const upstreamKind: "release" | "branch" = params.get("upstreamKind") === "branch" ? "branch" : "release";
+  const [nvPointerRef, setNvPointerRef] = useState<string | null>(null);
+  const upstreamApplied = useRef(false);
+  useEffect(() => {
+    if (!upstreamRef || !ready || upstreamApplied.current) return;
+    upstreamApplied.current = true;
+    if (sourceType !== "pointer" || !f.externalUrl.trim()) return;
+    const bump = upstreamKind === "release" ? params.get("bump") : null;
+    setReuseFiles(false);
+    noteIsDefault.current = false;
+    setRefAuto(false);
+    setF((prev) => ({
+      ...prev,
+      externalRef: upstreamRef,
+      semver: suggestUpstreamVersion(nvLatest, isUpstreamBump(bump) ? bump : null),
+      whatChanged: upstreamWhatChanged(upstreamKind, nvPointerRef, upstreamRef),
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, after the pre-fill
+  }, [upstreamRef, ready]);
   // Snapshot of the skill's current metadata at pre-fill, for the client-side §8 no-op guard
   // (with reused files, at least one field must differ; the server re-enforces with a 422).
   const nvBaseline = useRef<{ title: string; description: string; toolHarness: string; categories: string[]; usageExamples: string; sharedNamespaceIds: string[] } | null>(null);
@@ -553,6 +578,7 @@ function ProposeForm() {
         setCategories(j.meta?.categories ?? []);
         setSourceType(j.meta?.type ?? "hosted");
         setNvLatest(j.latest ?? null);
+        setNvPointerRef(j.pointer?.ref ?? null);
         setCurrentIcon(j.meta?.icon ?? null);
         setIconMode("keep");
         // §42: the skill's current grants pre-fill the share picker; its visibility gates it.
@@ -1770,6 +1796,7 @@ function ProposeForm() {
               style={{ width: "100%", resize: "vertical", fontSize: 13 }}
               rows={4}
               maxLength={WHAT_CHANGED_MAX_LEN}
+              data-testid="what-changed"
               value={f.whatChanged}
               // Any keystroke makes the note the proposer's — the default is never re-applied
               // or cleared from under them afterwards (§8).

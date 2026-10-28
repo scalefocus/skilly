@@ -7,7 +7,17 @@
 // mutated. SKILLY_SPEC.md §13 (Pointer scan-on-fetch caching, "external" trust).
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import { maxSeverity, bundleContentCap, contentRiskTripsGate, type ScanFinding } from "@skilly/shared";
+import {
+  maxSeverity,
+  bundleContentCap,
+  contentRiskTripsGate,
+  classifyPin,
+  isSkillsHubUrl,
+  listRemoteRefCommits,
+  type RemoteRefCommitsResult,
+  type ScanFinding,
+  type UpstreamPinKind,
+} from "@skilly/shared";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { fetchPointerFiles } from "./mirror.js";
 import { extractBundle } from "./bundle.js";
@@ -53,6 +63,8 @@ export interface RefreshOptions {
   minAgeSeconds?: number;
   /** Max versions to process per run (default 25) — bounds load on upstream hosts. */
   limit?: number;
+  /** The ref listing behind the §63.6 pin classification (injectable for tests). */
+  listGit?: (url: string) => Promise<RemoteRefCommitsResult>;
 }
 
 export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, opts: RefreshOptions = {}): Promise<RefreshResult> {
@@ -109,6 +121,8 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
 
       if (drifted) {
         drift++;
+        // §63.6: on the skill's baseline, a moved BRANCH gets "Propose the update"; a moved tag never.
+        const pinKind = await classifyDriftedBaseline(pool, row, opts.listGit ?? listRemoteRefCommits);
         findings.push({
           scanner: "pointer-drift",
           severity: "high",
@@ -138,7 +152,7 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
           await pool.query(
             `insert into notifications (user_id, type, payload)
              select uid, 'skill.drift',
-                    jsonb_build_object('namespaceSlug',$2::text,'skillSlug',$3::text,'semver',$4::text,'ref',$5::text,'contentRisk',$7::boolean)
+                    jsonb_build_object('namespaceSlug',$2::text,'skillSlug',$3::text,'semver',$4::text,'ref',$5::text,'contentRisk',$7::boolean,'pinKind',$8::text)
                from (
                  select sm.user_id as uid from skill_maintainers sm where sm.skill_id = $1
                  union
@@ -149,7 +163,7 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
                ) recipients
                join users u on u.id = recipients.uid and u.drift_notifications`,
             // §37.5: the drifted upstream content also trips the content check → one more sentence.
-            [row.skill_id, row.ns_slug, row.skill_slug, row.semver, row.external_ref, row.namespace_id, contentRiskTripsGate(findings)],
+            [row.skill_id, row.ns_slug, row.skill_slug, row.semver, row.external_ref, row.namespace_id, contentRiskTripsGate(findings), pinKind],
           );
         }
       }
@@ -173,4 +187,41 @@ export async function refreshPointerVersions(pool: Pool, store: ArtifactStore, o
   }
 
   return { checked, rescanned, drift };
+}
+
+/**
+ * §63.6: when a drifted version is its skill's baseline (the latest stable active version) on a git
+ * origin, classify its pin from the origin's listing and record it on the skill's upstream row — so
+ * the drift ping and the skill page offer "Propose the update" for a moved branch, and never for a
+ * moved tag, even while the §63 sweep is switched off. Null for an older version, a registry origin
+ * or an unreadable listing (no button). `checked_at` is left alone: this is not a release check.
+ */
+async function classifyDriftedBaseline(
+  pool: Pool,
+  row: PointerVersionRow,
+  listGit: (url: string) => Promise<RemoteRefCommitsResult>,
+): Promise<UpstreamPinKind | null> {
+  if (isSkillsHubUrl(row.external_origin_url)) return null;
+  const { rows } = await pool.query<{ id: string }>(
+    `select sv.id from skill_versions sv
+      where sv.skill_id = $1 and sv.status = 'active' and not sv.is_prerelease
+      order by skilly_semver_key(sv.semver) desc nulls last, sv.created_at desc
+      limit 1`,
+    [row.skill_id],
+  );
+  if (rows[0]?.id !== row.id) return null;
+  const listing = await listGit(row.external_origin_url).catch(() => null);
+  if (!listing?.ok) return null;
+  const pinKind = classifyPin(row.external_ref, { branches: listing.heads.keys(), tags: listing.tags.keys() }, false);
+  await pool.query(
+    `insert into skill_upstream_releases (skill_id, baseline_version_id, origin_url, subdir, pin_kind)
+     values ($1, $2, $3, $4, $5)
+     on conflict (skill_id) do update set
+       baseline_version_id = excluded.baseline_version_id,
+       origin_url = excluded.origin_url,
+       subdir = excluded.subdir,
+       pin_kind = excluded.pin_kind`,
+    [row.skill_id, row.id, row.external_origin_url, row.external_subdir, pinKind],
+  );
+  return pinKind;
 }

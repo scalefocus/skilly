@@ -290,10 +290,23 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     );
     await upstreamTag(movedCommit);
 
-    const drift1 = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
+    // §63.6: the refresh classifies a drifted baseline's pin from the origin's listing (stubbed — the
+    // fixture origin is a local repo). A moved TAG gets no "Propose the update".
+    const listAs = (kind: "heads" | "tags") => async () => ({
+      ok: true as const,
+      heads: new Map(kind === "heads" ? [["v1.0.0", origCommit]] : []),
+      tags: new Map(kind === "tags" ? [["v1.0.0", origCommit]] : []),
+    });
+    const driftPayload = async () =>
+      (await pool.query<{ p: Record<string, unknown> }>(
+        `select payload as p from notifications where user_id = $1 and type = 'skill.drift' and payload->>'skillSlug' = 'ptr' order by created_at desc limit 1`,
+        [nsAdmin],
+      )).rows[0]!.p;
+    const drift1 = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50, listGit: listAs("tags") });
     assert.ok(drift1.drift >= 1, "drift detected once stored artifact and upstream diverge");
     assert.equal(await driftCount(nsAdmin), 1, "namespace admin (implicit maintainer) alerted at drift onset");
     assert.equal(await driftCount(driftOff), 0, "opted-out maintainer gets no drift row (row-level, §12)");
+    assert.equal((await driftPayload()).pinKind, "semver_tag", "a moved tag is classified as a tag (no button)");
 
     // Persistent drift stays silent (onset dedup): the next pass re-detects but never re-pings.
     const drift2 = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
@@ -305,8 +318,14 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
     const cleanPass = await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
     assert.equal(cleanPass.drift, 0, "upstream back at the pinned commit matches the mirror again");
     await upstreamTag(movedCommit);
-    await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50 });
+    await refreshPointerVersions(pool, store, { minAgeSeconds: 0, limit: 50, listGit: listAs("heads") });
     assert.equal(await driftCount(nsAdmin), 2, "a new drift onset after recovery pings again");
+    assert.equal((await driftPayload()).pinKind, "branch", "a moved branch carries pinKind: branch (§63.6)");
+    assert.equal(
+      (await pool.query<{ k: string }>(`select pin_kind as k from skill_upstream_releases where skill_id = $1`, [pointer])).rows[0]?.k,
+      "branch",
+      "the classification is recorded on the skill's upstream row for the page notice",
+    );
     await upstreamTag(origCommit);
 
     // §49.12: a tampered STORED artifact is an integrity mismatch, never drift — recorded, not published.

@@ -34,6 +34,7 @@ import { AlreadyInstalledDialog } from "../../../../components/AlreadyInstalledD
 import { requestInstall, type ExistingInstall, type MintedInstall, type OnExisting } from "../../../../lib/installMint";
 import { installedHighlightHref } from "../../../../lib/installedFilter";
 import { HypeButton, HypedPill, HypeCount, HyperStrip, type HyperChip } from "../../../../components/Hype";
+import { UpstreamNotice, type UpstreamView } from "./UpstreamNotice";
 
 // recharts is heavy (d3) and owner-only — code-split it out of the route's initial bundle.
 // ssr:false since the chart measures the DOM; a skeleton holds its height while it loads.
@@ -184,7 +185,7 @@ interface Detail {
   /** §61.2 the Try with ‹name› button: switch on, AI Operational, skill installable. */
   tryAvailable?: boolean;
   usageExamples: string | null; archived: boolean;
-  pointer: { originUrl: string; subdir: string | null } | null;
+  pointer: { originUrl: string; subdir: string | null; ref: string } | null;
   meta: { toolHarness: string; title: string; description: string } | null;
   pendingMirror: { semver: string; attempts: number; failed: boolean; lastError: string | null } | null;
   createdAt: string; updatedAt: string;
@@ -217,6 +218,8 @@ interface Detail {
   deprecation: DeprecationView | null;
   replaces: Array<{ namespaceSlug: string; skillSlug: string; title: string }>;
   canDeprecate: boolean;
+  /** §63.7 the upstream notice — only ever sent to effective maintainers and platform admins. */
+  upstream?: UpstreamView | null;
 }
 
 export default function SkillDetail() {
@@ -614,6 +617,7 @@ export default function SkillDetail() {
           )}
         </div>
       )}
+      {data.upstream && <UpstreamNotice ns={ns} slug={slug} upstream={data.upstream} onChanged={reload} />}
       {data.replaces.length > 0 && (
         <div className="muted" style={{ fontSize: 12, marginTop: 6 }} data-testid="replaces-line">
           Replaces {data.replaces.map((r, i) => (

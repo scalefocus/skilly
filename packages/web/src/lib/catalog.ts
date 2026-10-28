@@ -828,19 +828,21 @@ export interface PointerSource {
   originUrl: string;
   /** Folder inside the upstream repo that was mirrored (multi-skill repos); null = repo root. §6. */
   subdir: string | null;
+  /** The pinned ref — the "from" of §63.9's pre-filled *What changed* note. */
+  ref: string;
 }
 
 /** Upstream provenance for a Pointer skill (latest active version), or null for Hosted skills. */
 export async function pointerSource(skillId: string): Promise<PointerSource | null> {
-  const { rows } = await pool.query<{ external_origin_url: string | null; external_subdir: string | null }>(
-    `select external_origin_url, external_subdir from skill_versions
+  const { rows } = await pool.query<{ external_origin_url: string | null; external_subdir: string | null; external_ref: string }>(
+    `select external_origin_url, external_subdir, external_ref from skill_versions
        where skill_id = $1 and status = 'active' and external_ref is not null
        order by created_at desc limit 1`,
     [skillId],
   );
   const r = rows[0];
   if (!r?.external_origin_url) return null;
-  return { originUrl: r.external_origin_url, subdir: r.external_subdir };
+  return { originUrl: r.external_origin_url, subdir: r.external_subdir, ref: r.external_ref };
 }
 
 export interface SkillFormDefaults {

@@ -95,6 +95,8 @@ jobs:
       # §62 search gaps — its own step: it rewrites the ai_integration singleton, so it must not run
       # in parallel with other live-DB files.
       - run: node --test packages/worker/dist/integration/searchGapSweep.test.js
+      # §63 upstream release alerts — the sweep with a stubbed upstream, scoped to its own fixtures.
+      - run: node --test packages/worker/dist/integration/upstreamReleaseSweep.test.js
       - run: pnpm --filter @skilly/web test:db
 
   build:

@@ -23,7 +23,7 @@ interface Mapping { id: string; role: Role; namespaceId: string | null; groupId:
 interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -41,7 +41,7 @@ const NS_PAGE = 100;
 // Every Administration card is collapsible (§5). The page owns each card's open/closed state,
 // persists it per-card (localStorage), and drives Expand all / Collapse all. Cards start collapsed.
 const ADMIN_CARD_IDS = [
-  "contribution", "duplicates", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
+  "contribution", "duplicates", "upstreamreleases", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
   "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
   "achievements", "hype", "featureideas", "search", "contentrisk", "policyrules", "policy",
 ] as const;
@@ -291,6 +291,34 @@ function FeatureIdeasSettings({
         checked={enabled}
         disabled={busy}
         onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ featureIdeasEnabled: next }) })}
+      />
+    </CollapsibleCard>
+  );
+}
+
+// Upstream release alerts (§63.10). Off stops the worker's daily check of pointer skills' upstreams,
+// hides the skill-page notices and sends nothing; the rows are kept. Branch drift keeps its button.
+function UpstreamReleasesSettings({
+  enabled, busy, call, open, onToggle,
+}: {
+  enabled: boolean;
+  busy: boolean;
+  call: (input: RequestInfo, init: RequestInit) => Promise<boolean>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <CollapsibleCard cardId="upstreamreleases" title="Upstream releases" summary={enabled ? "on" : "off"} open={open} onToggle={onToggle}>
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
+        Once a day, skilly checks the repository or registry each external (pointer) skill is pinned to. When a newer
+        stable release changes the skill&rsquo;s files, its maintainers are notified and can propose the update from a
+        pre-filled form. Off: no checks, no notices, no notifications.
+      </p>
+      <Switch
+        label="Check pointer skills for newer upstream releases"
+        checked={enabled}
+        disabled={busy}
+        onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ upstreamReleasesEnabled: next }) })}
       />
     </CollapsibleCard>
   );
@@ -653,6 +681,9 @@ export default function AdminPage() {
           A skill with the same name in the same namespace is always refused, regardless of this setting.
         </p>
       </CollapsibleCard>
+
+      {/* Upstream release alerts (§63.10) — the dormant-not-destructive on/off */}
+      <UpstreamReleasesSettings enabled={data.settings.upstreamReleasesEnabled} busy={busy} call={call} open={cards.open.upstreamreleases} onToggle={() => cards.toggle("upstreamreleases")} />
 
       {/* Max upload size + chunk size (§6) */}
       <CollapsibleCard

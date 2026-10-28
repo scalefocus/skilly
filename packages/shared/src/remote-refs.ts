@@ -145,3 +145,42 @@ export async function listRemoteRefs(rawUrl: string): Promise<PointerRefsResult>
   }
   return { ok: true, branches, tags };
 }
+
+export type RemoteRefCommitsResult =
+  | { ok: true; heads: Map<string, string>; tags: Map<string, string> }
+  | { ok: false; error: string };
+
+/**
+ * A git origin's branches and tags WITH their commits, for the §63 upstream-release sweep: an
+ * annotated tag maps to its peeled commit (the `^{}` line), a lightweight tag to its own. Same guards
+ * and transport as `listRemoteRefs`. Git origins only — a skills-hub origin has no commits.
+ */
+export async function listRemoteRefCommits(rawUrl: string): Promise<RemoteRefCommitsResult> {
+  const url = rawUrl.trim();
+  if (!url || isSkillsHubUrl(url)) return { ok: false, error: "not a git repository URL" };
+  const urlErr = validatePointerUrl(url);
+  if (urlErr) return { ok: false, error: urlErr };
+  const blocked = await resolvesToBlockedIp(url);
+  if (blocked) return { ok: false, error: `host resolves to a private/loopback address (${blocked})` };
+
+  let raw: string;
+  try {
+    raw = await runLsRemote(url);
+  } catch {
+    return { ok: false, error: "couldn’t read this repository’s refs" };
+  }
+  const heads = new Map<string, string>();
+  const tags = new Map<string, string>();
+  const peeled = new Map<string, string>();
+  for (const line of raw.split("\n")) {
+    const m = /^([0-9a-f]{40})\s+refs\/(heads|tags)\/(.+?)(\^\{\})?$/.exec(line.trim());
+    if (!m) continue;
+    const [, sha, kind, name, peel] = m;
+    if (kind === "heads") heads.set(name!, sha!);
+    else if (peel) peeled.set(name!, sha!);
+    else tags.set(name!, sha!);
+    if (heads.size + tags.size >= MAX_REFS) break;
+  }
+  for (const [name, sha] of peeled) if (tags.has(name)) tags.set(name, sha);
+  return { ok: true, heads, tags };
+}

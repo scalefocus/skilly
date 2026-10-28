@@ -15,6 +15,7 @@ import { aiDraftAvailability } from "../../../../../lib/qualityDraft";
 import { deprecationDetail, listReplaces } from "../../../../../lib/deprecation";
 import { hypeDetail } from "../../../../../lib/hype";
 import { tryAvailability } from "../../../../../lib/aiTry";
+import { upstreamDetail } from "../../../../../lib/upstreamReleases";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, canShareSkill, seesViaGrantOnly, resolveLatest } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
@@ -66,7 +67,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   // §49.2: quarantined versions are visible to the skill's owners/admins only.
   const versions = core.versions.filter((v) => v.status !== "quarantined" || isOwner).map((v) => ({ ...v, quality: versionQuality.get(v.semver) ?? null }));
   // The three reads below depend only on `latest` / `archived`, not on each other — run them together.
-  const [qualityDetail0, aiDraft, hype] = await Promise.all([
+  const [qualityDetail0, aiDraft, hype, upstream] = await Promise.all([
     // §41.11: the latest stable version's full Quality card payload (findings + verdict), or null.
     latest ? skillQualityDetail(access, skill, latest) : null,
     // §44.2: whether this viewer may draft improvements with AI (hidden = available:false, reason:null).
@@ -75,6 +76,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     // §50.6 the hype block — null when the feature is off or the skill is hard-ineligible (archived
     // skills are hard-ineligible, so an owner inspecting one sees no hype UI).
     archived ? null : hypeDetail(skill.id, access.userId ?? null),
+    // §63.7 the upstream notice — effective maintainers and platform admins only (= isOwner).
+    archived ? null : upstreamDetail({ id: skill.id, status: skill.status, deprecatedAt: skill.deprecatedAt, namespaceSlug: skill.namespaceSlug, slug: skill.slug }, isOwner),
   ]);
   // A quality card implies `latest`, so `aiDraft` is null here only for an archived skill (hidden).
   const qualityDetail = qualityDetail0 && { ...qualityDetail0, aiDraft: aiDraft ?? { available: false, reason: null } };
@@ -146,6 +149,8 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
     replaces,
     canDeprecate,
     hype,
+    // §63.11: null unless this viewer owns the skill and there is a release or branch drift to show.
+    upstream,
     // capability flags for the UI
     canManage: canYankOrArchive(access, skill.namespaceId), // yank / archive / restore
     // Permanent deletion is platform-admin only and only for archived skills (§7).

@@ -137,7 +137,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
 - **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `idea_votes_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's picture from others in the *Upvoted by* bubbles of *Coming soon* items; their votes still count; migration 0102, §60), `erased_at` (GDPR tombstone marker, §4).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `idea_votes_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's picture from others in the *Upvoted by* bubbles of *Coming soon* items; their votes still count; migration 0102, §60), `upstream_release_notifications` (BOOLEAN NOT NULL DEFAULT true — the maintainer opt-out of `skill.upstream_release`; migration 0104, §63), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 
@@ -282,7 +282,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -368,6 +368,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **Searches that found nothing, with no identity attached** (§62.3). `search_gap_salts` holds one random salt per UTC day; `search_gap_hits` holds today's raw rows `(day, query_norm, surface, mode, searcher_hash, hits)`, where the hash is an HMAC of the user id under the day's salt (no timestamp, no user id); the housekeeping sweep folds each finished day into `search_gap_daily` `(day, query_norm, surface, mode, hits, searchers)`, kept 90 days, and deletes that day's hits and salt.
 - **`search_gaps`** — one row per query that crossed the admin-set threshold: counts over the lookback window, state (`new` | `suggested` | `failed` | `accepted`), up to 3 restricted matches, the AI draft and attempts, and the outcome (a skill request or a synonym group). Accepted rows are pruned 90 days after the decision; dismissing deletes the row.
 - **`search_gap_tombstones`** — the unsalted SHA-256 of every query that was accepted or dismissed, so it is never recorded or suggested again. Kept forever.
+
+### `skill_upstream_releases` (migration 0104, detailed in §63)
+- **One row per checked pointer skill** (PK `skill_id`, CASCADE): the baseline the last check ran against, its pin kind (`semver_tag` | `tag` | `branch` | `commit` | `registry`), the newest upstream stable release above it (ref, semver, peeled commit, bump level), whether that release changed the skill's folder, `detected_at`, `notified_ref` (once-per-release dedup), the skip (`skipped_ref` / `skipped_by` / `skipped_at`), `checked_at` (nullable: `NULL` until the sweep first checks the skill) and `last_error`. Written by the upstream-release sweep, by *Skip* / *Un-skip*, and by the pointer refresh, which records a drifted baseline's pin kind (§63.4, §63.6). Whether a release is *pending* is derived on read, never stored.
+- `users.upstream_release_notifications` (`BOOLEAN NOT NULL DEFAULT true`) — the eighth maintainer notification preference (§12 / §63.10).
 
 ---
 
@@ -669,6 +673,9 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - Visibility scoping, audit, versioning (git tags), and scanning apply identically.
 - Pointer skills are **labeled "external"** in the catalog; scanned at mirror time; scan
   results cached per pinned ref **and commit** (§49.3).
+- **Upstream release alerts (§63).** A leader-only sweep tells a pointer skill's maintainers when
+  the upstream has a newer stable release than the pinned tag or registry version, and offers a
+  pre-filled new-version proposal. It never mirrors, scans or mutates anything itself.
 - **Mirror retries + dead-letter, with an admin retry.** The leader worker retries a failing
   mirror each sweep up to `MIRROR_MAX_ATTEMPTS` (default **5**), recording `attempts` + `last_error`
   on the `pending_mirrors` row; at the cap the row is **dead-lettered** (left in place, never
@@ -1290,7 +1297,8 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Events:**
   - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) in their namespace queue.
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
-  - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power).
+  - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power). When the drifted version is the skill's baseline and is pinned to a **branch**, the drift row also offers **Propose the update** (§63.6).
+  - To **effective maintainers** (minus `upstream_release_notifications` opt-outs): `skill.upstream_release` when the upstream-release sweep finds a newer stable release of a pointer skill's pinned tag or registry version that changed the skill's files (§63.5, **once per release**, naming the highest; silent when an open proposal already covers it); digestible by default (§48.3).
   - To **effective maintainers**: `skill.content_risk` when the re-scan sweep first flags a published version (§37.5, **once per onset**), gated by `content_risk_notifications` (§37.9).
   - To the **proposer**: `proposal.policy_violation` when a proposal's current §46 run lands with at least one violated **enforced** policy rule (§47.10, once per run; never for a cached link; proposal-lifecycle, no per-type opt-out).
   - To **effective maintainers** (plus **platform admins** when a platform rule is violated): `skill.policy_flag` when a published version is first flagged against a policy rule revision (§47.8, **once per onset**), gated by `policy_notifications`.
@@ -1348,7 +1356,8 @@ current or future type can ever leak JSON to a user.
   | `skill.new_version` | New version published | {ns}/{slug} published version {semver}. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.discussion` | New discussion comment | {fromName} commented on {ns}/{slug}. | View the discussion → `/skills/{ns}/{slug}#discussion` |
   | `skill.discussion_reply` | New reply | {fromName} replied to your comment on {ns}/{slug}. *(earlier replier, not the root's author: … replied in a discussion thread you're part of on {ns}/{slug}.)* | View the reply → `/skills/{ns}/{slug}#discussion-{rootId}` |
-  | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}` |
+  | `skill.drift` | Upstream drift detected | {ns}/{slug} has drifted from its pinned upstream ref ({ref}). | Review it → `/skills/{ns}/{slug}`; plus **Propose the update** → `/propose?newVersion=1&ns={ns}&slug={slug}&upstreamRef={ref}&upstreamKind=branch` when the payload carries `pinKind: "branch"` (§63.6) |
+  | `skill.upstream_release` | Upstream release available | {ns}/{slug} pins {currentRef}. Upstream has released {releaseRef}. | **Propose the update** → `/propose?newVersion=1&ns={ns}&slug={slug}&upstreamRef={releaseRef}&upstreamKind=release&bump={bump}` (§63.5) |
   | `skill.quality_low` | Low quality score | {ns}/{slug} v{semver} scored {stars} ★ ({score}/100, {mode}). *(+ the full findings list, then the AI summary and suggestions when present — §41.9)* | Open the Quality card → `/skills/{ns}/{slug}#quality`; plus **Draft improvements with {aiName}** → `/skills/{ns}/{slug}?draft=ai#quality` when §44.9 applies |
   | `proposal.policy_violation` | Policy check flagged your proposal | The policy check flagged your proposal for {ns}/{slug}: {rule titles}. *(+ each violated rule's explanation — §47.10)* | See the policy check → `/proposals/{proposalId}#policy` |
   | `skill.policy_flag` | Policy check flagged a skill | {ns}/{slug} v{semver} violates: {rule titles}. | Review the policy check → `/skills/{ns}/{slug}#policy` |
@@ -1380,7 +1389,7 @@ current or future type can ever leak JSON to a user.
 
 ### Maintainer notification preferences (per-type opt-outs)
 
-- **Seven per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
+- **Eight per-user toggles** on the **Profile** page (`/profile`), grouped with the email-channel
   toggle below: **"Upstream drift on skills I maintain"** (`users.drift_notifications`) and
   **"New versions of skills I maintain"** (`users.new_version_notifications`) — both
   `BOOLEAN NOT NULL DEFAULT true` (migration 0057; existing users backfilled ON) — plus
@@ -1404,6 +1413,11 @@ current or future type can ever leak JSON to a user.
   The seventh is **"Hype milestones on skills I maintain"** (`users.hype_notifications`,
   `BOOLEAN NOT NULL DEFAULT true`, migration 0098, §50.7); `PATCH /api/me` also accepts
   `hypeNotifications`. Hidden while `hype_enabled` is off (§50.8).
+  The eighth is **"Upstream releases on skills I maintain"**
+  (`users.upstream_release_notifications`, `BOOLEAN NOT NULL DEFAULT true`, migration 0104, §63.10);
+  `PATCH /api/me` also accepts `upstreamReleaseNotifications`. Hidden while
+  `upstream_releases_enabled` is off. It gates `skill.upstream_release` entirely; the branch-drift
+  *Propose the update* action (§63.6) rides on `skill.drift` and stays under `drift_notifications`.
   Toggling is **silent** (not audited), matching the other profile prefs.
 - **Row-level, not channel-level (contrast `email_notifications`).** An opted-out user is
   filtered out of the recipient set **at insert time** in the worker (the publish sweep's
@@ -1747,6 +1761,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/skills/:ns/:slug/versions/:semver/changes` — the published version's **file changes vs its immediate predecessor** (§10): `{ available, baselineSemver, added, modified, removed, unchanged, files[] }`, or `{ available: false, reason }` when there's no predecessor / no stored artifact yet. `?path=<file>` returns that file's unified line diff (or a `binary` / `tooLarge` marker). Gated by the **skill's own visibility** (invariant #3; archived → owners only, §7), rate-limited like `download`, cached by `(skill, semver)` — the reviewer counterpart is `GET /api/proposals/:id/changes` (§8).
 - `POST /api/skills/:ns/:slug/promote` — initiate promotion to global. `POST /api/skills/:ns/:slug/yank`, `.../archive`, `.../delete` (permanent; platform-admin, archived-only).
 - `POST /api/skills/:ns/:slug/hype` — place a hype (**201**; **404** invisible / feature off; **409** `{ reason }`), `GET /api/skills/:ns/:slug/hypers` — the in-window hyper list, `GET /api/leaderboard/hyped` — the Hyped-skills board, §50.10.
+- `POST|DELETE /api/skills/:ns/:slug/upstream/skip` — skip / un-skip a pending upstream release (effective maintainers and platform admins; **404** invisible, **403** otherwise, **409** `not_pending`); `GET /api/skills/:ns/:slug` gains `upstream` for those same viewers only, §63.11.
 - `POST /api/skills/:ns/:slug/feature { featured }` — Featured spotlight toggle (platform-admin, re-verified; **409** at the `max_featured_skills` cap; rejected for a non-installable/archived/**deprecated** skill), §7.
 - `PUT /api/skills/:ns/:slug/deprecation { successor: "<ns>/<slug>" | null, note: string | null }` / `DELETE /api/skills/:ns/:slug/deprecation` — deprecate (or edit the deprecation) / un-deprecate a skill (§45.8). Platform admin or owning-namespace admin; **403** visible-but-unauthorized, **404** invisible, **409** archived skill, **422** ineligible successor (`not_found` · `self` · `archived` · `deprecated` · `audience`) or an over-long note. `GET /api/skills/suggest?scope=successor&for=<ns>/<slug>` — the successor picker (eligible candidates only, §45.3).
 - `POST /api/skills/:ns/:slug/share` — mint a fresh **signed share link** (§33): visibility-checked, returns `{ url, expiresAt }` where `url` = `<base>/skills/:ns/:slug?s=<token>` (`<base>` per §33.6; the bare path when none is configured); audited `skill.share_link_created`. **404** for a skill the caller cannot see — **archived or not**; the visibility check precedes every status check (§49.4).
@@ -1815,7 +1830,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **AI integration (§40.9, all platform-admin):** `GET|PUT|PATCH|DELETE /api/admin/ai` (status / save-with-test / enable-disable / remove), `POST /api/admin/ai/models` (provider model list), `POST /api/admin/ai/test` (connectivity test of the form values). The token is write-only — no response ever contains it.
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`** / **`bugReports`**, §36, and **`emailDigest`** / **`emailDigestOptions`**, §48.12), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `POST /api/me/survey/bug` (a bug report, §36.17), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`** / **`bugReports`**, §36, and **`emailDigest`** / **`emailDigestOptions`**, §48.12, and **`upstreamReleaseNotifications`** / **`upstreamReleasesEnabled`** (read-only), §63.11), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `POST /api/me/survey/bug` (a bug report, §36.17), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - **Skill collections (§38.11):** `GET /api/collections/mine?skillId=` · `POST /api/collections` · `GET|PATCH|DELETE /api/collections/:id` · `PUT|DELETE /api/collections/:id/skills/:skillId` · `GET /api/collections/suggest?q=`. `GET /api/skills` gains **`?collection=<id>`** and **`?collectionsBy=<userId>`** (viewer-visibility-scoped).
@@ -2199,7 +2214,7 @@ Per-skill **ownership + notification** layer. Designed to name accountable owner
 - **At version acceptance (new versions of an already-existing skill, not just creation):** every accepted version of an existing skill — reviewed-proposal accept, direct publish (`require_review=false`), or a metadata-only *Keep current files* re-version (§8) alike, no distinction between them — auto-adds its submitter (`skill_versions.created_by`) as an explicit maintainer, under the **same eligibility gate as creation**: added iff they can currently see the skill (`isSkillVisible`), checked **at accept time** against the final namespace/visibility (so a reviewer's mid-review namespace/visibility edit is what's evaluated, not the submission-time state); an ineligible cross-namespace submitter is skipped, same admin-only-coverage fallback as creation. **No-op** if already an effective maintainer (explicit, or implicit via namespace-admin role) — no duplicate row, no duplicate audit entry. **Full parity** with any other explicit maintainer once added — the usual co-maintainer curation rights above, no cap on how many a skill accumulates over its lifetime, permanent until manually removed. **Global and unconditional**, not a per-namespace setting (unlike `require_review`). **Silent** — no dedicated notification (matches the creation-time rule); the new maintainer discovers their status via the skill detail page, **My Skills**, or the audit log. **Forward-only** — versions accepted before this shipped are not backfilled. **Audited** as a distinct action, `skill.maintainer_auto_added` (actor = the submitter), so it stays distinguishable from an admin's manual add/remove. **Out of scope: promotion to global** (§8) — it materializes an independent, brand-new skill, so it's already covered by the *At creation* rule above, not this one.
 
 ### Notifications, display & lifecycle
-- Maintainers are **implicit watchers** of their skill: `skill.new_version` on publish (deduped vs explicit watchers) and `skill.drift` on detected pointer drift. Both are gated by the per-user **maintainer notification preferences** (§12) — suppressed at insert time for opted-out users, with an explicit `skill_watches` row always outranking the new-version opt-out — and drift pings fire **once per drift onset**, not per refresh pass (§12). No un-actionable review notifications.
+- Maintainers are **implicit watchers** of their skill: `skill.new_version` on publish (deduped vs explicit watchers) and `skill.drift` on detected pointer drift. For pointer skills they also get `skill.upstream_release` and the skill page's upstream notice, with *Propose the update* and *Skip this release* (§63). Both are gated by the per-user **maintainer notification preferences** (§12) — suppressed at insert time for opted-out users, with an explicit `skill_watches` row always outranking the new-version opt-out — and drift pings fire **once per drift onset**, not per refresh pass (§12). No un-actionable review notifications.
 - The skill detail page shows maintainers as `display_name` + `email` to **anyone who can see the skill** (not only admins/maintainers) — the list is read-only for viewers, who can **Reach out** (direct message) to a maintainer, and **Follow** them (right of Reach out, §35.4); only platform admins, namespace admins, and the skill's own maintainers see the add field and the remove (✕) control. Coexists with the namespace `maintainer_contact` (namespace scope vs skill scope). Maintainer names are **not** in FTS (§10).
 - **Deprovision:** `ON DELETE CASCADE` (the implicit-admin half self-heals from live `role_mappings`).
 - **Visibility downgrade (`org→namespace`):** the effective-maintainer resolver always re-filters through `isSkillVisible` (defense-in-depth, so a stale row can never leak); any path that narrows the audience must additionally prune now-ineligible explicit rows (audited `skill.maintainer_removed`). The first such path is **unsharing a namespace** (§42.4): revoking a grant removes every explicit maintainer who is no longer eligible, in the same transaction. There is still no `org→namespace` flip in v1.
@@ -11815,7 +11830,7 @@ all read it, so they can never disagree.
 | Tier | Types | Admin can change? |
 |---|---|---|
 | **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.revise`, `proposal.resubmit` — the review queue | No |
-| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`), `idea.submitted` (§60.7), and `search_gaps.ready` and `skill.search_gap_hidden_match` (§62.9) | Yes — each can be switched off |
+| **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`), `idea.submitted` (§60.7), `search_gaps.ready` and `skill.search_gap_hidden_match` (§62.9), and `skill.upstream_release` (§63.5) | Yes — each can be switched off |
 | **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled`; the feature-idea lifecycle (§60.7): `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` | Yes — each can be switched on |
 | **Never emailed** | `system.error`, `achievement.earned` | No (not candidates) |
 
@@ -13836,3 +13851,262 @@ A request with `origin = 'search_gap'` has no requester and shows **Platform** i
 - **e2e** (stub provider, collection on, minimum 1): search a nonsense word and press Enter →
   *Run now* → the gap appears on `/admin/search-gaps` → **Create request…** → the request shows
   *Requested by Platform* on `/requests`.
+
+---
+
+## 63. Upstream release alerts
+
+Maintainers of a **pointer skill** (§6) hear when the upstream it pins has a **newer stable
+release**, and can **propose the update** from a pre-filled new-version form (§8). A leader-only
+worker sweep compares each pointer skill's **baseline** (its latest stable active version) with the
+upstream's releases. A release is a higher stable semver **tag** for a git origin, or a higher
+**registry version** for a skills-hub origin. For a git origin the sweep also checks that the
+skill's own files changed in that release, so a release of a multi-skill repo that never touched
+the skill's folder stays silent. Branch-pinned skills have no releases. Instead, their existing
+**drift** ping (§12) gains the same *Propose the update* action. Nothing here mutates a version,
+mirrors bytes or bypasses review. The alert only opens the ordinary propose form.
+
+### 63.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **A release is a higher stable semver.** For a git origin, that is a tag whose name parses as semver (an optional leading `v`) and is above the baseline's pinned tag. For a skills-hub origin, it is a published registry version above the pinned one. Prereleases never count. | It mirrors skilly's own `latest` = highest stable. Tags work on every git host, while a host's *Releases* API (GitHub's) would tie the feature to one vendor. |
+| 2 | **Only a semver pin has a "newer".** A baseline pinned to a branch, a commit SHA or a non-semver tag (`release-2024-05`) gets no release alert. Branch pins are covered by decision 3. | Without an ordered pin there is no honest "newer". Guessing from commit dates would alert on unrelated tags. |
+| 3 | **Branch drift gets the button.** When the pointer refresh reports drift (§12) on a baseline pinned to a **branch**, the drift notification and the skill page offer *Propose the update*, which re-pins the same branch at its new commit. Drift on a **moved tag or commit** gets no button. | A moving branch is how a `main`-pinned skill normally gets updates (`main` is the §8 default). A re-pointed tag is a supply-chain warning, and re-pinning it in one click would invite accepting tampered bytes. |
+| 4 | **Alert only if the skill's files changed.** For a git origin the sweep fetches the release's copy of the skill's folder and compares its content digest with the baseline's `content_sha256`. If they are equal, there is no alert. skills-hub versions are per-skill, so they always count. | A release of `anthropics/skills` would otherwise ping every skill mirrored from it. |
+| 5 | **"One click" opens the form and never submits.** *Propose the update* opens the new-version propose form with the new ref as an **explicitly supplied source**, a suggested semver and a pre-filled *What changed* note. The proposer checks it and submits through every normal gate. | Verification, duplicate checks, scans, policy rules and review all stay on one path. |
+| 6 | **The suggested semver follows upstream's bump level.** An upstream major suggests the next major above the skill's current latest, a minor the next minor, a patch the next patch. Branch drift suggests the next patch. | skilly keeps its own numbering but still signals a breaking change. |
+| 7 | **Effective maintainers are notified** (§19), with their own opt-out (`upstream_release_notifications`, default on). | They own the skill, and they are the same people drift goes to. The toggle is separate because a release is news and drift is a warning. |
+| 8 | **The page notice is for effective maintainers and platform admins only.** | Taking a release is the owners' call. The page stays clean for consumers. |
+| 9 | **One notification per release, naming the highest.** Several releases since the last alert produce one notification for the highest. A later, higher release alerts again. | No daily repeats, and no burst after a busy week upstream. |
+| 10 | **An open proposal for that release, or a higher one, silences it.** The notice links to that proposal, and no notification is sent when it was already open at detection. | Somebody is already on it. |
+| 11 | **A maintainer can skip a release.** Skipping hides the release for everyone until a higher one appears. It can be undone, and both directions are audited. | A breaking major may be deliberately not taken. |
+| 12 | **Deprecated and archived skills are not checked.** | Their users are being sent elsewhere (§45). |
+| 13 | **A platform switch, on by default** (`upstream_releases_enabled`). Off stops the sweep, hides the notices and sends nothing. The branch-drift button (decision 3) does not depend on it. | An organization can keep the sweep off its upstream hosts or turn the alerts off. The drift button has no checks behind it. |
+
+### 63.2 Baseline and pin kind
+- **Baseline** = the skill's **latest stable active version**, the version `main` / "latest"
+  serves (§6, §7). A skill is **eligible** when it is `active`, not deprecated
+  (`deprecated_at IS NULL`, §45), delivered as a pointer, and has a stable active version.
+- **Pin kind** of the baseline, classified by the sweep from the origin's ref listing (§63.3):
+  - `semver_tag`: the ref names a tag (`refs/tags/<ref>`) that parses as a stable semver after
+    stripping one leading `v`;
+  - `tag`: any other tag;
+  - `branch`: the ref names a branch (`refs/heads/<ref>`) **and no tag**. A name that is both a
+    branch and a tag counts as a tag, so it never gets the drift button;
+  - `commit`: anything else (a SHA pin, or a ref that is no longer listed);
+  - `registry`: a skills-hub origin (§6). Its pinned version is compared after stripping a `v`.
+- Only `semver_tag` and `registry` baselines get release alerts. A `branch` baseline can get the
+  drift button (§63.6). `tag` and `commit` baselines get neither.
+
+### 63.3 The sweep
+- A **leader-only worker sweep** (`upstreamReleases`) runs **hourly** and checks up to **25**
+  eligible skills per pass whose last check is older than **23 h** (or that were never checked),
+  oldest first: the pointer refresh's per-pass limit and spacing (§6), so no upstream is listed more
+  than about once a day. Passes never overlap (an advisory lock). While `upstream_releases_enabled`
+  is off the sweep does nothing.
+- **One listing per origin per pass.** Each normalized origin URL (`normalizeOriginUrl`, §8) is
+  listed once per pass. A monorepo with ten mirrored skills therefore costs one listing. For git
+  this is `git ls-remote --heads --tags` through the same SSRF-hardened transport as
+  `listRemoteRefs` (§8 ref pre-check, `@skilly/shared/remote-refs`), and it keeps each tag's
+  peeled commit. For skills-hub it is the registry's root API document (§6).
+- **Candidate** = the highest stable semver among the listed tags (git) or published versions
+  (registry) that is above the baseline's pinned semver. Its **bump** is the highest semver
+  component that differs from the pin: `major`, `minor` or `patch`.
+- **Folder check (git only, decision 4).** The sweep fetches the candidate tag's copy of the skill
+  with the mirror's own fetch and folder resolution (`fetchPointerFiles`, §6: the literal
+  `<subdir>/SKILL.md`, else a folder named after the skill), under the same bundle cap and SSRF
+  guards. It computes `contentDigest` (§8, the digest behind `content_sha256`) and compares it with
+  the baseline's `content_sha256`. The files are hashed and discarded: nothing is scanned or
+  stored. The result is cached per candidate `(ref, commit)` and baseline, so the fetch runs once
+  per candidate, not once per day. If the baseline has no `content_sha256` yet (the §8 backfill
+  hasn't reached it), the skill is left for a later pass.
+- **Only the highest candidate is checked.** An intermediate release that changed the folder,
+  followed by a highest release that reverted it, raises no alert. That is accepted (§63.12).
+- **Failures.** An unreachable origin, a failed folder fetch or a missing `SKILL.md` in the
+  candidate is recorded in `last_error`, and the previous release state is kept. The skill is
+  retried on its next eligible pass. No notification is sent for a failure: the pointer refresh
+  (§6) already surfaces an unreachable upstream.
+- **Then the notification step runs** (§63.5) against the updated row.
+
+### 63.4 Data model (migration 0104)
+**`skill_upstream_releases`**: one row per checked skill, written by the sweep, by *Skip* /
+*Un-skip* (§63.8), and by the pointer refresh, which records the baseline's pin kind when it detects
+drift (§63.6). A row the refresh created has `checked_at` `NULL` until the sweep first checks it.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `skill_id` | `uuid` PK, FK `skills` `ON DELETE CASCADE` | The skill. |
+| `baseline_version_id` | `uuid` FK `skill_versions` `ON DELETE CASCADE` | The baseline the last check ran against. |
+| `origin_url` / `subdir` | `text` / `text NULL` | The baseline's normalized origin and folder at that check. |
+| `pin_kind` | `text NOT NULL`, `CHECK IN ('semver_tag','tag','branch','commit','registry')` | §63.2. |
+| `release_ref` | `text NULL` | The candidate as upstream spells it (`v1.3.0`, `1.3.0`). `NULL` = no newer release. |
+| `release_semver` | `text NULL` | The candidate's parsed semver. |
+| `release_commit` | `text NULL` | The candidate tag's peeled commit (git only). |
+| `release_bump` | `text NULL`, `CHECK IN ('major','minor','patch')` | §63.3. |
+| `files_changed` | `boolean NULL` | The folder-check result for `(release_ref, release_commit)`. `NULL` = registry, or not checked yet. |
+| `detected_at` | `timestamptz NULL` | When the current `release_ref` was first seen. |
+| `notified_ref` | `text NULL` | The release last notified, or silenced by an open proposal (§63.5). |
+| `skipped_ref` / `skipped_by` / `skipped_at` | `text NULL` / `uuid NULL` FK `users` `ON DELETE SET NULL` / `timestamptz NULL` | The skipped release (§63.8). |
+| `checked_at` | `timestamptz NULL` | The sweep's last check. Drives the 23 h spacing. `NULL` = not checked yet (checked first). |
+| `last_error` | `text NULL` | The last failure, cleared by the next successful check. |
+
+Index on `checked_at`. Also:
+- `users.upstream_release_notifications` (`BOOLEAN NOT NULL DEFAULT true`) — the eighth maintainer
+  notification preference (§12).
+- The platform setting `upstream_releases_enabled` (absent ⇒ `true`).
+
+**A release is pending** (derived on every read by one shared pure helper,
+`@skilly/shared/upstream-releases`, never stored) when **all** of these hold:
+1. `upstream_releases_enabled` is on, and the skill is eligible (§63.2);
+2. the row's `pin_kind` is `semver_tag` or `registry`, the **current** baseline still pins the
+   row's `origin_url` and `subdir`, and its pinned ref parses as a stable semver below
+   `release_semver`. So publishing the update clears the notice at once, without waiting for the
+   sweep;
+3. for a git origin, `files_changed` is `true`;
+4. there is no skip that covers it: `skipped_ref` is `NULL`, or `release_semver` is above the
+   skipped semver.
+
+### 63.5 Notification — `skill.upstream_release`
+- **When.** After updating a row, the sweep notifies if a release is pending, `notified_ref` is
+  `NULL` or below the release, and **no open proposal covers it**. It then sets `notified_ref` to
+  the release. A covered release also sets `notified_ref`, without notifying, so it is never
+  notified later (decision 10).
+- **Covering proposal** = a new-version proposal for this skill in `proposed`, `under_review` or
+  `changes_requested`. Its current revision's pointer source must have the same normalized origin
+  URL and folder, and a ref that parses as stable semver at or above the release. The same lookup
+  feeds the page notice (§63.7).
+- **Recipients**: the skill's effective maintainers (§19), whose resolver re-filters through
+  `isSkillVisible`, minus `upstream_release_notifications = false`. Not coalesced; one row per
+  recipient per release.
+- **Content** (§12 table): subject **Upstream release available**; body *"{ns}/{slug} pins
+  {currentRef}. Upstream has released {releaseRef}."*; CTA **Propose the update** →
+  `/propose?newVersion=1&ns={ns}&slug={slug}&upstreamRef={releaseRef}&upstreamKind=release&bump={bump}`.
+  Payload: `{ skillId, ns, slug, currentRef, releaseRef, bump }`.
+- **Digestible by default** (§48.3).
+
+### 63.6 Branch drift: *Propose the update*
+- When the pointer refresh (§6 `pointerRefresh`) detects drift on a skill's **baseline** with a git
+  origin, it lists the origin's refs (the same transport as §63.3) and classifies the pin with the
+  §63.2 rule. It records the result on the skill's `skill_upstream_releases` row (baseline, origin,
+  folder and pin kind; never `checked_at` or the release columns), and the `skill.drift`
+  notification payload carries it as `pinKind`. With `pinKind: "branch"` the notification gains a
+  second CTA, **Propose the update** →
+  `/propose?newVersion=1&ns={ns}&slug={slug}&upstreamRef={ref}&upstreamKind=branch` (the webhook
+  payload carries it as `proposeUrl`). Drift on an older version, a registry origin, or a tag or
+  commit pin is unchanged, and so is a drift whose listing fails (no button).
+- The skill page shows the branch-drift notice (§63.7) while the baseline's most recent
+  `pointer_ref` report, ignoring `unreachable` rows, has `status = 'drift'`, and the row records
+  pin kind `branch` for **this** baseline.
+- **Not gated by `upstream_releases_enabled`**, and still gated by `drift_notifications` (§12).
+  Drift dedup (once per onset) is unchanged. There is no *Skip* for drift: the notice lasts until
+  the baseline is re-pinned or the drift clears. The covering-proposal rule applies, matching the
+  branch name instead of a semver.
+
+### 63.7 The skill page notice
+A notice at the top of the skill detail page (anchor `#upstream`), shown **only to effective
+maintainers and platform admins**, on pointer skills, while there is something to show:
+
+| State | Text | Actions |
+|---|---|---|
+| Release pending | *Upstream **{releaseRef}** is out. This skill pins **{currentRef}** ({bump} update).* | **Propose the update** (primary) · **Skip this release** |
+| Release pending, covered | *Upstream **{releaseRef}** is out. An update is already proposed.* | **View the proposal** |
+| Release skipped | *Skipped upstream **{releaseRef}** ({name}, {date}).* (muted, one line) | **Un-skip** |
+| Branch drift | *Upstream **{branch}** has moved since **v{semver}** was pinned.* | **Propose the update** (or **View the proposal** when covered) |
+
+A skipped notice disappears when a higher release appears, and the higher release is shown
+instead. If release and branch drift could both apply, only one can: a baseline has one pin kind.
+
+### 63.8 Skip and un-skip
+- `POST /api/skills/:ns/:slug/upstream/skip { ref }`: effective maintainers and platform admins.
+  The response is **404** when the caller can't see the skill (invariant #3) and **403** for other
+  viewers. It returns **409** `not_pending` when `ref` is not the currently pending release. It sets
+  `skipped_ref` / `skipped_by` / `skipped_at` and is audited as `skill.upstream_release_skipped`
+  `{ ref }`.
+- `DELETE /api/skills/:ns/:slug/upstream/skip`: the same authority. It clears the three columns,
+  and is audited as `skill.upstream_release_unskipped` `{ ref }`. The release becomes pending again.
+  It is **not** re-notified, because `notified_ref` already names it. **409** `not_skipped` when
+  nothing is skipped.
+- Both are rate-limited under their own per-user bucket (30 a minute), and a stale request (the
+  release moved on, or another maintainer acted first) gets its 409 and the page refetches.
+- A higher release supersedes a skip: it is pending, and it notifies.
+
+### 63.9 The pre-filled propose form
+- The form reads `upstreamRef`, `upstreamKind` (`release` | `branch`) and `bump` in new-version mode
+  (`newVersion=1&ns&slug`) for a **pointer** skill. Other skills ignore them.
+- **Source.** Origin URL and folder are the form's usual new-version pre-fill (the skill's current
+  pointer source, `pointer` on `GET /api/skills/:ns/:slug`, which now also carries its pinned
+  `ref`), and the ref is `upstreamRef`, as an **explicitly supplied source**. *Keep current files* is off, so submit-time verification (which
+  pins the new commit, §49.3), the fresh mirror and the worker re-scan all run (§8). The ref goes
+  through the normal live pre-check, which warns if it doesn't exist upstream.
+- **Semver.** The next `bump` above the skill's current latest stable (decision 6). A missing or
+  invalid `bump`, or `upstreamKind=branch`, falls back to the form's default, the next patch.
+- **What changed.** It is pre-filled with *"Updates upstream from {currentRef} to {upstreamRef}."*
+  (release) or *"Re-pins {upstreamRef} at its latest upstream commit."* (branch). This is an
+  ordinary editable value, not the *Updated metadata* default, so §8's clear-on-source rule never
+  touches it.
+- The parameters are **hints only**. They grant nothing: anyone who may open the new-version form
+  may follow the link, and everything else is the normal form. The resulting proposal carries no
+  marker.
+
+### 63.10 Administration and Profile
+- **Administration → Upstream releases**: a collapsible card (card id `upstreamreleases`, platform
+  admins only, collapsed by default, placed after **Duplicate proposals**, summary `on` / `off`).
+  It has one shared `Switch`, *Check pointer skills for newer upstream releases*, saved through
+  `PATCH /api/admin/settings { upstreamReleasesEnabled }` and audited as `settings.updated`. Turning
+  it **off** keeps the rows (dormant, not destructive, the §50.8 stance): notices disappear, the
+  sweep stops and nothing is notified. Turning it back on resumes, and a release already notified
+  is not notified again.
+- **Profile**: the eighth maintainer toggle, *Upstream releases on skills I maintain*
+  (`upstreamReleaseNotifications` on `GET` / `PATCH /api/me`), silent like the others (§12). It is
+  hidden while the switch is off. `GET /api/me` also returns `upstreamReleasesEnabled` (read-only).
+
+### 63.11 API, audit and metrics
+- `GET /api/skills/:ns/:slug` gains `upstream`, non-null **only** for effective maintainers and
+  platform admins, and only while §63.7 has something to show:
+  `{ kind: "release" | "branch_drift", currentRef, baselineSemver, release?: { ref, semver, bump,
+  detectedAt }, proposal?: { id }, skipped?: { ref, byName, at }, proposePath }`. Its `pointer`
+  block gains the pinned `ref` (§63.9).
+- `POST` / `DELETE /api/skills/:ns/:slug/upstream/skip` (§63.8).
+- `GET` / `PATCH /api/admin/settings` — `upstreamReleasesEnabled`.
+- `GET` / `PATCH /api/me` — `upstreamReleaseNotifications`, plus `upstreamReleasesEnabled`
+  (read-only).
+- **Audit**: `skill.upstream_release_skipped`, `skill.upstream_release_unskipped`, and
+  `settings.updated` for the switch. Detection itself is **not** audited: it has no actor and
+  changes nothing in the catalog (contrast drift, a security signal that is audited).
+- **Metrics**: `skilly_upstream_release_checks_total{result="none|release|unchanged|error"}` and
+  `skilly_upstream_release_notifications_total`.
+- **MCP** (§29): nothing in this change.
+
+### 63.12 Accepted trade-offs and out of scope
+- A repository that publishes GitHub *Releases* without semver tags, or uses a non-semver tag
+  scheme, never alerts (decisions 1–2). A pin to a commit SHA never alerts either.
+- Only the highest release is folder-checked (§63.3).
+- A release that moved the skill's folder raises no alert. The failure is only recorded in
+  `last_error`.
+- Branch drift has no *Skip*.
+- No release notes in the notification or the note: they are host-specific.
+- Deferred: an MCP field or tool, a per-namespace switch, and alerts for watchers or installers.
+
+### 63.13 Tests (ship with the change)
+- **Unit** (`@skilly/shared`): tag parsing (a `v` prefix, prereleases ignored, non-semver
+  ignored), candidate selection and bump level, the suggested semver, pin-kind classification
+  (including a branch and a tag with the same name, a SHA and a missing ref), the pending helper
+  (each of the four conditions, a skip, a higher release past a skip, a changed baseline origin),
+  and the covering-proposal matcher.
+- **Integration** (worker + DB, upstream stubbed):
+  - a `semver_tag` baseline with a newer, changed tag gets a row and one notification per effective
+    maintainer, and a second pass is silent;
+  - a higher release notifies again, naming only the highest;
+  - an unchanged folder, a prerelease, a `tag` or `commit` pin, a deprecated skill, the switch off,
+    and an opted-out maintainer each send nothing;
+  - an open covering proposal sets `notified_ref` without notifying;
+  - one listing per origin per pass; a failure records `last_error` and keeps the old state;
+  - a skills-hub baseline alerts with no folder fetch;
+  - branch drift on the baseline carries `pinKind: "branch"`, and tag drift doesn't.
+- **Integration** (web API + DB): `upstream` appears for a maintainer and a platform admin, is
+  absent for a plain viewer, and the skill is 404 for an outsider; skip and un-skip check authority,
+  return 409 `not_pending`, and write their audit rows; publishing a version that pins the release
+  clears `upstream` at once; settings and `/api/me` round-trip.
+- **e2e**: with a seeded pending release, a maintainer sees the notice, clicks **Propose the
+  update** and lands on the form with the new ref, the suggested semver and the note filled in, and
+  *Keep current files* off. **Skip this release** turns the notice into the muted skipped line.

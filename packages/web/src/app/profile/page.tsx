@@ -34,6 +34,9 @@ interface Me {
   /** §50.7 hype milestones on skills they maintain, and whether hype is on at all (§50.8). */
   hypeNotifications?: boolean;
   hypeEnabled?: boolean;
+  /** §63.10 upstream releases of pointer skills they maintain, and whether the switch is on. */
+  upstreamReleaseNotifications?: boolean;
+  upstreamReleasesEnabled?: boolean;
   directoryHidden: boolean;
   /** §60.9 feature ideas: the attribution opt-out and an admin's review-queue opt-out. */
   ideaAttributionHidden?: boolean;
@@ -393,7 +396,7 @@ function MaintainerNotificationsPref() {
   const [busy, setBusy] = useState(false);
   if (!data) return <div className="skeleton" style={{ height: 120, borderRadius: "var(--radius)" }} />;
 
-  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications" | "ideaNotifications", enabled: boolean) => {
+  const patch = async (field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications" | "upstreamReleaseNotifications" | "ideaNotifications", enabled: boolean) => {
     setBusy(true);
     try {
       await fetch("/api/me", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ [field]: enabled }) });
@@ -401,9 +404,13 @@ function MaintainerNotificationsPref() {
     } finally { setBusy(false); }
   };
 
-  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications" | "ideaNotifications"; label: string; offHint: string; value: boolean }[] = [
+  const rows: { field: "driftNotifications" | "newVersionNotifications" | "contentRiskNotifications" | "qualityNotifications" | "policyNotifications" | "discussionNotifications" | "aiPrereviewNotifications" | "hypeNotifications" | "upstreamReleaseNotifications" | "ideaNotifications"; label: string; offHint: string; value: boolean }[] = [
     { field: "driftNotifications", label: "Upstream drift", offHint: "You won't be alerted when an external skill's pinned source changes.", value: data.driftNotifications },
     { field: "newVersionNotifications", label: "New versions", offHint: "You won't be alerted when a skill you maintain publishes a version. Skills you watch still notify you.", value: data.newVersionNotifications },
+    // §63.10 — hidden while upstream release checks are switched off platform-wide.
+    ...(data.upstreamReleasesEnabled !== false
+      ? [{ field: "upstreamReleaseNotifications" as const, label: "Upstream releases", offHint: "You won't be told when the repository or registry an external skill you maintain points at has a newer release.", value: data.upstreamReleaseNotifications ?? true }]
+      : []),
     { field: "contentRiskNotifications", label: "Content check flags", offHint: "You won't be alerted when the content check flags a published version of a skill you maintain.", value: data.contentRiskNotifications },
     { field: "qualityNotifications", label: "Low quality scores", offHint: "You won't be alerted when a published version of a skill you maintain scores 2 stars or below on the quality check.", value: data.qualityNotifications },
     { field: "policyNotifications", label: "Policy flags", offHint: "You won't be alerted when the policy check flags a published version of a skill you maintain.", value: data.policyNotifications },
@@ -426,7 +433,7 @@ function MaintainerNotificationsPref() {
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Skills I maintain or watch</h2>
       <p className="page-sub" style={{ marginBottom: 16 }}>
         As a maintainer you’re alerted when a skill you maintain publishes a new version, when an external (pointer)
-        skill’s pinned source drifts upstream, when the content check flags a published version, or when a published version scores 2 stars or below on the quality check. You’re also alerted about new discussion comments on skills you maintain
+        skill’s pinned source drifts or has a newer upstream release, when the content check flags a published version, or when a published version scores 2 stars or below on the quality check. You’re also alerted about new discussion comments on skills you maintain
         or watch. Turning one off stops that alert entirely — in-app and email. Skills you explicitly watch keep notifying
         you of new versions either way (except discussion comments, which the toggle above silences for watched skills too).
       </p>
