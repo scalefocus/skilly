@@ -202,8 +202,11 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id` (bigserial), `skill_id`, `namespace_id` (denormalized for the namespace aggregate), `actor_user_id` (always set — views are authenticated), `created_at`. Append-only analytics of **skill-detail views**. Installs are NOT duplicated here — they're read from `access_log` (the git clone). Both FKs cascade (user → SET NULL).
 
 ### `proposals`
-- `id`, `target_namespace_id`, `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `accepted` | `rejected`), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `created_at`, `updated_at`.
+- `id`, `target_namespace_id`, `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `accepted` | `rejected`), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `import_id` (nullable — the repository import it came from, §64; set at creation, never changed; migration 0105), `created_at`, `updated_at`.
 - **Original submission stored immutably**; reviewer edits tracked as revisions.
+
+### `proposal_imports` (migration 0105, detailed in §64.8)
+- One row per repository import: submitter, namespace, normalized origin, ref, pinned commit, scan folder, mode (`review` | `direct`) and item counts. Links the proposals one import created (`proposals.import_id`); display and notification only.
 
 ### `proposal_revisions`
 - `id`, `proposal_id`, `revision_no`, `payload` (metadata + artifact reference for that revision — incl. the icon fields `iconSha256` / `iconFilename` / `iconEmoji`, **hash + filename, never bytes**, §33), `author`, `note`, `created_at`.
@@ -631,8 +634,8 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     charset). **The install command is unchanged** — it still targets skilly's gateway URL
     for that single skill; no `--skill`/`--all` flags appear (those are consumer-side flags for
     repos that contain multiple skills, which a skilly mirror never does). One proposal still
-    produces **exactly one** skill — bulk-importing every skill in an upstream repo is out of
-    scope.
+    produces **exactly one** skill. To bring in many skills from one repo, the **repository
+    import** (§64) creates one ordinary pointer proposal per chosen folder.
   - **skills-hub.ai origin (API-mirrored, not git).** A pointer may also originate from the
     skills-hub.ai registry (`npx @skills-hub-ai/cli install <slug>`). **Pinned from the CLI's
     source (v0.4.1)**: that tool does **no git clone and fetches no tarball** — it calls
@@ -962,7 +965,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 
 - A proposal targets **a new skill OR a new version of an existing skill**, scoped to a namespace.
 - **Closed tool/harness (coding-agent) vocabulary → install `--agent`.** The propose form's tool/harness is a **closed but searchable** picker over the curated agent list (`shared/agents.ts`; label shown, slug stored) — filter by label or slug, `Generic` first then alphabetical. The chosen agent **drives the install command**: a recognized non-generic slug appends `--agent <slug>` at the end of `npx skills add <url>` (§9); `Generic` (the default) appends nothing. Server-side, `verifySubmissionPayload` enforces **closed membership** (`generic` ∪ known agent slugs) — gating propose, direct publish, and reviewer edits/resubmits (`newPayload`). The old open vocabulary (type-a-new-value + derived suggestions) is removed; pre-existing values not in the list are **grandfathered** (shown raw, no `--agent`, **re-validated only when changed** — an unchanged value equal to the target skill's stored `tool_harness` passes even if it's a legacy slug; this carve-out is load-bearing now that new-version mode resends the field). The propose form's **paste-to-fill** preselects the agent when a pasted command carries a recognized `--agent <slug>`. **New-version mode:** the tool/harness picker stays **active** — a re-version may re-target the skill's coding agent (synced to the skill on accept, §8 below). Since `tool_harness` is skill-level, a change updates the `--agent` flag of the install command for **every** version, including already-published ones.
-- **Paste-to-fill for pointer proposals.** The propose form offers a paste box (the first field **inside the Pointer / external-git tab**, since it's pointer-specific; the Hosted/Pointer tab strip itself sits at the top of the form) that accepts a consumer-tool install command and fills the pointer fields from it — an **accelerator, not a third source type**: submission, validation, and review are unchanged, and every filled field stays editable. Parsing is a pure shared function (`parseInstallCommand`, beside the pinned wire-format adapter) covering the tool's source forms: full git URL (with optional `#ref`), GitHub `owner/repo` shorthand (normalized to `https://github.com/owner/repo.git`), GitHub `/tree/<ref>/<path>` URLs (split into URL + ref + folder), `--skill <name>` (→ the §6 skill folder; slug derived from its last segment), and the **skills-hub.ai install command** (`npx @skills-hub-ai/cli install <slug>` → the §6 API origin; the skilly slug is suggested from the registry slug and the ref must be a registry **version** — the command names none, so the form pins the registry's **latest version** via the ref pre-check, editable and quick-pickable from the published versions). Rules: for a **git** source, a command without a ref leaves the `main` default in charge (§8 below); `--all` is **rejected** with guidance (one skill per proposal, §6); URL schemes are never rewritten (the §6 SSRF validator remains the gate). **New-version mode:** the paste fills URL/ref/folder but **never changes the locked slug** (and cannot flip the locked source type); pasting a source counts as **explicitly supplying it**, so it switches the form off *Keep current files* (§8 below). A folder whose last segment differs from the slug shows a **soft warning** — submission is allowed, and the mirror-time `name == slug` validation stays the hard gate.
+- **Paste-to-fill for pointer proposals.** The propose form offers a paste box (the first field **inside the Pointer / external-git tab**, since it's pointer-specific; the Hosted/Pointer tab strip itself sits at the top of the form) that accepts a consumer-tool install command and fills the pointer fields from it — an **accelerator, not a third source type**: submission, validation, and review are unchanged, and every filled field stays editable. Parsing is a pure shared function (`parseInstallCommand`, beside the pinned wire-format adapter) covering the tool's source forms: full git URL (with optional `#ref`), GitHub `owner/repo` shorthand (normalized to `https://github.com/owner/repo.git`), GitHub `/tree/<ref>/<path>` URLs (split into URL + ref + folder), `--skill <name>` (→ the §6 skill folder; slug derived from its last segment), and the **skills-hub.ai install command** (`npx @skills-hub-ai/cli install <slug>` → the §6 API origin; the skilly slug is suggested from the registry slug and the ref must be a registry **version** — the command names none, so the form pins the registry's **latest version** via the ref pre-check, editable and quick-pickable from the published versions). Rules: for a **git** source, a command without a ref leaves the `main` default in charge (§8 below); `--all` fills nothing and offers **Import all skills from this repository** instead (one skill per proposal, §6; the repository import, §64.9); URL schemes are never rewritten (the §6 SSRF validator remains the gate). **New-version mode:** the paste fills URL/ref/folder but **never changes the locked slug** (and cannot flip the locked source type); pasting a source counts as **explicitly supplying it**, so it switches the form off *Keep current files* (§8 below). A folder whose last segment differs from the slug shows a **soft warning** — submission is allowed, and the mirror-time `name == slug` validation stays the hard gate.
 - **Propose a new version from the skill detail page.** Any authenticated user **who can see the skill** (*Target visibility gate*, below) can open the propose flow pre-filled from an existing skill (button on the detail page). In this mode only the **identity and access surface is LOCKED**: the **slug** (the install/repo identity — unique, read-only), the **visibility value** (`org`/`namespace`), and the **delivery type** (hosted vs pointer) — with **one deliberate exception**: on a `namespace`-visibility skill the **shared-namespaces list (§42) is editable**, pre-filled with the current grants, and lands at the same accept/publish gate as the version. **Everything else is editable**, pre-filled with the skill's current values: the skill-level metadata — **title, description, categories, and tool/harness** — and the version-level inputs — the semver (pre-filled with the next patch above the current latest stable), the usage examples, the **"What changed" note** (required in new-version mode — see the dedicated bullet below), and the **source**, which is now **optional** (default **Keep current files**, below; or a fresh hosted bundle / a new pinned ref+subdir for a pointer). Anyone who may propose may edit any of these — including retitling the skill — applied at the same accept/publish gate as the version (so in a `require_review = false` namespace, a member's direct publish retitles instantly; that is intended). It targets the existing skill and goes through the **normal review/approval** path (or direct publish where permitted). On accept, a new `skill_version` is created **and the skill's title, description, categories, and tool/harness are synced to the submitted values** (categories added/removed to match; all are skill-level metadata, not version content, so this is allowed — the sync re-fires the FTS trigger so search stays current, and it applies **on accept regardless of channel**: a prerelease re-version still updates the skill-level metadata immediately even though `latest` never moves). Only **visibility** stays frozen (a visibility change remains a skill-management action, never a re-version); the slug is immutable, period.
 - **Target visibility gate (invariant #3).** A new-version submission is accepted only when the actor **can see the target skill** through the shared visibility predicate (`isSkillVisible`: org-wide, a role in the owning namespace, a §42 grant to one of their namespaces, or platform admin). A target that exists but is not visible is answered exactly like a nonexistent one — **404 `target skill not found`** from `POST /api/proposals`; on `POST /api/publish` and the MCP `propose_*` tools (§29), where the slug *is* the target identity, an invisible existing skill is treated exactly as **absent** (the request takes the ordinary new-skill path and meets its usual authorization — a non-member's 403 on direct publish, the visibility-filtered slug check over MCP — never a distinct status) — so the response confirms nothing about the skill's existence. The rule closes a leak: without it an outsider could file a *Keep current files* proposal against a restricted skill whose slug they guessed, then read its snapshotted bundle through their own proposal's artifact/files/diff views. Enforced in **three layers**, each evaluated against the **actor's** access at the moment of the call: the route (404 before any payload work); `resolveReuseSource`, which refuses to snapshot an invisible target's artifact (so `revise`/`resubmit` and reviewer edits re-check at their own time — a submitter whose grant was revoked mid-review can no longer switch to *Keep current files*); and `verifySubmissionPayload`, which refuses a payload whose `targetSkillId` the actor cannot see. Both helpers take the actor's access and **fail closed without it**. The contribution policy (§4 *proposals open*) is evaluated **before** this gate and keeps its 403 (it names only the namespace, never a skill). A proposal filed while the target was visible stays readable to its submitter (own-proposal rule) even if their visibility later lapses — the snapshot was taken legitimately and the reviewers already hold the bytes; retroactive revocation is out of scope.
 - **AI-drafted files (§44).** The new-version propose form can also be opened **from the §44 draft dialog**, carrying an assembled hosted bundle (the latest stable version's files with the AI changes the user kept) as an **explicitly supplied source** (so *Keep current files* is off — the same in-place transition the duplicate redirect uses), the **"What changed"** note pre-filled with an **AI-written prose summary** of the kept changes (§44.7 — falling back to one line per kept change when the summary call fails; an ordinary value, not the *Updated metadata* default, so the clear-on-source rule never touches it; an AI-written note carries the hint *"Written by &lt;AI name&gt; — edit as needed."* under the field until the proposer first edits it) and an `aiDraftToken`. Everything else is the normal new-version mode; replacing the bundle before submitting drops the token (the proposal is then not marked). A submitted proposal carrying a valid token is marked **Drafted with &lt;AI name&gt;** on the proposal and review pages (§44.8).
@@ -1248,6 +1251,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
   - **Email digests (§48.13):** `settings.updated` for the five `email_digest*` platform keys. The user's digest choice and the digest sends are **not audited**.
+  - **Repository import (§64.10):** `proposal.import` once per submit (origin, ref, pinned commit, mode, per-outcome counts and slugs — never metadata text); each skill's own `proposal.created` (or publish) entry carries `importId`. Scans and AI drafts are **not audited**.
   - **Feedback survey (§36.11):** submissions, closes and first uses are **never audited** (an audit row would tie a person to an anonymous response). Audited: `settings.updated` for `survey_enabled` and `bug_reports_enabled` (§36.17), and **`survey.response_deleted`** (the admin; `before` = date, trigger, feature, segment, catalog version, answer count and text length — **never the text or a bug report's page path**). Bug reports (§36.17) are never audited either.
   - **Feature ideas (§60.10):** `idea.published`, `idea.rejected`, `idea.updated`, `idea.closed` (outcome, note, deleted vote count), `idea.marked_shipped`, `idea.deleted` (a snapshot of the deleted row, the reason, the deleted vote count), and `settings.updated` for `feature_ideas_enabled`. Submitting, editing or withdrawing an idea, votes and the two profile toggles are **not audited**.
 - **Read access (`/api/audit`):** Platform Admin → all; Namespace Admin → own namespace; **everyone else → 403** (the endpoint is admin-only). A regular user's view of *their own proposals' lifecycle* is surfaced on the proposal detail page, not through the audit-log endpoint — so the §4 matrix's "own proposals" cell is a proposal-detail capability, not audit-log access.
@@ -1370,6 +1374,8 @@ current or future type can ever leak JSON to a user.
   | `skill.search_gap_hidden_match` | Search for a restricted skill | People searched for "{query}" and couldn't find {ns}/{slug}, because only its namespace can see it. Up to {n} people in the last {days} days. Consider sharing it with more namespaces or making it org-visible. | View the skill → `/skills/{ns}/{slug}` |
   | `proposal.submitted` | Proposal submitted | Your skill proposal was submitted and is awaiting review. | View it → `/proposals/{proposalId}` |
   | `proposal.needs_review` | New proposal to review | A new skill proposal is awaiting your review. | Review it → `/proposals/{proposalId}` |
+  | `proposal.import_needs_review` | Skills imported for review | {fromName} imported {count} skills from {repo} into {ns}. They are awaiting your review. | Review them → `/proposals?tab=review&import={importId}` (§64.7) |
+  | `proposal.import_submitted` | Import submitted | Your import of {count} skills from {repo} was submitted and is awaiting review. | View them → `/proposals?tab=mine&import={importId}` (§64.7) |
   | `proposal.start_review` | Proposal under review | Your skill proposal is now under review. | View it → `/proposals/{proposalId}` |
   | `proposal.request_changes` | Changes requested | Your skill proposal needs changes. *(+ `Reviewer note: "{note}"` when a note is present)* | View it → `/proposals/{proposalId}` |
   | `proposal.resubmit` | Proposal resubmitted | Your skill proposal was resubmitted. | View it → `/proposals/{proposalId}` |
@@ -1784,7 +1790,8 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
   - **Existing endpoints that gain fields:** `GET /api/proposals/:id` and `GET /api/skills/:ns/:slug` gain `policy`; the accept gate's 409 gains `policy.tripped`; a policy override without a reason → **422**, without authority → **403 `policy_override_forbidden`**; `POST /api/publish` may answer **202** with `routedReason: 'policy'`. Re-checks use the §46 re-run endpoints.
 - **AI pre-review (§46.11):** `POST /api/proposals/:id/ai-prereview/rerun`, `POST /api/proposals/:id/ai-prereview/dispositions` (reviewers); `GET /api/skills/:ns/:slug/ai-prereview?semver=` (owners), `POST .../ai-prereview/rerun` and `.../ai-prereview/dispositions` (override holders); `GET /api/proposals/:id` gains `aiPrereview`.
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
-- `GET /api/propose/ai-draft` → `{ available }`; `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`), 502 `draft_failed`. Nothing persisted.
+- `GET /api/propose/ai-draft` → `{ available, remainingToday }` (§64.5); `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`), 502 `draft_failed`. Nothing persisted.
+- **Repository import (§64):** `POST /api/propose/import/scan` — list a git repo's `SKILL.md` folders at a ref with name, description, last-changed date and importability (§64.3); `POST /api/propose/import` — submit up to 50 skills as one import, one ordinary pointer proposal (or direct publish) each, outcome per skill (§64.6). `GET /api/proposals` gains `import=`; `GET /api/proposals/:id` gains `import` (§64.7).
 - `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon). The web form never sends the picked file itself — it uploads its own **256×256 PNG** crop (§33.3), so the 512 KB cap binds API callers only and is independent of the form's **10 MB** source limit.
 - `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6); an unparseable multipart body is a clear 400, not a 500 (§6). **Chunked variant** for bundles larger than the configured chunk size (§6): `POST /api/uploads/chunked` (start; sweeps ≥2h-old orphans, returns `{uploadId, chunkBytes}`), `PUT /api/uploads/chunked/:id/parts/:index` (raw octet-stream part), `POST /api/uploads/chunked/:id/complete` (assemble → identical validate/scan/store; same response shape as the single-shot upload), `DELETE /api/uploads/chunked/:id` (abort). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
 
@@ -10211,6 +10218,13 @@ differently from text the proposer typed — the proposer submits it as their ow
 | 7 | **Rate-limited: 10 per minute and 50 per rolling 24 hours per user**, with an explicit message when either is hit. | The first AI surface any authenticated user can trigger; §40 has no cost caps of its own. |
 | 8 | **No retry, no persistence, no audit.** Each draft is one `ai_usage` row. | An interactive call must fail fast; a draft only becomes record when submitted (already audited). |
 
+**The repository import (§64.5)** is the one other surface that calls this endpoint. When the
+proposer ticks its *Draft with AI* option, the import page drafts each ticked skill once the wizard
+opens: the tick plus Next is the deliberate act of decision 1. It uses the same endpoint, egress,
+limits (decision 7, shared with the propose form) and no-marker rule (decision 6). A draft there
+**replaces** the frontmatter-filled Description and Usage without a confirm, because the proposer
+has typed nothing yet, and keeps the §43.3 Undo. Otherwise decision 2 stands.
+
 ### 43.2 When the button is shown and enabled
 - **Shown** only when `aiAvailable()` (§40.7) is true — configured, enabled, token decrypts. The form
   asks once on load via `GET /api/propose/ai-draft` → `{ available }`. When AI is off, not
@@ -10269,7 +10283,8 @@ differently from text the proposer typed — the proposer submits it as their ow
 
 ### 43.5 Endpoint — `POST /api/propose/ai-draft`
 Any authenticated user (the implicit *propose* right, §4). `GET` on the same route returns
-`{ available: aiAvailable() }`.
+`{ available: aiAvailable(), remainingToday }`, where `remainingToday` is the caller's drafts left
+in the rolling 24 hours (§64.5).
 
 - **Request** — one of three sources:
   - **Hosted:** multipart with the bundle `file` (and the form's `skillSlug`, unused for hosted).
@@ -11833,9 +11848,9 @@ all read it, so they can never disagree.
 
 | Tier | Types | Admin can change? |
 |---|---|---|
-| **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.revise`, `proposal.resubmit` — the review queue | No |
+| **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.import_needs_review` (§64.7), `proposal.revise`, `proposal.resubmit` — the review queue | No |
 | **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`), `idea.submitted` (§60.7), `search_gaps.ready` and `skill.search_gap_hidden_match` (§62.9), and `skill.upstream_release` (§63.5) | Yes — each can be switched off |
-| **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled`; the feature-idea lifecycle (§60.7): `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` | Yes — each can be switched on |
+| **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.import_submitted` (§64.7), `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled`; the feature-idea lifecycle (§60.7): `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` | Yes — each can be switched on |
 | **Never emailed** | `system.error`, `achievement.earned` | No (not candidates) |
 
 - **`email_digest_types`** holds the enabled candidates from the two changeable tiers. The server
@@ -14194,3 +14209,331 @@ like the other facet counts:
 - **e2e**: with a seeded pending release, a maintainer sees the notice, clicks **Propose the
   update** and lands on the form with the new ref, the suggested semver and the note filled in, and
   *Keep current files* off. **Skip this release** turns the notice into the muted skipped line.
+
+---
+
+## 64. Import a whole repository
+
+A proposer points skilly at a **git repository that holds several skills**, ticks the ones they
+want, reviews each one's metadata in a **wizard**, and submits them **in one go**. Each ticked skill
+becomes an **ordinary pointer proposal** (§6, §8): the repository URL, the import's ref and that
+skill's folder, exactly what pasting `npx skills add <repo> --skill <name>` produces today. The
+import is a faster way to fill in N propose forms. Every proposal is reviewed, accepted or rejected
+on its own, through every existing gate. The proposals from one import are linked by an **import**
+record, for display and notification only.
+
+### 64.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **One ordinary pointer proposal per ticked skill**, independent from submit on. The import record only links them. | Verification, the slug match, duplicates, scans, policy rules, AI pre-review and the revision-pinned accept stay on one path. One bad skill never holds up the rest. Upstream release alerts (§63) already work per folder. |
+| 2 | **Git origins only.** | A skills-hub.ai slug is a single skill, so there is nothing to import in bulk. |
+| 3 | **The scan lists every `SKILL.md` anywhere in the repository** (or under an optional folder), sorted by path, each with its path, name, description and **last changed** date. | Repositories lay skills out as `skills/<name>/`, `.claude/skills/<name>/`, `plugins/<p>/skills/<s>/` or top-level `<name>/`. Scanning everywhere catches them all. An extra row is simply left unticked. |
+| 4 | **Namespace, visibility, the shared-namespaces list (§42) and the ref are chosen once**, on the pick page, for every skill. Tool/harness gets a default there that each step may change. | The namespace decides the reviewers and `require_review`. Visibility is identity, frozen on every later version (§8). One import lands in one review queue under one rule. |
+| 5 | **The slug is the upstream `name`, locked.** A `SKILL.md` with no `name` or `description`, or a `name` that isn't a valid slug, is listed but **not tickable**. | `validateBundle` requires both fields and `name == slug` (§6). Any other slug would fail at mirror time. |
+| 6 | **New skills only.** A found skill whose name matches an active skill the proposer can see (any namespace, deprecated included) is listed but **not tickable**, with a link to that skill. | A new-version step would target another namespace, need a *What changed* note and bring the delivery-type clash (§8). Updates go through the skill's page or §63. |
+| 7 | **A wizard with one step per ticked skill**, and **Previous**, **Next** and **Remove from proposal**. The proposer reviews every step, whether or not AI filled it. | "In one go" must not mean "unread". |
+| 8 | **AI drafting is opt-in per import**: a *Draft with AI* option, shown only when §43 drafting is available. When it is on, each ticked skill is drafted **in the background once the wizard opens**, through the §43 endpoint and **under the §43 limits** (10 per minute and 50 per rolling 24 hours, shared with the propose form). | Ticking the option and clicking Next is the deliberate act §43 decision 1 asks for. One shared cap keeps each person's provider spend bounded. |
+| 9 | **Submit needs every remaining step opened and passing.** The first time through, steps open in order. | §43's safety argument rests on the proposer reading the draft before reviewers see it. |
+| 10 | **Each skill succeeds or fails on its own at submit.** One bulk endpoint verifies every folder with **one** clone and pins **one** commit. Failed skills stay in the wizard to fix or remove. | A slug taken a minute ago shouldn't block 29 other skills. An all-or-nothing transaction across N proposals and their side effects is costly. |
+| 11 | **Submit for review**, plus **Publish directly** where the proposer may publish without review: today's rules, with each skill routed to review on its own when §37.4 or §47 says so. The content-risk override is not offered in bulk. A skill that would need it goes to review. | `require_review = false` is the namespace admin's choice. Every safety gate still runs per skill. |
+| 12 | **One notification per import** to the reviewers and one to the submitter, instead of a `proposal.needs_review` and a `proposal.submitted` per skill. Later lifecycle notifications stay per proposal. | Thirty identical notifications bury everything else in an inbox. |
+| 13 | **No bulk accept or reject.** Reviewers decide each imported proposal on its own. The queue can be filtered to one import. | Each accept guard (revision pin, scan gate, policy override, AI pre-review, slug re-check) protects one deliberate decision. |
+| 14 | **At most 50 ticked skills per import. The scan lists at most 500.** Both are fixed constants. | 50 equals the daily AI draft cap, and it bounds the worker's pre-scans and AI pre-reviews from one submit. |
+| 15 | **An unfinished import lives only in the open tab**, with a leave-page warning. Nothing is stored before submit. | This matches the propose form and chunked uploads (§6). A saved draft would be a stale scan of a ref that may have moved. |
+| 16 | **Its own page, `/propose/import`**, linked from the propose form's Pointer tab, from a pasted `--all` command and from the "no SKILL.md in the repository root" error. | The propose form is built around one skill. The import has a two-stage shape of its own. |
+
+### 64.2 The pick page
+`/propose/import`, open to any authenticated user (the implicit *propose* right, §4). Fields, top to
+bottom:
+- **Repository**: a git URL, or the GitHub `owner/repo` shorthand, normalized as paste-to-fill does
+  (§8). **Ref**: default **`main`** (§8), with the same live ref pre-check (`GET /api/pointer/refs`)
+  and quick-picks. A skills-hub URL is refused inline: *"skills-hub.ai has one skill per page.
+  Propose it from the propose form."*
+- **Folder · optional**: limits the scan to one subtree (`plugins/`, `skills/document/`). It is
+  validated as a safe relative path (`validateSubdir`).
+- **Scan** runs the scan (§64.3). Changing the repository, ref or folder after a scan needs a new
+  scan. If the wizard already holds edits, a confirm comes first: *"Scanning again discards your
+  edits to N skills."*
+- **Namespace**: the propose form's list (`GET /api/namespaces`): `global` plus the namespaces
+  where the proposer holds a role, and all of them for platform admins. The server checks the
+  contribution policy (§4) again at submit.
+- **Visibility** follows the namespace exactly as on the propose form: `global` is org-wide, any
+  other namespace restricts the skills to it. For a restricted import, the **shared-namespaces
+  list** (§42) is the propose form's control.
+- **Tool/harness default**: the propose form's closed picker (§8), default `Generic`.
+- **Draft with AI**: a checkbox, **unticked** by default, rendered only when `GET
+  /api/propose/ai-draft` says `available`. The label shows what is left: *"Draft with AI (38 drafts
+  left today)"*. Beneath it: *"Clicking Next sends each ticked skill's SKILL.md to the AI provider to
+  draft its description, usage and categories."* The egress is §43.8's, unchanged. With nothing
+  left, the checkbox is disabled and shows the §43.6 daily-cap message.
+
+**The list.** After a scan, one row per found skill, sorted by path:
+- A checkbox; the **path** (*(repo root)* for a root `SKILL.md`); the frontmatter **name** and the
+  first line of its **description**, truncated; and **Last changed**: the date of the newest commit
+  that touched the folder (§64.3), in the viewer's timezone and date style (`useDateFmt()`). It reads
+  *"before ‹date›"* when the folder wasn't touched within the fetched history, and *"—"* when it
+  isn't known.
+- A **row that can't be ticked** says why: *"Can't import: SKILL.md has no name"*, *"…has no
+  description"*, *"…name ‹X› isn't a valid skill slug"*, or *"Already in skilly as ‹ns›/‹slug›"*
+  (linked). The last one adds *"imported from this folder"* when that skill's latest stable version
+  pins the same normalized origin and folder.
+- **Warning, still tickable:** a `SKILL.md` inside another found skill's folder reads *"Inside
+  ‹outer path›. Importing ‹outer› also brings this folder's files."*
+- **Same name twice:** when two importable rows share a name, ticking one disables the other with
+  *"Same name as ‹path›"*.
+- **Tick all importable** ticks the first 50 importable rows in path order. Past 50, the checkboxes
+  are disabled: *"An import holds up to 50 skills. Submit these, then import the rest."*
+- Past 500 found skills: *"Showing the first 500 of N. Narrow it with a folder."*
+- **Next** needs at least one ticked skill, a namespace and a passing ref pre-check. It opens the
+  wizard (§64.4).
+
+### 64.3 The scan: `POST /api/propose/import/scan`
+- **Request** `{ url, ref, folder? }`, from any authenticated user. Rate limit:
+  `enforceRateLimit("import-scan", userId, 30)` per minute, the ref pre-check's rate. A skills-hub
+  URL, or an invalid one, is **422**.
+- **Fetch**, in the web tier, with the transport and guards of submit-time verification (§8
+  `verifyPointerSkill`): the shared URL validator, the DNS-rebind private-IP re-check, https only,
+  no redirects, no credential prompt, and the `v`-prefix ref toggle. It makes a **partial clone with
+  no file contents** (`--filter=blob:none --no-checkout`) of the ref's history, **at most 2,000
+  commits deep**, and lists only regular files (no symlinks, no submodules). Each git command is bounded by the existing per-command timeout
+  (`POINTER_VERIFY_TIMEOUT_MS`, 30 s).
+- **Discovery.** Every path in the tip's tree whose last segment is exactly `SKILL.md` and that
+  passes the shared safe-path predicate (§6), under `folder` when given. The skill's folder is the
+  path's parent; an empty parent is the repository root, with no subdir. Paths are sorted, and the
+  first **500** are returned with the `total`.
+- **Frontmatter.** Only the returned `SKILL.md` blobs are fetched (a sparse checkout of `SKILL.md`
+  files, with symlinks checked out as plain files), each read up to 64 KB as a regular file, and
+  parsed with the shared `parseFrontmatter`. Nothing else is read.
+- **Last changed.** One walk of the fetched history (`--name-only --no-renames`) keeps, for each
+  skill folder, the newest commit date that touched a path inside it. Prefixes match on whole
+  segments, so `skills/pdf` never matches `skills/pdf-tools`. A folder that wasn't touched within the
+  window gets `before` = the oldest fetched commit's date. If the walk times out, the list still
+  comes back, with no dates.
+- **Matches** (decision 6). Each valid name is checked against **active** skills (deprecated
+  included, archived never) **visible to the caller** through the shared predicate
+  (`isSkillVisible`), in every namespace: the lookup behind `GET /api/skills/slug-matches`. A skill
+  the caller can't see is never reported (invariant #3). Its row stays tickable, and the reviewer's
+  hidden-collision alert (§8) applies after submit.
+- **Response 200** `{ commit, total, shown, historyCommits, historyComplete, skills: [{ path,
+  subdir, name, description, lastChangedAt, lastChangedBefore, importable, reason?, match?: { ns,
+  slug, sameSource }, nestedIn? }] }`, with `reason` one of `no_name`, `no_description`,
+  `invalid_name` or `exists`. A ref that doesn't exist, or a repository that can't be read, is
+  **422** with the verification's message. A repository with no `SKILL.md` at all is **200** with an
+  empty list, and the page says *"No SKILL.md files found in this repository at ‹ref›."*
+
+### 64.4 The wizard
+Next opens a **dialog** over the pick page with one **step per ticked skill**, in path order. Its
+header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
+- **Fields**: the propose form's per-skill metadata, in its order. **Slug** (read-only, the
+  `name`), **Title**, **Icon** (§33: the form's emoji picker and image upload with crop; an icon in
+  the skill's own files still wins at mirror time), **Categories**, **Description**, **Usage**,
+  **Tool/harness** and **Version** (semver). There is no *What changed* note (a first version, §8)
+  and no namespace, visibility or source (decision 4).
+- **Pre-filled from the `SKILL.md` frontmatter.** Title is the `name` made readable (`titleize`,
+  moved from the propose page into `@skilly/shared/repo-import`). Description is `description`.
+  Usage is `usage_examples` when present. Categories is `category` when present and valid
+  (`categoryNameError`), else empty. Version is `version` when it is a valid semver, else `1.0.0`.
+  Tool/harness is the pick-page default.
+- **With *Draft with AI* on** (§64.5), a successful draft **replaces** the frontmatter Description
+  and Usage and **adds** its categories to the frontmatter's (the §43.4 caps: at most 4 drafted, 2
+  of them new, and the field's cap of 12). An **Undo** link restores the frontmatter values and
+  removes the drafted categories that are still selected. It disappears once the proposer edits
+  Description or Usage (§43.3). Drafted text carries **no AI marker** (§43 decision 6).
+- **Buttons: Previous, Next, Remove from proposal.**
+  - **Next** checks the step against the propose form's submit-time rules: a Title and Description,
+    the category rule, a well-formed semver and a tool/harness from the list. It won't leave a
+    failing step.
+  - **Remove from proposal** unticks the skill on the pick page and moves on to the next step (or
+    the previous one, when it was the last). Removing the last skill closes the dialog.
+- **A step strip** across the top marks each skill *done*, *current* or *not yet opened*. The first
+  time through, steps open in order. Any step already opened can be jumped back to. Changing a done
+  step checks it again on leaving.
+- **Submit** appears on the last step. It is enabled only when **every remaining step has been
+  opened and passes** (decision 9). Beside it, **Publish directly** shows when the proposer may
+  publish without review in the chosen namespace (a member of it, with `require_review = false`,
+  §8): exactly the propose form's condition.
+- **Closing the dialog** (✕ or Escape) returns to the pick page and keeps every step's edits. Next
+  reopens it at the step that was left. **Ticking another skill** adds a *not yet opened* step in
+  path order, and queues its draft when AI is on.
+- **Leaving the page** with any step edited or drafted asks first, through the browser's leave-page
+  prompt: *"Leave this import? Your edits to N skills will be lost."*
+
+### 64.5 AI drafting
+- Drafts are requested **from the browser**, one per ticked skill, through the existing **`POST
+  /api/propose/ai-draft`** with the pointer source `{ source: 'pointer', externalUrl, externalRef,
+  externalSubdir, skillSlug }`. Egress, prompt, output validation, the `ai_usage` record, the
+  metrics and the **§43.7 limits** are all unchanged. Drafting starts when the wizard first opens.
+- **Pacing**: in step order, at most **3 in flight** and at most **10 started per rolling minute**
+  (the §43 per-minute limit). A per-minute **429** waits for `retry-after` and tries again (a refused
+  request never reached the provider, so it doesn't count). A **daily-cap 429** stops the queue.
+  Every step not yet drafted then reads *"Not drafted: daily AI draft limit reached. The SKILL.md
+  values are filled in."*
+- **Per step.** While *Drafting…*, Description, Usage and Categories are read-only and Next waits.
+  **Fill it in myself** gives up the draft for that step: an unsent draft is dropped and not
+  counted, and one already sent completes, counts and is ignored. A failed draft (a §43 502 or 422)
+  reads *"Couldn't draft this one. The SKILL.md values are filled in."*
+- **Removing** a skill drops its unsent draft, which isn't counted. Drafts already made count against
+  the cap even if the tab is closed (no refund, §43.7).
+- `GET /api/propose/ai-draft` gains **`remainingToday`**: 50 minus the caller's `skill_draft` calls
+  in the last 24 hours, floored at 0, for the checkbox label.
+
+### 64.6 Submit: `POST /api/propose/import`
+- **Request** `{ url, ref, folder?, namespaceSlug, visibility, sharedNamespaceIds, mode: 'review' |
+  'direct', importId?, items: [{ subdir, semver, metadata }] }`, where `metadata` is the propose
+  form's (`skillSlug`, `title`, `description`, `categories`, `toolHarness`, `usageExamples` and the
+  icon fields). `importId` continues an earlier submit of the same import (*Fix and resubmit*, below).
+- **Whole-import checks, in order.** Any failure answers for the whole request, and nothing is
+  created:
+  1. auth (401);
+  2. `enforceRateLimit("proposals", userId, 30)`, **one** hit for the whole import;
+  3. 1 to 50 items, counting the skills the continued import already created (422);
+  4. distinct slugs (422);
+  5. the namespace exists (404);
+  6. the contribution policy (403, §4);
+  7. for `direct`, the authority to publish without review (403);
+  8. `importId`, when given, is the caller's own import for the same origin and namespace (404
+     otherwise);
+  9. **one** verification clone of `url@ref`, with §8's transport and guards (422 with the
+     verification's message). It resolves the **commit every proposal pins** (§49.3).
+- **Per skill**, in item order, with exactly the gates that `POST /api/proposals` and `POST
+  /api/publish` apply to a new-skill pointer payload: the folder resolves to a `SKILL.md` at that
+  commit (§8, read from the one clone); the slug match (`slug_exists`, naming visible matches only);
+  `verifySubmissionPayload` (the closed tool/harness list, categories, §42 grants, the SSRF and
+  transport allowlist); and duplicate detection under `duplicate_proposal_enforcement`. A skill that
+  passes is created in **its own transaction**: a proposal with `import_id` set (`review`), or a
+  direct publish (`direct`). In `direct` mode the §37.4 content check and the §47 policy routing run
+  per skill. A skill they route becomes a proposal (`routed_reason`). A skill that would need the
+  content-risk override confirmation is routed to review instead (`routed_reason = 'content_risk'`):
+  no override is offered in bulk.
+- **Response 200** `{ importId, commit, results: [{ subdir, slug, outcome: 'proposed' | 'published'
+  | 'routed' | 'failed', proposalId?, routedReason?, error?, code? }] }`. It is 200 even when some or
+  all skills failed, because the outcome is per skill.
+- **The result view**, in the dialog:
+  - created proposals, with links;
+  - published skills, with links (*"Publishing…"* until `git_published`, §6);
+  - routed skills, labelled *"Sent to review: content risk"* or *"…: policy rule"*;
+  - failed skills, with the server's reason, and **Fix and resubmit**. It reopens the wizard with
+    only those steps, each showing its error and marked *not yet opened*. Resubmitting sends
+    `importId`, so the new proposals join the same import.
+  When every skill succeeded, **Done** clears the page.
+- **A branch that moved.** If the ref is a branch that moved after the scan, the proposals pin the
+  commit resolved at submit (as a single pointer proposal does), and the result view says
+  *"‹ref› moved since the scan. These proposals pin ‹short commit›."*
+
+### 64.7 Reviewers and the submitter
+- **Notifications** (decision 12), for each submit that created at least one proposal (`proposed`
+  or `routed`):
+  - **`proposal.import_needs_review`** to the namespace's reviewers: the `proposal.needs_review`
+    audience (platform admins, the namespace's admins and the bootstrap admin group), minus the
+    submitter. Payload `{ importId, ns, repo, count, fromName }`.
+  - **`proposal.import_submitted`** to the submitter. Payload `{ importId, ns, repo, count }`.
+  - A proposal created by an import sends **no** per-proposal `proposal.needs_review` or
+    `proposal.submitted`. Every later lifecycle notification (start-review, request-changes,
+    resubmit, revise, accept, reject, policy) is per proposal, as today. A direct-published skill
+    sends what any publish sends (§12, §35) and isn't counted.
+- **The review queue.** `GET /api/proposals` accepts `import=<id>` on both tabs (*Mine* and *To
+  review*) and narrows the list to that import. The counts and the tab badge follow the filter, like
+  the state chips do. Each imported row carries a chip, *"Import · ‹owner/repo›"*, that applies the
+  filter. The rows of one import sit together anyway, since they were created together and the list
+  is newest first.
+- **The proposal page** says *"Imported from ‹repo› at ‹short commit›, with N others"*, linking to
+  the filtered queue. N counts the import's other proposals. They all share one namespace, so a
+  reviewer and the submitter both see all of them.
+- Accept, reject, request changes, delete and every gate stay **per proposal** (decision 13).
+
+### 64.8 Data model (migration 0105)
+**`proposal_imports`**: one row per import, written by its first submit and updated by *Fix and
+resubmit*.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | `uuid` PK | |
+| `submitted_by` | `uuid NULL` FK `users` `ON DELETE SET NULL` | The submitter. |
+| `target_namespace_id` | `uuid` FK `namespaces` `ON DELETE CASCADE` | The import's namespace. |
+| `origin_url` | `text` | The normalized origin (`normalizeOriginUrl`). |
+| `ref` / `commit` | `text` / `text NULL` | The ref, and the commit the latest submit pinned. |
+| `folder` | `text NULL` | The scan's folder, if one was given. |
+| `mode` | `text`, `CHECK IN ('review','direct')` | |
+| `items_submitted` / `items_created` | `integer` | Totals across submits. `created` = proposed + routed + published. |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+- **`proposals.import_id`**: `uuid NULL` FK `proposal_imports` `ON DELETE SET NULL`, indexed. Set at
+  creation and never changed. A proposal deleted for housekeeping (§8) leaves the import row.
+- No other table changes. The wizard's state is never stored (decision 15).
+
+### 64.9 Other surfaces
+- **The propose form's Pointer tab** gains a line under the paste box: *"Several skills in one
+  repository? **Import a whole repository**"*, linking to `/propose/import`.
+- **Paste-to-fill** (§8). `parseInstallCommand` reports `--all` as a **whole-repository import**
+  (`{ ok: true, importAll: true, url, ref }`) instead of an error. The paste box then fills nothing
+  and offers **Import all skills from this repository**, linking to `/propose/import?url=…&ref=…`,
+  which pre-fills those two fields. They are hints only: nothing runs until **Scan**.
+- **The verification error hint.** When submit-time verification (§8) fails with *no SKILL.md found
+  in the repository root* and no folder was given, the message adds *"If this repository holds
+  several skills, **import them**"*, linking to the import page, pre-filled.
+- **MCP** (§29): nothing in this change. Agents call `propose_pointer_skill` once per skill.
+- **Request links** (`?fromRequest=`, §26) are not carried into an import.
+
+### 64.10 API, audit and metrics
+- `POST /api/propose/import/scan` (§64.3) and `POST /api/propose/import` (§64.6). `GET
+  /api/propose/ai-draft` gains `remainingToday` (§64.5). `GET /api/namespaces` gains a per-namespace
+  `directPublish` (the caller's `canDirectPublish`), which decides whether **Publish directly** shows
+  (§64.4). `GET /api/proposals` gains `import=`
+  (§64.7). `GET /api/proposals/:id` gains `import: { id, repo, ref, commit, others } | null`.
+- **Audit**: one **`proposal.import`** per submit (actor; namespace; `{ importId, originUrl, ref,
+  commit, folder, mode, submitted, proposed, published, routed, failed, slugs }`), plus each skill's
+  existing `proposal.created` (carrying `importId`) or publish entries. A submit refused as a whole
+  (the §64.6 whole-import checks) writes nothing. Scans and drafts are **not audited**: they are
+  telemetry (§40.11).
+- **Metrics**: `skilly_repo_import_total{outcome="ok|partial|failed"}` per submit,
+  `skilly_repo_import_skills_total{outcome="proposed|published|routed|failed"}` and
+  `skilly_repo_import_scans_total{result="ok|error"}`.
+- **Constants** live in the client-safe `@skilly/shared/repo-import`: `IMPORT_MAX_SKILLS = 50`,
+  `IMPORT_SCAN_MAX_LISTED = 500` and `IMPORT_HISTORY_MAX_COMMITS = 2000`, beside the pure helpers
+  (discovery, the last-changed aggregation, importability, the pre-fill).
+
+### 64.11 Accepted trade-offs and out of scope
+- A skill can't be imported under a slug other than its `name`, because `name == slug` is the
+  mirror's rule (§6).
+- Open proposals don't block importing the same skill again. The accept-time slug re-check (§8)
+  stops a second accept.
+- Last-changed dates only reach 2,000 commits back.
+- Drafts made before the tab closed are spent.
+- A direct publish of many skills sends each publish's ordinary notifications (watchers and
+  followers, §35).
+- Deferred: saving an unfinished import, bulk accept or reject, an MCP tool, skills-hub imports,
+  private repositories (pointer sources are public, §6), and importing a repository again as new
+  versions of its skills.
+
+### 64.12 Tests (ship with the change)
+- **Unit** (`@skilly/shared/repo-import`): discovery (root, nested, exact-case `SKILL.md`, unsafe
+  paths skipped, path order, the 500 cut with `total`, folder narrowing); the last-changed
+  aggregation from a log fixture (whole-segment prefixes, `skills/pdf` against `skills/pdf-tools`,
+  and `before` for an untouched folder); importability (no name, no description, an invalid name,
+  an existing match, the same name twice); the pre-fill (`titleize`, `version` to a semver or
+  `1.0.0`, an invalid category dropped); and tick-all respecting the cap. `parseInstallCommand`:
+  `--all` gives `importAll` for each source form.
+- **Unit** (web client): the draft queue (order, at most 3 in flight, at most 10 started per minute,
+  the per-minute 429 retry, the daily-cap stop, removal dropping an unsent draft); and the wizard
+  gating (Next blocked on a failing step, Submit disabled until every remaining step is opened and
+  passes, Remove from proposal unticking the row).
+- **Integration** (web API + DB, with git run through the module's injectable runner against a
+  local fixture repository; the https-only transport and the SSRF guards keep their own unit tests):
+  - scan: rows, dates and reasons; an org skill and a §42-shared restricted skill are reported as
+    matches, and a restricted skill the caller can't see is not; an archived skill never matches and
+    a deprecated one does; the rate limit;
+  - submit: one proposal per item with `import_id`, all pinning one commit; one failing item (slug
+    taken, folder gone) leaves the others created; more than 50 items, counting what a continued
+    import already created, is 422; duplicate slugs are 422; the contribution policy is 403; `direct` without authority is
+    403; `direct` publishes, and routes a content-risk item to review; someone else's `importId` is
+    404; the import costs one `proposals` rate-limit hit;
+  - notifications: one `proposal.import_needs_review` per reviewer and one
+    `proposal.import_submitted`, and no per-proposal `needs_review` or `submitted`; the audit row and
+    its counts;
+  - the queue: `import=` on both tabs, with counts; the proposal detail's `import` block.
+- **e2e** (the ref pre-check, scan, submit and AI draft endpoints answered by Playwright route stubs;
+  the server side is covered above): scan, tick three skills, and Next opens the wizard; Submit stays disabled until
+  every step has been opened; **Remove from proposal** unticks the row on the page; a failing step
+  blocks Next; submit shows the result view with one failed skill, and **Fix and resubmit** reopens
+  only that step. With *Draft with AI* on, a step is filled from the draft, and **Undo** restores
+  the SKILL.md values.

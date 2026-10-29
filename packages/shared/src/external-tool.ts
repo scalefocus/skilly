@@ -95,6 +95,9 @@ export type ParsedInstallCommand =
       /** agent slug from `--agent <slug>` (raw, un-validated) if the command carried one; else null.
        *  The propose form preselects the tool/harness from it when it's a recognized agent (§8). */
       agent?: string | null;
+      /** `--all`: the command asks for every skill in the repo — a whole-repository import (§64.9).
+       *  The propose form fills nothing from it and offers the import page instead. */
+      importAll?: true;
     }
   | { ok: false; error: string };
 
@@ -103,7 +106,8 @@ export type ParsedInstallCommand =
  * pointer-proposal fields — the INVERSE of buildInstallCommand, for the propose form's
  * paste-to-fill accelerator (SKILLY_SPEC.md §8). Pure + lenient on prompt noise (`$ `, quotes),
  * strict on meaning:
- *  - `--all` is rejected (skilly imports one skill per proposal, §6);
+ *  - `--all` is reported as a whole-repository import (`importAll`, subdir null) — one skill per
+ *    proposal still holds (§6); the import page turns the repo into one proposal per skill (§64.9);
  *  - a missing `#ref` returns ref:null — the caller must require a pinned ref (§6/§7);
  *  - URL schemes are NOT rewritten; downstream validatePointerUrl stays the gate.
  * Source forms (pinned tool v1.5.10): full git URL (+#ref), owner/repo GitHub shorthand,
@@ -153,10 +157,12 @@ export function parseInstallCommand(raw: string): ParsedInstallCommand {
   let source: string | null = null;
   let skillFlag: string | null = null;
   let agentFlag: string | null = null;
+  let all = false;
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
     if (t === "--all" || t === "-a") {
-      return { ok: false, error: "skilly imports one skill per proposal — use --skill <name> (or paste a single-skill repo) instead of --all" };
+      all = true;
+      continue;
     }
     if (t === "--skill" || t === "-s") {
       skillFlag = tokens[i + 1] ? strip(tokens[++i]!) : null;
@@ -216,6 +222,8 @@ export function parseInstallCommand(raw: string): ParsedInstallCommand {
     return { ok: false, error: "unrecognized source — paste a git URL or a GitHub owner/repo" };
   }
 
+  // `--all` asks for the whole repo: no single folder, whatever else the command named (§64.9).
+  if (all) return { ok: true, url, ref, subdir: null, agent: agentFlag, importAll: true };
   if (skillFlag) subdir = skillFlag; // explicit --skill wins over a /tree/ path
   return { ok: true, url, ref, subdir, agent: agentFlag };
 }

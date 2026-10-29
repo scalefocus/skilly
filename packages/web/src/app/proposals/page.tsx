@@ -1,7 +1,7 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useApi, useEnterKey, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
@@ -20,6 +20,9 @@ interface ProposalRow {
   createdAt: string;
   submittedBy: string;
   viaMcpClient: string | null;
+  /** §64.7: the repository import this proposal came from (the row's chip), else null. */
+  importId?: string | null;
+  importRepo?: string | null;
 }
 // Initial GET: the caller's own submissions (whole) + whether the review tab is shown.
 interface MetaResponse { mine: ProposalRow[]; canReview: boolean }
@@ -48,10 +51,18 @@ const STATE_FILTERS: { value: ProposalState; label: string }[] = [
   { value: "rejected", label: "Rejected" },
 ];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function ProposalsInner() {
   const router = useRouter();
+  const params = useSearchParams();
   const fmt = useDateFmt();
-  const { data: meta, loading, error } = useApi<MetaResponse>("/api/proposals");
+  // §64.7: `?import=<id>` narrows both tabs to one repository import (the import notifications'
+  // links); `?tab=` picks the tab they point at.
+  const importParam = params.get("import");
+  const importId = importParam && UUID_RE.test(importParam) ? importParam : null;
+  const tabParam = params.get("tab");
+  const { data: meta, loading, error } = useApi<MetaResponse>(importId ? `/api/proposals?import=${importId}` : "/api/proposals");
   const canReview = meta?.canReview ?? false;
   const mine = meta?.mine ?? [];
 
@@ -66,10 +77,10 @@ function ProposalsInner() {
     new Set<ProposalState>(t === "review" ? ["proposed", "under_review", "changes_requested"] : []);
   useEffect(() => {
     if (!meta || tab !== null) return;
-    const t: Tab = meta.canReview ? "review" : "mine";
+    const t: Tab = tabParam === "mine" || !meta.canReview ? "mine" : "review";
     setTab(t);
     setStates(defaultStates(t));
-  }, [meta, tab]);
+  }, [meta, tab, tabParam]);
 
   // Review queue is paginated server-side (newest-first, 100/batch). We keep the accumulated rows,
   // the next-batch cursor, and the per-state totals (for the chips + tab badge) in local state.
@@ -90,6 +101,7 @@ function ProposalsInner() {
       const sp = new URLSearchParams({ tab: "review" });
       if (stateSet.size) sp.set("states", [...stateSet].join(","));
       if (cursor) sp.set("cursor", cursor);
+      if (importId) sp.set("import", importId);
       const r = await fetch(`/api/proposals?${sp.toString()}`);
       if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${r.status}`);
       const { review } = (await r.json()) as { review: ReviewPage };
@@ -104,7 +116,7 @@ function ProposalsInner() {
     } finally {
       if (myReq === reqRef.current) setReviewLoading(false);
     }
-  }, []);
+  }, [importId]);
 
   // (Re)load the first batch whenever the review tab is active and the state filter changes.
   useEffect(() => {
@@ -186,6 +198,14 @@ function ProposalsInner() {
   const chipCount = (s: ProposalState) => (tab === "review" ? reviewCounts[s] ?? 0 : mine.filter((p) => p.state === s).length);
   const hasAny = tab === "review" ? reviewTotal > 0 : mine.length > 0;
   const reviewInitialLoading = tab === "review" && reviewLoading && reviewItems.length === 0;
+  const importRepo = [...reviewItems, ...mine].find((p) => p.importId === importId)?.importRepo ?? null;
+  const filterImport = (id: string | null) => {
+    const sp = new URLSearchParams();
+    if (tab) sp.set("tab", tab);
+    if (id) sp.set("import", id);
+    setTab(null);
+    router.replace(`/proposals${sp.size ? `?${sp.toString()}` : ""}`);
+  };
 
   return (
     <div>
@@ -209,6 +229,13 @@ function ProposalsInner() {
           <button type="button" className={`btn btn-sm${tab === "mine" ? " btn-primary" : ""}`} aria-pressed={tab === "mine"} onClick={() => switchTab("mine")}>
             My submissions <span className="facet-n">{mine.length}</span>
           </button>
+        </div>
+      )}
+
+      {importId && (
+        <div className="muted" data-testid="proposals-import-filter" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, fontSize: 13 }}>
+          Showing only the proposals from the import of <strong className="mono">{importRepo ?? "a repository"}</strong>
+          <button className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => filterImport(null)}>✕ show all</button>
         </div>
       )}
 
@@ -264,6 +291,16 @@ function ProposalsInner() {
                     {/* §29: an agent-submitted proposal is flagged here, so a reviewer can weigh it
                         knowing it was authored through MCP rather than typed by a person. */}
                     {p.viaMcpClient && <> · <ViaMcp client={p.viaMcpClient} /></>}
+                    {/* §64.7: an imported proposal's chip narrows the list to its import. */}
+                    {p.importId && p.importId !== importId && (
+                      <> · <button
+                        type="button"
+                        className="btn-ghost mono"
+                        style={{ fontSize: 11, padding: 0 }}
+                        data-testid="proposal-import-chip"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); filterImport(p.importId!); }}
+                      >Import · {p.importRepo ?? "repository"}</button></>
+                    )}
                   </div>
                 </div>
                 <Pill tone={STATE_TONE[p.state]}>{p.state.replace("_", " ")}</Pill>
@@ -300,7 +337,9 @@ function ProposalsInner() {
 export default function ProposalsPage() {
   return (
     <RequireAuth>
-      <ProposalsInner />
+      <Suspense fallback={null}>
+        <ProposalsInner />
+      </Suspense>
     </RequireAuth>
   );
 }

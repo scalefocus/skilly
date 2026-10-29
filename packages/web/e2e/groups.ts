@@ -106,6 +106,7 @@ export const PARALLEL: readonly string[] = [
   "new-version-metadata.spec.ts",
   "notifications.spec.ts",
   "quick-start.spec.ts",
+  "repo-import.spec.ts", // write-free: the scan, submit and AI draft endpoints are route stubs
   "skill-detail.spec.ts",
   "slug-match-redirect.spec.ts",
   "smoke.spec.ts",

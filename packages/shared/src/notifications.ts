@@ -25,6 +25,9 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "proposal.start_review": { title: "Proposal under review", tone: "muted" },
   "proposal.resubmit": { title: "Proposal resubmitted", tone: "muted" },
   "proposal.revise": { title: "Proposal updated", tone: "warn" },
+  // §64.7 — one notification per repository import, in place of one per imported skill.
+  "proposal.import_needs_review": { title: "Skills imported for review", tone: "warn" },
+  "proposal.import_submitted": { title: "Import submitted", tone: "ok" },
   "skill.new_version": { title: "New version published", tone: "ok" },
   "skill.marked_official": { title: "Skill marked official", tone: "ok" },
   "skill.drift": { title: "Upstream drift detected", tone: "danger" },

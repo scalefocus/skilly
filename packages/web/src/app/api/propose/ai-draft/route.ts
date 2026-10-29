@@ -1,4 +1,4 @@
-// "Draft with AI" on the propose form (SKILLY_SPEC.md §43.5). GET → { available } (the button
+// "Draft with AI" on the propose form (SKILLY_SPEC.md §43.5). GET → { available, remainingToday } (the button
 // renders only when true); POST drafts the description, usage and categories from the SKILL.md of
 // a hosted bundle (multipart `file`, extracted and discarded), a pointer source (JSON) or the
 // Keep-current-files artifact (JSON). Any authenticated user — the implicit propose right (§4).
@@ -8,7 +8,7 @@ import { authOptions } from "../../../../lib/auth";
 import { resolveUserAccess } from "../../../../lib/access";
 import { withSystemLog } from "../../../../lib/apiLog";
 import { aiAvailable } from "../../../../lib/ai";
-import { draftWithAi, type DraftSource } from "../../../../lib/aiDraft";
+import { draftWithAi, draftsRemainingToday, type DraftSource } from "../../../../lib/aiDraft";
 import type { EffectiveAccess } from "@skilly/shared";
 import { getUploadChunkBytes } from "../../../../lib/settings";
 
@@ -26,7 +26,8 @@ async function authenticate(): Promise<{ error: Response } | { access: Effective
 export const GET = withSystemLog("/api/propose/ai-draft", async function GET() {
   const a = await authenticate();
   if ("error" in a) return a.error;
-  return Response.json({ available: await aiAvailable() });
+  // §64.5 `remainingToday`: the import page's "Draft with AI (N drafts left today)".
+  return Response.json({ available: await aiAvailable(), remainingToday: await draftsRemainingToday(a.access.userId) });
 });
 
 /** Multipart framing headroom over the single-request size before we refuse to buffer the body. */

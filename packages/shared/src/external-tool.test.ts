@@ -147,8 +147,39 @@ test("parseInstallCommand: registry-only commands rejected (no git repo to mirro
   assert.equal(parseInstallCommand("npx agent-skills-hub --claude").ok, false);
 });
 
-test("parseInstallCommand: --all rejected; junk rejected", () => {
-  assert.equal(parseInstallCommand("npx skills add anthropics/skills --all").ok, false);
+test("parseInstallCommand: --all is a whole-repository import (§64.9) for each source form", () => {
+  const short = parseInstallCommand("npx skills add anthropics/skills --all");
+  assert.ok(short.ok);
+  assert.equal(short.importAll, true);
+  assert.equal(short.url, "https://github.com/anthropics/skills.git");
+  assert.equal(short.subdir, null);
+  assert.equal(short.ref, null);
+
+  const full = parseInstallCommand("npx skills add https://git.example.com/acme/skills.git#v2.0.0 -a");
+  assert.ok(full.ok);
+  assert.equal(full.importAll, true);
+  assert.equal(full.url, "https://git.example.com/acme/skills.git");
+  assert.equal(full.ref, "v2.0.0");
+
+  // A /tree/ URL keeps its ref but --all drops the folder; so does an explicit --skill.
+  const tree = parseInstallCommand("npx skills add https://github.com/acme/skills/tree/main/skills/pdf --all");
+  assert.ok(tree.ok);
+  assert.equal(tree.importAll, true);
+  assert.equal(tree.ref, "main");
+  assert.equal(tree.subdir, null);
+  const both = parseInstallCommand("npx skills add acme/skills --skill pdf --all --agent claude-code");
+  assert.ok(both.ok);
+  assert.equal(both.importAll, true);
+  assert.equal(both.subdir, null);
+  assert.equal(both.agent, "claude-code");
+
+  // Without --all nothing changes.
+  const one = parseInstallCommand("npx skills add acme/skills --skill pdf");
+  assert.ok(one.ok);
+  assert.equal(one.importAll, undefined);
+});
+
+test("parseInstallCommand: junk rejected", () => {
   assert.equal(parseInstallCommand("").ok, false);
   assert.equal(parseInstallCommand("npx skills add").ok, false);
   assert.equal(parseInstallCommand("npx skills add not a url at all !!").ok, false);

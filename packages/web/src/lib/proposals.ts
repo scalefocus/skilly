@@ -51,6 +51,7 @@ import {
   type PolicyTrip,
   type ProposalPolicyPayload,
   scanVerdict, scanVerdictText, type ScanVerdictReason,
+  repoLabel,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { latestArtifactReport, recordAcknowledgement } from "./contentRisk";
@@ -178,6 +179,12 @@ export interface CreateProposalInput {
   routedRules?: string[];
   /** §44.8: the model that drafted the submitted files (from a verified aiDraftToken), else null. */
   aiDraftModel?: string | null;
+  /**
+   * §64: the repository import this proposal came from. An imported proposal sends no
+   * `proposal.submitted` / `proposal.needs_review` of its own — the import sends one of each for
+   * the whole submit (§64.7).
+   */
+  importId?: string | null;
 }
 
 /** The one not-found message for a new-version target the actor can't see OR that doesn't exist (§8). */
@@ -564,6 +571,23 @@ async function notifyReviewersNeedsReview(
   input: { proposalId: string; namespaceId: string; submitterId: string; skillSlug: string; semver: string },
   type: "proposal.needs_review" | "proposal.revise" = "proposal.needs_review",
 ): Promise<void> {
+  await notifyNamespaceReviewers(client, {
+    namespaceId: input.namespaceId,
+    submitterId: input.submitterId,
+    type,
+    payload: { proposalId: input.proposalId, skillSlug: input.skillSlug, semver: input.semver },
+  });
+}
+
+/**
+ * The reviewer fan-out behind every review-queue notification: platform admins anywhere + the
+ * namespace's admins + the bootstrap admin group, minus the submitter. Also the audience of a
+ * repository import's one `proposal.import_needs_review` (§64.7).
+ */
+export async function notifyNamespaceReviewers(
+  client: PoolClient,
+  input: { namespaceId: string; submitterId: string; type: string; payload: Record<string, unknown> },
+): Promise<void> {
   const bootstrap = process.env.SKILLY_BOOTSTRAP_ADMIN_GROUP?.trim() || null;
   await client.query(
     `with reviewers as (
@@ -582,7 +606,7 @@ async function notifyReviewersNeedsReview(
      )
      insert into notifications (user_id, type, payload)
      select id, $5, $2::jsonb from reviewers where id <> $3`,
-    [input.namespaceId, JSON.stringify({ proposalId: input.proposalId, skillSlug: input.skillSlug, semver: input.semver }), input.submitterId, bootstrap, type],
+    [input.namespaceId, JSON.stringify(input.payload), input.submitterId, bootstrap, input.type],
   );
 }
 
@@ -607,9 +631,9 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
     const { rows } = await client.query<{ id: string }>(
       // origin_request_id: set when the proposal was started from a skill request's "Propose a
       // skill" button (§26) — the explicit fulfilment link, advisory until acceptance.
-      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, routed_reason, ai_draft_model)
-       values ($1,$2,$3,'proposed',$4,$5,$6,$7) returning id`,
-      [input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null, input.routedReason ?? null, input.aiDraftModel ?? null],
+      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, routed_reason, ai_draft_model, import_id)
+       values ($1,$2,$3,'proposed',$4,$5,$6,$7,$8) returning id`,
+      [input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null, input.routedReason ?? null, input.aiDraftModel ?? null, input.importId ?? null],
     );
     const proposalId = rows[0]!.id;
     await client.query(
@@ -623,7 +647,7 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
       targetType: "proposal",
       targetId: proposalId,
       namespaceId: input.targetNamespaceId,
-      after: { state: "proposed", semver: input.proposedSemver, ...(input.aiDraftModel ? { aiDraftModel: input.aiDraftModel } : {}) },
+      after: { state: "proposed", semver: input.proposedSemver, ...(input.aiDraftModel ? { aiDraftModel: input.aiDraftModel } : {}), ...(input.importId ? { importId: input.importId } : {}) },
     });
     if (input.routedReason) {
       // §37.4: a direct publish the content check sent to review instead of publishing.
@@ -636,13 +660,16 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
         after: { reason: input.routedReason, rules: input.routedRules ?? [], semver: input.proposedSemver, skill: input.payload.metadata.skillSlug },
       });
     }
-    await notifyProposalCreated(client, {
-      proposalId,
-      namespaceId: input.targetNamespaceId,
-      submitterId: input.submittedByUserId,
-      skillSlug: input.payload.metadata.skillSlug,
-      semver: input.proposedSemver,
-    });
+    // §64.7: an imported proposal is announced once per import, not one by one.
+    if (!input.importId) {
+      await notifyProposalCreated(client, {
+        proposalId,
+        namespaceId: input.targetNamespaceId,
+        submitterId: input.submittedByUserId,
+        skillSlug: input.payload.metadata.skillSlug,
+        semver: input.proposedSemver,
+      });
+    }
     // §31: Homegrown / Finger Pointer by the initial revision's artifact shape (the same rule the
     // migration-0071 backfill uses: a pointer source or a pointer Keep-current-files reuse).
     const proposedPointer = !!input.payload.pointer || !!input.payload.reuse?.external;
@@ -1554,6 +1581,13 @@ export async function directPublish(
     overrideReason?: string | null;
     /** §44.8: the model that drafted the files (from a verified aiDraftToken), else null. */
     aiDraftModel?: string | null;
+    /** §64.6: the repository import this publish belongs to; a skill routed to review joins it. */
+    importId?: string | null;
+    /**
+     * §64.6: no override is offered in bulk — a skill that would need an override holder to confirm
+     * one (content risk, an incomplete scan verdict) is routed to review instead, like a member's.
+     */
+    routeOverrides?: boolean;
   },
 ): Promise<DirectPublishResult> {
   const ns = (await pool.query<{ id: string; require_review: boolean }>(`select id, require_review from namespaces where slug = $1`, [input.namespaceSlug])).rows[0];
@@ -1568,7 +1602,8 @@ export async function directPublish(
   const check = input.contentCheck ?? (await hostedContentCheck(pool, input.payload));
   const content = contentRiskFindings(check.findings);
   const trips = check.unreachable || contentRiskTripsGate(content);
-  const overrideHolder = canReviewNamespace(input.access, ns.id);
+  // §64.6: a bulk import offers no override, so an override holder is routed like a member.
+  const overrideHolder = canReviewNamespace(input.access, ns.id) && !input.routeOverrides;
   // §49.2: a hosted (or Keep-current-files) publish needs a COMPLETE verdict on its artifact — with
   // ClamAV configured, an engine result. Missing ⇒ a member is routed to review, an override holder
   // confirms with a reason (audited below). Pointer publishes are covered by `check.unreachable`.
@@ -1597,6 +1632,7 @@ export async function directPublish(
       routedReason: "scan_pending",
       routedRules: [`scan-${missing}`],
       aiDraftModel: input.aiDraftModel ?? null,
+      importId: input.importId ?? null,
     });
     return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "scan_pending" };
   }
@@ -1631,6 +1667,7 @@ export async function directPublish(
       routedReason: "content_risk",
       routedRules,
       aiDraftModel: input.aiDraftModel ?? null,
+      importId: input.importId ?? null,
     });
     return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "content_risk" };
   }
@@ -1655,6 +1692,7 @@ export async function directPublish(
       routedReason: "policy",
       routedRules: policyRules.filter((r) => r.state === "enforced").map((r) => r.title),
       aiDraftModel: input.aiDraftModel ?? null,
+      importId: input.importId ?? null,
     });
     return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "policy" };
   }
@@ -1857,6 +1895,9 @@ export interface ReviewQueueItem {
    *  submission. Reviewers see it as a "via MCP · <client>" tag — governance depends on knowing
    *  whether a proposal was written by a person or an agent. */
   viaMcpClient: string | null;
+  /** §64.7: the repository import this proposal came from (the queue row's chip), else null. */
+  importId: string | null;
+  importRepo: string | null;
 }
 
 interface QueueRow {
@@ -1872,6 +1913,8 @@ interface QueueRow {
   created_at_us: string;
   submitted_by_name: string;
   via_mcp_client: string | null;
+  import_id: string | null;
+  import_origin_url: string | null;
 }
 
 // Resolve a display name even for not-yet-materialized skills by reading the latest revision.
@@ -1883,11 +1926,13 @@ const QUEUE_BASE_SELECT = `
            coalesce(s.slug,  lr.payload->'metadata'->>'skillSlug') as skill_slug,
            coalesce(s.title, lr.payload->'metadata'->>'title')     as title,
            su.display_name as submitted_by_name,
-           p.via_mcp_client
+           p.via_mcp_client,
+           p.import_id, pi.origin_url as import_origin_url
       from proposals p
       join namespaces n on n.id = p.target_namespace_id
       join users su on su.id = p.submitted_by
       left join skills s on s.id = p.target_skill_id
+      left join proposal_imports pi on pi.id = p.import_id
       left join lateral (
         select payload from proposal_revisions where proposal_id = p.id order by revision_no desc limit 1
       ) lr on true`;
@@ -1904,6 +1949,8 @@ function toQueueItem(r: QueueRow): ReviewQueueItem {
     createdAt: r.created_at,
     submittedBy: r.submitted_by_name,
     viaMcpClient: r.via_mcp_client,
+    importId: r.import_id,
+    importRepo: r.import_origin_url ? repoLabel(r.import_origin_url) : null,
   };
 }
 
@@ -1940,7 +1987,7 @@ export interface ReviewQueuePage {
 export async function listReviewQueue(
   pool: Pool,
   access: EffectiveAccess,
-  opts: { states?: readonly string[]; cursor?: string | null; limit?: number } = {},
+  opts: { states?: readonly string[]; cursor?: string | null; limit?: number; importId?: string | null } = {},
 ): Promise<ReviewQueuePage> {
   const limit = Math.min(Math.max(opts.limit ?? REVIEW_PAGE_SIZE, 1), REVIEW_PAGE_SIZE);
 
@@ -1952,6 +1999,11 @@ export async function listReviewQueue(
     if (nsIds.length === 0) return { items: [], nextCursor: null, counts: emptyStateCounts(), total: 0 };
     scopeParams.push(nsIds);
     scopeConds.push(`p.target_namespace_id = any($${scopeParams.length})`);
+  }
+  // §64.7: narrowed to one repository import — the counts and the tab badge follow the filter.
+  if (opts.importId) {
+    scopeParams.push(opts.importId);
+    scopeConds.push(`p.import_id = $${scopeParams.length}::uuid`);
   }
 
   // Page query = scope + optional state filter + keyset cursor, NEWEST first.
@@ -2002,8 +2054,11 @@ export async function listReviewQueue(
 
 /** A user's own submissions, all states, across all namespaces — NEWEST first (personal history,
  *  unlike the review queue's oldest-first action ordering). Powers the "Mine" tab (§8). */
-export async function listMySubmissions(pool: Pool, userId: string): Promise<ReviewQueueItem[]> {
-  const rows = (await pool.query<QueueRow>(`${QUEUE_BASE_SELECT} where p.submitted_by = $1 order by p.created_at desc`, [userId])).rows;
+export async function listMySubmissions(pool: Pool, userId: string, opts: { importId?: string | null } = {}): Promise<ReviewQueueItem[]> {
+  // §64.7: `importId` narrows the list to one repository import.
+  const rows = opts.importId
+    ? (await pool.query<QueueRow>(`${QUEUE_BASE_SELECT} where p.submitted_by = $1 and p.import_id = $2::uuid order by p.created_at desc`, [userId, opts.importId])).rows
+    : (await pool.query<QueueRow>(`${QUEUE_BASE_SELECT} where p.submitted_by = $1 order by p.created_at desc`, [userId])).rows;
   return rows.map(toQueueItem);
 }
 
@@ -2072,6 +2127,8 @@ export interface ProposalDetail {
    * what accepting would change (§8). Null for new-skill proposals.
    */
   targetSkillCurrent: TargetSkillCurrent | null;
+  /** §64.7: the repository import this proposal came from, or null. */
+  import: { id: string; repo: string; originUrl: string; ref: string; commit: string | null; others: number } | null;
 }
 
 /** The target skill's live state, for the review page's old → new metadata diff (§8). */
@@ -2290,5 +2347,23 @@ export async function getProposalDetail(
     duplicate,
     slugMatches,
     targetSkillCurrent,
+    import: await proposalImportView(pool, p.id),
   };
+}
+
+/**
+ * §64.7: the repository import a proposal came from — its repo, ref, pinned commit and how many
+ * other proposals it holds — or null. Every proposal of an import shares one namespace, so whoever
+ * may open this one (a reviewer of that namespace, or the submitter) may open all of them.
+ */
+async function proposalImportView(db: Pool, proposalId: string): Promise<ProposalDetail["import"]> {
+  const { rows } = await db.query<{ id: string; origin_url: string; ref: string; commit: string | null; others: string }>(
+    `select pi.id, pi.origin_url, pi.ref, pi.commit,
+            (select count(*) from proposals o where o.import_id = pi.id and o.id <> p.id)::text as others
+       from proposals p join proposal_imports pi on pi.id = p.import_id
+      where p.id = $1`,
+    [proposalId],
+  );
+  const r = rows[0];
+  return r ? { id: r.id, repo: repoLabel(r.origin_url), originUrl: r.origin_url, ref: r.ref, commit: r.commit, others: Number(r.others) } : null;
 }

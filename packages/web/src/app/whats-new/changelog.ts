@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.50.0",
+    date: "2026-10-29",
+    summary:
+      "Import a whole repository: point at a git repo full of skills, tick the ones you want, review each one in a short wizard (optionally pre-filled by AI) and propose them all in one go. Each skill becomes its own proposal, and reviewers get one notification for the import. Start from Propose a skill → Import a whole repository.",
+  },
+  {
     version: "2.49.0",
     date: "2026-10-29",
     summary:
