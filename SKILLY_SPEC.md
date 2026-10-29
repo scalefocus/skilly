@@ -1148,6 +1148,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Unchanged:** the **maintained-by view** (`?maintainer=`) still hides the whole facet block, so it has no collapsed state to restore.
   - **Shared with `/requests`.** One `CollapsibleFacetRow` component backs this row and the §26 Requested-skills category row, so category filtering looks and behaves identically on both pages rather than diverging into two inline copies. It also backs the **§12 notifications inbox's `Type` row**. For that row the component gains one **optional collapsed-summary slot**, rendered in the chips column **only while the row is collapsed** (the inbox uses it for `<k> selected · ✕ clear`). The catalog and `/requests` do not pass it, so they are unchanged.
 - **"My Skills" toggle** (`?mine=1`): narrows the catalog to skills the caller is an **explicit maintainer** of (`skill_maintainers`, §19) — the same definition as `maintainsSkills` in `/api/me`. Implicit (namespace-admin) maintainership is **not** included: "My Skills" means skills named to you, not every skill in a namespace you administer. Visibility-filtered like everything else.
+- **"Updates available" toggle** (`?updates=1`, §63.7): owner-only, in the Source row after *✓ Official*, labelled with the viewer's count and shown only while that count is above zero or the toggle is on. It narrows the catalog to the pointer skills that show the `update available` / `update proposed` pill for this viewer (effective maintainers and platform admins). Unlike *My Skills*, it includes implicit (namespace-admin) maintainership, because it follows the §63.7 notice's audience.
 - **Maintained-by view** (`?maintainer=<userId>&by=<name>`): the same explicit-maintainer filter for an **arbitrary** person (used by the leaderboard's per-row "Skills" action, §21). The catalog shows a **dismissible "Skills maintained by &lt;name&gt;" banner** (the name is carried in the URL, no extra lookup) and, on arrival, **ignores the viewer's other saved filters** (category/tool/type/My-Skills) to show everything by that maintainer the viewer can see. Both surfaces share one server filter (`searchSkills.maintainerUserId`); the `maintainer` value is validated as a UUID and the result is **still viewer-visibility-scoped** (invariant #3), so it never reveals a restricted skill to someone who couldn't already see it.
 - **Namespace view** (`?ns=<slug>&nsName=<display name>`): the catalog narrowed to **one namespace's skills** — used by the Marketplaces page's per-row "Skills" action (§30.6) so a consumer can browse a marketplace's namespace before adding it. Same shape as the maintained-by view: a **dismissible "Skills in &lt;display name&gt;" banner** (the name carried in the URL, no extra lookup), and on arrival the view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) to show everything in that namespace the viewer can see — the facet rows **stay available** afterwards, since a namespace can hold many skills and narrowing within it is useful. One server filter (`searchSkills.namespaceSlug`, matched on `namespaces.slug`); the result is **still viewer-visibility-scoped** (invariant #3): an outsider filtering on a namespace they don't belong to sees only that namespace's `org`-visible skills, exactly what they'd see by browsing. An unknown slug yields an empty list, not an error. Note the difference from the marketplace row's count: this view lists the namespace's **whole visible catalog** (`org` + `namespace` visibility), while the row counts only the **marketplace payload** (`namespace`-visibility skills, §30.1) — the two numbers are expected to differ. **Skills shared with that namespace (§42) are included** in its namespace view (they are part of what its members can see and of its marketplace), carrying the *Shared with your namespace by …* marker for viewers who qualify for it.
 - **Presentation:** the catalog offers a **cards / list toggle** (card grid vs a compact one-line list; same data + visibility filtering, pure view preference persisted client-side). The skill detail page shows **created** (skill row) and **last updated** (newest version — versions are immutable, so the latest version's timestamp IS the last content update) dates. The **card view is fixed-height** — every card in the grid is exactly as tall as every other, with the description clamped and reserved at four lines, the title at two, the categories row clipped to one, and the top meta row capped at two; see §14 *Fixed-height catalog cards* for the zone budget and its accepted losses.
@@ -1670,7 +1671,10 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
       - **The namespace is width-capped** (`max-width`, ellipsis, full value on `title` hover). It is
         the widest item in the row and the main reason the row wraps; capping it **recovers a whole
         row** at the 290px floor — `@platform-engineering-emea` + `v12.144.1` drops from two rows to
-        one — and with it capped, a card carrying *all six* pills still fits inside two rows.
+        one — and with it capped, a card carrying *all six* pills still fits inside two rows. The
+        owner-only `update available` / `update proposed` pill (§63.7) sits right after the version
+        chip; it only appears on active, non-deprecated skills, so it never shares the row with
+        `archived` or `deprecated` and stays inside the same budget.
       - **The row is exempt from flex-shrink.** Without that exemption an over-full card compresses
         the row and **shaves ~3px off every second-row pill**, which reads as a broken render rather
         than as truncation. The cap sits between the measured second-row bottom and third-row top, so
@@ -1750,7 +1754,7 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
 REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PAT auth path**; PATs were removed with the install-token model, §9/§23). SCIM under `/scim/v2` on the worker. This inventory is indicative; the route handlers are the source of truth.
 
 **Catalog & skills**
-- `GET /api/skills` — search/list (visibility-filtered, faceted); `q` runs the §34 engine and the response is `{ skills, matchMode }` (`"all" | "any"`, `null` without a query).
+- `GET /api/skills` — search/list (visibility-filtered, faceted); `q` runs the §34 engine and the response is `{ skills, matchMode }` (`"all" | "any"`, `null` without a query). `updates=1` is the owner-only *Updates available* facet, and each row carries `upstreamUpdate` for effective maintainers and platform admins only (§63.11).
 - `GET /api/skills/featured` — the **Featured skills** home-page feed (§7): visibility-filtered, **live-published only**, most-recent-featured first, **not** sliced to the cap; an empty result ⇒ the section is omitted.
 - `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7) + `deprecation` / `replaces[]` / `canDeprecate` (§45.8).
 - `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once **and only for a same-site request** (a `Sec-Fetch-Site: cross-site` navigation is served but never counted — a GET must not be a cross-site state trigger, §49.9), and **never listed as an installation** on the Installed Skills page (§23).
@@ -2214,7 +2218,7 @@ Per-skill **ownership + notification** layer. Designed to name accountable owner
 - **At version acceptance (new versions of an already-existing skill, not just creation):** every accepted version of an existing skill — reviewed-proposal accept, direct publish (`require_review=false`), or a metadata-only *Keep current files* re-version (§8) alike, no distinction between them — auto-adds its submitter (`skill_versions.created_by`) as an explicit maintainer, under the **same eligibility gate as creation**: added iff they can currently see the skill (`isSkillVisible`), checked **at accept time** against the final namespace/visibility (so a reviewer's mid-review namespace/visibility edit is what's evaluated, not the submission-time state); an ineligible cross-namespace submitter is skipped, same admin-only-coverage fallback as creation. **No-op** if already an effective maintainer (explicit, or implicit via namespace-admin role) — no duplicate row, no duplicate audit entry. **Full parity** with any other explicit maintainer once added — the usual co-maintainer curation rights above, no cap on how many a skill accumulates over its lifetime, permanent until manually removed. **Global and unconditional**, not a per-namespace setting (unlike `require_review`). **Silent** — no dedicated notification (matches the creation-time rule); the new maintainer discovers their status via the skill detail page, **My Skills**, or the audit log. **Forward-only** — versions accepted before this shipped are not backfilled. **Audited** as a distinct action, `skill.maintainer_auto_added` (actor = the submitter), so it stays distinguishable from an admin's manual add/remove. **Out of scope: promotion to global** (§8) — it materializes an independent, brand-new skill, so it's already covered by the *At creation* rule above, not this one.
 
 ### Notifications, display & lifecycle
-- Maintainers are **implicit watchers** of their skill: `skill.new_version` on publish (deduped vs explicit watchers) and `skill.drift` on detected pointer drift. For pointer skills they also get `skill.upstream_release` and the skill page's upstream notice, with *Propose the update* and *Skip this release* (§63). Both are gated by the per-user **maintainer notification preferences** (§12) — suppressed at insert time for opted-out users, with an explicit `skill_watches` row always outranking the new-version opt-out — and drift pings fire **once per drift onset**, not per refresh pass (§12). No un-actionable review notifications.
+- Maintainers are **implicit watchers** of their skill: `skill.new_version` on publish (deduped vs explicit watchers) and `skill.drift` on detected pointer drift. For pointer skills they also get `skill.upstream_release` and the skill page's upstream notice, with *Propose the update* and *Skip this release*, plus the catalog's `update available` pill and *Updates available* facet (§63). Both are gated by the per-user **maintainer notification preferences** (§12) — suppressed at insert time for opted-out users, with an explicit `skill_watches` row always outranking the new-version opt-out — and drift pings fire **once per drift onset**, not per refresh pass (§12). No un-actionable review notifications.
 - The skill detail page shows maintainers as `display_name` + `email` to **anyone who can see the skill** (not only admins/maintainers) — the list is read-only for viewers, who can **Reach out** (direct message) to a maintainer, and **Follow** them (right of Reach out, §35.4); only platform admins, namespace admins, and the skill's own maintainers see the add field and the remove (✕) control. Coexists with the namespace `maintainer_contact` (namespace scope vs skill scope). Maintainer names are **not** in FTS (§10).
 - **Deprovision:** `ON DELETE CASCADE` (the implicit-admin half self-heals from live `role_mappings`).
 - **Visibility downgrade (`org→namespace`):** the effective-maintainer resolver always re-filters through `isSkillVisible` (defense-in-depth, so a stale row can never leak); any path that narrows the audience must additionally prune now-ineligible explicit rows (audited `skill.maintainer_removed`). The first such path is **unsharing a namespace** (§42.4): revoking a grant removes every explicit maintainer who is no longer eligible, in the same transaction. There is still no `org→namespace` flip in v1.
@@ -13498,8 +13502,8 @@ the **seventh registered AI task** (§40.7). For the gap log only, this section 
   - the parsed query (§34.4) has **at least one positive unit** and passes the 2-character floor.
     Exclusion-only queries are not gaps;
   - **no facet or scoped view narrows the result**: no category, tool, source or `minQuality`
-    facet, and none of the scoped views (My Skills, Official, archived, namespace, maintained-by,
-    `collection`, `collectionsBy`). The sort doesn't matter. An empty filtered result says the
+    facet, and none of the scoped views (My Skills, Official, Updates available, archived,
+    namespace, maintained-by, `collection`, `collectionsBy`). The sort doesn't matter. An empty filtered result says the
     filter is narrow, not that the words are missing;
   - the result is **empty** (mode `none`) or the **any-word fallback** (mode `any`, §34.5);
   - the raw query **passes the §6 secret scanner**. A query that looks like a credential is dropped
@@ -13863,8 +13867,10 @@ upstream's releases. A release is a higher stable semver **tag** for a git origi
 **registry version** for a skills-hub origin. For a git origin the sweep also checks that the
 skill's own files changed in that release, so a release of a multi-skill repo that never touched
 the skill's folder stays silent. Branch-pinned skills have no releases. Instead, their existing
-**drift** ping (§12) gains the same *Propose the update* action. Nothing here mutates a version,
-mirrors bytes or bypasses review. The alert only opens the ordinary propose form.
+**drift** ping (§12) gains the same *Propose the update* action. The same owners see an
+**`update available`** pill on the skill's catalog cards and rows, and can filter the catalog down to
+those skills (§63.7). Nothing here mutates a version, mirrors bytes or bypasses review. The alert
+only opens the ordinary propose form.
 
 ### 63.1 Decisions
 | # | Decision | Why |
@@ -13882,6 +13888,11 @@ mirrors bytes or bypasses review. The alert only opens the ordinary propose form
 | 11 | **A maintainer can skip a release.** Skipping hides the release for everyone until a higher one appears. It can be undone, and both directions are audited. | A breaking major may be deliberately not taken. |
 | 12 | **Deprecated and archived skills are not checked.** | Their users are being sent elsewhere (§45). |
 | 13 | **A platform switch, on by default** (`upstream_releases_enabled`). Off stops the sweep, hides the notices and sends nothing. The branch-drift button (decision 3) does not depend on it. | An organization can keep the sweep off its upstream hosts or turn the alerts off. The drift button has no checks behind it. |
+| 14 | **The catalog pill mirrors the page notice.** A card or list row shows **`update available`** when the §63.7 notice offers *Propose the update* (a pending release or branch drift), and **`update proposed`** when it offers *View the proposal* instead. A skipped release shows no pill. | One rule, so the pill and the notice can never disagree. Branch drift counts because `main` is the §8 default pin, so most pointer skills would otherwise never show a pill. |
+| 15 | **The pill has the notice's audience**: effective maintainers and platform admins. Nobody else's response carries it. | Taking an update is the owners' call. Cards stay clean for consumers. |
+| 16 | **Every card and row shows it**, on every surface that renders `SkillCard` / `SkillListRow`. | One component and one rule, with no per-surface flag. |
+| 17 | **No pill on a deprecated skill**, even when its page shows a branch-drift notice. | Decision 12: its users are being sent elsewhere. It also keeps the card's top row inside its two-row cap (§14). |
+| 18 | **An owner-only *Updates available* facet**, shown only when the viewer has at least one pill, with a count. | A platform admin or namespace admin can find every pending update without paging through the catalog. Consumers never see it. |
 
 ### 63.2 Baseline and pin kind
 - **Baseline** = the skill's **latest stable active version**, the version `main` / "latest"
@@ -14002,7 +14013,7 @@ Index on `checked_at`. Also:
   the baseline is re-pinned or the drift clears. The covering-proposal rule applies, matching the
   branch name instead of a semver.
 
-### 63.7 The skill page notice
+### 63.7 The skill page notice and the catalog pill
 A notice at the top of the skill detail page (anchor `#upstream`), shown **only to effective
 maintainers and platform admins**, on pointer skills, while there is something to show:
 
@@ -14015,6 +14026,55 @@ maintainers and platform admins**, on pointer skills, while there is something t
 
 A skipped notice disappears when a higher release appears, and the higher release is shown
 instead. If release and branch drift could both apply, only one can: a baseline has one pin kind.
+
+**The catalog pill** (decisions 14–17). Every skill card and list row (`SkillCard`,
+`SkillListRow`) shows it: the catalog's card and list views in all of its views (My Skills,
+namespace, maintained-by, collections), the homepage *Featured*, *Recently published* and *Hyped*
+grids, and the skill page's *Skills you might like*. It shows only to effective maintainers and
+platform admins, only on pointer skills, and it is derived from the notice's state:
+
+| Notice state | Pill | Tooltip and accessible name |
+|---|---|---|
+| Release pending | **`update available`** (accent tone) | *Upstream {releaseRef} is out. This skill pins {currentRef} ({bump} update).* |
+| Release pending, covered | **`update proposed`** (muted tone) | *Upstream {releaseRef} is out. An update is already proposed.* |
+| Branch drift | **`update available`** (accent tone) | *Upstream {branch} has moved since v{semver} was pinned.* |
+| Branch drift, covered | **`update proposed`** (muted tone) | *Upstream {branch} has moved. An update is already proposed.* |
+| Release skipped, or no notice | none | — |
+
+- **Never on a deprecated skill** (decision 17), although its page can still show a branch-drift
+  notice (§63.6 doesn't check deprecation). Archived skills have no notice, so no pill.
+- **Position.** Right after the version chip, in the card's top meta row and in the list row's
+  meta alike, so it reads *v1.2.0 · update available*. The *({bump} update)* clause is left out when
+  the bump is unknown. The pill is a plain label inside the card's link: clicking the card opens
+  the skill page as usual, and the notice is at its top.
+- **The two-row cap still holds** (§14 *Fixed-height catalog cards*). The pill only appears on
+  active, non-deprecated skills, so it never shares the row with `archived` or `deprecated`. Its
+  widest company is `@namespace` + Official + Hyped + version + `external` + `restricted` /
+  `shared`, one item fewer than the row was sized for.
+- **Derived on read, never stored.** Each listing computes the pill in **one batched pass per
+  page** (the §50.6 hype-stats pattern, never a query per card), over the page's pointer skills
+  only, and only when the viewer is a platform admin or an effective maintainer of one of them. The
+  pass uses the helpers behind `upstreamDetail`: the pending helper (§63.4), the covering-proposal
+  lookup (§63.5) and the branch-drift check (§63.6). So publishing the update clears the pill at
+  once, and turning `upstream_releases_enabled` off removes release pills but not branch-drift ones,
+  exactly as it does to the notice.
+
+**The *Updates available* facet** (decision 18). A toggle in the catalog's **Source** facet row,
+after *My Skills* and *✓ Official*, labelled **Updates available** with `{n}` beside it, styled
+like the other facet counts:
+- `{n}` is the number of skills on which this viewer would see either pill, across everything they
+  can see. Like every `GET /api/skills/facets` value it ignores the other active filters, so it
+  doesn't change as they do.
+- **Shown only while `{n}` > 0, or while the toggle is on.** The second case lets a toggle
+  restored from saved preferences be switched off after its last update ships. A viewer who owns
+  no pointer skill with an update never sees it.
+- **On** narrows the listing to exactly the skills that show a pill for this viewer, in either
+  state (`?updates=1`). It composes with the other facets, the sort and `q`. The server computes
+  the viewer's pill set with the batched pass above and applies it as a skill-id filter under the
+  usual visibility predicate, so for a viewer with no pills it matches nothing and it never widens
+  what anyone sees.
+- **Remembered** with the other catalog filters (`skilly.catalogPrefs`, §10) and reset by
+  *✕ clear*. The maintained-by view hides the whole facet block, as it already does.
 
 ### 63.8 Skip and un-skip
 - `POST /api/skills/:ns/:slug/upstream/skip { ref }`: effective maintainers and platform admins.
@@ -14066,6 +14126,13 @@ instead. If release and branch drift could both apply, only one can: a baseline 
   `{ kind: "release" | "branch_drift", currentRef, baselineSemver, release?: { ref, semver, bump,
   detectedAt }, proposal?: { id }, skipped?: { ref, byName, at }, proposePath }`. Its `pointer`
   block gains the pinned `ref` (§63.9).
+- Every listing that returns catalog cards (`GET /api/skills`, `/api/skills/featured`,
+  `/api/skills/hyped` and `/api/skills/:ns/:slug/related`) gains a per-row `upstreamUpdate`,
+  non-null **only** for effective maintainers and platform admins while the pill shows (§63.7):
+  `{ state: "available" | "proposed", kind: "release" | "branch_drift", currentRef, baselineSemver,
+  releaseRef?, bump? }`.
+- `GET /api/skills?updates=1` is the *Updates available* facet (§63.7), and `GET
+  /api/skills/facets` gains `updates`, the viewer's pill count (`0` for everyone else).
 - `POST` / `DELETE /api/skills/:ns/:slug/upstream/skip` (§63.8).
 - `GET` / `PATCH /api/admin/settings` — `upstreamReleasesEnabled`.
 - `GET` / `PATCH /api/me` — `upstreamReleaseNotifications`, plus `upstreamReleasesEnabled`
@@ -14075,7 +14142,8 @@ instead. If release and branch drift could both apply, only one can: a baseline 
   changes nothing in the catalog (contrast drift, a security signal that is audited).
 - **Metrics**: `skilly_upstream_release_checks_total{result="none|release|unchanged|error"}` and
   `skilly_upstream_release_notifications_total`.
-- **MCP** (§29): nothing in this change.
+- **MCP** (§29): nothing in this change. `search_skills` carries no `upstreamUpdate`.
+- The pill and the facet are read-only, so they add no audit action and no metric.
 
 ### 63.12 Accepted trade-offs and out of scope
 - A repository that publishes GitHub *Releases* without semver tags, or uses a non-semver tag
@@ -14085,6 +14153,10 @@ instead. If release and branch drift could both apply, only one can: a baseline 
   `last_error`.
 - Branch drift has no *Skip*.
 - No release notes in the notification or the note: they are host-specific.
+- A deprecated skill with branch drift shows the notice on its page but no catalog pill
+  (decision 17).
+- The facet count ignores the other active filters, so with a category selected it can be higher
+  than the number of filtered results.
 - Deferred: an MCP field or tool, a per-namespace switch, and alerts for watchers or installers.
 
 ### 63.13 Tests (ship with the change)
@@ -14093,6 +14165,8 @@ instead. If release and branch drift could both apply, only one can: a baseline 
   (including a branch and a tag with the same name, a SHA and a missing ref), the pending helper
   (each of the four conditions, a skip, a higher release past a skip, a changed baseline origin),
   and the covering-proposal matcher.
+- **Unit** (catalog pill): the mapping from notice state to pill (`available`, `proposed`, none
+  for a skip and for a deprecated skill) and each tooltip, including a release with no known bump.
 - **Integration** (worker + DB, upstream stubbed):
   - a `semver_tag` baseline with a newer, changed tag gets a row and one notification per effective
     maintainer, and a second pass is silent;
@@ -14107,6 +14181,16 @@ instead. If release and branch drift could both apply, only one can: a baseline 
   absent for a plain viewer, and the skill is 404 for an outsider; skip and un-skip check authority,
   return 409 `not_pending`, and write their audit rows; publishing a version that pins the release
   clears `upstream` at once; settings and `/api/me` round-trip.
+- **Integration** (catalog pill and facet, web API + DB): `upstreamUpdate` on `GET /api/skills`
+  for an explicit maintainer, a namespace admin and a platform admin, and absent for a plain
+  viewer; a covering proposal gives `proposed`; a skip, a deprecated skill and a hosted skill give
+  none; with the switch off a release pill disappears and a branch-drift pill stays; the related
+  and featured listings carry it too; `?updates=1` returns exactly the viewer's pill set and
+  nothing for a consumer; `facets.updates` counts both states and is `0` for a consumer.
+- **e2e** (catalog pill): with the seeded pending release, the maintainer sees *update available*
+  on the skill's card and on its list row, and the facet shows *Updates available* with a count of
+  1 and narrows the catalog to that skill. A consumer sees neither. The §14 card-geometry assertion still passes
+  with the pill on a seeded card.
 - **e2e**: with a seeded pending release, a maintainer sees the notice, clicks **Propose the
   update** and lands on the form with the new ref, the suggested semver and the note filled in, and
   *Keep current files* off. **Skip this release** turns the notice into the muted skipped line.

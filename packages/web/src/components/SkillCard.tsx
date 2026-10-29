@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { agentLabel } from "@skilly/shared/agents";
+import { upstreamPillLabel, upstreamPillTitle, type UpstreamCardUpdate } from "@skilly/shared/upstream-releases";
 import { Pill, formatCount } from "./ui";
 import { useDateFmt } from "./DateFormat";
 import { plainText, descTooltip } from "../lib/cardText";
@@ -45,6 +46,8 @@ export interface CatalogEntry {
   deprecation?: { note: string | null; successor: { namespaceSlug: string; skillSlug: string; title: string } | null } | null;
   /** §50.6 the in-window hype count and the Hyped flag; null/absent when the skill has neither. */
   hype?: { count: number; top: boolean } | null;
+  /** §63.7 the upstream pill — present only for effective maintainers and platform admins. */
+  upstreamUpdate?: UpstreamCardUpdate | null;
 }
 
 /** §45.5 the `deprecated` pill — its tooltip / accessible name carries the full sentence. */
@@ -53,6 +56,18 @@ export function DeprecatedPill({ d }: { d?: CatalogEntry["deprecation"] }) {
   const text = d.successor ? `Deprecated — use ${d.successor.title} instead` : "Deprecated";
   return (
     <span title={text} aria-label={text} data-testid="deprecated-pill"><Pill tone="warn">deprecated</Pill></span>
+  );
+}
+
+/** §63.7 the owner-only upstream pill: `update available` (accent) or `update proposed` (muted).
+ *  A plain label — the whole card is the link, and the skill page carries the notice. */
+export function UpstreamUpdatePill({ u }: { u?: UpstreamCardUpdate | null }) {
+  if (!u) return null;
+  const text = upstreamPillTitle(u);
+  return (
+    <span title={text} aria-label={text} data-testid="upstream-update-pill">
+      <Pill tone={u.state === "available" ? "accent" : "muted"}>{upstreamPillLabel(u)}</Pill>
+    </span>
   );
 }
 
@@ -119,6 +134,7 @@ export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number })
         <OfficialBadge official={s.official} />
         {s.hype?.top && <HypedPill />}
         {s.latest && <span className="chip chip-accent">v{s.latest}</span>}
+        <UpstreamUpdatePill u={s.upstreamUpdate} />
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
         {s.visibility === "namespace" && (s.sharedFrom
           ? <span title={`Shared with your namespace by ${s.sharedFrom}`} aria-label={`Shared with your namespace by ${s.sharedFrom}`}><Pill tone="warn">shared</Pill></span>
@@ -177,6 +193,7 @@ export function SkillListRow({ s }: { s: CatalogEntry }) {
         <OfficialBadge official={s.official} />
         {s.hype?.top && <HypedPill />}
         {s.latest && <span className="chip chip-accent">v{s.latest}</span>}
+        <UpstreamUpdatePill u={s.upstreamUpdate} />
         {s.type === "pointer" && <Pill tone="muted">external</Pill>}
         {s.visibility === "namespace" && <Pill tone="warn">{s.sharedFrom ? "shared" : "restricted"}</Pill>}
         {s.status === "archived" && <Pill tone="danger">archived</Pill>}

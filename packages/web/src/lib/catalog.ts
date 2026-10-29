@@ -12,7 +12,9 @@ export function qualitySummary(score: number | null | undefined, mode: QualityMo
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
 import { hypeCardStats, topHypedSkillIds, type HypeCardStat } from "./hype";
+import { upstreamCardUpdates } from "./upstreamReleases";
 import type { GrantView } from "./grants";
+import type { UpstreamCardUpdate } from "@skilly/shared";
 
 /** The `icon` shape every catalog/detail/suggest payload exposes (§33). */
 export interface SkillIconView { url: string | null; emoji: string | null }
@@ -177,6 +179,9 @@ export interface CatalogEntry {
   deprecation?: DeprecationLite | null;
   /** §50.6: the in-window hype count and the Hyped flag — null when the skill has neither. */
   hype?: HypeCardStat | null;
+  /** §63.7 the owner-only upstream pill — null unless the CALLER is an effective maintainer or a
+   *  platform admin and the skill page would offer an update. */
+  upstreamUpdate?: UpstreamCardUpdate | null;
 }
 
 /** All known category names (labels) — powers the propose form's category combobox. */
@@ -218,11 +223,18 @@ export interface CatalogSearchOpts {
   collectionsByUserId?: string | null;
   /** §50.6 exactly these skills (the home page's Hyped section); still visibility-filtered. */
   skillIds?: string[] | null;
+  /** §63.7 the owner-only *Updates available* facet (`?updates=1`). */
+  updatesOnly?: boolean;
 }
 
 /** Visibility-filtered catalog listing — see searchCatalog. */
 export async function searchSkills(access: EffectiveAccess, opts: CatalogSearchOpts): Promise<CatalogEntry[]> {
   return (await searchCatalog(access, opts)).skills;
+}
+
+/** A listing's pointer skills — the only ones the §63.7 upstream pill can apply to. */
+function pointerIds(skills: CatalogEntry[]): string[] {
+  return skills.flatMap((x) => (x.type === "pointer" && x.skillId ? [x.skillId] : []));
 }
 
 /**
@@ -338,6 +350,14 @@ export async function searchCatalog(
     params.push(opts.skillIds);
     where.push(`s.id = any($${params.length}::uuid[])`);
   }
+  // §63.7 the *Updates available* facet: exactly the skills that show THIS viewer the upstream
+  // pill. The batched pass that finds them also dresses the cards below, so it runs once.
+  let upstream: Map<string, UpstreamCardUpdate> | null = null;
+  if (opts.updatesOnly) {
+    upstream = await upstreamCardUpdates(access, null);
+    params.push([...upstream.keys()]);
+    where.push(`s.id = any($${params.length}::uuid[])`);
+  }
   // Free text (§34): the shared engine, resolved AFTER every filter above so its any-word fallback
   // probe sees exactly the rows this listing can show. The same call backs the header dropdown and
   // the worker's MCP search_skills, so the three surfaces match and rank identically.
@@ -424,9 +444,16 @@ export async function searchCatalog(
       deprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
     };
   });
-  // §50.6 the hype count / Hyped pill: one batched query for the whole page, never per card.
-  const hype = await hypeCardStats(skills.map((x) => x.skillId!));
-  for (const x of skills) x.hype = hype.get(x.skillId!) ?? null;
+  // §50.6 the hype count / Hyped pill and §63.7 the owner-only upstream pill: one batched query
+  // each for the whole page, never per card. Archived skills never carry the upstream pill.
+  const [hype, updates] = await Promise.all([
+    hypeCardStats(skills.map((x) => x.skillId!)),
+    upstream ?? (opts.archivedOnly ? new Map<string, UpstreamCardUpdate>() : upstreamCardUpdates(access, pointerIds(skills))),
+  ]);
+  for (const x of skills) {
+    x.hype = hype.get(x.skillId!) ?? null;
+    x.upstreamUpdate = updates.get(x.skillId!) ?? null;
+  }
   return { skills, matchMode: engine?.matchMode ?? null };
 }
 
@@ -488,7 +515,7 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
   // no LIMIT is needed), each flagged with whether the viewer has adopted it. That lets us drop
   // installed ones AND distinguish "all installed" (message) from "nothing to show" (hide).
   const { rows } = await pool.query<{
-    namespace_slug: string; skill_slug: string; title: string; description: string;
+    skill_id: string; namespace_slug: string; skill_slug: string; title: string; description: string;
     type: "hosted" | "pointer"; visibility: "org" | "namespace"; tool_harness: string;
     categories: string[] | null; install_count: string;
     rating_sum: string; rating_count: string; watcher_count: string; status: "active" | "archived";
@@ -496,7 +523,7 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
     icon_sha256: string | null; icon_emoji: string | null;
     quality_score: number | null; quality_mode: QualityMode | null;
   }>(
-    `select n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
+    `select s.id as skill_id, n.slug as namespace_slug, s.slug as skill_slug, s.title, s.description, s.type,
             s.visibility, s.tool_harness, s.install_count::text as install_count,
             s.rating_sum::text as rating_sum, s.rating_count::text as rating_count, s.status,
             (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji, s.quality_score, s.quality_mode, s.created_at as created_at,
@@ -519,6 +546,7 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
   const toEntry = (r: (typeof rows)[number]): CatalogEntry => {
     const ratingCount = Number(r.rating_count);
     return {
+      skillId: r.skill_id,
       namespaceSlug: r.namespace_slug,
       skillSlug: r.skill_slug,
       title: r.title,
@@ -542,6 +570,9 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
     };
   };
   const related = rows.filter((r) => !r.installed).slice(0, Math.max(1, show)).map(toEntry);
+  // §63.7 the owner-only upstream pill, batched over the shown cards like every listing.
+  const updates = await upstreamCardUpdates({ ...access, userId: viewerUserId }, pointerIds(related));
+  for (const x of related) x.upstreamUpdate = updates.get(x.skillId!) ?? null;
   // "You have all related skills" only when there were visible neighbours but none remain after
   // dropping the ones the viewer has installed. No visible neighbours at all ⇒ allInstalled false ⇒ hide.
   const allInstalled = rows.length > 0 && related.length === 0;

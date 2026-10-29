@@ -80,6 +80,9 @@ export async function GET(req: Request) {
     namespaceSlug: namespaceParam(url),
     collectionId,
     collectionsByUserId,
+    // §63.7 the owner-only *Updates available* facet: the skills showing THIS caller the upstream
+    // pill. It never widens a listing — a consumer's set is empty.
+    updatesOnly: url.searchParams.get("updates") === "1",
     catalogSeenAt,
   });
   // §34.15: counts only — the query text is never logged. The one exception is the opt-in,
@@ -92,7 +95,7 @@ export async function GET(req: Request) {
     const sp = url.searchParams;
     const narrowed =
       ["category", "tool", "type", "minQuality", "maintainer", "ns", "collection", "collectionsBy"].some((k) => !!sp.get(k)) ||
-      sp.get("archived") === "1" || sp.get("mine") === "1" || sp.get("official") === "1";
+      sp.get("archived") === "1" || sp.get("mine") === "1" || sp.get("official") === "1" || sp.get("updates") === "1";
     void maybeRecordGapHit(pool, {
       userId: access.userId,
       surface: "web",

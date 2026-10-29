@@ -10,9 +10,14 @@ import {
   proposeUpdatePath,
   suggestUpstreamVersion,
   upstreamReleaseNotificationContent,
+  upstreamCardUpdate,
+  upstreamNotice,
+  upstreamPillLabel,
+  upstreamPillTitle,
   upstreamReleaseState,
   upstreamSemver,
   upstreamWhatChanged,
+  type UpstreamNoticeInput,
   type UpstreamReleaseRow,
 } from "./upstream-releases.js";
 
@@ -147,4 +152,66 @@ test("links and wording", () => {
   assert.equal(driftProposeUpdatePath("skill.drift", drift), "/propose?newVersion=1&ns=team&slug=pdf&upstreamRef=main&upstreamKind=branch");
   assert.equal(driftProposeUpdatePath("skill.drift", { ...drift, pinKind: "tag" }), null, "a moved tag gets no button");
   assert.equal(driftProposeUpdatePath("skill.drift", { namespaceSlug: "team", skillSlug: "pdf", ref: "main" }), null, "a pre-§63 drift row");
+});
+
+// §63.7 — the skill page notice and the catalog pill derived from it (§63.13 unit, catalog pill).
+const noticeInput = (over: Partial<UpstreamNoticeInput> = {}, row: Partial<UpstreamNoticeInput["row"] & object> = {}): UpstreamNoticeInput => ({
+  enabled: true,
+  active: true,
+  deprecated: false,
+  row: { ...baseRow, baselineVersionId: "b1", releaseBump: "minor", ...row },
+  baseline: { ...baseline, id: "b1", semver: "1.2.0" },
+  baselineDrifted: false,
+  openProposals: [],
+  ...over,
+});
+const branchRow = { pinKind: "branch" as const, releaseRef: null, releaseSemver: null, filesChanged: null };
+const branchBaseline = { ...baseline, ref: "main", id: "b1", semver: "1.2.0" };
+
+test("upstreamNotice: pending release, skipped release, branch drift on this baseline, else nothing", () => {
+  assert.deepEqual(upstreamNotice(noticeInput()), { kind: "release", state: "pending", proposalId: null });
+  assert.deepEqual(upstreamNotice(noticeInput({}, { skippedRef: "v1.3.0" })), { kind: "release", state: "skipped" });
+  const drift = noticeInput({ baseline: branchBaseline, baselineDrifted: true }, branchRow);
+  assert.deepEqual(upstreamNotice(drift), { kind: "branch_drift", proposalId: null });
+  assert.equal(upstreamNotice({ ...drift, baselineDrifted: false }), null, "no drift report");
+  assert.equal(upstreamNotice(noticeInput({ baseline: branchBaseline, baselineDrifted: true }, { ...branchRow, baselineVersionId: "older" })), null, "the pin kind was recorded for another baseline");
+  assert.equal(upstreamNotice({ ...drift, enabled: false })?.kind, "branch_drift", "the switch doesn't gate branch drift");
+  assert.equal(upstreamNotice({ ...drift, deprecated: true })?.kind, "branch_drift", "deprecation doesn't gate branch drift");
+  assert.equal(upstreamNotice(noticeInput({ enabled: false })), null, "the switch gates releases");
+  assert.equal(upstreamNotice(noticeInput({ deprecated: true })), null, "deprecation gates releases");
+  assert.equal(upstreamNotice(noticeInput({ active: false })), null, "archived");
+  assert.equal(upstreamNotice(noticeInput({ row: null })), null, "never checked");
+  assert.equal(upstreamNotice(noticeInput({ baseline: null })), null, "no pointer baseline");
+});
+
+test("upstreamNotice: an open proposal that covers it is named", () => {
+  const covering = { id: "p2", originUrl: "https://github.com/acme/skills.git", subdir: "pdf", ref: "v1.3.0" };
+  const lower = { id: "p1", originUrl: "https://github.com/acme/skills.git", subdir: "pdf", ref: "v1.2.5" };
+  assert.deepEqual(upstreamNotice(noticeInput({ openProposals: [lower, covering] })), { kind: "release", state: "pending", proposalId: "p2" });
+  const branchProposal = { id: "p3", originUrl: "https://github.com/acme/skills", subdir: "pdf", ref: "main" };
+  assert.deepEqual(upstreamNotice(noticeInput({ baseline: branchBaseline, baselineDrifted: true, openProposals: [branchProposal] }, branchRow)), { kind: "branch_drift", proposalId: "p3" });
+});
+
+test("upstreamCardUpdate: available, proposed, and none for a skip or a deprecated skill", () => {
+  assert.deepEqual(upstreamCardUpdate(noticeInput()), { state: "available", kind: "release", currentRef: "v1.2.0", baselineSemver: "1.2.0", releaseRef: "v1.3.0", bump: "minor" });
+  const covering = { id: "p2", originUrl: "https://github.com/acme/skills.git", subdir: "pdf", ref: "v1.3.0" };
+  assert.equal(upstreamCardUpdate(noticeInput({ openProposals: [covering] }))?.state, "proposed");
+  assert.equal(upstreamCardUpdate(noticeInput({}, { skippedRef: "v1.3.0" })), null, "skipped");
+  assert.equal(upstreamCardUpdate(noticeInput({}, { releaseBump: "bogus" }))?.bump, null, "an unknown bump");
+  const drift = noticeInput({ baseline: branchBaseline, baselineDrifted: true }, branchRow);
+  assert.deepEqual(upstreamCardUpdate(drift), { state: "available", kind: "branch_drift", currentRef: "main", baselineSemver: "1.2.0" });
+  assert.equal(upstreamCardUpdate({ ...drift, deprecated: true }), null, "a deprecated skill shows no pill, though its page shows the drift notice");
+  assert.equal(upstreamCardUpdate({ ...drift, baselineDrifted: false }), null);
+});
+
+test("upstreamPillLabel / upstreamPillTitle: the §63.7 wording", () => {
+  const release = { state: "available", kind: "release", currentRef: "v1.2.0", baselineSemver: "1.2.0", releaseRef: "v1.3.0", bump: "minor" } as const;
+  assert.equal(upstreamPillLabel(release), "update available");
+  assert.equal(upstreamPillLabel({ state: "proposed" }), "update proposed");
+  assert.equal(upstreamPillTitle(release), "Upstream v1.3.0 is out. This skill pins v1.2.0 (minor update).");
+  assert.equal(upstreamPillTitle({ ...release, bump: null }), "Upstream v1.3.0 is out. This skill pins v1.2.0.");
+  assert.equal(upstreamPillTitle({ ...release, state: "proposed" }), "Upstream v1.3.0 is out. An update is already proposed.");
+  const drift = { state: "available", kind: "branch_drift", currentRef: "main", baselineSemver: "1.2.0" } as const;
+  assert.equal(upstreamPillTitle(drift), "Upstream main has moved since v1.2.0 was pinned.");
+  assert.equal(upstreamPillTitle({ ...drift, state: "proposed" }), "Upstream main has moved. An update is already proposed.");
 });

@@ -1,16 +1,22 @@
 // Upstream release alerts — the web side (SKILLY_SPEC.md §63.7, §63.8, §63.11): the skill page's
-// `upstream` block for effective maintainers and platform admins, and Skip / Un-skip. The worker's
-// sweep writes `skill_upstream_releases`; what is *pending* is derived here on every read from the
-// skill's CURRENT baseline through the shared rules, so publishing the update clears the notice at
-// once.
+// `upstream` block and the catalog pill for effective maintainers and platform admins, and Skip /
+// Un-skip. The worker's sweep writes `skill_upstream_releases`; what is *pending* is derived here on
+// every read from the skill's CURRENT baseline through the shared rules, so publishing the update
+// clears the notice and the pill at once.
 import type { Pool, PoolClient } from "pg";
 import {
   OPEN_POINTER_PROPOSALS_SQL,
   isUpstreamBump,
-  proposalCovers,
+  openPointerProposalsSql,
   proposeUpdatePath,
+  skillVisibilityWhere,
+  upstreamCardUpdate,
+  upstreamNotice,
   upstreamReleaseState,
+  type EffectiveAccess,
+  type OpenProposalPointer,
   type UpstreamBump,
+  type UpstreamCardUpdate,
   type UpstreamPinKind,
   type UpstreamReleaseState,
 } from "@skilly/shared";
@@ -109,64 +115,179 @@ async function releaseStateOf(db: Db, skill: SkillFacts, baseline: Baseline | nu
   });
 }
 
-async function coveringProposal(
-  db: Db,
-  skillId: string,
-  target: { originUrl: string; subdir: string | null; releaseSemver?: string | null; branch?: string | null },
-): Promise<{ id: string } | undefined> {
-  const { rows } = await db.query<{ id: string; url: string | null; ref: string | null; subdir: string | null }>(OPEN_POINTER_PROPOSALS_SQL, [skillId]);
-  const hit = rows.find((r) => r.url && r.ref && proposalCovers({ originUrl: r.url, subdir: r.subdir, ref: r.ref }, target));
-  return hit ? { id: hit.id } : undefined;
+type ProposalRow = { id: string; url: string | null; ref: string | null; subdir: string | null };
+
+/** Open proposals with a usable pointer source — the covering-proposal candidates (§63.5). */
+function openProposalPointers(rows: ProposalRow[]): OpenProposalPointer[] {
+  return rows.flatMap((r) => (r.url && r.ref ? [{ id: r.id, originUrl: r.url, subdir: r.subdir, ref: r.ref }] : []));
 }
 
-/** Is the baseline's most recent pointer_ref report (ignoring unreachable blips) a drift? (§63.6) */
+async function loadOpenProposals(db: Db, skillId: string): Promise<OpenProposalPointer[]> {
+  const { rows } = await db.query<ProposalRow>(OPEN_POINTER_PROPOSALS_SQL, [skillId]);
+  return openProposalPointers(rows);
+}
+
+/** The baseline's most recent pointer_ref report, ignoring unreachable blips (§63.6).
+ *  `scan_reports.subject_id` is text, so a uuid expression is cast. */
+const LAST_POINTER_REF_STATUS_SQL = (versionExpr: string) => `
+  select status from scan_reports
+   where subject_type = 'pointer_ref' and subject_id = (${versionExpr})::text and status <> 'unreachable'
+   order by created_at desc limit 1`;
+
+/** Is the baseline's most recent pointer_ref report a drift? (§63.6) */
 async function baselineDrifted(db: Db, versionId: string): Promise<boolean> {
-  const { rows } = await db.query<{ status: string }>(
-    `select status from scan_reports
-      where subject_type = 'pointer_ref' and subject_id = $1 and status <> 'unreachable'
-      order by created_at desc limit 1`,
-    [versionId],
-  );
+  const { rows } = await db.query<{ status: string }>(LAST_POINTER_REF_STATUS_SQL("$1"), [versionId]);
   return rows[0]?.status === "drift";
 }
 
 /**
  * The skill page's upstream notice (§63.7), or null. The caller decides the audience — effective
- * maintainers and platform admins only — and passes `isOwner`; everyone else gets null.
+ * maintainers and platform admins only — and passes `isOwner`; everyone else gets null. The notice
+ * itself is the shared `upstreamNotice`, the same rule the catalog pill is derived from.
  */
 export async function upstreamDetail(skill: SkillFacts & { namespaceSlug: string; slug: string }, isOwner: boolean, db: Db = pool): Promise<UpstreamView | null> {
   if (!isOwner || skill.status !== "active") return null;
   const baseline = await loadBaseline(db, skill.id);
   if (!baseline) return null;
   const row = await loadRow(db, skill.id);
-  const state = await releaseStateOf(db, skill, baseline, row);
+  if (!row) return null;
+  const [enabled, drifted, openProposals] = await Promise.all([
+    getUpstreamReleasesEnabled(),
+    baselineDrifted(db, baseline.id),
+    loadOpenProposals(db, skill.id),
+  ]);
+  const notice = upstreamNotice({
+    enabled,
+    active: true,
+    deprecated: skill.deprecatedAt != null,
+    row: noticeRow(row),
+    baseline: { id: baseline.id, semver: baseline.semver, originUrl: baseline.origin_url, subdir: baseline.subdir, ref: baseline.ref },
+    baselineDrifted: drifted,
+    openProposals,
+  });
+  if (!notice) return null;
 
-  if (row && state !== "none" && row.release_ref && row.release_semver) {
+  if (notice.kind === "release" && row.release_ref && row.release_semver) {
     const bump = isUpstreamBump(row.release_bump) ? row.release_bump : null;
     return {
       kind: "release",
       currentRef: baseline.ref,
       baselineSemver: baseline.semver,
       release: { ref: row.release_ref, semver: row.release_semver, bump, detectedAt: row.detected_at ? new Date(row.detected_at).toISOString() : null },
-      ...(state === "pending"
-        ? { proposal: await coveringProposal(db, skill.id, { originUrl: baseline.origin_url, subdir: baseline.subdir, releaseSemver: row.release_semver }) }
+      ...(notice.state === "pending"
+        ? { proposal: notice.proposalId ? { id: notice.proposalId } : undefined }
         : { skipped: { ref: row.skipped_ref!, byName: row.skipped_by_name, at: row.skipped_at ? new Date(row.skipped_at).toISOString() : null } }),
       proposePath: proposeUpdatePath({ ns: skill.namespaceSlug, slug: skill.slug, ref: row.release_ref, kind: "release", bump }),
     };
   }
-
-  // §63.6 branch drift — not gated by the switch; the pin kind is the refresh's (or the sweep's)
-  // classification of THIS baseline.
-  if (row && row.pin_kind === "branch" && row.baseline_version_id === baseline.id && (await baselineDrifted(db, baseline.id))) {
+  if (notice.kind === "branch_drift") {
     return {
       kind: "branch_drift",
       currentRef: baseline.ref,
       baselineSemver: baseline.semver,
-      proposal: await coveringProposal(db, skill.id, { originUrl: baseline.origin_url, subdir: baseline.subdir, branch: baseline.ref }),
+      proposal: notice.proposalId ? { id: notice.proposalId } : undefined,
       proposePath: proposeUpdatePath({ ns: skill.namespaceSlug, slug: skill.slug, ref: baseline.ref, kind: "branch" }),
     };
   }
   return null;
+}
+
+/** The shared rules' view of a stored row. */
+function noticeRow(row: Pick<StoredRow, "baseline_version_id" | "origin_url" | "subdir" | "pin_kind" | "release_ref" | "release_semver" | "release_bump" | "files_changed" | "skipped_ref">) {
+  return {
+    baselineVersionId: row.baseline_version_id,
+    originUrl: row.origin_url,
+    subdir: row.subdir,
+    pinKind: row.pin_kind,
+    releaseRef: row.release_ref,
+    releaseSemver: row.release_semver,
+    releaseBump: row.release_bump,
+    filesChanged: row.files_changed,
+    skippedRef: row.skipped_ref,
+  };
+}
+
+/**
+ * The §63.7 catalog pill for the skills that show one to this viewer, keyed by skill id — in ONE
+ * query, never one per card (the §50.6 hype-stats pattern). `skillIds` narrows it to a page of
+ * cards; `null` covers everything the viewer can see (the *Updates available* facet's set and
+ * count). Only active, non-deprecated pointer skills the viewer owns are considered: a platform
+ * admin, an admin of the owning namespace, or an explicit maintainer — the skill page's `isOwner`
+ * (`managesMaintainers`). Everyone else gets an empty map. `access` is the caller's resolved access
+ * (`resolveUserAccess`), whose `userId` names the explicit maintainer.
+ */
+export async function upstreamCardUpdates(
+  access: EffectiveAccess & { userId?: string | null },
+  skillIds: string[] | null,
+  db: Db = pool,
+): Promise<Map<string, UpstreamCardUpdate>> {
+  const out = new Map<string, UpstreamCardUpdate>();
+  if (skillIds && skillIds.length === 0) return out;
+  const adminNs = [...access.namespaceRoles.entries()].filter(([, r]) => r === "namespace_admin").map(([ns]) => ns);
+  if (!access.isPlatformAdmin && adminNs.length === 0 && !access.userId) return out;
+
+  const params: unknown[] = [];
+  const where = ["s.type = 'pointer'", "s.status = 'active'", "s.deprecated_at is null"];
+  if (!access.isPlatformAdmin) {
+    params.push(adminNs, access.userId ?? null);
+    where.push(
+      `(s.namespace_id = any($${params.length - 1}::uuid[])` +
+        ` or exists (select 1 from skill_maintainers sm where sm.skill_id = s.id and sm.user_id = $${params.length}::uuid))`,
+    );
+  }
+  const vis = skillVisibilityWhere(access, params);
+  if (vis) where.push(vis);
+  if (skillIds) {
+    params.push(skillIds);
+    where.push(`s.id = any($${params.length}::uuid[])`);
+  }
+  const [enabled, { rows }] = await Promise.all([
+    getUpstreamReleasesEnabled(),
+    db.query<
+      Pick<StoredRow, "baseline_version_id" | "origin_url" | "subdir" | "pin_kind" | "release_ref" | "release_semver" | "release_bump" | "files_changed" | "skipped_ref"> & {
+        skill_id: string;
+        b_id: string;
+        b_semver: string;
+        b_origin_url: string | null;
+        b_ref: string | null;
+        b_subdir: string | null;
+        drifted: boolean;
+        proposals: ProposalRow[];
+      }
+    >(
+      `select s.id as skill_id, r.baseline_version_id, r.origin_url, r.subdir, r.pin_kind, r.release_ref, r.release_semver,
+              r.release_bump, r.files_changed, r.skipped_ref,
+              b.id as b_id, b.semver as b_semver, b.external_origin_url as b_origin_url, b.external_ref as b_ref,
+              b.external_subdir as b_subdir,
+              coalesce((select d.status = 'drift' from (${LAST_POINTER_REF_STATUS_SQL("b.id")}) d), false) as drifted,
+              coalesce((select json_agg(op) from (${openPointerProposalsSql("s.id")}) op), '[]'::json) as proposals
+         from skills s
+         join skill_upstream_releases r on r.skill_id = s.id
+         join lateral (
+           select sv.id, sv.semver, sv.external_origin_url, sv.external_ref, sv.external_subdir
+             from skill_versions sv
+            where sv.skill_id = s.id and sv.status = 'active' and not sv.is_prerelease
+            order by skilly_semver_key(sv.semver) desc nulls last, sv.created_at desc
+            limit 1
+         ) b on true
+        where ${where.join(" and ")}`,
+      params,
+    ),
+  ]);
+  for (const r of rows) {
+    if (!r.b_origin_url || !r.b_ref) continue;
+    const update = upstreamCardUpdate({
+      enabled,
+      active: true,
+      deprecated: false,
+      row: noticeRow(r),
+      baseline: { id: r.b_id, semver: r.b_semver, originUrl: r.b_origin_url, subdir: r.b_subdir, ref: r.b_ref },
+      baselineDrifted: r.drifted,
+      openProposals: openProposalPointers(r.proposals),
+    });
+    if (update) out.set(r.skill_id, update);
+  }
+  return out;
 }
 
 export type SkipResult = { ok: true; ref: string } | { ok: false; status: 409; error: "not_pending" | "not_skipped" };
