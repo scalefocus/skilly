@@ -460,7 +460,7 @@ function ImportPage() {
                     {why && (
                       <p style={{ fontSize: 12.5, margin: "4px 0 0" }}>
                         {r.reason === "exists" && r.match ? (
-                          <>Already in skilly as <Link href={`/skills/${r.match.ns}/${r.match.slug}`}>{r.match.ns}/{r.match.slug}</Link>{r.match.sameSource ? ", imported from this folder" : ""}</>
+                          <>Already in skilly as <Link href={`/skills/${encodeURIComponent(r.match.ns)}/${encodeURIComponent(r.match.slug)}`}>{r.match.ns}/{r.match.slug}</Link>{r.match.sameSource ? ", imported from this folder" : ""}</>
                         ) : why}
                       </p>
                     )}
@@ -593,6 +593,8 @@ function WizardStepForm({
     const r = await fetch("/api/icons", { method: "POST", body: form });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error ?? "Could not upload the icon");
+    // Only a real content hash ever reaches the preview's <img src>.
+    if (typeof j.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(j.sha256)) throw new Error("Could not upload the icon");
     onChange((s) => ({ ...s, iconSha256: j.sha256, iconEmoji: "" }));
     setIconErr(null);
   });
@@ -630,7 +632,7 @@ function WizardStepForm({
       <div>
         <label style={label}>Icon <span style={hint}>· optional; an icon in the skill’s own files wins</span></label>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {step.iconSha256 ? (
+          {step.iconSha256 && /^[0-9a-f]{64}$/.test(step.iconSha256) ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={`/skill-icons/${step.iconSha256}.png`} alt="" width={40} height={40} style={{ borderRadius: 8 }} />
           ) : step.iconEmoji ? (
@@ -686,9 +688,9 @@ function ImportResultView({ result, namespaceSlug, steps }: { result: ImportSubm
           <span className="mono muted" style={{ fontSize: 12 }}>{r.subdir ?? "(repo root)"}</span>
           <span style={{ marginLeft: "auto", fontSize: 13 }}>
             {r.proposalId ? (
-              <Link href={`/proposals/${r.proposalId}`}>{r.outcome === "routed" ? `Sent to review: ${routedLabel(r.routedReason)}` : "View the proposal"}</Link>
+              <Link href={`/proposals/${encodeURIComponent(r.proposalId)}`}>{r.outcome === "routed" ? `Sent to review: ${routedLabel(r.routedReason)}` : "View the proposal"}</Link>
             ) : r.outcome === "published" ? (
-              <Link href={`/skills/${namespaceSlug}/${r.slug}`}>View the skill (publishing…)</Link>
+              <Link href={`/skills/${encodeURIComponent(namespaceSlug)}/${encodeURIComponent(r.slug)}`}>View the skill (publishing…)</Link>
             ) : (
               <span className="field-error" style={{ margin: 0 }}>{r.error}</span>
             )}

@@ -10,6 +10,7 @@ import {
   importReasonText,
   isImportableName,
   isInFolder,
+  normalizeImportFolder,
   lastChangedByFolder,
   nestedSkillFolders,
   parseNameOnlyLog,
@@ -179,4 +180,13 @@ test("digest tiers and line: the reviewer notification is never digested; the su
     { mode: "daily", baseUrl: "https://skilly.example", bodySentence: () => "Your import of 2 skills from acme/skills was submitted and is awaiting review." },
   );
   assert.match(d.text, /https:\/\/skilly\.example\/proposals\?tab=mine&import=imp-1/);
+});
+
+test("normalizeImportFolder and repoLabel stay linear on runs of slashes (js/polynomial-redos)", () => {
+  const start = performance.now();
+  assert.equal(normalizeImportFolder("/".repeat(200_000) + "x" + "/".repeat(200_000)), "x");
+  repoLabel("a://./a" + "//".repeat(200_000));
+  repoLabel("https://h/" + "/".repeat(200_000));
+  assert.ok(performance.now() - start < 1000);
+  assert.equal(repoLabel("https://github.com/acme/skills.git/"), "acme/skills");
 });

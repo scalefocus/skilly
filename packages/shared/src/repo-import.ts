@@ -35,10 +35,19 @@ export interface FoundSkillPath {
   subdir: string | null;
 }
 
-/** Strip slashes at either end; empty → null. */
+/** Strip slashes at either end; empty → null. An index scan, not a regex, so a run of slashes in
+ *  user input can never make it backtrack (js/polynomial-redos). */
 export function normalizeImportFolder(raw: string | null | undefined): string | null {
-  const v = (raw ?? "").trim().replace(/^\/+|\/+$/g, "");
+  const v = trimSlashes((raw ?? "").trim());
   return v || null;
+}
+
+function trimSlashes(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && s[start] === "/") start++;
+  while (end > start && s[end - 1] === "/") end--;
+  return s.slice(start, end);
 }
 
 /**
@@ -282,8 +291,16 @@ export interface ImportSubmitResult {
 
 /** The repository as people read it: `owner/repo` from a git URL (host dropped, `.git` trimmed). */
 export function repoLabel(originUrl: string): string {
-  const m = /^[a-z]+:\/\/[^/]+\/(.+?)(?:\.git)?\/*$/i.exec(originUrl.trim());
-  return m ? m[1]! : originUrl.trim();
+  const raw = originUrl.trim();
+  // String scanning, not one regex over the whole URL (js/polynomial-redos on runs of `/`).
+  const scheme = raw.indexOf("://");
+  if (scheme <= 0 || !/^[a-z]+$/i.test(raw.slice(0, scheme))) return raw;
+  const rest = raw.slice(scheme + 3);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return raw;
+  let path = trimSlashes(rest.slice(slash + 1));
+  if (path.toLowerCase().endsWith(".git")) path = path.slice(0, -4);
+  return path || raw;
 }
 
 // ── Notifications (§64.7) ─────────────────────────────────────────────────────────────────────

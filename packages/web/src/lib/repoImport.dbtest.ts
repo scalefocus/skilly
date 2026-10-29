@@ -182,8 +182,10 @@ test("import a whole repository: scan, submit, notifications, audit, direct, fil
   assert.equal(props.length, 2);
   assert.ok(props.every((p) => p.import_id === importId && p.commit === sent.result.commit), "one import, one pinned commit");
 
-  // Notifications: one each for the import; none per proposal.
-  const notes = async (user: string) => (await q<{ type: string; payload: Record<string, unknown> }>(`select type, payload from notifications where user_id = $1`, [user])).rows;
+  // Notifications: one each for the import; none per proposal. (The submitter may also earn a
+  // first-proposal badge — achievement.earned — which is not the import's business.)
+  const notes = async (user: string) =>
+    (await q<{ type: string; payload: Record<string, unknown> }>(`select type, payload from notifications where user_id = $1 and type like 'proposal.%'`, [user])).rows;
   const revNotes = await notes(rev);
   assert.deepEqual(revNotes.map((n) => n.type), ["proposal.import_needs_review"]);
   assert.equal(revNotes[0]!.payload.count, 2);
