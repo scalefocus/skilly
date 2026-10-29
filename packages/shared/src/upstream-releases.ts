@@ -172,18 +172,24 @@ export function upstreamReleaseState(input: {
 }
 
 /**
- * The open new-version proposals of skill `$1` with their current revision's pointer source
- * (`id`, `url`, `ref`, `subdir`) — the input to `proposalCovers`, shared by the sweep and the page.
+ * The open new-version proposals of the skill at `skillExpr` with their current revision's pointer
+ * source (`id`, `url`, `ref`, `subdir`) — the input to `proposalCovers`. A correlated expression
+ * (`s.id`) lets the catalog batch it over a page of cards (§63.7).
  */
-export const OPEN_POINTER_PROPOSALS_SQL = `
+export function openPointerProposalsSql(skillExpr: string): string {
+  return `
   select p.id, pr.payload->'pointer'->>'url' as url, pr.payload->'pointer'->>'ref' as ref,
          pr.payload->'pointer'->>'subdir' as subdir
     from proposals p
     join lateral (
       select payload from proposal_revisions where proposal_id = p.id order by revision_no desc limit 1
     ) pr on true
-   where p.target_skill_id = $1 and p.state in ('proposed', 'under_review', 'changes_requested')
+   where p.target_skill_id = ${skillExpr} and p.state in ('proposed', 'under_review', 'changes_requested')
    order by p.created_at desc`;
+}
+
+/** `openPointerProposalsSql` for skill `$1`, shared by the sweep and the page. */
+export const OPEN_POINTER_PROPOSALS_SQL = openPointerProposalsSql("$1");
 
 /** An open proposal's pointer source, as its current revision carries it. */
 export interface ProposalPointer {
@@ -204,6 +210,106 @@ export function proposalCovers(
   if (target.branch) return proposal.ref.trim() === target.branch;
   const proposed = upstreamSemver(proposal.ref);
   return !!proposed && !!target.releaseSemver && compareSemver(proposed, target.releaseSemver) >= 0;
+}
+
+/** An open proposal's pointer source with its id — one row of `openPointerProposalsSql`. */
+export interface OpenProposalPointer extends ProposalPointer {
+  id: string;
+}
+
+/** The first open proposal that covers the target (§63.5, §63.6), or null. */
+function coveringProposalId(
+  proposals: OpenProposalPointer[],
+  target: { originUrl: string; subdir: string | null; releaseSemver?: string | null; branch?: string | null },
+): string | null {
+  return proposals.find((p) => proposalCovers(p, target))?.id ?? null;
+}
+
+/** What the skill page notice shows (§63.7), before the UI dresses it. */
+export type UpstreamNotice =
+  | { kind: "release"; state: "pending"; proposalId: string | null }
+  | { kind: "release"; state: "skipped" }
+  | { kind: "branch_drift"; proposalId: string | null };
+
+/** Everything the notice and the catalog pill are derived from, for one skill. */
+export interface UpstreamNoticeInput {
+  /** The `upstream_releases_enabled` switch (§63.10). */
+  enabled: boolean;
+  /** `skills.status = 'active'`. */
+  active: boolean;
+  deprecated: boolean;
+  /** The sweep's row, plus the baseline it last ran against and the stored bump. */
+  row: (UpstreamReleaseRow & { baselineVersionId: string; releaseBump: string | null }) | null;
+  /** The CURRENT baseline (§63.2) with its version id and semver; null for a hosted skill. */
+  baseline: (UpstreamBaseline & { id: string; semver: string }) | null;
+  /** The baseline's most recent pointer_ref report, ignoring unreachable blips, is a drift (§63.6). */
+  baselineDrifted: boolean;
+  openProposals: OpenProposalPointer[];
+}
+
+/**
+ * The skill page notice (§63.7), or null. A pending or skipped release wins; otherwise branch drift
+ * on THIS baseline. Branch drift is not gated by the switch or by deprecation (§63.6).
+ */
+export function upstreamNotice(input: UpstreamNoticeInput): UpstreamNotice | null {
+  const { row, baseline } = input;
+  if (!input.active || !row || !baseline) return null;
+  const state = upstreamReleaseState({ enabled: input.enabled, eligible: !input.deprecated, row, baseline });
+  if (state === "skipped") return { kind: "release", state: "skipped" };
+  if (state === "pending") {
+    const target = { originUrl: baseline.originUrl, subdir: baseline.subdir, releaseSemver: row.releaseSemver };
+    return { kind: "release", state: "pending", proposalId: coveringProposalId(input.openProposals, target) };
+  }
+  if (row.pinKind === "branch" && row.baselineVersionId === baseline.id && input.baselineDrifted) {
+    const target = { originUrl: baseline.originUrl, subdir: baseline.subdir, branch: baseline.ref };
+    return { kind: "branch_drift", proposalId: coveringProposalId(input.openProposals, target) };
+  }
+  return null;
+}
+
+/** The catalog pill's two states (§63.7): nobody has acted yet, or a proposal already covers it. */
+export type UpstreamPillState = "available" | "proposed";
+
+/** The `upstreamUpdate` field of a catalog card (§63.11). */
+export interface UpstreamCardUpdate {
+  state: UpstreamPillState;
+  kind: "release" | "branch_drift";
+  /** The baseline's pinned ref (the branch name, for branch drift). */
+  currentRef: string;
+  baselineSemver: string;
+  releaseRef?: string;
+  bump?: UpstreamBump | null;
+}
+
+/**
+ * The catalog pill (§63.1 decisions 14 and 17): `available` when the notice offers *Propose the
+ * update*, `proposed` when it offers *View the proposal*, and none for a skipped release or a
+ * deprecated skill. The audience (effective maintainers and platform admins) is the caller's call.
+ */
+export function upstreamCardUpdate(input: UpstreamNoticeInput): UpstreamCardUpdate | null {
+  const notice = upstreamNotice(input);
+  const { row, baseline } = input;
+  if (!notice || input.deprecated || !row || !baseline) return null;
+  if (notice.kind === "release" && notice.state === "skipped") return null;
+  const base = { state: notice.proposalId ? "proposed" : "available", currentRef: baseline.ref, baselineSemver: baseline.semver } as const;
+  if (notice.kind === "branch_drift") return { ...base, kind: "branch_drift" };
+  return { ...base, kind: "release", releaseRef: row.releaseRef ?? "", bump: isUpstreamBump(row.releaseBump) ? row.releaseBump : null };
+}
+
+/** The pill's text (§63.7). */
+export function upstreamPillLabel(u: Pick<UpstreamCardUpdate, "state">): string {
+  return u.state === "available" ? "update available" : "update proposed";
+}
+
+/** The pill's tooltip and accessible name (§63.7). */
+export function upstreamPillTitle(u: UpstreamCardUpdate): string {
+  if (u.kind === "branch_drift") {
+    return u.state === "available"
+      ? `Upstream ${u.currentRef} has moved since v${u.baselineSemver} was pinned.`
+      : `Upstream ${u.currentRef} has moved. An update is already proposed.`;
+  }
+  if (u.state === "proposed") return `Upstream ${u.releaseRef} is out. An update is already proposed.`;
+  return `Upstream ${u.releaseRef} is out. This skill pins ${u.currentRef}${u.bump ? ` (${u.bump} update)` : ""}.`;
 }
 
 /** The pre-filled propose form's link (§63.9). */

@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.49.0",
+    date: "2026-10-29",
+    summary:
+      "Maintainers, namespace admins and platform admins now see an \"update available\" pill on an external skill's catalog card and row when its upstream has a newer release or its pinned branch has moved, and \"update proposed\" once someone has proposed it. A new Updates available filter in the catalog lists just those skills.",
+  },
+  {
     version: "2.48.0",
     date: "2026-10-28",
     summary:

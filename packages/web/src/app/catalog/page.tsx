@@ -25,6 +25,8 @@ interface Facets {
   categories: { name: string; count: number }[];
   tools: { name: string; count: number }[];
   types: { name: "hosted" | "pointer"; count: number }[];
+  /** §63.7 how many skills show THIS viewer the upstream pill (0 for consumers). */
+  updates?: number;
 }
 
 const TYPE_LABEL: Record<string, string> = { hosted: "Hosted", pointer: "External" };
@@ -87,6 +89,8 @@ function Catalog() {
   const [mine, setMine] = useState(false);
   // "Official only": platform-endorsed skills (§7).
   const [official, setOfficial] = useState(false);
+  // §63.7 "Updates available": only the skills showing you the owner-only upstream pill.
+  const [updates, setUpdates] = useState(false);
   // Cards vs list presentation.
   const [view, setView] = useState<"cards" | "list">("cards");
   // The Category chip row is collapsible and starts COLLAPSED (§10). Two pieces of state, not one:
@@ -107,7 +111,7 @@ function Catalog() {
     try {
       const raw = localStorage.getItem(PREFS_KEY);
       if (raw) {
-        const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; type: "hosted" | "pointer" | null; sort: "relevance" | "top_rated" | "latest" | "quality"; minQuality: 3 | 4 | 4.5 | null; showArchived: boolean; mine: boolean; official: boolean; view: "cards" | "list"; categoryOpen: boolean }>;
+        const p = JSON.parse(raw) as Partial<{ category: string | null; tool: string | null; type: "hosted" | "pointer" | null; sort: "relevance" | "top_rated" | "latest" | "quality"; minQuality: 3 | 4 | 4.5 | null; showArchived: boolean; mine: boolean; official: boolean; updates: boolean; view: "cards" | "list"; categoryOpen: boolean }>;
         if ("category" in p) setCategory(p.category ?? null);
         if ("tool" in p) setTool(p.tool ?? null);
         if ("type" in p) setType(p.type ?? null);
@@ -116,6 +120,7 @@ function Catalog() {
         if (typeof p.showArchived === "boolean") setShowArchived(p.showArchived);
         if (typeof p.mine === "boolean") setMine(p.mine);
         if (typeof p.official === "boolean") setOfficial(p.official);
+        if (typeof p.updates === "boolean") setUpdates(p.updates);
         if (p.view === "cards" || p.view === "list") setView(p.view);
         setCategoryOpenPref(storedFacetRowOpen(p.categoryOpen));
         // Auto-expand (effective state only) when a category filter is restored alongside it.
@@ -130,7 +135,7 @@ function Catalog() {
   // prefs restore so it wins on mount). Filters picked inside the view are not persisted (below).
   useEffect(() => {
     if (!nsView && !collectionParam && !collectionsBy) return;
-    setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setShowArchived(false);
+    setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setUpdates(false); setShowArchived(false);
   }, [nsView, collectionParam, collectionsBy]);
   // `?category=<name>` arrival (§10): select that chip exactly as a click would — it overrides the
   // remembered category for this visit and composes with `?ns=`. Marketplace plugin homepages
@@ -144,9 +149,9 @@ function Catalog() {
   useEffect(() => {
     if (!prefsLoaded || nsView || collectionView) return;
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, minQuality, showArchived, mine, official, view, categoryOpen: categoryOpenPref }));
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ category, tool, type, sort, minQuality, showArchived, mine, official, updates, view, categoryOpen: categoryOpenPref }));
     } catch { /* private mode etc. */ }
-  }, [prefsLoaded, nsView, collectionView, category, tool, type, sort, minQuality, showArchived, mine, official, view, categoryOpenPref]);
+  }, [prefsLoaded, nsView, collectionView, category, tool, type, sort, minQuality, showArchived, mine, official, updates, view, categoryOpenPref]);
   // Managers (platform/namespace admins or maintainers) may surface archived skills to restore them.
   const { data: me } = useApi<{ isPlatformAdmin: boolean; namespaceRoles: { role: string }[]; maintainsSkills: boolean }>("/api/me");
   const canManage = !!me && (me.isPlatformAdmin || (me.namespaceRoles ?? []).some((r) => r.role === "namespace_admin") || me.maintainsSkills);
@@ -168,6 +173,7 @@ function Catalog() {
     if (showArchived && canManage) qs.set("archived", "1");
     if (mine) qs.set("mine", "1");
     if (official) qs.set("official", "1");
+    if (updates) qs.set("updates", "1");
     if (minQuality) qs.set("minQuality", String(minQuality));
   }
   if (sort === "top_rated") qs.set("sort", "top_rated");
@@ -375,6 +381,13 @@ function Catalog() {
             <button type="button" className={`facet${official ? " facet-on" : ""}`} aria-pressed={official} title="Only skills marked Official by a platform admin" onClick={() => setOfficial((o) => !o)}>
               ✓ Official
             </button>
+            {/* §63.7 owner-only: your pointer skills with a newer upstream. Shown only while you have
+                some, or while it is on (so a restored filter can still be switched off). */}
+            {((facets?.updates ?? 0) > 0 || updates) && (
+              <button type="button" className={`facet${updates ? " facet-on" : ""}`} aria-pressed={updates} title="Only skills you own with a newer upstream version" data-testid="facet-updates" onClick={() => setUpdates((u) => !u)}>
+                Updates available <span className="facet-n">{formatCount(facets?.updates ?? 0)}</span>
+              </button>
+            )}
           </FacetRow>
           {/* §41.7 minimum-quality facet: single-select stars floor; unscored skills drop out while active. */}
           <FacetRow label="Quality">
@@ -392,8 +405,8 @@ function Catalog() {
               </button>
             ))}
           </FacetRow>
-          {(category || tool || type || mine || official || minQuality) && (
-            <button className="btn-ghost mono" style={{ fontSize: 12, alignSelf: "flex-start" }} onClick={() => { setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setMinQuality(null); }}>
+          {(category || tool || type || mine || official || updates || minQuality) && (
+            <button className="btn-ghost mono" style={{ fontSize: 12, alignSelf: "flex-start" }} onClick={() => { setCategory(null); setTool(null); setType(null); setMine(false); setOfficial(false); setUpdates(false); setMinQuality(null); }}>
               ✕ clear filters
             </button>
           )}
@@ -459,15 +472,15 @@ function Catalog() {
           {skills.length === 0 ? (
             maintainer ? (
               <EmptyState title="No skills to show" hint={`${maintainerName || "This person"} maintains no skills you have access to.`} />
-            ) : activeCollection && !(submitted || category || tool || type || mine || official) ? (
+            ) : activeCollection && !(submitted || category || tool || type || mine || official || updates) ? (
               <EmptyState title="No skills to show" hint="This collection has no skills yet." />
-            ) : collectionsBy && !(submitted || category || tool || type || mine || official) ? (
+            ) : collectionsBy && !(submitted || category || tool || type || mine || official || updates) ? (
               <EmptyState title="No skills to show" hint={`${collectionsByName || "This person"} has no collections with skills yet.`} />
-            ) : nsView && !(submitted || category || tool || type || mine || official) ? (
+            ) : nsView && !(submitted || category || tool || type || mine || official || updates) ? (
               <EmptyState title="No skills to show" hint={`${nsViewName || nsView} has no skills you have access to yet.`} />
             ) : (
             <EmptyState
-              title={showArchived ? "No archived skills" : submitted || category || tool || type ? "No skills match your filters" : "No skills published yet"}
+              title={showArchived ? "No archived skills" : submitted || category || tool || type || updates ? "No skills match your filters" : "No skills published yet"}
               hint={
                 showArchived
                   ? "You have no archived skills to restore."

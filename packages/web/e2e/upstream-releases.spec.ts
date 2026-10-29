@@ -6,6 +6,10 @@
 //   pre-filled with the new ref (Keep current files off), the suggested 1.3.0 and the note →
 //   back on the skill page, Skip this release turns the notice into the muted skipped line →
 //   un-skip brings it back.
+// The catalog pill and facet (§63.7): the web-scraper card and list row carry "update available",
+//   every card stays the same height, and the Updates available facet narrows the catalog to the
+//   skills with a pill. (A consumer seeing neither is asserted in upstreamReleases.dbtest.ts: every
+//   e2e sign-in is a platform admin.)
 // WRITE-FREE apart from the seeded row (deleted in `finally`): the form is never submitted.
 //
 // EXCLUSIVE (groups.ts): the notice shows to every platform admin viewing the seeded web-scraper.
@@ -16,12 +20,13 @@ import { clickAndAwait, gotoLoaded } from "./helpers/ready";
 const dbUrl = process.env.DATABASE_URL;
 const PAGE = "/skills/global/web-scraper";
 const DETAIL = /\/api\/skills\/global\/web-scraper$/;
+const LIST = /\/api\/skills(\?|$)/;
 
 test.describe.configure({ mode: "serial" });
 
-test("upstream release: notice → pre-filled propose form → skip → un-skip", async ({ page }) => {
-  test.skip(!dbUrl, "DATABASE_URL not set — cannot seed the worker's result");
-  const pool = new Pool({ connectionString: dbUrl });
+/** Seed the sweep's result — upstream v1.3.0 is out for web-scraper (pinned to v1.2.0) — and return
+ *  the skill id for the cleanup. */
+async function seedRelease(pool: Pool): Promise<{ skillId: string; origin: string }> {
   const { rows } = await pool.query<{ skill_id: string; version_id: string; origin: string }>(
     `select s.id as skill_id, sv.id as version_id, sv.external_origin_url as origin
        from skills s join namespaces n on n.id = s.namespace_id
@@ -29,18 +34,24 @@ test("upstream release: notice → pre-filled propose form → skip → un-skip"
       where n.slug = 'global' and s.slug = 'web-scraper'`,
   );
   const seed = rows[0]!;
-  try {
-    await pool.query(`delete from platform_settings where key = 'upstream_releases_enabled'`);
-    await pool.query(
-      `insert into skill_upstream_releases (skill_id, baseline_version_id, origin_url, subdir, pin_kind, release_ref, release_semver,
-                                            release_commit, release_bump, files_changed, detected_at, checked_at, notified_ref)
-       values ($1, $2, $3, null, 'semver_tag', 'v1.3.0', '1.3.0', $4, 'minor', true, now(), now(), 'v1.3.0')
-       on conflict (skill_id) do update set baseline_version_id = excluded.baseline_version_id, origin_url = excluded.origin_url,
-         subdir = null, pin_kind = 'semver_tag', release_ref = 'v1.3.0', release_semver = '1.3.0', release_bump = 'minor',
-         files_changed = true, skipped_ref = null, skipped_by = null, skipped_at = null`,
-      [seed.skill_id, seed.version_id, seed.origin, "b".repeat(40)],
-    );
+  await pool.query(`delete from platform_settings where key = 'upstream_releases_enabled'`);
+  await pool.query(
+    `insert into skill_upstream_releases (skill_id, baseline_version_id, origin_url, subdir, pin_kind, release_ref, release_semver,
+                                          release_commit, release_bump, files_changed, detected_at, checked_at, notified_ref)
+     values ($1, $2, $3, null, 'semver_tag', 'v1.3.0', '1.3.0', $4, 'minor', true, now(), now(), 'v1.3.0')
+     on conflict (skill_id) do update set baseline_version_id = excluded.baseline_version_id, origin_url = excluded.origin_url,
+       subdir = null, pin_kind = 'semver_tag', release_ref = 'v1.3.0', release_semver = '1.3.0', release_bump = 'minor',
+       files_changed = true, skipped_ref = null, skipped_by = null, skipped_at = null`,
+    [seed.skill_id, seed.version_id, seed.origin, "b".repeat(40)],
+  );
+  return { skillId: seed.skill_id, origin: seed.origin };
+}
 
+test("upstream release: notice → pre-filled propose form → skip → un-skip", async ({ page }) => {
+  test.skip(!dbUrl, "DATABASE_URL not set — cannot seed the worker's result");
+  const pool = new Pool({ connectionString: dbUrl });
+  const seed = await seedRelease(pool);
+  try {
     await devSignIn(page);
     await gotoLoaded(page, PAGE, DETAIL);
     const notice = page.getByTestId("upstream-notice");
@@ -67,7 +78,46 @@ test("upstream release: notice → pre-filled propose form → skip → un-skip"
     await expect(page.getByTestId("upstream-notice")).toBeVisible();
     await expect(page.getByTestId("upstream-skipped")).toHaveCount(0);
   } finally {
-    await pool.query(`delete from skill_upstream_releases where skill_id = $1`, [seed.skill_id]);
+    await pool.query(`delete from skill_upstream_releases where skill_id = $1`, [seed.skillId]);
+    await pool.end();
+  }
+});
+
+test("upstream release: catalog pill on card and row, and the Updates available facet", async ({ page }) => {
+  test.skip(!dbUrl, "DATABASE_URL not set — cannot seed the worker's result");
+  const pool = new Pool({ connectionString: dbUrl });
+  const seed = await seedRelease(pool);
+  try {
+    await devSignIn(page);
+    await gotoLoaded(page, "/catalog", LIST);
+
+    // The card: `update available` right after the version chip, with the release in its tooltip.
+    const card = page.locator('a.skill-card[href="/skills/global/web-scraper"]');
+    const pill = card.getByTestId("upstream-update-pill");
+    await expect(pill).toHaveText("update available");
+    await expect(pill).toHaveAttribute("title", "Upstream v1.3.0 is out. This skill pins v1.2.0 (minor update).");
+    // The pill fits the two-row top meta: every card in the grid still reports the same height.
+    const heights = await page.$$eval(".card-grid .skill-card", (cards) => cards.map((c) => Math.round(c.getBoundingClientRect().height)));
+    expect(new Set(heights).size, `card heights: ${heights.join(", ")}`).toBe(1);
+
+    // The facet shows the count and narrows the catalog to the skills with a pill.
+    const facet = page.getByTestId("facet-updates");
+    await expect(facet).toContainText("Updates available");
+    await expect(facet).toHaveAttribute("aria-pressed", "false");
+    await clickAndAwait(page, () => facet.click(), /\/api\/skills\?.*updates=1/);
+    await expect(facet).toHaveAttribute("aria-pressed", "true");
+    await expect(card).toBeVisible();
+    const cards = page.locator(".card-grid .skill-card");
+    const shown = await cards.count();
+    expect(shown).toBeGreaterThan(0);
+    await expect(page.locator(".card-grid .skill-card [data-testid='upstream-update-pill']")).toHaveCount(shown);
+
+    // The list row carries the same pill.
+    await page.getByRole("button", { name: "☰ List", exact: true }).click();
+    const row = page.locator('a.skill-row[href="/skills/global/web-scraper"]');
+    await expect(row.getByTestId("upstream-update-pill")).toHaveText("update available");
+  } finally {
+    await pool.query(`delete from skill_upstream_releases where skill_id = $1`, [seed.skillId]);
     await pool.end();
   }
 });
