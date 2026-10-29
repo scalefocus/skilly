@@ -11,6 +11,7 @@ import { followNotificationContent } from "@skilly/shared/follows";
 import { ideaNotificationContent } from "@skilly/shared/ideas";
 import { searchGapNotificationContent } from "@skilly/shared/search-gaps";
 import { driftProposeUpdatePath, upstreamReleaseNotificationContent } from "@skilly/shared/upstream-releases";
+import { importNotificationContent } from "@skilly/shared/repo-import";
 
 const PAGE = 100;
 
@@ -216,6 +217,8 @@ export default function NotificationsPage() {
             // §63.5 skill.upstream_release — the shared sentence and the pre-filled propose form; §63.6
             // the second CTA of a branch-drift row.
             const upstream = upstreamReleaseNotificationContent(n.type, n.payload);
+            // §64.7 a repository import's one notification — the shared sentence and the filtered queue.
+            const imported = importNotificationContent(n.type, n.payload);
             const driftPropose = driftProposeUpdatePath(n.type, n.payload);
             // §45.6 skill.deprecated: the successor (named only when THIS recipient could see it at insert).
             const succNs = n.type === "skill.deprecated" && typeof n.payload.successorNamespaceSlug === "string" ? n.payload.successorNamespaceSlug : null;
@@ -262,6 +265,14 @@ export default function NotificationsPage() {
                       <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-upstream">{upstream.sentence}</p>
                       <Link href={upstream.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block", marginRight: 12 }}>
                         {upstream.ctaLabel.toLowerCase()} →
+                      </Link>
+                    </>
+                  )}
+                  {imported && (
+                    <>
+                      <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-import">{imported.sentence}</p>
+                      <Link href={imported.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                        {imported.ctaLabel.toLowerCase()} →
                       </Link>
                     </>
                   )}

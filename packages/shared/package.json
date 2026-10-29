@@ -166,6 +166,10 @@
     "./ideas": {
       "types": "./dist/ideas.d.ts",
       "default": "./dist/ideas.js"
+    },
+    "./repo-import": {
+      "types": "./dist/repo-import.d.ts",
+      "default": "./dist/repo-import.js"
     }
   },
   "scripts": {

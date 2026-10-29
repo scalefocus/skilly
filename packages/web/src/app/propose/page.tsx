@@ -9,6 +9,7 @@ import { isAgentSlug, GENERIC_AGENT } from "@skilly/shared/agents";
 import { isSkillsHubUrl, validateSkillsHubRef } from "@skilly/shared/skills-hub";
 import { isUpstreamBump, suggestUpstreamVersion, upstreamWhatChanged } from "@skilly/shared/upstream-releases";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
+import { titleize } from "@skilly/shared/repo-import";
 import { SLUG_EXISTS_CODE, normalizeMatchSlug, slugMatchClashes, slugClashMessage, type SlugMatchView } from "@skilly/shared/slug-match";
 import { Modal, Pill, ScrollToTop } from "../../components/ui";
 import { PolicyRulesPanel } from "../../components/PolicyRulesPanel";
@@ -85,20 +86,16 @@ const PASTE_EXAMPLES = [
   "https://github.com/owner/repo.git#v1.0.0",
 ];
 
+/** The repository import pre-filled with a URL and ref — hints only, nothing runs until Scan (§64.9). */
+function importHref(url: string, ref: string | null): string {
+  const q = new URLSearchParams({ url, ...(ref ? { ref } : {}) });
+  return `/propose/import?${q.toString()}`;
+}
+
 /** Suggest the next patch version above the current latest stable (proposer can change it). */
 function bumpPatch(v: string | null): string {
   const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
   return m ? `${m[1]}.${m[2]}.${Number(m[3]) + 1}` : "1.0.0";
-}
-
-/** Turn a kebab/snake slug into a title: separators → spaces, each word capitalized
- *  ("case-study-creator" → "Case Study Creator"). */
-function titleize(slug: string): string {
-  return slug
-    .split(/[-_]+/)
-    .filter(Boolean)
-    .map((w) => w[0]!.toUpperCase() + w.slice(1))
-    .join(" ");
 }
 
 function clearAiDraftHandoff(): void {
@@ -287,6 +284,8 @@ function ProposeForm() {
   const [pasteCmd, setPasteCmd] = useState("");
   const [pasteErr, setPasteErr] = useState<string | null>(null);
   const [pasteHint, setPasteHint] = useState<string | null>(null);
+  // §64.9: a pasted `--all` command — the whole repo, offered as a repository import instead.
+  const [pasteImport, setPasteImport] = useState<{ url: string; ref: string | null } | null>(null);
   // Typewriter placeholder: while the box is empty, cycle through accepted example commands —
   // type one out, hold, erase, advance. Pauses entirely once the user has typed/pasted.
   const [phText, setPhText] = useState(PASTE_EXAMPLES[0]!);
@@ -672,6 +671,7 @@ function ProposeForm() {
   function applyPaste(raw: string) {
     setPasteCmd(raw);
     setPasteHint(null);
+    setPasteImport(null);
     if (!raw.trim()) {
       setPasteErr(null);
       return;
@@ -682,6 +682,11 @@ function ProposeForm() {
       return;
     }
     setPasteErr(null);
+    if (p.importAll) {
+      // `--all` names no single skill: fill nothing, offer the repository import (§64.9).
+      setPasteImport({ url: p.url, ref: p.ref });
+      return;
+    }
     if (!lock) setSourceType("pointer"); // in new-version mode the source type is fixed
     setReuseFiles(false); // pasting a source = explicitly supplying one → not "Keep current files" (§8)
     dropDefaultNote();
@@ -1404,6 +1409,11 @@ function ProposeForm() {
               />
               {pasteErr ? (
                 <p style={{ color: "var(--danger)", fontSize: 12, marginTop: 7 }}>{pasteErr}</p>
+              ) : pasteImport ? (
+                <p style={{ fontSize: 12.5, marginTop: 7 }} data-testid="paste-import-all">
+                  This command asks for every skill in the repository.{" "}
+                  <Link href={importHref(pasteImport.url, pasteImport.ref)}>Import all skills from this repository →</Link>
+                </p>
               ) : pasteHint ? (
                 <p style={{ color: "var(--accent-2)", fontSize: 12, marginTop: 7 }}>{pasteHint}</p>
               ) : (
@@ -1412,6 +1422,11 @@ function ProposeForm() {
                 </p>
               )}
             </div>
+            {!lock && (
+              <p className="muted" style={{ fontSize: 12.5, margin: "-4px 0 0" }}>
+                Several skills in one repository? <Link href="/propose/import" data-testid="import-repo-link">Import a whole repository</Link>
+              </p>
+            )}
             <div><label style={label}>External git URL</label><input className="input input-lg input-mono" style={{ width: "100%" }} value={f.externalUrl} onChange={set("externalUrl")} placeholder="https://github.com/anthropics/skills.git" /></div>
             <div>
               <label style={label}>{hubSource ? "Pinned version" : "Pinned ref (branch/tag/commit)"} <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>{hubSource ? "· registry version · defaults to the latest" : "· defaults to main"}</span></label>
@@ -1876,7 +1891,15 @@ function ProposeForm() {
             {qualityOpen && <div style={{ marginTop: 10 }}><QualityFindingsList findings={quality.findings} compact /></div>}
           </div>
         )}
-        {err && <div ref={errRef} style={{ color: "var(--danger)", fontSize: 13.5, borderRadius: "var(--radius-sm)" }}>{err}</div>}
+        {err && (
+          <div ref={errRef} style={{ color: "var(--danger)", fontSize: 13.5, borderRadius: "var(--radius-sm)" }}>
+            {err}
+            {/* §64.9: a repo with no root SKILL.md (and no folder given) may hold several skills. */}
+            {sourceType === "pointer" && !f.externalSubdir.trim() && /no SKILL\.md found in the repository root/.test(err) && (
+              <> If this repository holds several skills, <Link href={importHref(f.externalUrl.trim(), f.externalRef.trim() || null)}>import them</Link>.</>
+            )}
+          </div>
+        )}
 
         {mode !== "want" && contentOverride && (
           <div className="card card-pad" data-testid="publish-override" style={{ borderColor: "color-mix(in oklab, var(--danger) 35%, var(--line))" }}>

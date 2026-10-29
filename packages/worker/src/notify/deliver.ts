@@ -24,6 +24,7 @@ import {
   ideaNotificationContent,
   searchGapNotificationContent,
   upstreamReleaseNotificationContent,
+  importNotificationContent,
   driftProposeUpdatePath,
   isFollowNotificationType,
   notificationTitle,
@@ -472,6 +473,18 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: `${upstream.sentence} ${cta(upstream.ctaLabel, upstream.path)}`,
       webhook: { event: n.type, title: s, skill: slug, currentRef: p.currentRef ?? null, releaseRef: p.releaseRef ?? null, bump: p.bump ?? null, url: abs(upstream.path) },
+    };
+  }
+
+  // proposal.import_needs_review / proposal.import_submitted (§64.7) — the shared wording; the CTA
+  // opens the proposals queue filtered to the import.
+  const imported = importNotificationContent(n.type, p);
+  if (imported) {
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${imported.sentence} ${cta(imported.ctaLabel, imported.path)}`,
+      webhook: { event: n.type, title: s, importId: p.importId ?? null, repo: p.repo ?? null, count: p.count ?? null, url: abs(imported.path) },
     };
   }
 

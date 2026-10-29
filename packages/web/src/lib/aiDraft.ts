@@ -67,6 +67,11 @@ async function recentDraftCalls(userId: string, now: Date): Promise<Date[]> {
   return rows.map((r) => r.created_at);
 }
 
+/** §64.5: the caller's drafts left in the rolling 24 hours (the import page's checkbox label). */
+export async function draftsRemainingToday(userId: string, now: Date = new Date()): Promise<number> {
+  return Math.max(0, AI_DRAFT_DAILY_CAP - (await recentDraftCalls(userId, now)).length);
+}
+
 const skillMdOf = (entries: BundleEntry[]): string | null => {
   const f = entries.find((e) => e.path === "SKILL.md");
   return f ? new TextDecoder().decode(f.bytes) : null;

@@ -6,6 +6,7 @@
 import { followNotificationContent, isFollowNotificationType } from "./follows.js";
 import { NOTIFICATION_LABELS, notificationTitle } from "./notifications.js";
 import { formatStars } from "./quality-status.js";
+import { importNotificationContent } from "./repo-import.js";
 import { textToHtmlFragment } from "./email-template.js";
 
 // ── Tiers (§48.3) ─────────────────────────────────────────────────────────────────────────────
@@ -15,6 +16,8 @@ export const DIGEST_FLOOR_TYPES = [
   "message.new",
   "message.mention",
   "proposal.needs_review",
+  // §64.7 the one review-queue notification of a repository import.
+  "proposal.import_needs_review",
   "proposal.revise",
   "proposal.resubmit",
 ] as const;
@@ -47,6 +50,8 @@ export const DIGEST_DEFAULT_TYPES = [
  *  admin can switch each one on. */
 export const DIGEST_OPTIONAL_TYPES = [
   "proposal.submitted",
+  // §64.7 the submitter's one confirmation of a repository import.
+  "proposal.import_submitted",
   "proposal.start_review",
   "proposal.request_changes",
   "proposal.accept",
@@ -90,6 +95,7 @@ export const DIGEST_FLOOR_LABELS: readonly string[] = [
   "Direct messages and messages on proposals and requests",
   NOTIFICATION_LABELS["message.mention"]!.title,
   NOTIFICATION_LABELS["proposal.needs_review"]!.title,
+  NOTIFICATION_LABELS["proposal.import_needs_review"]!.title,
   NOTIFICATION_LABELS["proposal.revise"]!.title,
   NOTIFICATION_LABELS["proposal.resubmit"]!.title,
 ];
@@ -385,7 +391,7 @@ export function renderDigest(rows: readonly DigestRow[], opts: RenderDigestOptio
   for (const r of sorted) {
     const p = r.payload ?? {};
     if (isFollowNotificationType(r.type)) push(people, s(p.actorId) ?? s(p.actorName) ?? "?", r);
-    else if (isProposalOrRequest(r.type)) push(mine, s(p.proposalId) ? `p:${p.proposalId}` : s(p.requestId) ? `r:${p.requestId}` : `x:${r.id}`, r);
+    else if (isProposalOrRequest(r.type)) push(mine, s(p.proposalId) ? `p:${p.proposalId}` : s(p.requestId) ? `r:${p.requestId}` : s(p.importId) ? `i:${p.importId}` : `x:${r.id}`, r);
     else push(skills, s(p.namespaceSlug) && s(p.skillSlug) ? `${p.namespaceSlug}/${p.skillSlug}` : `x:${r.id}`, r);
   }
 
@@ -449,7 +455,9 @@ export function renderDigest(rows: readonly DigestRow[], opts: RenderDigestOptio
   });
 
   const mineLines: Line[] = [...mine.entries()].map(([key, rs]) => {
-    const path = key.startsWith("p:") ? `/proposals/${key.slice(2)}` : key.startsWith("r:") ? `/requests/${key.slice(2)}` : "/notifications";
+    // §64.7 a repository import's confirmation links to the Mine tab filtered to that import.
+    const importPath = key.startsWith("i:") ? importNotificationContent(rs[0]!.type, rs[0]!.payload ?? {})?.path ?? null : null;
+    const path = key.startsWith("p:") ? `/proposals/${key.slice(2)}` : key.startsWith("r:") ? `/requests/${key.slice(2)}` : importPath ?? "/notifications";
     return { at: ms(rs[rs.length - 1]!.createdAt), rows: rs.length, text: link(rs.map(sentence).join(" "), path) };
   });
 

@@ -25,4 +25,8 @@ export const M = {
   // §44.10 AI-drafted quality improvements — counts only, never content.
   aiQualityDraftRuns: metrics.counter("skilly_ai_quality_draft_runs_total", "AI quality-draft runs, by outcome (complete|capped|cancelled)"),
   aiQualityDraftFiles: metrics.counter("skilly_ai_quality_draft_files_total", "Files in AI quality-draft runs, by final status"),
+  // §64.10 import a whole repository — submits, per-skill outcomes and scans.
+  repoImports: metrics.counter("skilly_repo_import_total", "Repository-import submits, by outcome (ok|partial|failed)"),
+  repoImportSkills: metrics.counter("skilly_repo_import_skills_total", "Skills in repository-import submits, by outcome (proposed|published|routed|failed)"),
+  repoImportScans: metrics.counter("skilly_repo_import_scans_total", "Repository-import scans, by result (ok|error)"),
 };

@@ -3,28 +3,32 @@
 // plus every namespace the user holds a role in. Platform admins see them all. This never
 // exposes skills, only the namespace directory the user can already contribute to.
 import { pool } from "./db";
-import type { EffectiveAccess } from "@skilly/shared";
+import { canDirectPublish, type EffectiveAccess } from "@skilly/shared";
 
 export interface NamespaceOption {
   slug: string;
   displayName: string;
+  /** Whether the caller may publish here without review (`canDirectPublish`) — §64.4's *Publish directly*. */
+  directPublish: boolean;
 }
 
 export async function listVisibleNamespaces(access: EffectiveAccess): Promise<NamespaceOption[]> {
+  type Row = { id: string; slug: string; display_name: string; require_review: boolean };
+  const toOption = (r: Row): NamespaceOption => ({ slug: r.slug, displayName: r.display_name, directPublish: canDirectPublish(access, r.id, r.require_review) });
   if (access.isPlatformAdmin) {
-    const { rows } = await pool.query<{ slug: string; display_name: string }>(
-      `select slug, display_name from namespaces order by (slug = 'global') desc, slug asc`,
+    const { rows } = await pool.query<Row>(
+      `select id, slug, display_name, require_review from namespaces order by (slug = 'global') desc, slug asc`,
     );
-    return rows.map((r) => ({ slug: r.slug, displayName: r.display_name }));
+    return rows.map(toOption);
   }
   const nsIds = [...access.namespaceRoles.keys()];
-  const { rows } = await pool.query<{ slug: string; display_name: string }>(
-    `select slug, display_name from namespaces
+  const { rows } = await pool.query<Row>(
+    `select id, slug, display_name, require_review from namespaces
       where slug = 'global' or id = any($1::uuid[])
       order by (slug = 'global') desc, slug asc`,
     [nsIds],
   );
-  return rows.map((r) => ({ slug: r.slug, displayName: r.display_name }));
+  return rows.map(toOption);
 }
 
 export interface ShareTarget {

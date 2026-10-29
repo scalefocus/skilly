@@ -91,6 +91,8 @@ interface Detail {
   policy?: ProposalPolicyBlock | null;
   /** §44.8: the model that drafted the submitted files, or null. */
   aiDraftModel?: string | null;
+  /** §64.7: the repository import this proposal came from, or null. */
+  import?: { id: string; repo: string; originUrl: string; ref: string; commit: string | null; others: number } | null;
   /** §46.8 the AI pre-review of the latest revision (advisory; never gates accept). */
   aiPrereview?: PrereviewView | null;
   submitterCard: SubmitterCard | null;
@@ -579,6 +581,16 @@ function ProposalDetailInner() {
         )}
       </div>
       <h1 className="page-title" style={{ fontSize: "clamp(28px,4vw,40px)" }}>{latest?.payload.metadata.title ?? "Proposal"}</h1>
+      {/* §64.7: one of several proposals from a repository import — linked to the filtered queue. */}
+      {data.import && (
+        <p className="muted" data-testid="proposal-imported-from" style={{ fontSize: 13, margin: "4px 0 0" }}>
+          Imported from <span className="mono">{data.import.repo}</span> at <span className="mono">{data.import.commit ? data.import.commit.slice(0, 7) : data.import.ref}</span>
+          {data.import.others > 0 ? (
+            <>, with <Link href={`/proposals?tab=${data.caps.isReviewer ? "review" : "mine"}&import=${data.import.id}`}>{data.import.others} other{data.import.others === 1 ? "" : "s"}</Link></>
+          ) : null}
+          .
+        </p>
+      )}
 
       {/* Duplicate alert (§8): this new-skill proposal matches an existing skill the reviewer can
           see. Shown regardless of enforcement mode — it may have slipped past a "warn" gate, or

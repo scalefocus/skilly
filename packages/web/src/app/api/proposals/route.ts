@@ -181,6 +181,9 @@ export const GET = withSystemLog("/api/proposals", async function GET(req: Reque
   if (!access) return Response.json({ error: "unauthenticated" }, { status: 401 });
   const canReview = hasReviewScope(access);
   const url = new URL(req.url);
+  // §64.7: `import=<id>` narrows either tab to one repository import (a malformed id is ignored).
+  const importParam = url.searchParams.get("import");
+  const importId = importParam && UUID_RE.test(importParam) ? importParam : null;
 
   // `?tab=review` → one paginated batch of the reviewer queue (newest-first, 100/batch), for the
   // UI's infinite scroll. State filtering + cursor + per-state counts all resolve server-side. §8.
@@ -190,12 +193,12 @@ export const GET = withSystemLog("/api/proposals", async function GET(req: Reque
     }
     const statesParam = url.searchParams.get("states");
     const states = statesParam ? statesParam.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
-    const review = await listReviewQueue(pool, access, { states, cursor: url.searchParams.get("cursor") });
+    const review = await listReviewQueue(pool, access, { states, cursor: url.searchParams.get("cursor"), importId });
     return Response.json({ review });
   }
 
   // Initial load: the caller's own submissions (everyone, whole) + whether to show the review tab.
   // `canReview` drives the "To review" tab; the page then fetches the first review batch itself. §8.
-  const mine = access.userId ? await listMySubmissions(pool, access.userId) : [];
+  const mine = access.userId ? await listMySubmissions(pool, access.userId, { importId }) : [];
   return Response.json({ mine, canReview });
 });
