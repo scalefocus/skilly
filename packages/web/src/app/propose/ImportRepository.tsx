@@ -600,21 +600,20 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
                 <button className="btn" data-testid="import-done" onClick={done}>Done</button>
               </div>
             ) : (
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", width: "100%" }}>
-                <button className="btn btn-ghost" data-testid="import-step-remove" onClick={() => removeStep(step.path)}>Remove from proposal</button>
-                <span style={{ marginLeft: "auto" }} />
-                <button className="btn" data-testid="import-step-prev" disabled={current === 0} onClick={() => go(current - 1)}>← Previous</button>
+              <div className={`import-foot${lastStep && directAllowed ? " import-foot-direct" : ""}`}>
+                <button className="btn btn-ghost import-foot-remove" data-testid="import-step-remove" onClick={() => removeStep(step.path)}>Remove from proposal</button>
+                <button className="btn import-foot-prev" data-testid="import-step-prev" disabled={current === 0} onClick={() => go(current - 1)}>← Previous</button>
                 {!lastStep && (
-                  <button className="btn btn-primary" data-testid="import-step-next" disabled={isDrafting(step)} onClick={next}>Next →</button>
+                  <button className="btn btn-primary import-foot-next" data-testid="import-step-next" disabled={isDrafting(step)} onClick={next}>Next →</button>
                 )}
                 {lastStep && (
                   <>
                     {directAllowed && (
-                      <button className="btn" data-testid="import-publish" disabled={busy || !submittable} onClick={() => { if (!stepErrors(step, categoryOptions).length) void submit("direct"); else setStepErr(stepErrors(step, categoryOptions)); }}>
+                      <button className="btn import-foot-publish" data-testid="import-publish" disabled={busy || !submittable} onClick={() => { if (!stepErrors(step, categoryOptions).length) void submit("direct"); else setStepErr(stepErrors(step, categoryOptions)); }}>
                         Publish directly
                       </button>
                     )}
-                    <button className="btn btn-primary" data-testid="import-submit" disabled={busy || !submittable} onClick={() => { const errs = stepErrors(step, categoryOptions); if (errs.length) setStepErr(errs); else void submit("review"); }}>
+                    <button className="btn btn-primary import-foot-next" data-testid="import-submit" disabled={busy || !submittable} onClick={() => { const errs = stepErrors(step, categoryOptions); if (errs.length) setStepErr(errs); else void submit("review"); }}>
                       {busy ? "Submitting…" : "Submit for review →"}
                     </button>
                   </>

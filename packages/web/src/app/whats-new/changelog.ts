@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.52.2",
+    date: "2026-10-30",
+    summary:
+      "On a phone, the repository import's Previous and Next buttons now sit together on the bottom row of each step, with Remove from proposal above them. On the last step, Previous sits beside Submit for review.",
+  },
+  {
     version: "2.52.1",
     date: "2026-10-30",
     summary:

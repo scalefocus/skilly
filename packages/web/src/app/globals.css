@@ -1815,6 +1815,20 @@ a.mention-chip:hover { text-decoration: underline; }
 @media (max-width: 767px) { .modal.modal-side { width: 100%; border-left: 0; } }
 @media (prefers-reduced-motion: reduce) { .modal-backdrop, .modal { animation: none; } }
 
+/* §64.4 the repository import wizard's footer: one row on a wide screen; below 720 px it stacks with
+   the navigation (Previous beside Next, or beside Submit) as the bottom row, never split. */
+.import-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; width: 100%; }
+.import-foot-remove { margin-right: auto; }
+@media (max-width: 719px) {
+  .import-foot { display: grid; grid-template-columns: 1fr 1fr; grid-template-areas: "remove remove" "prev next"; }
+  .import-foot.import-foot-direct { grid-template-areas: "remove remove" "publish publish" "prev next"; }
+  .import-foot .btn { justify-content: center; white-space: nowrap; }
+  .import-foot-remove { grid-area: remove; justify-self: start; margin-right: 0; }
+  .import-foot-prev { grid-area: prev; }
+  .import-foot-publish { grid-area: publish; }
+  .import-foot-next { grid-area: next; }
+}
+
 /* §61.3 Try a skill: a fixed header block over a scrolling conversation; the composer is the footer. */
 .modal-body.try-body { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding-bottom: 0; }
 .try-meta { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); line-height: 1.45; }
