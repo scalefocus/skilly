@@ -44,6 +44,15 @@ type AiState = { available: boolean; remainingToday: number };
 /** "(repo root)" for the root SKILL.md, else the folder. */
 const where = (s: { subdir: string | null }) => s.subdir ?? "(repo root)";
 
+/** Every link in the import opens in a new tab, marked ↗ (§64.1 decision 15): leaving this tab loses the import. */
+function NewTabLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Link href={href} target="_blank" rel="noopener noreferrer">
+      {children} <span aria-hidden>↗</span><span className="sr-only"> (opens in a new tab)</span>
+    </Link>
+  );
+}
+
 function newStep(skill: ScannedSkill, toolHarness: string): WizardStep {
   const p = importPrefill(skill, toolHarness);
   return {
@@ -554,7 +563,7 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
                     {why && (
                       <p style={{ fontSize: 12.5, margin: "4px 0 0" }}>
                         {r.reason === "exists" && r.match ? (
-                          <>Already in skilly as <Link href={`/skills/${encodeURIComponent(r.match.ns)}/${encodeURIComponent(r.match.slug)}`}>{r.match.ns}/{r.match.slug}</Link>{r.match.sameSource ? ", imported from this folder" : ""}</>
+                          <>Already in skilly as <NewTabLink href={`/skills/${encodeURIComponent(r.match.ns)}/${encodeURIComponent(r.match.slug)}`}>{r.match.ns}/{r.match.slug}</NewTabLink>{r.match.sameSource ? ", imported from this folder" : ""}</>
                         ) : why}
                       </p>
                     )}
@@ -846,9 +855,9 @@ function ImportResultView({ result, namespaceSlug, steps }: { result: ImportSubm
           <span className="mono muted" style={{ fontSize: 12 }}>{r.subdir ?? "(repo root)"}</span>
           <span style={{ marginLeft: "auto", fontSize: 13 }}>
             {r.proposalId ? (
-              <Link href={`/proposals/${encodeURIComponent(r.proposalId)}`}>{r.outcome === "routed" ? `Sent to review: ${routedLabel(r.routedReason)}` : "View the proposal"}</Link>
+              <NewTabLink href={`/proposals/${encodeURIComponent(r.proposalId)}`}>{r.outcome === "routed" ? `Sent to review: ${routedLabel(r.routedReason)}` : "View the proposal"}</NewTabLink>
             ) : r.outcome === "published" ? (
-              <Link href={`/skills/${encodeURIComponent(namespaceSlug)}/${encodeURIComponent(r.slug)}`}>View the skill (publishing…)</Link>
+              <NewTabLink href={`/skills/${encodeURIComponent(namespaceSlug)}/${encodeURIComponent(r.slug)}`}>View the skill (publishing…)</NewTabLink>
             ) : (
               <span className="field-error" style={{ margin: 0 }}>{r.error}</span>
             )}
