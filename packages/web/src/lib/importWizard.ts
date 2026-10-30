@@ -79,18 +79,20 @@ export function canSubmit(steps: readonly WizardStep[], knownCategories: readonl
   return steps.length > 0 && steps.every((s) => s.opened && !isDrafting(s) && stepErrors(s, knownCategories).length === 0);
 }
 
-/** The fields the proposer typed into (§64.4): Description or Usage differing from what the
- *  pre-fill or a draft last put there. A step's Draft button confirms before replacing them. */
+/** Typed text (§64.4): not empty, and not what the pre-fill or a draft last put there. */
+const isTyped = (value: string, filled: string) => !!value.trim() && value !== filled;
+
+/** The fields holding typed text. A step's Draft button confirms before replacing them. */
 export function typedFields(step: WizardStep): ("Description" | "Usage")[] {
   const out: ("Description" | "Usage")[] = [];
-  if (step.description !== step.filled.description) out.push("Description");
-  if (step.usageExamples !== step.filled.usageExamples) out.push("Usage");
+  if (isTyped(step.description, step.filled.description)) out.push("Description");
+  if (isTyped(step.usageExamples, step.filled.usageExamples)) out.push("Usage");
   return out;
 }
 
-/** Merge a successful AI draft into a step (§64.4): it replaces Description and Usage (only the
- *  empty ones with `fill: "empty"`) and adds its categories, capped like the propose form (12). */
-export function applyDraft(step: WizardStep, draft: { description: string; usage: string; categories: string[] }, fill: "replace" | "empty" = "replace"): WizardStep {
+/** Merge a successful AI draft into a step (§64.4): it replaces Description and Usage (all but
+ *  the typed ones with `fill: "keep"`) and adds its categories, capped like the propose form (12). */
+export function applyDraft(step: WizardStep, draft: { description: string; usage: string; categories: string[] }, fill: "replace" | "keep" = "replace"): WizardStep {
   const have = new Set(step.categories.map((c) => c.toLowerCase()));
   const added: string[] = [];
   for (const c of draft.categories) {
@@ -99,8 +101,8 @@ export function applyDraft(step: WizardStep, draft: { description: string; usage
     have.add(v);
     added.push(v);
   }
-  const description = (fill === "replace" || !step.description.trim()) && draft.description.trim();
-  const usageExamples = (fill === "replace" || !step.usageExamples.trim()) && draft.usage.trim();
+  const description = (fill === "replace" || !isTyped(step.description, step.filled.description)) && draft.description.trim();
+  const usageExamples = (fill === "replace" || !isTyped(step.usageExamples, step.filled.usageExamples)) && draft.usage.trim();
   return {
     ...step,
     description: description || step.description,

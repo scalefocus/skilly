@@ -14363,15 +14363,19 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   daily-cap message, and at that message's time the page asks `GET /api/propose/ai-draft` again and
   enables the button if drafts are left. While the step's draft is queued or running, the button
   reads *Drafting…* (§64.5).
-- **A click confirms only over typed text.** When the proposer has changed Description or Usage on
-  this step from the text last put there (the SKILL.md pre-fill or a draft), the §43.3 dialog comes
-  first, naming the changed field(s): **Replace** · **Fill empty fields only** · **Cancel**. Cancel
-  sends nothing. Otherwise the click drafts straight away and replaces both fields, since neither
-  holds the proposer's own writing. Categories are never in the dialog: they are always added.
+- **A click confirms only over typed text.** A field holds **typed text** when it is not empty and
+  differs from the text last put there (the SKILL.md pre-fill or a draft). An emptied field holds
+  nothing to keep. When Description or Usage holds typed text, a dialog comes first, naming those
+  field(s): **Replace** · **Keep what I typed** · **Cancel**. *Replace* drafts both fields. *Keep
+  what I typed* leaves the typed field(s) as they are and drafts the other one, even when it holds
+  SKILL.md or draft text. *Cancel* sends nothing. With no typed text the click drafts straight
+  away and replaces both fields. Categories are never in the dialog: they are always added. (The
+  propose form keeps §43.3's *Fill empty fields only*. The wizard differs because every step starts
+  pre-filled from the SKILL.md, so "empty" would leave that text undrafted.)
 - **Every click is one draft** against the §43.7 limits, on a step already drafted too. It joins the
   import's draft queue at the front (§64.5).
 - **A successful draft**, from the button or the pick-page option, **replaces** Description and
-  Usage (only the empty ones after *Fill empty fields only*) and **adds** its categories to those
+  Usage (all but the typed one(s) after *Keep what I typed*) and **adds** its categories to those
   selected (the §43.4 caps: at most 4 drafted, 2 of them new, and the field's cap of 12). Drafted
   text carries **no AI marker** (§43 decision 6).
 - **Undo** (single-step, §43.3) follows each successful draft. It restores Description and Usage to
@@ -14570,9 +14574,10 @@ resubmit*.
 - **Unit** (web client): the draft queue (order, at most 3 in flight, at most 10 started per minute,
   the per-minute 429 retry, the daily-cap stop, removal dropping an unsent draft, a clicked draft
   going to the front, a click after the cap's time restarting it); the per-step draft (no confirm
-  over the SKILL.md pre-fill or a draft's text, a confirm once Description or Usage was typed into,
-  *Fill empty fields only* leaving a non-empty field, Undo after a second draft restoring the first
-  draft's text, and restored typed text still asking); and the wizard
+  over the SKILL.md pre-fill, a draft's text or an emptied field, a confirm once Description or
+  Usage holds typed text, *Keep what I typed* keeping the typed field and drafting the other even
+  over SKILL.md text, Undo after a second draft restoring the first draft's text, and restored typed
+  text still asking); and the wizard
   gating (Next blocked on a failing step, Submit disabled until every remaining step is opened and
   passes, Remove from proposal unticking the row); and the tab read from the address (`mode=repo`,
   `mode=want`, none or unknown gives *I have a skill*, `newVersion=1` wins).
@@ -14597,8 +14602,8 @@ resubmit*.
   only that step. With *Draft with AI* on, a step is filled from the draft, and **Undo** restores
   the SKILL.md values. With it off, a step's **Draft with ‹AI name›** button fills that step only
   and leaves the others with their SKILL.md values; typing into Description and clicking it again
-  opens the confirm, and *Fill empty fields only* keeps the typed text. With AI disabled, neither
-  the option nor the button renders. The tabs: *I have a repo* sits between the other two; switching away and back
+  opens the confirm, and *Keep what I typed* keeps the typed text and drafts Usage. With AI
+  disabled, neither the option nor the button renders. The tabs: *I have a repo* sits between the other two; switching away and back
   keeps the propose form's title and the import's scan and ticks; `/propose/import?url=…&ref=…`
   lands on the tab with both fields filled; and a pasted `--all` command's link switches to the tab
   with Repository and Ref filled.

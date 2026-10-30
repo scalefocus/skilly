@@ -77,24 +77,29 @@ test("applyDraft replaces Description and Usage and adds categories; undoDraft r
 const draftA = { description: "Draft A.", usage: "Usage A.", categories: [] };
 const draftB = { description: "Draft B.", usage: "Usage B.", categories: ["search"] };
 
-test("typedFields: no confirm over the SKILL.md pre-fill or a draft's text, a confirm once typed into", () => {
+test("typedFields: no confirm over the SKILL.md pre-fill, a draft's text or an emptied field; a confirm over typed text", () => {
   assert.deepEqual(typedFields(step()), [], "the pre-fill");
   const drafted = applyDraft(step(), draftA);
   assert.deepEqual(typedFields(drafted), [], "a draft's text");
   assert.deepEqual(typedFields({ ...drafted, description: "Mine." }), ["Description"]);
   assert.deepEqual(typedFields({ ...drafted, description: "Mine.", usageExamples: "My usage." }), ["Description", "Usage"]);
   assert.deepEqual(typedFields(step({ usageExamples: "Typed." })), ["Usage"]);
+  assert.deepEqual(typedFields({ ...drafted, description: "  " }), [], "an emptied field holds nothing to keep");
 });
 
-test("applyDraft with fill 'empty' keeps a non-empty field, and typed text still counts as typed", () => {
-  const typed = step({ description: "Mine." });
-  const drafted = applyDraft(typed, draftB, "empty");
-  assert.equal(drafted.description, "Mine.", "a non-empty field is left alone");
-  assert.equal(drafted.usageExamples, "Usage B.", "the empty Usage is filled");
+test("applyDraft with fill 'keep' keeps the typed field and drafts the other, even over SKILL.md text", () => {
+  // Description typed; Usage still holds the SKILL.md's text.
+  const typed = step({ description: "Mine.", usageExamples: "From SKILL.md.", filled: { description: "Reads PDFs.", usageExamples: "From SKILL.md." } });
+  const drafted = applyDraft(typed, draftB, "keep");
+  assert.equal(drafted.description, "Mine.", "the typed field is left alone");
+  assert.equal(drafted.usageExamples, "Usage B.", "the SKILL.md text is drafted over");
   assert.deepEqual(drafted.categories, ["documents", "search"], "categories are added either way");
-  assert.deepEqual(typedFields(drafted), ["Description"]);
+  assert.deepEqual(typedFields(drafted), ["Description"], "the kept text still counts as typed");
+  const emptied = applyDraft(step({ description: "" }), draftB, "keep");
+  assert.equal(emptied.description, "Draft B.", "an emptied field is drafted");
   const replaced = applyDraft(typed, draftB, "replace");
   assert.equal(replaced.description, "Draft B.");
+  assert.equal(replaced.usageExamples, "Usage B.");
   assert.deepEqual(typedFields(replaced), []);
 });
 

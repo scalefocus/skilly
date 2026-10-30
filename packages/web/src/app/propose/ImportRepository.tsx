@@ -38,7 +38,7 @@ type NamespaceOption = { slug: string; displayName: string; directPublish?: bool
 type RefsResult = { ok: true; branches: string[]; tags: string[] } | { ok: false; error: string };
 type Draft = { description: string; usage: string; categories: string[] };
 /** One draft request in the queue: the skill's pointer source, and how its reply lands (§64.4). */
-type DraftRequest = { path: string; url: string; ref: string; subdir: string | null; slug: string; fill: "replace" | "empty" };
+type DraftRequest = { path: string; url: string; ref: string; subdir: string | null; slug: string; fill: "replace" | "keep" };
 type AiState = { available: boolean; remainingToday: number };
 
 /** "(repo root)" for the root SKILL.md, else the folder. */
@@ -284,7 +284,7 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
   }
 
   /** A new queue key for one step's draft request, from the scanned source. */
-  function newRequest(s: WizardStep, fill: "replace" | "empty"): string {
+  function newRequest(s: WizardStep, fill: "replace" | "keep"): string {
     const key = `${s.path}#${++requestSeq.current}`;
     requests.current.set(key, { path: s.path, url: url.trim(), ref: refTrim, subdir: s.subdir, slug: s.skillSlug, fill });
     return key;
@@ -321,7 +321,7 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
   }
 
   /** Queue one step's draft at the front (§64.5); every click is one draft. */
-  function requestStepDraft(path: string, fill: "replace" | "empty") {
+  function requestStepDraft(path: string, fill: "replace" | "keep") {
     setDraftConfirm(null);
     const s = steps.find((x) => x.path === path);
     if (!s || isDrafting(s)) return;
@@ -672,14 +672,14 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
           footer={
             <>
               <button type="button" className="btn btn-ghost" onClick={() => setDraftConfirm(null)}>Cancel</button>
-              <button type="button" className="btn" onClick={() => requestStepDraft(draftConfirm.path, "empty")}>Fill empty fields only</button>
+              <button type="button" className="btn" onClick={() => requestStepDraft(draftConfirm.path, "keep")}>Keep what I typed</button>
               <button type="button" className="btn btn-primary" onClick={() => requestStepDraft(draftConfirm.path, "replace")}>Replace</button>
             </>
           }
         >
           <p style={{ margin: 0 }}>
             {draftConfirm.fields.join(" and ")} already {draftConfirm.fields.length > 1 ? "have" : "has"} text you typed. The {aiName} draft can replace it,
-            or fill only the empty fields. Suggested categories are added to the ones you picked either way.
+            or keep it and draft the rest. Suggested categories are added to the ones you picked either way.
           </p>
         </Modal>
       )}

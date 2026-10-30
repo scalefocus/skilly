@@ -205,12 +205,12 @@ test("a step's own Draft button drafts that step only, and asks before replacing
   await expect(wizard.getByText("Skill 2 of 2 · skills/pdf")).toBeVisible();
   await expect(description).toHaveValue("e2e-imp-pdf from SKILL.md");
 
-  // Over typed text it asks first; Fill empty fields only keeps what was typed.
+  // Over typed text it asks first; Keep what I typed keeps it and drafts Usage.
   await description.fill("My own words.");
   await wizard.getByTestId("import-step-draft").click();
   const confirm = page.getByTestId("import-draft-confirm");
   await expect(confirm).toContainText("Description already has text you typed.");
-  await clickAndAwait(page, () => confirm.getByRole("button", { name: "Fill empty fields only" }).click(), "/api/propose/ai-draft", { method: "POST" });
+  await clickAndAwait(page, () => confirm.getByRole("button", { name: "Keep what I typed" }).click(), "/api/propose/ai-draft", { method: "POST" });
   await expect(usage).toHaveValue("Ask it to read a PDF.");
   await expect(description).toHaveValue("My own words.");
   expect(drafts).toHaveLength(2);
