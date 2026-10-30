@@ -14392,6 +14392,13 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
     failing step.
   - **Remove from proposal** unticks the skill on the pick page and moves on to the next step (or
     the previous one, when it was the last). Removing the last skill closes the dialog.
+  - **Layout.** On a wide screen the footer is one row: *Remove from proposal* on the left, the
+    navigation on the right. **Below 720 px** (where the last step's buttons stop fitting on one
+    row) it stacks with the **navigation as the bottom row**: *Remove from proposal* on its own row
+    on top, then **← Previous** and **Next →** side by side, each half the width. On the last step
+    the bottom row is **← Previous** and **Submit for review →**, and *Publish directly* (when
+    shown) takes a full-width row of its own between the two. Previous and Next never land on
+    different rows.
 - **A step strip** across the top marks each skill *done*, *current* or *not yet opened*. The first
   time through, steps open in order. Any step already opened can be jumped back to. Changing a done
   step checks it again on leaving.
@@ -14612,4 +14619,6 @@ resubmit*.
   disabled, neither the option nor the button renders. The tabs: *I have a repo* sits between the other two; switching away and back
   keeps the propose form's title and the import's scan and ticks; `/propose/import?url=…&ref=…`
   lands on the tab with both fields filled; and a pasted `--all` command's link switches to the tab
-  with Repository and Ref filled.
+  with Repository and Ref filled. At a 375 px viewport, **← Previous** and **Next →** share the
+  footer's bottom row below *Remove from proposal*, and on the last step **← Previous** and
+  **Submit for review →** do.

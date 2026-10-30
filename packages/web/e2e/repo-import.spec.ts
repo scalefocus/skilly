@@ -9,7 +9,8 @@
 // existing skill's link and the result view's links open in a new tab, keeping the import. With
 // Draft with AI on, a step is filled from the draft and Undo restores the SKILL.md values. With it
 // off, a step's own Draft button drafts that step only, and asks before replacing typed text; with
-// AI disabled neither the option nor the button renders. The
+// AI disabled neither the option nor the button renders. At a phone's width the wizard's footer
+// stacks with Previous beside Next (or beside Submit) as its bottom row. The
 // import is the propose page's "I have a repo" tab (§64.2): it sits between the other two tabs,
 // switching tabs keeps both tabs' work, the old /propose/import address lands on it filled, and a
 // pasted `--all` command's link switches to it filled.
@@ -164,6 +165,44 @@ test("pick, review every step, remove one, submit, fix and resubmit the failed o
   await wizard.getByTestId("import-fix-resubmit").click();
   await expect(wizard.getByText("Skill 1 of 1 · skills/xlsx")).toBeVisible();
   await expect(wizard.getByTestId("import-step-error")).toHaveText("slug taken a minute ago");
+});
+
+test("on a phone the wizard's footer keeps Previous and Next together as its bottom row", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ reducedMotion: "reduce" }); // no open animation scaling the boxes
+  await stubSources(page);
+  // Every namespace allows publishing directly, so the last step shows all four buttons.
+  await page.route("**/api/namespaces", async (r) => {
+    const res = await r.fetch();
+    const j = await res.json();
+    await r.fulfill({ response: res, json: { ...j, namespaces: j.namespaces.map((n: object) => ({ ...n, directPublish: true })) } });
+  });
+  await scanAndTick(page, ["skills/docx/SKILL.md", "skills/pdf/SKILL.md"]);
+  await page.getByTestId("import-next").click();
+  const wizard = page.getByTestId("import-wizard");
+  await expect(wizard.getByText("Skill 1 of 2 · skills/docx")).toBeVisible();
+  const box = async (id: string) => (await wizard.getByTestId(id).boundingBox())!;
+
+  // Remove from proposal on its own row; Previous and Next below it, side by side, half each.
+  let remove = await box("import-step-remove");
+  let prev = await box("import-step-prev");
+  const next = await box("import-step-next");
+  expect(prev.y).toBeGreaterThanOrEqual(remove.y + remove.height);
+  expect(next.y).toBeCloseTo(prev.y, 0);
+  expect(next.x).toBeGreaterThan(prev.x);
+  expect(next.width).toBeCloseTo(prev.width, 0);
+
+  // The last step: Publish directly gets a row of its own, and Previous sits beside Submit below it.
+  await wizard.getByTestId("import-step-next").click();
+  await expect(wizard.getByText("Skill 2 of 2 · skills/pdf")).toBeVisible();
+  remove = await box("import-step-remove");
+  const publish = await box("import-publish");
+  prev = await box("import-step-prev");
+  const submit = await box("import-submit");
+  expect(publish.y).toBeGreaterThanOrEqual(remove.y + remove.height);
+  expect(prev.y).toBeGreaterThanOrEqual(publish.y + publish.height);
+  expect(submit.y).toBeCloseTo(prev.y, 0);
+  expect(submit.x).toBeGreaterThan(prev.x);
 });
 
 test("an existing skill's link opens in a new tab and the import keeps its scan and ticks", async ({ page, context }) => {
