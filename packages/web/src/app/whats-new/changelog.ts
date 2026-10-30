@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.51.0",
+    date: "2026-10-30",
+    summary:
+      "Propose a skill now has three tabs: I have a skill, I have a repo and I want a skill. I have a repo is the repository import, now on the same page, and switching tabs keeps what you've typed in each one. Old /propose/import links still work and open the new tab.",
+  },
+  {
     version: "2.50.0",
     date: "2026-10-29",
     summary:

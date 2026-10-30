@@ -3966,9 +3966,10 @@ Users can post a **request** for a skill that doesn't exist yet; anyone can pick
 propose the skill through the normal pipeline, and — on acceptance — the request is fulfilled,
 the requester is notified, and the fulfiller earns leaderboard credit.
 
-### Posting a request (the propose-page toggle)
-- The **Propose a skill** page gains a two-state toggle at the top: **"I have a skill"** (default —
-  the page behaves exactly as today) / **"I want a skill"**.
+### Posting a request (the propose-page tabs)
+- The **Propose a skill** page has three tabs at the top: **"I have a skill"** (default — the
+  propose form), **"I have a repo"** (the repository import, §64.2) and **"I want a skill"**. A
+  request is posted from the last one, which `/propose?mode=want` opens directly.
 - In **"I want a skill"** mode the form reduces to: **Title**, **Categories**, **Description**,
   **Usage** and **Tool/harness** — namespace, visibility, slug, version and the bundle/pointer
   sources are hidden (a request has no namespace: it is **org-visible to every authenticated
@@ -14214,8 +14215,9 @@ like the other facet counts:
 
 ## 64. Import a whole repository
 
-A proposer points skilly at a **git repository that holds several skills**, ticks the ones they
-want, reviews each one's metadata in a **wizard**, and submits them **in one go**. Each ticked skill
+From the propose page's **I have a repo** tab, a proposer points skilly at a **git repository that
+holds several skills**, ticks the ones they want, reviews each one's metadata in a **wizard**, and
+submits them **in one go**. Each ticked skill
 becomes an **ordinary pointer proposal** (§6, §8): the repository URL, the import's ref and that
 skill's folder, exactly what pasting `npx skills add <repo> --skill <name>` produces today. The
 import is a faster way to fill in N propose forms. Every proposal is reviewed, accepted or rejected
@@ -14239,12 +14241,28 @@ record, for display and notification only.
 | 12 | **One notification per import** to the reviewers and one to the submitter, instead of a `proposal.needs_review` and a `proposal.submitted` per skill. Later lifecycle notifications stay per proposal. | Thirty identical notifications bury everything else in an inbox. |
 | 13 | **No bulk accept or reject.** Reviewers decide each imported proposal on its own. The queue can be filtered to one import. | Each accept guard (revision pin, scan gate, policy override, AI pre-review, slug re-check) protects one deliberate decision. |
 | 14 | **At most 50 ticked skills per import. The scan lists at most 500.** Both are fixed constants. | 50 equals the daily AI draft cap, and it bounds the worker's pre-scans and AI pre-reviews from one submit. |
-| 15 | **An unfinished import lives only in the open tab**, with a leave-page warning. Nothing is stored before submit. | This matches the propose form and chunked uploads (§6). A saved draft would be a stale scan of a ref that may have moved. |
-| 16 | **Its own page, `/propose/import`**, linked from the propose form's Pointer tab, from a pasted `--all` command and from the "no SKILL.md in the repository root" error. | The propose form is built around one skill. The import has a two-stage shape of its own. |
+| 15 | **An unfinished import lives only in the open browser tab**, with a leave-page warning. Nothing is stored before submit. | This matches the propose form and chunked uploads (§6). A saved draft would be a stale scan of a ref that may have moved. |
+| 16 | **A tab on the propose page, *I have a repo***, between *I have a skill* and *I want a skill* (§26), at `/propose?mode=repo`. The old `/propose/import` address redirects there. Switching tabs keeps each tab's work. A pasted `--all` command and the "no SKILL.md in the repository root" error switch to it. | One skill, many skills and a wish for one are three answers to the same page's question, and nothing typed is lost by changing the answer. The tab holds the import's own pick list and wizard, not the propose form, which is built around one skill. |
 
-### 64.2 The pick page
-`/propose/import`, open to any authenticated user (the implicit *propose* right, §4). Fields, top to
-bottom:
+### 64.2 The pick page: the *I have a repo* tab
+The pick page is the propose page's **I have a repo** tab (decision 16), open to any authenticated
+user (the implicit *propose* right, §4).
+- **Tabs.** *I have a skill* · *I have a repo* · *I want a skill*, in that order, in the propose
+  page's segmented control at the top of its card. They are hidden in new-version mode (§8), as the
+  two-tab toggle was. On this tab the page title reads **"Import a repository."**, and beneath it:
+  *"Point at a git repository full of skills, tick the ones you want, review each one, and propose
+  them all in one go. Each skill becomes its own proposal."* There is no breadcrumb.
+- **Address.** `?mode=repo` opens this tab and `?mode=want` the request tab (§26). With no `mode`,
+  or an unknown one, the page opens on *I have a skill*. Switching tabs rewrites `mode` in the
+  address, replacing the history entry rather than adding one, so a reload opens the same tab.
+  `newVersion=1` (§8) wins over `mode`. **`/propose/import` redirects** to `/propose?mode=repo`,
+  keeping its query, so earlier links still work. `url` and `ref` pre-fill Repository and Ref
+  (§64.9). `fromRequest` (§26) applies to *I have a skill* only.
+- **Switching tabs keeps each tab's work** for as long as the page is open: the propose form's
+  fields and staged files, and the import's scan, ticks, pick-page fields and wizard steps. Since
+  switching loses nothing, it never asks. The leave-page prompt (§64.4) applies to leaving the page.
+
+Fields, top to bottom:
 - **Repository**: a git URL, or the GitHub `owner/repo` shorthand, normalized as paste-to-fill does
   (§8). **Ref**: default **`main`** (§8), with the same live ref pre-check (`GET /api/pointer/refs`)
   and quick-picks. A skills-hub URL is refused inline: *"skills-hub.ai has one skill per page.
@@ -14373,7 +14391,7 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   counted, and one already sent completes, counts and is ignored. A failed draft (a §43 502 or 422)
   reads *"Couldn't draft this one. The SKILL.md values are filled in."*
 - **Removing** a skill drops its unsent draft, which isn't counted. Drafts already made count against
-  the cap even if the tab is closed (no refund, §43.7).
+  the cap even if the browser tab is closed (no refund, §43.7).
 - `GET /api/propose/ai-draft` gains **`remainingToday`**: 50 minus the caller's `skill_draft` calls
   in the last 24 hours, floored at 0, for the checkbox label.
 
@@ -14462,15 +14480,17 @@ resubmit*.
 - No other table changes. The wizard's state is never stored (decision 15).
 
 ### 64.9 Other surfaces
-- **The propose form's Pointer tab** gains a line under the paste box: *"Several skills in one
-  repository? **Import a whole repository**"*, linking to `/propose/import`.
+- **The propose page's tabs** (§64.2) are the way in. The Pointer source has no separate link to
+  the import under its paste box: the tab above it does that job.
 - **Paste-to-fill** (§8). `parseInstallCommand` reports `--all` as a **whole-repository import**
   (`{ ok: true, importAll: true, url, ref }`) instead of an error. The paste box then fills nothing
-  and offers **Import all skills from this repository**, linking to `/propose/import?url=…&ref=…`,
-  which pre-fills those two fields. They are hints only: nothing runs until **Scan**.
+  and offers **Import all skills from this repository**, which switches to the *I have a repo* tab
+  and fills its Repository and Ref. They are hints only: nothing runs until **Scan**. If the tab
+  already holds a scan, the scan goes stale as with any edit to those fields, and Scan asks before
+  discarding wizard edits (§64.2).
 - **The verification error hint.** When submit-time verification (§8) fails with *no SKILL.md found
   in the repository root* and no folder was given, the message adds *"If this repository holds
-  several skills, **import them**"*, linking to the import page, pre-filled.
+  several skills, **import them**"*, which switches to the *I have a repo* tab, filled the same way.
 - **MCP** (§29): nothing in this change. Agents call `propose_pointer_skill` once per skill.
 - **Request links** (`?fromRequest=`, §26) are not carried into an import.
 
@@ -14498,7 +14518,7 @@ resubmit*.
 - Open proposals don't block importing the same skill again. The accept-time slug re-check (§8)
   stops a second accept.
 - Last-changed dates only reach 2,000 commits back.
-- Drafts made before the tab closed are spent.
+- Drafts made before the browser tab closed are spent.
 - A direct publish of many skills sends each publish's ordinary notifications (watchers and
   followers, §35).
 - Deferred: saving an unfinished import, bulk accept or reject, an MCP tool, skills-hub imports,
@@ -14516,7 +14536,8 @@ resubmit*.
 - **Unit** (web client): the draft queue (order, at most 3 in flight, at most 10 started per minute,
   the per-minute 429 retry, the daily-cap stop, removal dropping an unsent draft); and the wizard
   gating (Next blocked on a failing step, Submit disabled until every remaining step is opened and
-  passes, Remove from proposal unticking the row).
+  passes, Remove from proposal unticking the row); and the tab read from the address (`mode=repo`,
+  `mode=want`, none or unknown gives *I have a skill*, `newVersion=1` wins).
 - **Integration** (web API + DB, with git run through the module's injectable runner against a
   local fixture repository; the https-only transport and the SSRF guards keep their own unit tests):
   - scan: rows, dates and reasons; an org skill and a §42-shared restricted skill are reported as
@@ -14536,4 +14557,7 @@ resubmit*.
   every step has been opened; **Remove from proposal** unticks the row on the page; a failing step
   blocks Next; submit shows the result view with one failed skill, and **Fix and resubmit** reopens
   only that step. With *Draft with AI* on, a step is filled from the draft, and **Undo** restores
-  the SKILL.md values.
+  the SKILL.md values. The tabs: *I have a repo* sits between the other two; switching away and back
+  keeps the propose form's title and the import's scan and ticks; `/propose/import?url=…&ref=…`
+  lands on the tab with both fields filled; and a pasted `--all` command's link switches to the tab
+  with Repository and Ref filled.
