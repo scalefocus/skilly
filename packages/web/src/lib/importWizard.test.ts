@@ -1,7 +1,7 @@
 // Unit tests for the repository import's wizard gating (SKILLY_SPEC.md §64.4, §64.12).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyDraft, canJumpTo, canSubmit, stepErrors, stepState, undoDraft, type WizardStep } from "./importWizard";
+import { applyDraft, canJumpTo, canSubmit, stepErrors, stepState, typedFields, undoDraft, type WizardStep } from "./importWizard";
 
 const step = (over: Partial<WizardStep> = {}): WizardStep => ({
   path: "skills/pdf/SKILL.md",
@@ -17,7 +17,11 @@ const step = (over: Partial<WizardStep> = {}): WizardStep => ({
   iconSha256: null,
   opened: true,
   draft: "none",
-  base: { description: "Reads PDFs.", usageExamples: "", categories: ["documents"] },
+  draftKey: null,
+  draftClicked: false,
+  draftMessage: null,
+  filled: { description: "Reads PDFs.", usageExamples: "" },
+  beforeDraft: null,
   draftedCategories: [],
   undoable: false,
   submitError: null,
@@ -68,4 +72,48 @@ test("applyDraft replaces Description and Usage and adds categories; undoDraft r
   assert.equal(undone.undoable, false);
   const full = applyDraft(step({ categories: Array.from({ length: 12 }, (_, i) => `c${i}`) }), { description: "d", usage: "u", categories: ["extra"] });
   assert.equal(full.categories.length, 12, "the field cap of 12 holds");
+});
+
+const draftA = { description: "Draft A.", usage: "Usage A.", categories: [] };
+const draftB = { description: "Draft B.", usage: "Usage B.", categories: ["search"] };
+
+test("typedFields: no confirm over the SKILL.md pre-fill, a draft's text or an emptied field; a confirm over typed text", () => {
+  assert.deepEqual(typedFields(step()), [], "the pre-fill");
+  const drafted = applyDraft(step(), draftA);
+  assert.deepEqual(typedFields(drafted), [], "a draft's text");
+  assert.deepEqual(typedFields({ ...drafted, description: "Mine." }), ["Description"]);
+  assert.deepEqual(typedFields({ ...drafted, description: "Mine.", usageExamples: "My usage." }), ["Description", "Usage"]);
+  assert.deepEqual(typedFields(step({ usageExamples: "Typed." })), ["Usage"]);
+  assert.deepEqual(typedFields({ ...drafted, description: "  " }), [], "an emptied field holds nothing to keep");
+});
+
+test("applyDraft with fill 'keep' keeps the typed field and drafts the other, even over SKILL.md text", () => {
+  // Description typed; Usage still holds the SKILL.md's text.
+  const typed = step({ description: "Mine.", usageExamples: "From SKILL.md.", filled: { description: "Reads PDFs.", usageExamples: "From SKILL.md." } });
+  const drafted = applyDraft(typed, draftB, "keep");
+  assert.equal(drafted.description, "Mine.", "the typed field is left alone");
+  assert.equal(drafted.usageExamples, "Usage B.", "the SKILL.md text is drafted over");
+  assert.deepEqual(drafted.categories, ["documents", "search"], "categories are added either way");
+  assert.deepEqual(typedFields(drafted), ["Description"], "the kept text still counts as typed");
+  const emptied = applyDraft(step({ description: "" }), draftB, "keep");
+  assert.equal(emptied.description, "Draft B.", "an emptied field is drafted");
+  const replaced = applyDraft(typed, draftB, "replace");
+  assert.equal(replaced.description, "Draft B.");
+  assert.equal(replaced.usageExamples, "Usage B.");
+  assert.deepEqual(typedFields(replaced), []);
+});
+
+test("undoDraft after a second draft restores the first draft's text, and restored typed text still asks", () => {
+  const second = applyDraft(applyDraft(step(), draftA), draftB);
+  const undone = undoDraft(second);
+  assert.equal(undone.description, "Draft A.");
+  assert.equal(undone.usageExamples, "Usage A.");
+  assert.deepEqual(undone.categories, ["documents"], "the second draft's category is removed");
+  assert.deepEqual(typedFields(undone), []);
+  assert.equal(undoDraft(undone), undone, "single-step: nothing more to undo");
+
+  const typedThenDrafted = applyDraft(step({ description: "Mine." }), draftB, "replace");
+  const back = undoDraft(typedThenDrafted);
+  assert.equal(back.description, "Mine.");
+  assert.deepEqual(typedFields(back), ["Description"], "the restored text was typed, so the next draft asks");
 });

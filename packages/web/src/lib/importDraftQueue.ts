@@ -2,21 +2,25 @@
 // browser, one per ticked skill, through the ordinary §43 endpoint, in step order, with at most 3
 // in flight and at most 10 started per rolling minute (the §43 per-minute limit). A per-minute 429
 // waits and tries again (a refused request never reached the provider, so it doesn't count); a
-// daily-cap 429 stops the queue and every skill not yet drafted is reported as capped. A skill
-// removed (or filled in by hand) before its draft is sent is dropped and never counted.
+// daily-cap 429 stops the queue and every skill not yet drafted is reported as capped, until the
+// page resumes it once the cap's time has passed; a 409 `ai_unavailable` stops it for good. A step's
+// own Draft button (§64.4) puts its request at the front. A skill removed (or filled in by hand)
+// before its draft is sent is dropped and never counted.
 // Pure scheduling: the request, the clock and the timer are injected, so the unit test drives it.
 
 export type DraftReply<T> =
   | { kind: "ok"; draft: T }
   | { kind: "minute" }
   | { kind: "day"; retryAt?: string | null }
+  | { kind: "unavailable" }
   | { kind: "failed"; message: string };
 
 export type DraftEvent<T> =
   | { key: string; kind: "started" }
   | { key: string; kind: "ok"; draft: T }
   | { key: string; kind: "failed"; message: string }
-  | { key: string; kind: "capped"; retryAt?: string | null };
+  | { key: string; kind: "capped"; retryAt?: string | null }
+  | { key: string; kind: "unavailable" };
 
 export interface DraftQueueOptions<T> {
   send: (key: string) => Promise<DraftReply<T>>;
@@ -37,7 +41,7 @@ export class DraftQueue<T> {
   private pending: string[] = [];
   private inFlight = new Set<string>();
   private started: number[] = [];
-  private stopped = false;
+  private stopped: "day" | "unavailable" | null = null;
   private wakeAt: number | null = null;
   private readonly o: Required<Omit<DraftQueueOptions<T>, "send" | "onEvent">> & Pick<DraftQueueOptions<T>, "send" | "onEvent">;
 
@@ -56,12 +60,35 @@ export class DraftQueue<T> {
   enqueue(keys: readonly string[]): void {
     for (const k of keys) {
       if (this.stopped) {
-        this.o.onEvent({ key: k, kind: "capped" });
+        this.refuse(k);
         continue;
       }
       if (!this.pending.includes(k) && !this.inFlight.has(k)) this.pending.push(k);
     }
     this.pump();
+  }
+
+  /** Queue one key ahead of the rest: a step's own Draft button (§64.4). */
+  enqueueFirst(key: string): void {
+    if (this.stopped) {
+      this.refuse(key);
+      return;
+    }
+    if (this.inFlight.has(key)) return;
+    const i = this.pending.indexOf(key);
+    if (i >= 0) this.pending.splice(i, 1);
+    this.pending.unshift(key);
+    this.pump();
+  }
+
+  /** Accept drafts again after a daily-cap stop, once the cap's time has passed (§64.5). The
+   *  server still decides; a 409 `ai_unavailable` stop is never lifted. */
+  resume(): void {
+    if (this.stopped === "day") this.stopped = null;
+  }
+
+  private refuse(key: string): void {
+    this.o.onEvent(this.stopped === "unavailable" ? { key, kind: "unavailable" } : { key, kind: "capped" });
   }
 
   /** Drop a key that hasn't been sent yet. Returns false when it was already in flight (or unknown). */
@@ -132,9 +159,16 @@ export class DraftQueue<T> {
       this.pending.unshift(key);
       this.wake(this.o.minuteRetryMs);
       return;
+    } else if (reply.kind === "unavailable") {
+      // AI was switched off: this one and everything still queued stop, for good.
+      this.stopped = "unavailable";
+      const left = [key, ...this.pending];
+      this.pending = [];
+      for (const k of left) this.o.onEvent({ key: k, kind: "unavailable" });
+      return;
     } else {
       // The daily cap: this one and everything still queued is capped.
-      this.stopped = true;
+      this.stopped = "day";
       const left = [key, ...this.pending];
       this.pending = [];
       for (const k of left) this.o.onEvent({ key: k, kind: "capped", retryAt: reply.retryAt ?? null });
@@ -149,5 +183,6 @@ export function draftReplyFromResponse<T>(status: number, body: Record<string, u
   if (status === 200 && body) return { kind: "ok", draft: toDraft(body) };
   if (status === 429 && body?.scope === "day") return { kind: "day", retryAt: typeof body.retryAt === "string" ? body.retryAt : null };
   if (status === 429) return { kind: "minute" };
+  if (status === 409 && body?.error === "ai_unavailable") return { kind: "unavailable" };
   return { kind: "failed", message: typeof body?.message === "string" ? body.message : "Couldn't draft this one." };
 }

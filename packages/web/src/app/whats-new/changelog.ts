@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.52.0",
+    date: "2026-10-30",
+    summary:
+      "Each step of the repository import now has its own Draft with AI button. Draft just the skills that need it, retry one that failed, or draft one again; it asks first before replacing text you typed, and Undo puts back what was there. Every click counts as one of your 50 drafts a day.",
+  },
+  {
     version: "2.51.0",
     date: "2026-10-30",
     summary:

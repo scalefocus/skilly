@@ -94,11 +94,58 @@ test("draft queue: prioritize moves the step being viewed to the front", () => {
   assert.deepEqual([...h.q.pendingKeys], ["d", "b", "c"]);
 });
 
+test("draft queue: a step's own click goes to the front of the queue", () => {
+  const h = harness(1, 10);
+  h.q.enqueue(["a", "b", "c"]);
+  h.q.enqueueFirst("x");
+  assert.deepEqual([...h.q.pendingKeys], ["x", "b", "c"]);
+  h.q.enqueueFirst("c");
+  assert.deepEqual([...h.q.pendingKeys], ["c", "x", "b"], "a queued key moves up, not twice");
+  h.q.enqueueFirst("a");
+  assert.deepEqual([...h.q.pendingKeys], ["c", "x", "b"], "one in flight isn't queued again");
+});
+
+test("draft queue: a click with a free slot starts at once; dropping an unsent click never sends it", async () => {
+  const h = harness(2, 10);
+  h.q.enqueue(["a", "b", "c"]);
+  h.q.enqueueFirst("x");
+  assert.deepEqual(h.sent, ["a", "b"]);
+  assert.equal(h.q.drop("x"), true);
+  await h.settle("a", { kind: "ok", draft: "A" });
+  assert.deepEqual(h.sent, ["a", "b", "c"], "the dropped click was never sent");
+});
+
+test("draft queue: after the daily cap, resume lets a click through and the server decides again", async () => {
+  const h = harness(1, 10);
+  h.q.enqueue(["a"]);
+  await h.settle("a", { kind: "day", retryAt: "2026-10-30T10:00:00Z" });
+  h.q.enqueueFirst("x");
+  assert.ok(h.events.some((e) => e.key === "x" && e.kind === "capped"), "still stopped before resume");
+  assert.deepEqual(h.sent, ["a"]);
+  h.q.resume();
+  h.q.enqueueFirst("y");
+  assert.deepEqual(h.sent, ["a", "y"]);
+  await h.settle("y", { kind: "ok", draft: "Y" });
+  assert.ok(h.events.some((e) => e.key === "y" && e.kind === "ok"));
+});
+
+test("draft queue: ai_unavailable stops the queue for good; resume doesn't lift it", async () => {
+  const h = harness(1, 10);
+  h.q.enqueue(["a", "b"]);
+  await h.settle("a", { kind: "unavailable" });
+  assert.deepEqual(h.events.filter((e) => e.kind === "unavailable").map((e) => e.key), ["a", "b"]);
+  h.q.resume();
+  h.q.enqueueFirst("x");
+  assert.deepEqual(h.sent, ["a"]);
+  assert.ok(h.events.some((e) => e.key === "x" && e.kind === "unavailable"));
+});
+
 test("draftReplyFromResponse maps the §43.5 statuses", () => {
   const to = (b: Record<string, unknown>) => String(b.description);
   assert.deepEqual(draftReplyFromResponse(200, { description: "x" }, to), { kind: "ok", draft: "x" });
   assert.deepEqual(draftReplyFromResponse(429, { scope: "minute" }, to), { kind: "minute" });
   assert.deepEqual(draftReplyFromResponse(429, { scope: "day", retryAt: "t" }, to), { kind: "day", retryAt: "t" });
   assert.deepEqual(draftReplyFromResponse(502, { message: "boom" }, to), { kind: "failed", message: "boom" });
+  assert.deepEqual(draftReplyFromResponse(409, { error: "ai_unavailable" }, to), { kind: "unavailable" });
   assert.deepEqual(draftReplyFromResponse(422, null, to), { kind: "failed", message: "Couldn't draft this one." });
 });
