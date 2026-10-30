@@ -32,6 +32,8 @@ import { QualityFindingsList, type QualityFindingItem } from "../../components/Q
 import { QualityStars } from "../../components/QualityBadge";
 import { formatStars } from "@skilly/shared/quality";
 import { useAiName } from "../../components/AiName";
+import { proposeTabFromAddress, proposeTabQuery, repoTabHref, type ProposeTab } from "../../lib/proposeTab";
+import { ImportRepository, type RepoFill } from "./ImportRepository";
 
 /** §44.7 the AI draft handed over from the skill page's draft dialog (sessionStorage). */
 const AI_DRAFT_HANDOFF_KEY = "skilly.aiDraft";
@@ -86,12 +88,6 @@ const PASTE_EXAMPLES = [
   "https://github.com/owner/repo.git#v1.0.0",
 ];
 
-/** The repository import pre-filled with a URL and ref — hints only, nothing runs until Scan (§64.9). */
-function importHref(url: string, ref: string | null): string {
-  const q = new URLSearchParams({ url, ...(ref ? { ref } : {}) });
-  return `/propose/import?${q.toString()}`;
-}
-
 /** Suggest the next patch version above the current latest stable (proposer can change it). */
 function bumpPatch(v: string | null): string {
   const m = v ? /^(\d+)\.(\d+)\.(\d+)/.exec(v) : null;
@@ -123,10 +119,15 @@ function ProposeForm() {
   const nvSlug = forcedNV?.slug ?? params.get("slug");
   const isNewVersion = !!forcedNV || (params.get("newVersion") === "1" && !!nvNs && !!nvSlug);
 
-  // "Request a skill" (§26): the page-top toggle flips between "I have a skill" (the normal
-  // propose flow) and "I want a skill" (post a request: title/categories/description/usage/tool
-  // Never shown in new-version mode. Requests are text-only (§26) — no file uploads.
-  const [mode, setMode] = useState<"have" | "want">("have");
+  // The page-top tabs (§26, §64.2): "I have a skill" (the normal propose flow), "I have a repo"
+  // (the repository import) and "I want a skill" (post a request: title/categories/description/
+  // usage/tool). Never shown in new-version mode. Requests are text-only (§26) — no file uploads.
+  // `?mode=` opens a tab; switching rewrites it without adding a history entry.
+  const [mode, setMode] = useState<ProposeTab>(() => proposeTabFromAddress(params.get("mode"), isNewVersion));
+  // The import mounts the first time its tab opens and then stays mounted (hidden), so switching
+  // tabs keeps its scan, ticks and wizard steps. `repoFill` fills its Repository and Ref (§64.9).
+  const [repoMounted, setRepoMounted] = useState(mode === "repo");
+  const [repoFill, setRepoFill] = useState<RepoFill | null>(null);
   // Advisory similar-match (soft-warn): shown once before posting; the next click posts anyway.
   const [reqSimilar, setReqSimilar] = useState<{ openRequest: { id: string; title: string } | null; catalogSkill: { namespaceSlug: string; skillSlug: string; title: string } | null } | null>(null);
   const [reqAck, setReqAck] = useState(false);
@@ -797,10 +798,11 @@ function ProposeForm() {
   }
 
   // Keep the page-wide drop handler current: a drop is actionable as a hosted upload unless this
-  // is a locked new-version of a pointer skill (source type can't change). A drop while on the
-  // Pointer tab of a NEW skill switches to Hosted and stages the file.
+  // is a locked new-version of a pointer skill (source type can't change) or the repo tab is open
+  // (the propose form is hidden there). A drop while on the Pointer tab of a NEW skill switches to
+  // Hosted and stages the file.
   dragStateRef.current = {
-    canDrop: !lock || sourceType === "hosted",
+    canDrop: mode !== "repo" && (!lock || sourceType === "hosted"),
     accept: (picked: File | null) => {
       if (!picked) return;
       if (sourceType !== "hosted") setSourceType("hosted");
@@ -1199,6 +1201,32 @@ function ProposeForm() {
     }
   }
 
+  function switchTab(next: ProposeTab) {
+    setMode(next);
+    setErr(null);
+    if (next === "want") setDup(null);
+    if (next === "repo") setRepoMounted(true);
+    window.history.replaceState(null, "", proposeTabQuery(window.location.search, next) || window.location.pathname);
+  }
+
+  /** "Import all skills" / "import them" (§64.9): switch to the repo tab with Repository and Ref
+   *  filled. In new-version mode there are no tabs, so the link loads the repo tab afresh. */
+  function repoTabLink(url: string, ref: string | null, text: string) {
+    return (
+      <a
+        href={repoTabHref(url, ref)}
+        onClick={(e) => {
+          if (lock) return;
+          e.preventDefault();
+          setRepoFill((prev) => ({ url, ref, n: (prev?.n ?? 0) + 1 }));
+          switchTab("repo");
+        }}
+      >
+        {text}
+      </a>
+    );
+  }
+
   if (!ready) {
     return (
       <div className="reveal" style={{ maxWidth: 720 }}>
@@ -1208,6 +1236,18 @@ function ProposeForm() {
       </div>
     );
   }
+
+  // The tabs (§26, §64.2) — new-skill flow only (a new version is always "have"). They sit at the
+  // top of the propose card, or of the import's first card on the repo tab.
+  const tabs = !lock && (
+    <div className="sort-toggle" role="group" aria-label="Propose, import or request" style={{ alignSelf: "flex-start" }}>
+      {([["have", "I have a skill"], ["repo", "I have a repo"], ["want", "I want a skill"]] as const).map(([m, text]) => (
+        <button key={m} type="button" className={`sort-opt${mode === m ? " sort-on" : ""}`} aria-pressed={mode === m} onClick={() => switchTab(m)}>
+          {text}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="reveal" style={{ maxWidth: 720 }}>
@@ -1227,18 +1267,21 @@ function ProposeForm() {
       )}
       <div className="page-head">
         <div className="eyebrow">Contribute</div>
-        <h1 className="page-title">{lock ? "Propose a new version." : mode === "want" ? "Request a skill." : "Propose a skill."}</h1>
+        <h1 className="page-title">{lock ? "Propose a new version." : mode === "want" ? "Request a skill." : mode === "repo" ? "Import a repository." : "Propose a skill."}</h1>
         {lock ? (
           <p className="page-sub">
             New version of <span className="mono">{f.namespaceSlug}/{f.skillSlug}</span>. The slug is locked — everything else (title, description, categories, tool/harness, usage) is editable, and you can keep the current files or provide a fresh source. It enters the normal review/approval flow.
           </p>
         ) : mode === "want" ? (
           <p className="page-sub">Describe the skill you wish existed. Your request appears on the Requested skills page, where anyone can pick it up and build it — you’ll be notified when it’s fulfilled.</p>
+        ) : mode === "repo" ? (
+          <p className="page-sub">Point at a git repository full of skills, tick the ones you want, review each one, and propose them all in one go. Each skill becomes its own proposal.</p>
         ) : (
           <p className="page-sub">Upload a <span className="mono">SKILL.md</span> bundle, or point at an external git repo. It’s validated and scanned, then enters review — or publishes directly if you’re permitted.</p>
         )}
       </div>
 
+      {mode !== "repo" && (
       <div className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 18, position: "relative" }}>
         {/* §26: read-only scrim while a request is posting. Dims + blocks the whole form; the
             "Working…" button is raised above it (below) so it stays visible as the sole feedback. */}
@@ -1259,17 +1302,7 @@ function ProposeForm() {
             <button type="button" className="btn btn-sm" onClick={useDifferentSlug}>Use a different slug</button>
           </div>
         )}
-        {/* "I have / I want" toggle (§26) — new-skill flow only (a new version is always "have"). */}
-        {!lock && (
-          <div className="sort-toggle" role="group" aria-label="Propose or request" style={{ alignSelf: "flex-start" }}>
-            <button type="button" className={`sort-opt${mode === "have" ? " sort-on" : ""}`} aria-pressed={mode === "have"} onClick={() => { setMode("have"); setErr(null); }}>
-              I have a skill
-            </button>
-            <button type="button" className={`sort-opt${mode === "want" ? " sort-on" : ""}`} aria-pressed={mode === "want"} onClick={() => { setMode("want"); setErr(null); setDup(null); }}>
-              I want a skill
-            </button>
-          </div>
-        )}
+        {tabs}
         {/* Source type first: choose hosted vs pointer, with the matching panel directly below it;
             the descriptive metadata (namespace, title, …) follows. Hidden in "I want a skill" mode. */}
         {mode === "have" && (
@@ -1399,6 +1432,7 @@ function ProposeForm() {
               </label>
               <input
                 ref={pasteRef}
+                data-testid="propose-paste"
                 className="input input-lg input-mono"
                 aria-invalid={pasteErr ? true : undefined}
                 style={{ width: "100%", fontSize: 13 }}
@@ -1412,7 +1446,7 @@ function ProposeForm() {
               ) : pasteImport ? (
                 <p style={{ fontSize: 12.5, marginTop: 7 }} data-testid="paste-import-all">
                   This command asks for every skill in the repository.{" "}
-                  <Link href={importHref(pasteImport.url, pasteImport.ref)}>Import all skills from this repository →</Link>
+                  {repoTabLink(pasteImport.url, pasteImport.ref, "Import all skills from this repository →")}
                 </p>
               ) : pasteHint ? (
                 <p style={{ color: "var(--accent-2)", fontSize: 12, marginTop: 7 }}>{pasteHint}</p>
@@ -1422,11 +1456,6 @@ function ProposeForm() {
                 </p>
               )}
             </div>
-            {!lock && (
-              <p className="muted" style={{ fontSize: 12.5, margin: "-4px 0 0" }}>
-                Several skills in one repository? <Link href="/propose/import" data-testid="import-repo-link">Import a whole repository</Link>
-              </p>
-            )}
             <div><label style={label}>External git URL</label><input className="input input-lg input-mono" style={{ width: "100%" }} value={f.externalUrl} onChange={set("externalUrl")} placeholder="https://github.com/anthropics/skills.git" /></div>
             <div>
               <label style={label}>{hubSource ? "Pinned version" : "Pinned ref (branch/tag/commit)"} <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}>{hubSource ? "· registry version · defaults to the latest" : "· defaults to main"}</span></label>
@@ -1896,7 +1925,7 @@ function ProposeForm() {
             {err}
             {/* §64.9: a repo with no root SKILL.md (and no folder given) may hold several skills. */}
             {sourceType === "pointer" && !f.externalSubdir.trim() && /no SKILL\.md found in the repository root/.test(err) && (
-              <> If this repository holds several skills, <Link href={importHref(f.externalUrl.trim(), f.externalRef.trim() || null)}>import them</Link>.</>
+              <> If this repository holds several skills, {repoTabLink(f.externalUrl.trim(), f.externalRef.trim() || null, "import them")}.</>
             )}
           </div>
         )}
@@ -1945,6 +1974,12 @@ function ProposeForm() {
           </>
         )}
       </div>
+      )}
+      {repoMounted && (
+        <div hidden={mode !== "repo"}>
+          <ImportRepository tabs={mode === "repo" ? tabs : null} fill={repoFill} />
+        </div>
+      )}
     </div>
   );
 }

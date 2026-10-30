@@ -6,9 +6,12 @@
 // Covers: scan → tick three → Next opens the wizard; Submit appears only on the last step and only
 // once every step is opened; a failing step blocks Next; Remove from proposal unticks the row on
 // the page; the result view shows a failed skill and Fix and resubmit reopens only that step. With
-// Draft with AI on, a step is filled from the draft and Undo restores the SKILL.md values.
+// Draft with AI on, a step is filled from the draft and Undo restores the SKILL.md values. The
+// import is the propose page's "I have a repo" tab (§64.2): it sits between the other two tabs,
+// switching tabs keeps both tabs' work, the old /propose/import address lands on it filled, and a
+// pasted `--all` command's link switches to it filled.
 import { authedTest as test, expect, type Page } from "./fixtures";
-import { gotoLoaded, clickAndAwait } from "./helpers/ready";
+import { gotoLoaded, clickAndAwait, reloadReady } from "./helpers/ready";
 
 const URL_ = "https://git.example.test/acme/skills.git";
 const row = (path: string, name: string | null, extra: Record<string, unknown> = {}) => ({
@@ -58,12 +61,66 @@ async function stubSources(page: Page, opts: { ai?: boolean } = {}) {
   );
 }
 
-async function scanAndTick(page: Page, paths: string[]) {
-  await gotoLoaded(page, "/propose/import", "/api/namespaces");
+async function scan(page: Page, paths: string[]) {
   await page.getByTestId("import-url").fill(URL_);
   await clickAndAwait(page, () => page.getByTestId("import-scan").click(), "/api/propose/import/scan", { method: "POST" });
   for (const p of paths) await page.getByTestId(`import-row-${p}`).getByRole("checkbox").check();
 }
+
+async function scanAndTick(page: Page, paths: string[]) {
+  await gotoLoaded(page, "/propose?mode=repo", "/api/namespaces");
+  await scan(page, paths);
+}
+
+const tabs = (page: Page) => page.getByRole("group", { name: "Propose, import or request" });
+
+test("I have a repo sits between the other tabs, and switching tabs keeps both tabs' work", async ({ page }) => {
+  await stubSources(page);
+  await gotoLoaded(page, "/propose", "/api/namespaces");
+  await expect(tabs(page).getByRole("button")).toHaveText(["I have a skill", "I have a repo", "I want a skill"]);
+  const title = page.getByPlaceholder("PDF Tools");
+  await title.fill("My own skill");
+
+  await tabs(page).getByRole("button", { name: "I have a repo" }).click();
+  await expect(page.getByRole("heading", { name: "Import a repository." })).toBeVisible();
+  await expect(page).toHaveURL(/[?&]mode=repo(&|$)/);
+  await scan(page, ["skills/pdf/SKILL.md"]);
+
+  await tabs(page).getByRole("button", { name: "I have a skill" }).click();
+  await expect(page.getByRole("heading", { name: "Propose a skill." })).toBeVisible();
+  await expect(page).not.toHaveURL(/mode=/);
+  await expect(title).toHaveValue("My own skill");
+
+  await tabs(page).getByRole("button", { name: "I have a repo" }).click();
+  await expect(page.getByTestId("import-url")).toHaveValue(URL_);
+  await expect(page.getByTestId("import-row-skills/pdf/SKILL.md").getByRole("checkbox")).toBeChecked();
+
+  // The address carries the tab, so a reload opens the same one.
+  await tabs(page).getByRole("button", { name: "I want a skill" }).click();
+  await expect(page).toHaveURL(/[?&]mode=want(&|$)/);
+  await reloadReady(page);
+  await expect(page.getByRole("heading", { name: "Request a skill." })).toBeVisible();
+});
+
+test("the old /propose/import address lands on the repo tab with Repository and Ref filled", async ({ page }) => {
+  await stubSources(page);
+  await gotoLoaded(page, `/propose/import?url=${encodeURIComponent(URL_)}&ref=v1.0.0`, "/api/namespaces");
+  await expect(page).toHaveURL(/\/propose\?.*mode=repo/);
+  await expect(page.getByRole("heading", { name: "Import a repository." })).toBeVisible();
+  await expect(page.getByTestId("import-url")).toHaveValue(URL_);
+  await expect(page.getByTestId("import-ref")).toHaveValue("v1.0.0");
+});
+
+test("a pasted --all command's link switches to the repo tab with Repository and Ref filled", async ({ page }) => {
+  await stubSources(page);
+  await gotoLoaded(page, "/propose", "/api/namespaces");
+  // A new proposal opens on the Pointer source, where the paste box lives.
+  await page.getByTestId("propose-paste").fill(`npx skills add ${URL_}#v2.0.0 --all`);
+  await page.getByTestId("paste-import-all").getByRole("link", { name: "Import all skills from this repository →" }).click();
+  await expect(page.getByRole("heading", { name: "Import a repository." })).toBeVisible();
+  await expect(page.getByTestId("import-url")).toHaveValue(URL_);
+  await expect(page.getByTestId("import-ref")).toHaveValue("v2.0.0");
+});
 
 test("pick, review every step, remove one, submit, fix and resubmit the failed one", async ({ page }) => {
   await stubSources(page);
