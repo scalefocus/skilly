@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.52.1",
+    date: "2026-10-30",
+    summary:
+      "Links in the repository import now open in a new tab, so you no longer lose your import by following one. That covers the link to a skill that's already in skilly and the proposal and skill links after you submit.",
+  },
+  {
     version: "2.52.0",
     date: "2026-10-30",
     summary:

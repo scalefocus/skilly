@@ -5,7 +5,8 @@
 //
 // Covers: scan → tick three → Next opens the wizard; Submit appears only on the last step and only
 // once every step is opened; a failing step blocks Next; Remove from proposal unticks the row on
-// the page; the result view shows a failed skill and Fix and resubmit reopens only that step. With
+// the page; the result view shows a failed skill and Fix and resubmit reopens only that step. An
+// existing skill's link and the result view's links open in a new tab, keeping the import. With
 // Draft with AI on, a step is filled from the draft and Undo restores the SKILL.md values. With it
 // off, a step's own Draft button drafts that step only, and asks before replacing typed text; with
 // AI disabled neither the option nor the button renders. The
@@ -29,14 +30,15 @@ const row = (path: string, name: string | null, extra: Record<string, unknown> =
 });
 const SCAN = {
   commit: "a".repeat(40),
-  total: 4,
-  shown: 4,
+  total: 5,
+  shown: 5,
   historyCommits: 12,
   historyComplete: true,
   skills: [
     row("skills/docx/SKILL.md", "e2e-imp-docx"),
     row("skills/noname/SKILL.md", null, { importable: false, reason: "no_name" }),
     row("skills/pdf/SKILL.md", "e2e-imp-pdf"),
+    row("skills/pptx/SKILL.md", "e2e-imp-pptx", { importable: false, reason: "exists", match: { ns: "global", slug: "e2e-imp-pptx", sameSource: false } }),
     row("skills/xlsx/SKILL.md", "e2e-imp-xlsx"),
   ],
 };
@@ -156,11 +158,31 @@ test("pick, review every step, remove one, submit, fix and resubmit the failed o
   await expect(wizard.getByTestId("import-submit")).toBeEnabled();
   await clickAndAwait(page, () => wizard.getByTestId("import-submit").click(), "/api/propose/import", { method: "POST" });
   await expect(wizard.getByTestId("import-result")).toContainText("slug taken a minute ago");
-  await expect(wizard.getByTestId("import-result")).toContainText("View the proposal");
+  // The result view's links open in a new tab, so the failed skill waiting below isn't lost (§64.6).
+  await expect(wizard.getByTestId("import-result").getByRole("link", { name: /View the proposal/ })).toHaveAttribute("target", "_blank");
 
   await wizard.getByTestId("import-fix-resubmit").click();
   await expect(wizard.getByText("Skill 1 of 1 · skills/xlsx")).toBeVisible();
   await expect(wizard.getByTestId("import-step-error")).toHaveText("slug taken a minute ago");
+});
+
+test("an existing skill's link opens in a new tab and the import keeps its scan and ticks", async ({ page, context }) => {
+  // The new tab gets a stub page, so the spec doesn't wait on the skill page compiling.
+  await context.route("**/skills/global/e2e-imp-pptx", (r) => r.fulfill({ contentType: "text/html", body: "<title>skill</title>" }));
+  await stubSources(page);
+  await scanAndTick(page, ["skills/pdf/SKILL.md"]);
+  const existing = page.getByTestId("import-row-skills/pptx/SKILL.md");
+  await expect(existing.getByRole("checkbox")).toBeDisabled();
+  const link = existing.getByRole("link", { name: "global/e2e-imp-pptx (opens in a new tab)" });
+  await expect(link).toHaveAttribute("target", "_blank");
+
+  const [popup] = await Promise.all([page.waitForEvent("popup"), link.click()]);
+  await expect(popup).toHaveURL(/\/skills\/global\/e2e-imp-pptx$/);
+  await popup.close();
+
+  await expect(page).toHaveURL(/\/propose\?.*mode=repo/);
+  await expect(page.getByTestId("import-url")).toHaveValue(URL_);
+  await expect(page.getByTestId("import-row-skills/pdf/SKILL.md").getByRole("checkbox")).toBeChecked();
 });
 
 test("Draft with AI fills each step and Undo restores the SKILL.md values", async ({ page }) => {

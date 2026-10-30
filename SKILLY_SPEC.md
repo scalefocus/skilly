@@ -14243,7 +14243,7 @@ record, for display and notification only.
 | 12 | **One notification per import** to the reviewers and one to the submitter, instead of a `proposal.needs_review` and a `proposal.submitted` per skill. Later lifecycle notifications stay per proposal. | Thirty identical notifications bury everything else in an inbox. |
 | 13 | **No bulk accept or reject.** Reviewers decide each imported proposal on its own. The queue can be filtered to one import. | Each accept guard (revision pin, scan gate, policy override, AI pre-review, slug re-check) protects one deliberate decision. |
 | 14 | **At most 50 ticked skills per import. The scan lists at most 500.** Both are fixed constants. | 50 equals the daily AI draft cap, and it bounds the worker's pre-scans and AI pre-reviews from one submit. |
-| 15 | **An unfinished import lives only in the open browser tab**, with a leave-page warning. Nothing is stored before submit. | This matches the propose form and chunked uploads (§6). A saved draft would be a stale scan of a ref that may have moved. |
+| 15 | **An unfinished import lives only in the open browser tab**, with a leave-page warning. Nothing is stored before submit. **Every link in the import opens in a new tab** (§64.2, §64.6). | This matches the propose form and chunked uploads (§6). A saved draft would be a stale scan of a ref that may have moved. Since nothing is stored, a link that left the tab would lose the import. |
 | 16 | **A tab on the propose page, *I have a repo***, between *I have a skill* and *I want a skill* (§26), at `/propose?mode=repo`. The old `/propose/import` address redirects there. Switching tabs keeps each tab's work. A pasted `--all` command and the "no SKILL.md in the repository root" error switch to it. | One skill, many skills and a wish for one are three answers to the same page's question, and nothing typed is lost by changing the answer. The tab holds the import's own pick list and wizard, not the propose form, which is built around one skill. |
 
 ### 64.2 The pick page: the *I have a repo* tab
@@ -14295,9 +14295,12 @@ Fields, top to bottom:
   *"before ‹date›"* when the folder wasn't touched within the fetched history, and *"—"* when it
   isn't known.
 - A **row that can't be ticked** says why: *"Can't import: SKILL.md has no name"*, *"…has no
-  description"*, *"…name ‹X› isn't a valid skill slug"*, or *"Already in skilly as ‹ns›/‹slug›"*
-  (linked). The last one adds *"imported from this folder"* when that skill's latest stable version
-  pins the same normalized origin and folder.
+  description"*, *"…name ‹X› isn't a valid skill slug"*, or *"Already in skilly as ‹ns›/‹slug›"*.
+  The last one adds *"imported from this folder"* when that skill's latest stable version pins the
+  same normalized origin and folder. Its *‹ns›/‹slug›* links to that skill's page and **opens it in
+  a new tab** (decision 15), as the propose form's slug-match link does (§8). It is marked **↗**,
+  which screen readers announce as *"opens in a new tab"*. Only the link opens the skill. Clicking
+  elsewhere on the row does nothing.
 - **Warning, still tickable:** a `SKILL.md` inside another found skill's folder reads *"Inside
   ‹outer path›. Importing ‹outer› also brings this folder's files."*
 - **Same name twice:** when two importable rows share a name, ticking one disables the other with
@@ -14471,7 +14474,9 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   - failed skills, with the server's reason, and **Fix and resubmit**. It reopens the wizard with
     only those steps, each showing its error and marked *not yet opened*. Resubmitting sends
     `importId`, so the new proposals join the same import.
-  When every skill succeeded, **Done** clears the page.
+  When every skill succeeded, **Done** clears the page. The proposal and skill links **open in a
+  new tab**, marked ↗ as on the pick page (decision 15), so following one never loses the failed
+  skills waiting for *Fix and resubmit*.
 - **A branch that moved.** If the ref is a branch that moved after the scan, the proposals pin the
   commit resolved at submit (as a single pointer proposal does), and the result view says
   *"‹ref› moved since the scan. These proposals pin ‹short commit›."*
@@ -14599,8 +14604,9 @@ resubmit*.
   the server side is covered above): scan, tick three skills, and Next opens the wizard; Submit stays disabled until
   every step has been opened; **Remove from proposal** unticks the row on the page; a failing step
   blocks Next; submit shows the result view with one failed skill, and **Fix and resubmit** reopens
-  only that step. With *Draft with AI* on, a step is filled from the draft, and **Undo** restores
-  the SKILL.md values. With it off, a step's **Draft with ‹AI name›** button fills that step only
+  only that step. An *"Already in skilly"* row's link opens the skill in a new tab, and the
+  import's own tab keeps its scan and ticks. The result view's links open in a new tab too. With
+  *Draft with AI* on, a step is filled from the draft, and **Undo** restores the SKILL.md values. With it off, a step's **Draft with ‹AI name›** button fills that step only
   and leaves the others with their SKILL.md values; typing into Description and clicking it again
   opens the confirm, and *Keep what I typed* keeps the typed text and drafts Usage. With AI
   disabled, neither the option nor the button renders. The tabs: *I have a repo* sits between the other two; switching away and back
