@@ -970,7 +970,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Target visibility gate (invariant #3).** A new-version submission is accepted only when the actor **can see the target skill** through the shared visibility predicate (`isSkillVisible`: org-wide, a role in the owning namespace, a §42 grant to one of their namespaces, or platform admin). A target that exists but is not visible is answered exactly like a nonexistent one — **404 `target skill not found`** from `POST /api/proposals`; on `POST /api/publish` and the MCP `propose_*` tools (§29), where the slug *is* the target identity, an invisible existing skill is treated exactly as **absent** (the request takes the ordinary new-skill path and meets its usual authorization — a non-member's 403 on direct publish, the visibility-filtered slug check over MCP — never a distinct status) — so the response confirms nothing about the skill's existence. The rule closes a leak: without it an outsider could file a *Keep current files* proposal against a restricted skill whose slug they guessed, then read its snapshotted bundle through their own proposal's artifact/files/diff views. Enforced in **three layers**, each evaluated against the **actor's** access at the moment of the call: the route (404 before any payload work); `resolveReuseSource`, which refuses to snapshot an invisible target's artifact (so `revise`/`resubmit` and reviewer edits re-check at their own time — a submitter whose grant was revoked mid-review can no longer switch to *Keep current files*); and `verifySubmissionPayload`, which refuses a payload whose `targetSkillId` the actor cannot see. Both helpers take the actor's access and **fail closed without it**. The contribution policy (§4 *proposals open*) is evaluated **before** this gate and keeps its 403 (it names only the namespace, never a skill). A proposal filed while the target was visible stays readable to its submitter (own-proposal rule) even if their visibility later lapses — the snapshot was taken legitimately and the reviewers already hold the bytes; retroactive revocation is out of scope.
 - **AI-drafted files (§44).** The new-version propose form can also be opened **from the §44 draft dialog**, carrying an assembled hosted bundle (the latest stable version's files with the AI changes the user kept) as an **explicitly supplied source** (so *Keep current files* is off — the same in-place transition the duplicate redirect uses), the **"What changed"** note pre-filled with an **AI-written prose summary** of the kept changes (§44.7 — falling back to one line per kept change when the summary call fails; an ordinary value, not the *Updated metadata* default, so the clear-on-source rule never touches it; an AI-written note carries the hint *"Written by &lt;AI name&gt; — edit as needed."* under the field until the proposer first edits it) and an `aiDraftToken`. Everything else is the normal new-version mode; replacing the bundle before submitting drops the token (the proposal is then not marked). A submitted proposal carrying a valid token is marked **Drafted with &lt;AI name&gt;** on the proposal and review pages (§44.8).
 - **Skill icon (§33) — an optional, skill-level field on every propose/publish path.** The propose form carries an **Icon · optional** field (after Title): an **emoji picker** (the existing `EmojiPicker`) and an **image upload framed in the icon crop dialog** (§33.4 — it opens by itself for a non-square image; *Adjust crop* re-opens it), plus a **preview tile** showing the *effective* icon and its **source label** — *from SKILL.md `icon:`*, *from icon.png in the bundle*, *uploaded*, *emoji*, or *default — skilly*. The effective icon is resolved by the **§33 precedence** — bundle frontmatter `icon:` → root `icon.png` → the uploaded image → the emoji → the default — against the bundle the materialized version will serve (*Keep current files* ⇒ the reused artifact; a pointer ⇒ its mirror), so **a bundle-borne icon beats an uploaded one**; when the bundle carries an icon the upload/emoji controls stay enabled but the preview says the bundle icon will be used (they persist as fallbacks). **New-version mode** pre-fills the current icon and offers three states — **keep**, **replace**, **remove** (the app's segmented pill, §33.4); *remove* clears the uploaded image and the emoji only — a bundle-borne icon can only be removed by shipping a bundle without it. **An icon change is a real change** for the metadata-only no-op guard (below). A **reviewer edit may remove the icon (image and/or emoji) but never upload a replacement** (the reviewer's *remove* is part of the ordinary reviewer-edit revision — no separate audit action). Revision payloads and audit rows carry the icon as **hash + filename + emoji, never bytes**. On accept (or direct publish) the resolved icon is **synced to the skill** exactly like title/categories/tool-harness — regardless of channel; **global promotion copies** the icon columns to the global copy; archive/yank leave it untouched. The **MCP `propose` / `update_proposal` tools silently ignore icon fields** (UI-only in this change, the same posture as the retired `tags` field).
-- **Draft with AI (§43).** When the §40 AI integration is available, the propose form (hosted and pointer; new-skill and new-version mode, including *Keep current files*) offers a proposer-clicked **Draft with AI** button that reads the source's `SKILL.md` and drafts the **Description**, the **Usage** and **categories** (added to the proposer's picks, never replacing them). It replaces typed Description/Usage text only after a confirm, is rate-limited (10/min, 50 per rolling 24 h), and leaves no marker — the proposer submits the text as their own. Not offered on the proposal page, in reviewer edits, in request mode or over MCP.
+- **Draft with AI (§43).** When the §40 AI integration is available, the propose form (hosted and pointer; new-skill and new-version mode, including *Keep current files*) offers a proposer-clicked **Draft with AI** button that reads the source's `SKILL.md` and drafts the **Description**, the **Usage** and **categories** (added to the proposer's picks, never replacing them). It replaces typed Description/Usage text only after a confirm, is rate-limited (10/min, 50 per rolling 24 h), and leaves no marker — the proposer submits the text as their own. The repository import's wizard offers the same button on every step (§64.4). Not offered on the proposal page, in reviewer edits, in request mode or over MCP.
 - **The "What changed" note (per-version).** Every **new version** carries a short, proposer-authored **"What changed"** note — a plain-text summary of what this version changes — surfaced on the skill detail page (§10) and to reviewers. It is **distinct from `usage_examples`**: usage documents *how to use* the skill; this note is *what moved* since the last version. Rules:
   - **Required on new versions; hidden on first versions.** **Required** (non-empty) on every **new-version** publish — through review **and** the direct-publish path (`require_review = false` members, §8) — and **not shown or collected** for a skill's **first** version (a new-skill proposal) or a **global promotion** (which materializes an independent global skill's first version, §8). A first version has no predecessor to describe.
   - **Plain text, no Markdown.** Stored raw; rendered **HTML-escaped with newlines preserved** (pre-wrap) — **no Markdown parsing, no embedded HTML, no URL autolinking**. Capped at **4,000 characters** (client-counted, server-enforced).
@@ -10219,12 +10219,14 @@ differently from text the proposer typed — the proposer submits it as their ow
 | 7 | **Rate-limited: 10 per minute and 50 per rolling 24 hours per user**, with an explicit message when either is hit. | The first AI surface any authenticated user can trigger; §40 has no cost caps of its own. |
 | 8 | **No retry, no persistence, no audit.** Each draft is one `ai_usage` row. | An interactive call must fail fast; a draft only becomes record when submitted (already audited). |
 
-**The repository import (§64.5)** is the one other surface that calls this endpoint. When the
-proposer ticks its *Draft with AI* option, the import page drafts each ticked skill once the wizard
-opens: the tick plus Next is the deliberate act of decision 1. It uses the same endpoint, egress,
-limits (decision 7, shared with the propose form) and no-marker rule (decision 6). A draft there
-**replaces** the frontmatter-filled Description and Usage without a confirm, because the proposer
-has typed nothing yet, and keeps the §43.3 Undo. Otherwise decision 2 stands.
+**The repository import (§64.5)** is the one other surface that calls this endpoint, in two ways.
+When the proposer ticks its *Draft with AI* option, the import page drafts each ticked skill once
+the wizard opens: the tick plus Next is the deliberate act of decision 1. A draft there **replaces**
+the frontmatter-filled Description and Usage without a confirm, because the proposer has typed
+nothing yet. And every wizard step has its own **Draft with ‹AI name›** button (§64.4), a
+proposer click like this form's, which confirms only before replacing text the proposer typed.
+Both use the same endpoint, egress, limits (decision 7, shared with the propose form), the §43.3
+Undo and the no-marker rule (decision 6). Otherwise decision 2 stands.
 
 ### 43.2 When the button is shown and enabled
 - **Shown** only when `aiAvailable()` (§40.7) is true — configured, enabled, token decrypts. The form
@@ -14234,7 +14236,7 @@ record, for display and notification only.
 | 5 | **The slug is the upstream `name`, locked.** A `SKILL.md` with no `name` or `description`, or a `name` that isn't a valid slug, is listed but **not tickable**. | `validateBundle` requires both fields and `name == slug` (§6). Any other slug would fail at mirror time. |
 | 6 | **New skills only.** A found skill whose name matches an active skill the proposer can see (any namespace, deprecated included) is listed but **not tickable**, with a link to that skill. | A new-version step would target another namespace, need a *What changed* note and bring the delivery-type clash (§8). Updates go through the skill's page or §63. |
 | 7 | **A wizard with one step per ticked skill**, and **Previous**, **Next** and **Remove from proposal**. The proposer reviews every step, whether or not AI filled it. | "In one go" must not mean "unread". |
-| 8 | **AI drafting is opt-in per import**: a *Draft with AI* option, shown only when §43 drafting is available. When it is on, each ticked skill is drafted **in the background once the wizard opens**, through the §43 endpoint and **under the §43 limits** (10 per minute and 50 per rolling 24 hours, shared with the propose form). | Ticking the option and clicking Next is the deliberate act §43 decision 1 asks for. One shared cap keeps each person's provider spend bounded. |
+| 8 | **AI drafting is opt-in, per import and per step.** Per import: a *Draft with AI* option, shown only when §43 drafting is available. When it is on, each ticked skill is drafted **in the background once the wizard opens**. Per step: a **Draft with ‹AI name›** button in every wizard step, shown whenever §43 drafting is available, drafts that one skill on demand: when the option was off, after a failed draft, or again after a draft. Both go through the §43 endpoint and **under the §43 limits** (10 per minute and 50 per rolling 24 hours, shared with the propose form). | Ticking the option and clicking Next, or clicking a step's button, is the deliberate act §43 decision 1 asks for. The button lets a proposer draft only the skills that need it, or redo one, without drafting the whole import. One shared cap keeps each person's provider spend bounded. |
 | 9 | **Submit needs every remaining step opened and passing.** The first time through, steps open in order. | §43's safety argument rests on the proposer reading the draft before reviewers see it. |
 | 10 | **Each skill succeeds or fails on its own at submit.** One bulk endpoint verifies every folder with **one** clone and pins **one** commit. Failed skills stay in the wizard to fix or remove. | A slug taken a minute ago shouldn't block 29 other skills. An all-or-nothing transaction across N proposals and their side effects is costly. |
 | 11 | **Submit for review**, plus **Publish directly** where the proposer may publish without review: today's rules, with each skill routed to review on its own when §37.4 or §47 says so. The content-risk override is not offered in bulk. A skill that would need it goes to review. | `require_review = false` is the namespace admin's choice. Every safety gate still runs per skill. |
@@ -14280,10 +14282,11 @@ Fields, top to bottom:
   list** (§42) is the propose form's control.
 - **Tool/harness default**: the propose form's closed picker (§8), default `Generic`.
 - **Draft with AI**: a checkbox, **unticked** by default, rendered only when `GET
-  /api/propose/ai-draft` says `available`. The label shows what is left: *"Draft with AI (38 drafts
-  left today)"*. Beneath it: *"Clicking Next sends each ticked skill's SKILL.md to the AI provider to
-  draft its description, usage and categories."* The egress is §43.8's, unchanged. With nothing
-  left, the checkbox is disabled and shows the §43.6 daily-cap message.
+  /api/propose/ai-draft` says `available`. The label names the AI by its display name (§40.14) and
+  shows what is left: *"Draft with ‹AI name› (38 drafts left today)"*. Beneath it: *"Clicking Next
+  sends each ticked skill's SKILL.md to the AI provider to draft its description, usage and
+  categories."* The egress is §43.8's, unchanged. With nothing left, the checkbox is disabled and
+  shows the §43.6 daily-cap message. Each wizard step also has its own button (§64.4).
 
 **The list.** After a scan, one row per found skill, sorted by path:
 - A checkbox; the **path** (*(repo root)* for a root `SKILL.md`); the frontmatter **name** and the
@@ -14352,11 +14355,30 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   Usage is `usage_examples` when present. Categories is `category` when present and valid
   (`categoryNameError`), else empty. Version is `version` when it is a valid semver, else `1.0.0`.
   Tool/harness is the pick-page default.
-- **With *Draft with AI* on** (§64.5), a successful draft **replaces** the frontmatter Description
-  and Usage and **adds** its categories to the frontmatter's (the §43.4 caps: at most 4 drafted, 2
-  of them new, and the field's cap of 12). An **Undo** link restores the frontmatter values and
-  removes the drafted categories that are still selected. It disappears once the proposer edits
-  Description or Usage (§43.3). Drafted text carries **no AI marker** (§43 decision 6).
+- **Draft with ‹AI name›** (§40.14): a button in every step, directly above Categories as on the
+  propose form (§43.2), rendered whenever `GET /api/propose/ai-draft` says `available`, whether or
+  not the pick page's option was ticked. Beneath it: *"Drafts the description, usage and categories
+  from the SKILL.md. 38 drafts left today."* The source is always in hand (the skill's folder at the
+  import's ref), so only the daily cap disables the button: with no drafts left it shows the §43.6
+  daily-cap message, and at that message's time the page asks `GET /api/propose/ai-draft` again and
+  enables the button if drafts are left. While the step's draft is queued or running, the button
+  reads *Drafting…* (§64.5).
+- **A click confirms only over typed text.** When the proposer has changed Description or Usage on
+  this step from the text last put there (the SKILL.md pre-fill or a draft), the §43.3 dialog comes
+  first, naming the changed field(s): **Replace** · **Fill empty fields only** · **Cancel**. Cancel
+  sends nothing. Otherwise the click drafts straight away and replaces both fields, since neither
+  holds the proposer's own writing. Categories are never in the dialog: they are always added.
+- **Every click is one draft** against the §43.7 limits, on a step already drafted too. It joins the
+  import's draft queue at the front (§64.5).
+- **A successful draft**, from the button or the pick-page option, **replaces** Description and
+  Usage (only the empty ones after *Fill empty fields only*) and **adds** its categories to those
+  selected (the §43.4 caps: at most 4 drafted, 2 of them new, and the field's cap of 12). Drafted
+  text carries **no AI marker** (§43 decision 6).
+- **Undo** (single-step, §43.3) follows each successful draft. It restores Description and Usage to
+  their text from just before that draft (the SKILL.md values, for the step's first draft), and
+  removes the categories that draft added that are still selected. Restored text counts as typed
+  exactly when it did before the draft. Undo disappears on the next draft and once the proposer
+  edits Description or Usage.
 - **Buttons: Previous, Next, Remove from proposal.**
   - **Next** checks the step against the propose form's submit-time rules: a Title and Description,
     the category rule, a well-formed semver and a tool/harness from the list. It won't leave a
@@ -14372,7 +14394,7 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   §8): exactly the propose form's condition.
 - **Closing the dialog** (✕ or Escape) returns to the pick page and keeps every step's edits. Next
   reopens it at the step that was left. **Ticking another skill** adds a *not yet opened* step in
-  path order, and queues its draft when AI is on.
+  path order, and queues its draft when the pick page's *Draft with AI* option is ticked.
 - **Leaving the page** with any step edited or drafted asks first, through the browser's leave-page
   prompt: *"Leave this import? Your edits to N skills will be lost."*
 
@@ -14380,20 +14402,32 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
 - Drafts are requested **from the browser**, one per ticked skill, through the existing **`POST
   /api/propose/ai-draft`** with the pointer source `{ source: 'pointer', externalUrl, externalRef,
   externalSubdir, skillSlug }`. Egress, prompt, output validation, the `ai_usage` record, the
-  metrics and the **§43.7 limits** are all unchanged. Drafting starts when the wizard first opens.
+  metrics and the **§43.7 limits** are all unchanged. With the pick page's option ticked, drafting
+  starts when the wizard first opens. A step's **Draft with ‹AI name›** button (§64.4) adds one
+  draft at any time.
 - **Pacing**: in step order, at most **3 in flight** and at most **10 started per rolling minute**
-  (the §43 per-minute limit). A per-minute **429** waits for `retry-after` and tries again (a refused
-  request never reached the provider, so it doesn't count). A **daily-cap 429** stops the queue.
-  Every step not yet drafted then reads *"Not drafted: daily AI draft limit reached. The SKILL.md
-  values are filled in."*
+  (the §43 per-minute limit). A step's button puts its skill **at the front** of the queue, so it
+  shares this pacing with any background drafts and starts as soon as a slot frees. A per-minute
+  **429** waits for `retry-after` and tries again (a refused request never reached the provider, so
+  it doesn't count). A **daily-cap 429** stops the queue. Every step not yet drafted then reads
+  *"Not drafted: daily AI draft limit reached. The SKILL.md values are filled in."* Once the cap's
+  time has passed and the button is enabled again (§64.4), a click restarts the queue for that step.
 - **Per step.** While *Drafting…*, Description, Usage and Categories are read-only and Next waits.
-  **Fill it in myself** gives up the draft for that step: an unsent draft is dropped and not
-  counted, and one already sent completes, counts and is ignored. A failed draft (a §43 502 or 422)
-  reads *"Couldn't draft this one. The SKILL.md values are filled in."*
+  **Fill it in myself** (a background draft) or **Cancel** (a clicked one) gives up the draft for
+  that step: an unsent draft is dropped and not counted, and one already sent completes, counts and
+  is ignored. The fields keep the text they had. A failed background draft (a §43 502 or 422) reads
+  *"Couldn't draft this one. The SKILL.md values are filled in."* A failed clicked draft shows the
+  §43.6 message for the case beneath the button, since its fields may hold typed text: *"Couldn't
+  draft right now — try again or write it yourself."*, or the daily-cap message with its time.
+  Either way the button can try again.
+- **AI switched off mid-import.** A **409 `ai_unavailable`** stops the queue, removes the button from
+  every step and the option from the pick page, and reads *"AI drafting is no longer available."*
+  (§43.6). Steps keep the text they hold.
 - **Removing** a skill drops its unsent draft, which isn't counted. Drafts already made count against
   the cap even if the browser tab is closed (no refund, §43.7).
 - `GET /api/propose/ai-draft` gains **`remainingToday`**: 50 minus the caller's `skill_draft` calls
-  in the last 24 hours, floored at 0, for the checkbox label.
+  in the last 24 hours, floored at 0, for the checkbox label and each step's helper line. The page
+  counts it down as drafts come back.
 
 ### 64.6 Submit: `POST /api/propose/import`
 - **Request** `{ url, ref, folder?, namespaceSlug, visibility, sharedNamespaceIds, mode: 'review' |
@@ -14534,7 +14568,11 @@ resubmit*.
   `1.0.0`, an invalid category dropped); and tick-all respecting the cap. `parseInstallCommand`:
   `--all` gives `importAll` for each source form.
 - **Unit** (web client): the draft queue (order, at most 3 in flight, at most 10 started per minute,
-  the per-minute 429 retry, the daily-cap stop, removal dropping an unsent draft); and the wizard
+  the per-minute 429 retry, the daily-cap stop, removal dropping an unsent draft, a clicked draft
+  going to the front, a click after the cap's time restarting it); the per-step draft (no confirm
+  over the SKILL.md pre-fill or a draft's text, a confirm once Description or Usage was typed into,
+  *Fill empty fields only* leaving a non-empty field, Undo after a second draft restoring the first
+  draft's text, and restored typed text still asking); and the wizard
   gating (Next blocked on a failing step, Submit disabled until every remaining step is opened and
   passes, Remove from proposal unticking the row); and the tab read from the address (`mode=repo`,
   `mode=want`, none or unknown gives *I have a skill*, `newVersion=1` wins).
@@ -14557,7 +14595,10 @@ resubmit*.
   every step has been opened; **Remove from proposal** unticks the row on the page; a failing step
   blocks Next; submit shows the result view with one failed skill, and **Fix and resubmit** reopens
   only that step. With *Draft with AI* on, a step is filled from the draft, and **Undo** restores
-  the SKILL.md values. The tabs: *I have a repo* sits between the other two; switching away and back
+  the SKILL.md values. With it off, a step's **Draft with ‹AI name›** button fills that step only
+  and leaves the others with their SKILL.md values; typing into Description and clicking it again
+  opens the confirm, and *Fill empty fields only* keeps the typed text. With AI disabled, neither
+  the option nor the button renders. The tabs: *I have a repo* sits between the other two; switching away and back
   keeps the propose form's title and the import's scan and ticks; `/propose/import?url=…&ref=…`
   lands on the tab with both fields filled; and a pasted `--all` command's link switches to the tab
   with Repository and Ref filled.

@@ -6,7 +6,9 @@
 // Covers: scan → tick three → Next opens the wizard; Submit appears only on the last step and only
 // once every step is opened; a failing step blocks Next; Remove from proposal unticks the row on
 // the page; the result view shows a failed skill and Fix and resubmit reopens only that step. With
-// Draft with AI on, a step is filled from the draft and Undo restores the SKILL.md values. The
+// Draft with AI on, a step is filled from the draft and Undo restores the SKILL.md values. With it
+// off, a step's own Draft button drafts that step only, and asks before replacing typed text; with
+// AI disabled neither the option nor the button renders. The
 // import is the propose page's "I have a repo" tab (§64.2): it sits between the other two tabs,
 // switching tabs keeps both tabs' work, the old /propose/import address lands on it filled, and a
 // pasted `--all` command's link switches to it filled.
@@ -128,9 +130,12 @@ test("pick, review every step, remove one, submit, fix and resubmit the failed o
   await expect(page.getByTestId("import-row-skills/noname/SKILL.md").getByRole("checkbox")).toBeDisabled();
   await expect(page.getByText("Can't import: SKILL.md has no name")).toBeVisible();
 
+  // AI is off: no Draft with AI option on the page and no Draft button in a step.
+  await expect(page.getByTestId("import-draft-ai")).toHaveCount(0);
   await page.getByTestId("import-next").click();
   const wizard = page.getByTestId("import-wizard");
   await expect(wizard.getByText("Skill 1 of 3 · skills/docx")).toBeVisible();
+  await expect(wizard.getByTestId("import-step-draft")).toHaveCount(0);
   await expect(wizard.getByTestId("import-submit")).toHaveCount(0);
 
   // A failing step blocks Next.
@@ -170,4 +175,43 @@ test("Draft with AI fills each step and Undo restores the SKILL.md values", asyn
   await expect(description).toHaveValue("Drafted description.");
   await wizard.getByTestId("import-step-undo").click();
   await expect(description).toHaveValue("e2e-imp-pdf from SKILL.md");
+});
+
+test("a step's own Draft button drafts that step only, and asks before replacing typed text", async ({ page }) => {
+  await stubSources(page, { ai: true });
+  await scanAndTick(page, ["skills/docx/SKILL.md", "skills/pdf/SKILL.md"]);
+  const drafts: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && new URL(r.url()).pathname === "/api/propose/ai-draft") drafts.push(r.postData() ?? "");
+  });
+  // The pick page's option stays unticked, so opening the wizard drafts nothing.
+  await page.getByTestId("import-next").click();
+  const wizard = page.getByTestId("import-wizard");
+  await expect(wizard.getByText("Skill 1 of 2 · skills/docx")).toBeVisible();
+  // The step's textareas are Description then Usage (Categories is a tag input).
+  const description = wizard.locator("textarea").first();
+  const usage = wizard.locator("textarea").nth(1);
+  await expect(description).toHaveValue("e2e-imp-docx from SKILL.md");
+  expect(drafts).toHaveLength(0);
+
+  // Over the SKILL.md pre-fill the button drafts straight away.
+  await clickAndAwait(page, () => wizard.getByTestId("import-step-draft").click(), "/api/propose/ai-draft", { method: "POST" });
+  await expect(description).toHaveValue("Drafted description.");
+  expect(drafts).toHaveLength(1);
+  expect(JSON.parse(drafts[0]!)).toMatchObject({ source: "pointer", externalSubdir: "skills/docx", skillSlug: "e2e-imp-docx" });
+
+  // The next step keeps its SKILL.md values.
+  await wizard.getByTestId("import-step-next").click();
+  await expect(wizard.getByText("Skill 2 of 2 · skills/pdf")).toBeVisible();
+  await expect(description).toHaveValue("e2e-imp-pdf from SKILL.md");
+
+  // Over typed text it asks first; Fill empty fields only keeps what was typed.
+  await description.fill("My own words.");
+  await wizard.getByTestId("import-step-draft").click();
+  const confirm = page.getByTestId("import-draft-confirm");
+  await expect(confirm).toContainText("Description already has text you typed.");
+  await clickAndAwait(page, () => confirm.getByRole("button", { name: "Fill empty fields only" }).click(), "/api/propose/ai-draft", { method: "POST" });
+  await expect(usage).toHaveValue("Ask it to read a PDF.");
+  await expect(description).toHaveValue("My own words.");
+  expect(drafts).toHaveLength(2);
 });
