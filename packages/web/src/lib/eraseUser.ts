@@ -8,6 +8,7 @@ import { appendAudit } from "./audit";
 import { userLabel } from "./userLabel";
 import { invalidateLeaderboard } from "./leaderboard";
 import { invalidateLevels } from "./levels";
+import { unassignErasedUser } from "./reviewAssign";
 
 export interface UserSearchResult { userId: string; displayName: string; email: string; status: "active" | "inactive"; avatar: string | null }
 
@@ -118,6 +119,10 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_hypes", "skill_watches", "notifications", "tokens", "oauth_grants", "user_achievements"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [targetUserId]);
     }
+    // Review assignments (§65.9): the user's OPEN assignments are cleared now, audited as
+    // ineligible with this admin as actor (the SCIM erasure path is left to the worker's reminder
+    // sweep, which clears any ineligible assignee). Decided proposals keep the tombstone label.
+    await unassignErasedUser(client, targetUserId, actorUserId);
     // RUM samples (§32.3) are anonymised IN PLACE, not deleted: the rows stay so per-route
     // performance aggregates remain true, only the person is dropped. Erasure is a tombstone
     // (the users row is never deleted), so the column's ON DELETE SET NULL never fires — null it here.

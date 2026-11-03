@@ -149,7 +149,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `group_id`, `user_id`. Synced via SCIM. **Authoritative source of "who is in a group."**
 
 ### `namespaces`
-- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **a validated email address**: any valid address, **not** required to be a registered user, shape-checked on write in the browser and on the server; the editor offers a shared **user-search typeahead** that fills a picked user's email, and a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `marketplace_synced_at` (TIMESTAMPTZ, nullable — when the worker's marketplace sweep last evaluated this namespace's marketplace, stamped every sweep whether or not content changed; NULL until the first sweep after enabling and reset to NULL on disable; shown as "synced N min ago" on the Marketplaces page, §30.6), `created_at`.
+- `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **a validated email address**: any valid address, **not** required to be a registered user, shape-checked on write in the browser and on the server; the editor offers a shared **user-search typeahead** that fills a picked user's email, and a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `marketplace_synced_at` (TIMESTAMPTZ, nullable — when the worker's marketplace sweep last evaluated this namespace's marketplace, stamped every sweep whether or not content changed; NULL until the first sweep after enabling and reset to NULL on disable; shown as "synced N min ago" on the Marketplaces page, §30.6), `review_target_days` (`smallint NULL`, 1–30 business days; NULL = no review target — migration 0106, §65.3), `created_at`.
 - Created explicitly by Platform Admins. `global` is special: `require_review` always true.
 
 ### `role_mappings` (the explicit Entra-group→role binding table)
@@ -202,7 +202,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id` (bigserial), `skill_id`, `namespace_id` (denormalized for the namespace aggregate), `actor_user_id` (always set — views are authenticated), `created_at`. Append-only analytics of **skill-detail views**. Installs are NOT duplicated here — they're read from `access_log` (the git clone). Both FKs cascade (user → SET NULL).
 
 ### `proposals`
-- `id`, `target_namespace_id`, `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `accepted` | `rejected`), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `import_id` (nullable — the repository import it came from, §64; set at creation, never changed; migration 0105), `created_at`, `updated_at`.
+- `id`, `target_namespace_id`, `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `accepted` | `rejected`), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `import_id` (nullable — the repository import it came from, §64; set at creation, never changed; migration 0105), the **review-assignment columns** (`assignee_id`, `assigned_by`, `assignment_changed_at`, `turn_started_at`, `turn_due_at`, `turn_escalate_at`, `turn_reminded_at`, `turn_escalated_at`; migration 0106, §65.9), `created_at`, `updated_at`.
 - **Original submission stored immutably**; reviewer edits tracked as revisions.
 
 ### `proposal_imports` (migration 0105, detailed in §64.8)
@@ -376,6 +376,9 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **One row per checked pointer skill** (PK `skill_id`, CASCADE): the baseline the last check ran against, its pin kind (`semver_tag` | `tag` | `branch` | `commit` | `registry`), the newest upstream stable release above it (ref, semver, peeled commit, bump level), whether that release changed the skill's folder, `detected_at`, `notified_ref` (once-per-release dedup), the skip (`skipped_ref` / `skipped_by` / `skipped_at`), `checked_at` (nullable: `NULL` until the sweep first checks the skill) and `last_error`. Written by the upstream-release sweep, by *Skip* / *Un-skip*, and by the pointer refresh, which records a drifted baseline's pin kind (§63.4, §63.6). Whether a release is *pending* is derived on read, never stored.
 - `users.upstream_release_notifications` (`BOOLEAN NOT NULL DEFAULT true`) — the eighth maintainer notification preference (§12 / §63.10).
 
+### Review assignments and targets (migration 0106, detailed in §65.9)
+- `namespaces.review_target_days` (the namespace's review target in business days, NULL = none) and, on `proposals`, the single assignee (`assignee_id`, `assigned_by`, `assignment_changed_at`) and the current turn's clock (`turn_started_at`, `turn_due_at`, `turn_escalate_at`, `turn_reminded_at`, `turn_escalated_at`). Overdue is derived on read, never stored.
+
 ---
 
 ## 4. RBAC model & permission matrix
@@ -384,7 +387,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 
 ### Roles
 - **Platform Admin** (platform-level): create namespaces + role mappings, govern `global`, approve in any namespace, see all audit logs, set namespace maintainer, yank/archive anywhere.
-- **Namespace Admin** (per namespace): approve/reject proposals targeting the namespace, manage namespace skills, publish versions, yank/archive in-namespace, edit namespace settings — `require_review`, `maintainer_contact` and the **Claude plugin marketplace toggle** — on the **Namespace administration** page (§30.6).
+- **Namespace Admin** (per namespace): approve/reject proposals targeting the namespace, manage namespace skills, publish versions, yank/archive in-namespace, edit namespace settings — `require_review`, `maintainer_contact`, the **review target** (§65) and the **Claude plugin marketplace toggle** — on the **Namespace administration** page (§30.6).
 - **Namespace Member** (per namespace): direct-publish/version into the namespace **only if** `require_review = false`; otherwise their submissions become proposals.
 - **Implicit (any authenticated Entra user):** **propose** to any namespace; **consume** (browse/search/install) any skill *visible* to them.
 
@@ -393,12 +396,13 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Action | Plat. Admin | NS Admin (own) | NS Member (own) | Auth user |
 |---|---|---|---|---|
 | Create namespace / role mapping | ✅ | ❌ | ❌ | ❌ |
-| Edit namespace settings — `require_review`, `maintainer_contact`, marketplace toggle (§30.6) | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
+| Edit namespace settings — `require_review`, `maintainer_contact`, review target (§65.3), marketplace toggle (§30.6) | ✅ (any, incl. `global`'s review target) | ✅ (own ns) | ❌ | ❌ |
 | Toggle the **public** plugin marketplace (§30.1) | ✅ | ❌ | ❌ | ❌ |
 | Mint a **namespace** marketplace token (§30.4) | ✅ | ✅ (own ns) | ✅ (own ns) | ❌ |
 | Mint a **public** marketplace token (§30.4) | ✅ | ✅ | ✅ | ✅ |
 | Approve/reject proposal | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Edit proposal in review | ✅ | ✅ (own ns) | ❌ | ❌ |
+| Assign / reassign / unassign a proposal's reviewer (§65.2) — only reviewers of the target namespace are assignable, never the proposer | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Direct publish/version | ✅ | ✅ (own ns) | ✅ if `require_review=false` | ❌ |
 | Propose (new skill / new version) | ✅ | ✅ | ✅ | ✅ |
 | Initiate promotion to global | ✅ | ✅ (own ns) | ✅ (own ns) | ❌ |
@@ -489,6 +493,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
 - **Search gaps (§62.3):** nothing to erase — no search-gap row holds a searcher's user id.
+- **Review assignments (§65.9):** the user's **open** proposal assignments are cleared in the erasure transaction (audited `proposal.unassigned`, `reason: "ineligible"`, the erasing admin as actor; the pool is alerted when the proposal waits on reviewers). Decided proposals keep the assignee, now rendered with the tombstone label.
 - **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false`, `idea_notifications = true` and `idea_votes_hidden = false`.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
 - **Maintainer transfer (optional):** with a "Replace maintainer to" target, each skill the user **explicitly** maintains gets the target added as an explicit maintainer (`added_by` = the acting admin) **where the target is eligible** (visibility — invariant #3); ineligible/restricted skills are **skipped and reported**, and the erased user's row is removed regardless. Implicit (namespace-admin) maintainerships aren't transferable — they're role-based, and erasure removes the user's group memberships anyway.
@@ -1012,14 +1017,14 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **New-skill proposal:** every field — title, description, **tool/harness**, **visibility**, categories, usage, and the **files** (a fresh hosted bundle, or new pointer url/ref/subdir).
   - **New-version proposal:** the same fields a re-version may otherwise change — **title**, **description**, **categories**, **tool/harness**, usage, the **"What changed"** note, and the **files** (including switching between *Keep current files* and a fresh bundle/pointer source, in either direction — a switch to reuse re-snapshots the then-latest stable artifact) — plus the **proposed semver**. Only the **slug** (immutable) and the **visibility value** remain frozen; flipping `org`↔`namespace` is never a re-version. The **shared-namespaces list** (§42) *is* part of a new-version proposal and may change here. The no-op guard (§8 above) applies on resubmit too.
   - **Files are proposer-only on resubmit** (a reviewer edit stays metadata-only — the proposer owns the bytes). The **delivery type is locked** (a hosted proposal stays hosted; a pointer stays pointer). A changed artifact/pointer re-runs the **same gates as the initial submission**: `verifySubmissionPayload` (artifact ownership + scan, SSRF/transport allowlist), pointer **`verifyPointerSkill`**, and **duplicate detection** (warn/block policy). A new hosted bundle's scan flows into the accept-time override gate automatically; a changed pointer is re-scanned by the worker.
-  - **Reviewers are notified on resubmit** (the namespace's reviewers get a "needs review" notification, excluding the proposer) so a resubmitted proposal doesn't silently re-enter the queue.
+  - **Reviewers are notified on resubmit** (the namespace's reviewers get a "needs review" notification, excluding the proposer) so a resubmitted proposal doesn't silently re-enter the queue. When the proposal has an **assignee** (§65), only the assignee is notified. A resubmit also starts a fresh reviewer turn for the review target (§65.3).
   - The **`resubmit` verb** is gated to `changes_requested`; a proposal sitting in `proposed` or actively `under_review` is proposer-edited via the **`revise`** verb instead (next bullet) — same field set, **no state transition**, files replaceable on hosted proposals only.
 - **Proposer mid-review edits (`revise`).** Until a decision lands, the proposal stays the proposer's to improve: in **`proposed` and `under_review`** the **submitter** may update the proposal in place via a dedicated lifecycle verb **`revise`** (`POST /api/proposals/:id/actions`). No state change (`proposed` stays `proposed`, `under_review` stays `under_review`); each revise appends one `proposal_revision` (`newPayload`, author = proposer). Applies to **both proposal types** (new skill and new version).
   - **Metadata:** the same field set as resubmit — title, description, categories, tool/harness, usage examples, the **"What changed"** note (new-version proposals only — hidden on new-skill); **visibility** editable only on new-skill proposals (the `org`/`namespace` value is frozen on new-version proposals, as everywhere) — the **shared-namespaces list** (§42) is editable on **both** proposal types whenever visibility is `namespace`. Slug and delivery type locked, as always.
   - **Files — hosted proposals only.** The proposer may upload a **replacement bundle**, superseding the staged one; the proposal still materializes exactly **one** `skill_version` on accept. For hosted **new-version** proposals this includes switching between *Keep current files* and a fresh bundle in either direction (a switch to reuse re-snapshots the then-latest stable artifact, §8 above). **Pointer proposals' files are frozen mid-review** — url/ref/subdir are untouchable via revise; changing a pointer source still requires the reviewer to request changes → resubmit.
   - **The proposed semver is LOCKED mid-review.** A revise never changes the version number, for either proposal type. (Changing the semver remains possible only on **resubmit** after `changes_requested`, where it was already allowed.)
   - **Same gates as initial submission.** A replacement bundle runs the full §6 upload path (validation + ClamAV scan) and `verifySubmissionPayload` (artifact ownership + scan verdict — the new scan flows into the accept-time override gate automatically), and the revise re-runs **duplicate detection** under the platform warn/block policy. The **no-op guard** applies: at least one metadata field or the bundle must actually differ from the current revision, else **422**.
-  - **Reviewers are notified on every revise** — edits can be impactful and must be visible. A `proposal.revise` notification goes to the namespace's reviewers (excluding the proposer), and the Review-queue badge re-arms naturally (`updated_at` bump, §10). The review page shows the standard revision **diff** (old → new per changed field) plus a *"bundle replaced"* marker with the old/new artifact digests + filenames when the files changed.
+  - **Reviewers are notified on every revise** — edits can be impactful and must be visible. A `proposal.revise` notification goes to the namespace's reviewers (excluding the proposer) — or to the **assignee alone** when the proposal is assigned (§65) — and the Review-queue badge re-arms naturally (`updated_at` bump, §10). The review page shows the standard revision **diff** (old → new per changed field) plus a *"bundle replaced"* marker with the old/new artifact digests + filenames when the files changed.
   - **Revision-pinned accept (anti-swap).** `accept` carries the **revision number the reviewer inspected**; if the proposal has gained a newer revision, accept fails with **409** ("the proposal changed since you reviewed it") and the reviewer re-reviews the current revision. This closes the inspect→accept race where a proposer could swap bytes between the reviewer's inspection and their accept click. `request-changes` and `reject` are **not** pinned (they materialize nothing).
   - **Last-writer-wins with reviewer edits.** The reviewer metadata-edit capability (dashboard, below) is unchanged and coexists; a proposer's revise may overwrite a reviewer's edit — and vice versa. Every write is its own attributed revision with a diff, so the sequence stays fully auditable.
   - **Superseded staged artifacts are deleted eagerly.** Replacing the bundle deletes the previous **staged upload object** from the object store (and its object-keyed scan rows) once the new revision commits — staged objects are proposal-only, never shared with a live version, so this is safe. A *Keep current files* snapshot references a **published version's** object and is never deleted by a revise. Consequence: the **bundle file browser always browses the current revision's bundle only**; earlier revisions keep their recorded digests/filenames in the history, but their bytes are gone.
@@ -1030,6 +1035,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 ### Admin review dashboard
 - Gated by namespace-scoped reviewer authority: **Namespace Admins review their namespace; Platform Admins review anything.**
 - Reviewers can: inspect (instructions, metadata, bundled scripts, scan report, the **AI pre-review** — §46, advisory, with per-finding Agree/Dismiss), edit (metadata, SKILL.md, target namespace, visibility, the **shared-namespaces list** — add or strip grantee namespaces, §42), request changes, accept (publish), reject (notify with reason).
+- **Assignment and the review target (§65).** A reviewer can **assign** an open proposal to one reviewer of its namespace (themselves included). Start review claims an unassigned proposal for the reviewer who clicks it. Assignment is advisory: every reviewer can still act on the proposal. When a namespace sets a **review target** in business days, each proposal waiting on reviewers shows a due date. A worker sweep reminds the assignee (or the namespace's admins) when it passes, and escalates once at twice the target. The queue gains *Assigned to me*, *Unassigned* and *Overdue* filters.
 - **Bundle file browser (hosted uploads):** the review page shows the uploaded bundle's full directory tree (`GET /api/proposals/:id/files`); a reviewer can read any **text** file inline and **download** the rest, to inspect every file before approving. Same access gate as the proposal detail (reviewer of the namespace or the submitter). Content is served `text/plain`/attachment with `nosniff` so a stored `.html`/`.svg` can never execute, and paths must match a real extracted entry (no traversal). Pointer proposals with a **fresh** source have no skilly-stored bundle pre-accept, so they link out to the upstream repo instead; a pointer **Keep-current-files** proposal (§8) *does* have one — the reused mirror tarball — and gets the same file browser as a hosted upload.
 - **File-change view for reviewers.** For a **new-version** proposal the review surface highlights **what changed in the files** against a baseline — the skill's **latest stable active version** (the bytes `main`/"latest" serves and that *Keep current files* reuses); a version proposed *below* current latest, or a prerelease, still diffs against **latest stable**. Every path is classified **added / modified / removed / unchanged** by comparing **per-file content hash** (the same per-file sha256 that feeds `content_sha256`, §8); a **rename shows as a remove + an add** (no rename detection). A top summary reads **"+X added · ~Y modified · −Z removed"**. This is the same surface for **hosted and pointer** proposals — only the byte source differs (below).
   - **Text vs binary.** *Text/Markdown* files (decided by the **same rule the bundle file browser uses** to read-inline vs download) render an inline **unified (single-column) line diff**, server-computed and read-only. **All other** files show the **status badge only** — no diff. A diff is **skipped** past a size cap (**> ~500 KB** or **> ~2,000 changed lines**, or otherwise undiffable), shown as *"modified — too large to diff; download to compare"*.
@@ -1166,7 +1172,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Loaded on demand, cached on immutability.** Nothing is computed on page load — the summary is fetched **when a row is expanded**, and each line diff **when a file is expanded**, so the detail page's cost is unchanged for the many viewers who never open one. Results cache by **`(skill, semver)`**: published versions are **immutable** (invariant #2), so a cached entry can never go stale — the TTL is a memory bound, not a correctness one (contrast the reviewer view, whose cache must be pinned to the proposal *revision*).
   - **The featured card stays note-only.** The top *"What's changed"* card (latest stable version) keeps showing just the note; the file changes live in the Versions list, where the version-to-version framing makes sense.
 - **"New to you" discovery (per-user, not a global window):** each user has a `catalog_seen_at` marker. The Catalog nav item shows a **superscript "new items" count** (1–9, then `9+`) of skills that became visible to *that user* since they last opened the catalog (`created_at > catalog_seen_at`, visibility-filtered — a new *version* of an existing skill is not a new skill and isn't counted). The same predicate flags individual catalog entries with a **"new" edge badge** (cards and list rows), so the badged rows are exactly the ones the count refers to. The marker is **advanced when the user leaves the catalog**, not on entry, so the count, the badges, and any in-visit filtering/sorting stay stable for the whole visit; the next visit only flags genuinely newer skills. This is explicitly **not** an "updated in the last N days" window — a skill the user has already seen never shows as new, and a skill older than any window still shows as new on its first sighting. The Review queue badge works the same way (`review_seen_at`), without per-row badges — and it is a **combined** count of everything needing the user on the Proposals page since they last opened it, both halves matched on the proposal's **`updated_at`** against the same `review_seen_at` (so a single visit clears both, and the state transition that makes an item actionable re-arms it):
-  - **Reviewer half** — proposals in their review scope that need a reviewer: state `proposed` (a first look) or `under_review`. Because it keys on `updated_at`, a **resubmit** (`changes_requested → under_review`, which leaves `created_at` unchanged) re-arms the badge — so reviewers are re-notified when a proposer submits changes — and a mid-review **`revise`** (§8) re-arms it the same way (it bumps `updated_at` without changing state).
+  - **Reviewer half** — proposals in their review scope that need a reviewer: state `proposed` (a first look) or `under_review`, **unassigned or assigned to the caller** (a proposal assigned to someone else is not counted, §65.5; an assignment change re-arms the half through `assignment_changed_at`). Because it keys on `updated_at`, a **resubmit** (`changes_requested → under_review`, which leaves `created_at` unchanged) re-arms the badge — so reviewers are re-notified when a proposer submits changes — and a mid-review **`revise`** (§8) re-arms it the same way (it bumps `updated_at` without changing state).
   - **Proposer half** — the caller's own proposals returned as **`changes_requested`** (their turn to revise & resubmit). So a pure proposer who never reviews still gets a 1–9+ badge when changes are requested on their submission.
   - `changes_requested` is deliberately the **proposer's** signal, not the reviewer's (it's waiting on the proposer), so it counts only in the proposer half.
   - **Proposals page default filters:** the **To review** tab opens with the three open states selected (Proposed + Under review + Changes requested) — everything still in flight; **My submissions** opens with **no filter selected** (all your submissions, every state).
@@ -1251,6 +1257,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Achievements (§31)** are **not audited** — personal milestones, not governance; only the `achievements_enabled` platform toggle is (as `settings.updated`).
   - **Follows (§35)** are **not audited**, like watches and ratings. Neither is the `allow_follows` profile toggle.
   - **Email digests (§48.13):** `settings.updated` for the five `email_digest*` platform keys. The user's digest choice and the digest sends are **not audited**.
+  - **Review assignments (§65.10):** `proposal.assigned` (`from`, `to`, `reason`: `manual` | `start_review` | `import`) and `proposal.unassigned` (`from`, `reason`: `manual` | `ineligible`; no actor when the worker sweep clears it). The review target is audited as the existing `namespace.updated`. Reminders are **not** audited.
   - **Repository import (§64.10):** `proposal.import` once per submit (origin, ref, pinned commit, mode, per-outcome counts and slugs — never metadata text); each skill's own `proposal.created` (or publish) entry carries `importId`. Scans and AI drafts are **not audited**.
   - **Feedback survey (§36.11):** submissions, closes and first uses are **never audited** (an audit row would tie a person to an anonymous response). Audited: `settings.updated` for `survey_enabled` and `bug_reports_enabled` (§36.17), and **`survey.response_deleted`** (the admin; `before` = date, trigger, feature, segment, catalog version, answer count and text length — **never the text or a bug report's page path**). Bug reports (§36.17) are never audited either.
   - **Feature ideas (§60.10):** `idea.published`, `idea.rejected`, `idea.updated`, `idea.closed` (outcome, note, deleted vote count), `idea.marked_shipped`, `idea.deleted` (a snapshot of the deleted row, the reason, the deleted vote count), and `settings.updated` for `feature_ideas_enabled`. Submitting, editing or withdrawing an idea, votes and the two profile toggles are **not audited**.
@@ -1300,7 +1307,8 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Remembered per browser.** The user's own open/closed choice is stored in localStorage under **`skilly.notifications.types-open`** (`"1"` = open; anything else, or absent, = collapsed, which is the default). **Only** that choice is stored, never the type selection. Blocked storage means the row is collapsed on every visit. A remembered-open row **paints open on arrival with no slide**; only a user toggle animates (the §10 rule). No auto-expand rule is needed, because the selection is never persisted and the page therefore always arrives unfiltered.
   - **A collapsed, filtered inbox always shows why.** While the row is **collapsed and at least one type is selected**, a summary **`<k> selected · ✕ clear`** sits beside the header, in the chips column. A filtered list therefore never appears without a visible cause, and the selection can be cleared without expanding. **While the row is open the summary is not shown**: the chips show the selection, and `✕ clear` stays at the end of the chips as before, so selecting a chip never shifts the chips under the pointer. Clearing from the collapsed summary leaves the row collapsed, and toggling the row never changes the selection.
 - **Events:**
-  - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) in their namespace queue.
+  - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) in their namespace queue. Once a proposal has an **assignee** (§65), its resubmission and revision pings go to the assignee alone.
+  - **Review assignments and targets (§65.8):** `proposal.assigned` to a reviewer someone else assigned (one row for a whole import); `proposal.review_overdue` to the assignee — or the namespace's admins, or platform admins — when a proposal passes its namespace's review target; `proposal.review_escalated` one level up at twice the target; `proposal.changes_reminder` to the proposer once when their *changes requested* turn passes the target. The three reminders fold into one unread row per recipient, type and namespace. No per-type opt-out.
   - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power). When the drifted version is the skill's baseline and is pinned to a **branch**, the drift row also offers **Propose the update** (§63.6).
   - To **effective maintainers** (minus `upstream_release_notifications` opt-outs): `skill.upstream_release` when the upstream-release sweep finds a newer stable release of a pointer skill's pinned tag or registry version that changed the skill's files (§63.5, **once per release**, naming the highest; silent when an open proposal already covers it); digestible by default (§48.3).
@@ -1380,6 +1388,7 @@ current or future type can ever leak JSON to a user.
   | `proposal.request_changes` | Changes requested | Your skill proposal needs changes. *(+ `Reviewer note: "{note}"` when a note is present)* | View it → `/proposals/{proposalId}` |
   | `proposal.resubmit` | Proposal resubmitted | Your skill proposal was resubmitted. | View it → `/proposals/{proposalId}` |
   | `proposal.revise` | Proposal updated | A skill proposal in your review queue was updated by the proposer. | Review it → `/proposals/{proposalId}` |
+  | `proposal.assigned`, `proposal.review_overdue`, `proposal.review_escalated`, `proposal.changes_reminder` | *see §65.8* | *see §65.8* | *see §65.8* |
   | `proposal.accept` | Proposal accepted | Your skill proposal was accepted. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `proposal.reject` | Proposal rejected | Your skill proposal was rejected. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `system.error` † | System log events | There are {count} new system log events. | View the system log → `/system-log` |
@@ -1781,6 +1790,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `POST /api/proposals` — submit (new skill or new version). `GET /api/proposals` — queue (scoped by reviewer authority). `GET /api/proposals/:id` — detail. A new-skill payload whose slug matches a visible active skill in any namespace → **409** `slug_exists` with the visible `matches` (§8 slug match; promotion exempt) — the same on `POST /api/publish` and on a new-skill `accept` (re-checked at the proposer's visibility). A new-version payload whose target skill the caller cannot see → **404** `target skill not found`, identical to a nonexistent target (§8 *Target visibility gate*); `POST /api/publish` treats an invisible target as absent (the new-skill path, so a non-member meets the ordinary 403).
 - `GET /api/skills/slug-matches?slug=` — the propose form's live slug lookup (§8): the **visible active** skills with that slug across all namespaces, `{ matches: [{ namespaceSlug, slug, title, type, deprecated }] }`; authenticated, visibility-filtered through the shared predicate (never a count or hint of hidden ones).
 - `POST /api/proposals/:id/actions` — start-review / request-changes / accept / reject / resubmit / **revise** (proposer mid-review edit, no state change, §8) (the lifecycle verb; *not* `PATCH /api/proposals/:id`). **`accept` carries the inspected `revisionNo`** and returns **409** if a newer revision landed (revision-pinned accept, §8).
+- **Review assignments (§65):** `POST /api/proposals/:id/assign { assigneeId | null }` (reviewers; **422** `assignee_not_eligible`, **409** `proposal_decided`), `GET /api/proposals/:id/assignable` (the picker), `POST /api/proposal-imports/:id/assign { assigneeId }` (*Assign all open*). `GET /api/proposals?tab=review` gains `assignee=me|none`, `overdue=1` and `ns=<slug>`; `GET /api/proposals/:id` gains `assignment` and `reviewTarget`; `GET /api/namespaces/administered` and `GET|PATCH /api/namespaces/:id/settings` gain `reviewTargetDays` (plus the live counts on the former).
 - `DELETE /api/proposals/:id` — permanently delete a proposal (reviewer of its namespace; any state except `accepted`). Housekeeping, silent, audited (`proposal.deleted`); cleans the review conversation + pointer scan + dangling notifications. §8.
 - `GET /api/proposals/:id/files` (bundle browser, §8), `.../artifact`, `.../duplicate-check`, `GET|POST /api/proposals/:id/messages` (review discussion, §24).
 - **Policy rules (§47.11):**
@@ -4690,7 +4700,7 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 | `propose_pointer_skill` | A pointer proposal: origin URL + **pinned ref** + subdir + metadata. Mirroring, scanning and validation are the existing ingest path, unchanged. |
 | `propose_hosted_skill` | A hosted proposal with the bundle **base64-encoded in the tool arguments**, capped at `mcp_max_inline_upload_bytes` (see below). |
 | `list_my_proposals` | The caller's own submissions and their states. |
-| `get_proposal` | One proposal the caller may see, incl. scan report and review conversation. |
+| `get_proposal` | One proposal the caller may see, incl. scan report and review conversation, and the read-only `assignee` and `reviewTarget` (§65.10; `list_my_proposals` carries them too). |
 | `revise_proposal` | The §8 proposer mid-review edit (no state change). |
 | `resubmit_proposal` | `changes_requested → under_review`. |
 | `post_proposal_message` | A message in the proposal's review conversation (§24), so an agent can answer a reviewer. Mention tokens are validated identically to the web composer. |
@@ -5346,6 +5356,9 @@ generally**, not a single-toggle page:
   cancel leaves the switch on. Success shows *Review policy saved.* as before. **`global`
   renders the switch on, disabled and dimmed**, with the note that review is always required
   there (§4/§8).
+- **Review target** — a number of business days (empty = no target) with **Save**, plus the
+  namespace's live **open / unassigned / overdue** proposal counts linking to the filtered To
+  review queue (§65.7). Editable for `global` too.
 - **`maintainer_contact`** — editable, reusing the existing user-search typeahead that fills
   a picked user's email (a shared mailbox is still allowed). **One shared component serves
   both surfaces** (this page and the Administration → Namespaces card), so they cannot drift
@@ -11851,9 +11864,9 @@ all read it, so they can never disagree.
 
 | Tier | Types | Admin can change? |
 |---|---|---|
-| **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.import_needs_review` (§64.7), `proposal.revise`, `proposal.resubmit` — the review queue | No |
+| **Always immediate** (the floor) | `message.new` (direct, proposal-thread and request-thread messages) and `message.mention` — people-to-people; `proposal.needs_review`, `proposal.import_needs_review` (§64.7), `proposal.revise`, `proposal.resubmit`, `proposal.assigned`, `proposal.review_overdue`, `proposal.review_escalated` (§65.8) — the review queue | No |
 | **Digestible by default** | `skill.new_version`, `skill.discussion`, `skill.shared`, `skill.shared_new_version`, `skill.marked_official`, `skill.quality_low`, `skill.hyped` (§50.7), the six `follow.*` types (`follow.new_skill`, `follow.new_version`, `follow.achievement`, `follow.request_created`, `follow.request_fulfilled`, `follow.collection_created`), `idea.submitted` (§60.7), `search_gaps.ready` and `skill.search_gap_hidden_match` (§62.9), and `skill.upstream_release` (§63.5) | Yes — each can be switched off |
-| **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.import_submitted` (§64.7), `proposal.start_review`, `proposal.request_changes`, `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled`; the feature-idea lifecycle (§60.7): `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` | Yes — each can be switched on |
+| **Immediate by default** | proposer lifecycle: `proposal.submitted`, `proposal.import_submitted` (§64.7), `proposal.start_review`, `proposal.request_changes`, `proposal.changes_reminder` (§65.8), `proposal.accept`, `proposal.reject`, `proposal.policy_violation`; safety flags: `skill.drift`, `skill.content_risk`, `skill.policy_flag`, `skill.ai_prereview_flagged`; `skill.deprecated`; `request.fulfilled`; the feature-idea lifecycle (§60.7): `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` | Yes — each can be switched on |
 | **Never emailed** | `system.error`, `achievement.earned` | No (not candidates) |
 
 - **`email_digest_types`** holds the enabled candidates from the two changeable tiers. The server
@@ -14508,6 +14521,9 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   the filtered queue. N counts the import's other proposals. They all share one namespace, so a
   reviewer and the submitter both see all of them.
 - Accept, reject, request changes, delete and every gate stay **per proposal** (decision 13).
+- **Assignment (§65.5).** Imported proposals arrive unassigned. With the queue filtered to one
+  import, **Assign all open** assigns every open proposal of the import to one reviewer in one
+  action and sends one `proposal.assigned` for the whole import.
 
 ### 64.8 Data model (migration 0105)
 **`proposal_imports`**: one row per import, written by its first submit and updated by *Fix and
@@ -14622,3 +14638,346 @@ resubmit*.
   with Repository and Ref filled. At a 375 px viewport, **← Previous** and **Next →** share the
   footer's bottom row below *Remove from proposal*, and on the last step **← Previous** and
   **Submit for review →** do.
+
+---
+
+## 65. Review assignments and targets
+
+A reviewer can **assign** a proposal to one reviewer, the person accountable for its decision. A
+namespace can set a **review target** in business days. Each proposal waiting on its reviewers then
+has a **due date**, which the To review queue and the proposal page show. A leader-only worker sweep
+**reminds** the assignee when the date passes and **escalates** once if the proposal is still
+undecided after twice the target. A proposer whose turn (*changes requested*) runs past the same
+target is reminded once. Assignment is **ownership, not authority**: every reviewer of the
+namespace can still act on every proposal (§4, invariant #1). Nothing here changes the §8 state
+machine.
+
+### 65.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Only reviewers can be assigned.** The eligible assignees are the active users who can decide in the proposal's target namespace: its namespace admins, the platform admins and the bootstrap admin group, which is the `proposal.needs_review` audience. The proposer is never eligible for their own proposal. | Assignment grants no access and no authority, because an assignee already holds both. Roles stay in SCIM groups and `role_mappings` (invariant #1). |
+| 2 | **Advisory, not a lock.** Any reviewer may still start review, edit, request changes, accept, reject or delete an assigned proposal. | An absent assignee never blocks the queue. Accountability comes from notifications and reminders. |
+| 3 | **Exactly one assignee.** | One accountable person, and one clear target for a reminder. |
+| 4 | **Any reviewer of the proposal assigns, reassigns or unassigns**, including assigning themselves. Nothing assigns automatically on submit. | It is the authority that already acts on the queue (accept, reject, delete). Round-robin would need a pool policy nobody has asked for. |
+| 5 | **Start review claims an unassigned proposal** for the reviewer who clicks it. It never takes an assigned proposal from someone else. | Starting the review is the natural *"I've got this"* moment. |
+| 6 | **An assigned proposal's review-queue pings go to the assignee alone.** `proposal.revise` and a resubmit's `proposal.needs_review` reach only the assignee, and the reviewer half of the Proposals badge skips proposals assigned to someone else. An unassigned proposal fans out to the whole pool, as today. | Today every platform admin hears about every proposal in every namespace. Assigning a proposal narrows that noise. |
+| 7 | **An assignee who stops being eligible is unassigned automatically.** The change is audited, and the pool gets `proposal.needs_review` when the proposal is waiting on reviewers. | A proposal must never sit with someone who can't act on it, and it must not go quiet. |
+| 8 | **The assignment survives *changes requested* and is frozen at a decision.** | The reviewer who asked for changes gets the resubmission. A decided proposal keeps its assignee as history. |
+| 9 | **The proposer sees the assignee's name and the due date.** | They know who to talk to in the review discussion and when to expect a decision. Reviewers' names already show through decisions and the discussion. |
+| 10 | **The review target is set per namespace, in business days (1–30), and is empty by default.** Namespace admins set it for their own namespace. Platform admins set it for any namespace, including `global`. | Teams differ. An empty default means nothing changes for a namespace until its admins opt in. |
+| 11 | **A business day is Monday to Friday in UTC.** There is no holiday calendar. | A Friday submission is never overdue over the weekend. A holiday calendar or a time zone per namespace is more configuration than the feature needs. |
+| 12 | **The clock measures the reviewer's turn.** It starts when the proposal is submitted or resubmitted, and it ends at request changes, accept or reject. Start review and a proposer's `revise` neither stop it nor reset it. Each resubmit starts a fresh turn with the full target. | Reviewers aren't charged for the proposer's time. Start review is one click, so it must not satisfy the target. |
+| 13 | **One reminder at the due date, one escalation at twice the target, then silence.** | This surfaces a stuck proposal without nagging. The *Overdue* pill keeps showing. |
+| 14 | **Reminders fold into one unread row per recipient and namespace**, for example *"4 proposals are past the review target in team-a"*. The row is refreshed until it is read, like `message.new`. | Setting a target on a namespace with a stale backlog pings each person once, not once per proposal. |
+| 15 | **Reviewer-side notifications are review duty.** They are always immediate, never digested and have no per-type opt-out (the §48.3 floor). Only the channel-level email switch applies. | The same rule as `proposal.needs_review`. |
+| 16 | **The proposer is reminded once** when their *changes requested* turn runs past the same target. That reminder has no escalation. | A proposal waiting on its proposer shouldn't be forgotten either. |
+| 17 | **Changing the target re-dates every open proposal in the namespace.** | The target is the namespace's current promise, not a contract fixed per proposal. |
+| 18 | **A repository import can be assigned in one action** (§64), with *Assign all open* on the queue filtered to that import. There is no general multi-select. | An import lands up to 50 proposals at once. No other bulk assignment has been asked for. |
+| 19 | **Live counts only.** The Namespace administration page shows each namespace's open, unassigned and overdue counts. It shows no turnaround history. | It answers *"what needs attention now?"* Metrics over time are out of scope. |
+
+### 65.2 Eligibility and assigning
+- **Eligible assignee.** An active user who, when checked, is a platform admin, a namespace admin of
+  the proposal's **target namespace**, or a member of the bootstrap admin group
+  (`SKILLY_BOOTSTRAP_ADMIN_GROUP`), and who is **not** the proposal's submitter. One server-side
+  predicate serves the assign endpoints, the picker and the sweep (§65.4).
+- **Who may assign.** Anyone who may review the proposal, meaning a namespace admin of its target
+  namespace or a platform admin. That is the same gate as accept, reject and delete (§8). Others
+  get **403**, and a proposal the caller can't see gets **404**.
+- **When.** Only in the three open states (`proposed`, `under_review`, `changes_requested`). A
+  decided proposal answers **409** `proposal_decided`.
+- **The picker** on the proposal page (§65.6) is a searchable list of the eligible assignees. The
+  namespace's admins come first, then the platform admins and the bootstrap group, each
+  alphabetical, with the avatar bubble. It offers **Assign to me** when the caller is eligible and
+  isn't already the assignee, and **Unassign** when someone is assigned. An ineligible pick answers
+  **422** `assignee_not_eligible`.
+- **The Start review claim.** `start_review` on an **unassigned** proposal assigns the reviewer who
+  clicks it, in the same transaction. When that reviewer is the submitter (a platform admin can
+  start review on their own proposal), nobody is assigned. On an assigned proposal, Start review
+  leaves the assignment alone.
+- **Reassign and unassign.** Reassigning replaces the assignee, and unassigning clears it.
+  Assigning the current assignee again is a no-op: **200**, with no audit row and no notification.
+- **Who hears.** The new assignee gets `proposal.assigned`, unless they assigned themselves or it
+  came from the Start review claim. The previous assignee is not notified. A manual unassign sends
+  nothing: the proposal goes back into every reviewer's badge (§65.5) and the *Unassigned* filter.
+- **Stamps.** Every assign, reassign and unassign sets `assigned_by` (`NULL` for the sweep) and
+  `assignment_changed_at`. It does **not** bump `updated_at`, so the proposer's badge is not
+  re-armed by a change in who reviews.
+- **A proposal that moves to another namespace** (a §8 reviewer edit) is re-dated by the turn
+  trigger in the same write. An assignee who isn't eligible in the new namespace is unassigned by
+  the next sweep pass (§65.4 step 1).
+
+### 65.3 The target and the clock
+- **The setting.** `namespaces.review_target_days`: empty, or a whole number of business days from
+  1 to 30. One shared validator, in the client-safe `@skilly/shared/review-target`, runs in the
+  browser and on the server (**422** otherwise). It is edited on the Namespace administration page
+  (§65.7) through `PATCH /api/namespaces/:id/settings`, and `global` may have a target. A change is
+  audited as the existing `namespace.updated`.
+- **Turns.** An open proposal is always in one turn. The **reviewer turn** covers `proposed` and
+  `under_review`, and the **proposer turn** covers `changes_requested`. A decided proposal has no
+  turn. `proposals.turn_started_at` is stamped whenever the proposal moves into a different turn: at
+  creation (reviewer turn), at request changes (proposer turn), and at resubmit or a Start review out
+  of `changes_requested` (reviewer turn). Start review from `proposed`, `revise`, reviewer edits and
+  assignment changes don't touch it. A database trigger (migration 0106) keeps the turn columns
+  right on every write path, the web tier and the worker's MCP tools alike.
+- **Business time.** `addBusinessDays(start, n)` in `@skilly/shared/review-target` counts only
+  Monday to Friday in UTC. The result is the instant at which *n* × 24 business hours have elapsed
+  since `start`. A start that falls on a weekend counts from the following Monday at 00:00 UTC.
+  Examples: Friday 15:00 + 1 is Monday 15:00, Saturday 10:00 + 1 is Tuesday 00:00, and Wednesday
+  09:00 + 3 is Monday 09:00. `businessDaysBetween(a, b)` returns the whole business days elapsed
+  between two instants, and the pills use it (§65.5).
+- **The stored instants.** In the reviewer turn, `turn_due_at = addBusinessDays(turn_started_at,
+  target)` and `turn_escalate_at = addBusinessDays(turn_started_at, 2 × target)`. In the proposer
+  turn, `turn_due_at` is set the same way and `turn_escalate_at` is `NULL`. Both are `NULL` when
+  the namespace has no target or the proposal is decided. They are stored so the queue can filter
+  and count overdue proposals on the server.
+- **When they are recomputed.**
+  - When a turn starts. This also clears `turn_reminded_at` and `turn_escalated_at`.
+  - When the namespace's target changes, for every open proposal in it, in the settings
+    transaction.
+  - When a reviewer edit moves the proposal to another namespace. The new namespace's target
+    applies, and `turn_started_at` is unchanged.
+
+  A recomputation clears a reminder or escalation stamp whose instant has moved into the future,
+  so it fires at the new instant. A stamp whose instant is still past is kept, so a turn never
+  sends the same reminder twice. Removing the target clears both instants. Reminder rows already
+  sent stay (forward-only).
+- **Overdue** means the proposal is in the reviewer turn and `now ≥ turn_due_at`. It is derived on
+  every read and never stored as a flag.
+
+### 65.4 The reminder sweep
+A **leader-only worker sweep** runs every **15 minutes**. Each pass does four steps in order:
+
+1. **Eligibility.** Every open proposal whose assignee is no longer eligible (§65.2) is unassigned.
+   That covers a removed role mapping, a leaver (`status` no longer active) and GDPR erasure,
+   which removes group memberships (§4). The sweep writes `proposal.unassigned` with
+   `reason: "ineligible"` and no actor. When the proposal is in the reviewer turn, it sends
+   `proposal.needs_review` to the pool, minus the submitter. This step runs before the reminders,
+   so a reminder never goes to someone who has just lost eligibility.
+2. **Overdue reminder.** Each reviewer-turn proposal with `turn_due_at ≤ now` and no
+   `turn_reminded_at` gets a `proposal.review_overdue` reminder, and `turn_reminded_at` is
+   stamped. The reminder goes to:
+   - the **assignee**, when there is one;
+   - otherwise the target namespace's **active namespace admins**;
+   - otherwise the **platform admins** (with the bootstrap group), when the namespace is `global` or
+     has no active namespace admin.
+
+   The submitter is always left out.
+3. **Escalation.** Each reviewer-turn proposal with `turn_escalate_at ≤ now` and no
+   `turn_escalated_at` gets a `proposal.review_escalated` reminder, and `turn_escalated_at` is
+   stamped. Recipients are worked out from the proposal's current state:
+   - **Assigned:** the namespace's active namespace admins except the assignee. When there are
+     none, the platform admins except the assignee.
+   - **Unassigned, in a namespace with active namespace admins:** the platform admins. The
+     namespace admins already had the reminder.
+   - **Unassigned, in `global` or a namespace without namespace admins:** no escalation, because
+     the reminder already reached the platform admins. The stamp is still set.
+
+   The submitter is always left out. A proposal already past twice its target when a target is
+   first set gets its reminder and its escalation in the same pass.
+4. **Proposer reminder.** Each proposer-turn proposal with `turn_due_at ≤ now` and no
+   `turn_reminded_at` sends `proposal.changes_reminder` to the submitter when they are active, and
+   `turn_reminded_at` is stamped.
+
+- **Folding.** All three reminder types fold into one **unread** row per recipient, type and
+  namespace. When the recipient already has an unread row of that type for that namespace, the
+  sweep **updates it in place**. It adds the proposal to the payload's `proposalIds` and refreshes
+  `count`, and it keeps the row's delivery bookkeeping (§12 *Coalescing carve-outs*), so there is
+  at most one email per row until it is read. Otherwise the sweep inserts a new row. Opening the
+  inbox reads the row (§12), so the next reminder starts a new one. Deleting a proposal (§8) removes
+  its id from any folded row and lowers `count`, and a row left with no proposals is deleted.
+- **No weekend pings.** Due and escalation instants are business time, so they always fall between
+  Monday 00:00 and Saturday 00:00 UTC.
+- **Metrics:** `skilly_review_reminders_total{kind="overdue|escalated|proposer"}` (one count per
+  proposal reminded, not per row) and `skilly_review_unassigned_ineligible_total`.
+
+### 65.5 The To review queue and the badge
+- **Each row** shows the assignee (avatar bubble and name) or a muted *Unassigned*. While the
+  namespace has a target and the proposal is in the reviewer turn, the row also shows a due pill:
+  - **Due in N d** (muted) when N, the whole business days left, is 1 or more;
+  - **Due today** (warn) when less than one business day is left;
+  - **Overdue** (danger) for the first business day past the due instant;
+  - **Overdue N d** (danger) after that.
+
+  The pill's tooltip is the absolute due instant in the viewer's date format (`useDateFmt`). A
+  proposer-turn row and a decided row show no pill.
+- **The filters.** An *Assignee* group with *Assigned to me* and *Unassigned* (pick one, or neither
+  to see all) and an *Overdue* chip. They combine with the state chips (AND) on the server:
+  `GET /api/proposals?tab=review&states=…&assignee=me|none&overdue=1`. `overdue=1` keeps only
+  reviewer-turn proposals past their due instant. The per-state counts and the tab badge follow
+  these filters, as they follow `import=` (§64.7).
+- **`ns=<slug>`** narrows the queue to one namespace on the server. It is shown as a removable
+  *Namespace · ‹slug›* chip, like the import chip. A namespace outside the caller's review scope
+  gives an empty list. The Namespace administration counts (§65.7) and the reminder links use it.
+- **Order** stays newest-first (§8).
+- **Assign all open (imports).** When the queue is filtered to one import (`import=`) and the caller
+  may review it, an **Assign all open** button opens the assignee picker. A confirm dialog follows:
+  *"Assign N open proposals from ‹repo› to ‹name›? M of them are assigned to someone else and will
+  be reassigned."* `POST /api/proposal-imports/:id/assign { assigneeId }` assigns every open
+  proposal of the import in one transaction. Eligibility is checked once, since the proposals share
+  a namespace. It writes one `proposal.assigned` audit row per proposal that changed, and sends the
+  assignee **one** `proposal.assigned` notification for the whole import, unless they assigned
+  themselves. There is no bulk unassign.
+- **The badge's reviewer half** (§10). It counts proposals in the caller's review scope that are in
+  `proposed` or `under_review`, are **unassigned or assigned to the caller**, and have
+  `greatest(updated_at, assignment_changed_at) > review_seen_at`. Being assigned therefore re-arms
+  the assignee's badge, and an unassign re-arms everyone's. The proposer half is unchanged.
+
+### 65.6 The proposal page
+- **A *Reviewer* line** in the page's facts shows the assignee with the directory hover card (§28),
+  or *Unassigned*. A reviewer of the proposal also sees **Assign…** (**Change** when someone is
+  assigned), **Assign to me** and **Unassign**. The proposer sees the line read-only.
+- **A *Review target* line** shows while the namespace has a target and the proposal is in the
+  reviewer turn: *"Review target: 3 business days · due ‹date time›"*, with the §65.5 pill. Both
+  reviewers and the proposer see it. In the proposer turn the line is hidden, and the proposer
+  reminder is the nudge.
+- **A decided proposal** keeps the *Reviewer* line as read-only history. It may name someone other
+  than the person who decided.
+- **`GET /api/proposals/:id`** gains `assignment: { assignee: { id, name } | null, assignedAt,
+  canAssign, canSelfAssign }` and `reviewTarget: { days, dueAt, overdue } | null`. The proposer gets
+  the same `assignee` and `reviewTarget`, with `canAssign` and `canSelfAssign` false.
+- **`POST /api/proposals/:id/assign { assigneeId | null }`** assigns, reassigns or unassigns (`null`).
+  `GET /api/proposals/:id/assignable` returns the picker's list.
+
+### 65.7 Namespace administration
+- **A *Review target* field** on each namespace on `/namespaces` (§30.6): a number input labelled
+  *business days*, where empty means no target. Its help text reads *"Proposals waiting longer than
+  this remind their reviewer. Leave empty for no target."* It has a **Save** button and the success
+  message *Review target saved.* `global` is editable by platform admins, unlike its `require_review`
+  switch. The field is not on the Administration → Namespaces card.
+- **Live counts** for each namespace: **open** (the three open states), **unassigned** (open with no
+  assignee) and, while a target is set, **overdue** (§65.3). Each links to the To review queue
+  narrowed with `ns=`, and with `assignee=none` or `overdue=1` for the last two.
+- **`GET /api/namespaces/administered`** gains `reviewTargetDays`, `openProposals`,
+  `unassignedProposals` and `overdueProposals`. **`GET|PATCH /api/namespaces/:id/settings`** gains
+  `reviewTargetDays` (`null` or 1–30, otherwise **422**).
+
+### 65.8 Notifications
+| Type | To | When | Folding | §48.3 tier |
+|---|---|---|---|---|
+| `proposal.assigned` | The new assignee | Assigned by someone else, one proposal or a whole import | None | Always immediate |
+| `proposal.review_overdue` | §65.4 step 2 | The reviewer turn passes its due instant | Per recipient and namespace, until read | Always immediate |
+| `proposal.review_escalated` | §65.4 step 3 | The reviewer turn passes twice the target | Per recipient and namespace, until read | Always immediate |
+| `proposal.changes_reminder` | The submitter | The proposer turn passes the target | Per recipient and namespace, until read | Immediate by default |
+
+None of them has a per-type opt-out. The proposer reminder sits with the proposer lifecycle types,
+so a platform admin may make it digestible (§48.3). The existing review-queue types change as
+follows:
+- **`proposal.revise`**, and the **`proposal.needs_review`** sent on resubmit, go to the
+  **assignee alone** when the proposal is assigned, and to the whole pool otherwise (decision 6).
+- **`proposal.needs_review`** on first submission and **`proposal.import_needs_review`** (§64.7)
+  are unchanged, because a new proposal is always unassigned.
+
+Content (§12 *Notification content*; *{days}* is the namespace's target):
+
+| Type | Subject | Body sentence | CTA → link |
+|---|---|---|---|
+| `proposal.assigned` | Proposal assigned to you | {byName} assigned you the proposal for {ns}/{slug}. *(import: {byName} assigned you {count} proposals imported from {repo} into {ns}.)* | Review it → `/proposals/{proposalId}` *(import: Review them → `/proposals?tab=review&import={importId}&assignee=me`)* |
+| `proposal.review_overdue` | Review overdue | The proposal for {ns}/{slug} is past {ns}'s review target of {days} business days. *(count > 1: {count} proposals are past {ns}'s review target of {days} business days.)* | Review it → `/proposals/{proposalId}` *(count > 1: Review them → `/proposals?tab=review&ns={ns}&overdue=1`)* |
+| `proposal.review_escalated` | Review overdue — escalated | The proposal for {ns}/{slug} has waited twice {ns}'s review target of {days} business days. *(count > 1: {count} proposals in {ns} have waited twice the review target of {days} business days.)* | as `proposal.review_overdue` |
+| `proposal.changes_reminder` | Your proposal is waiting on you | Your proposal for {ns}/{slug} is still waiting on the changes the reviewer asked for. *(count > 1: {count} of your proposals in {ns} are still waiting on your changes.)* | Update it → `/proposals/{proposalId}` *(count > 1: View them → `/proposals?tab=mine&states=changes_requested`)* |
+
+Payloads: `proposal.assigned` carries `{ proposalId, ns, slug, byName }` or `{ importId, ns, repo,
+count, byName }`. The three reminders carry `{ nsId, ns, days, count, proposalIds, slug }`, where
+`nsId` keys the fold and `slug` is the first proposal's slug, used only when `count` is 1.
+
+### 65.9 Data model (migration 0106)
+- **`namespaces.review_target_days`**: `smallint NULL`, `CHECK (review_target_days BETWEEN 1 AND
+  30)`.
+- **`proposals`** gains:
+
+| Column | Type | Meaning |
+|---|---|---|
+| `assignee_id` | `uuid NULL` FK `users` `ON DELETE SET NULL` | The assignee (§65.2). |
+| `assigned_by` | `uuid NULL` FK `users` `ON DELETE SET NULL` | Who made the last assignment change. `NULL` for the sweep. |
+| `assignment_changed_at` | `timestamptz NULL` | The last assign, reassign or unassign. It feeds the badge (§65.5). |
+| `turn_started_at` | `timestamptz NOT NULL` | The start of the current turn (§65.3). |
+| `turn_due_at` / `turn_escalate_at` | `timestamptz NULL` | The turn's due and escalation instants. |
+| `turn_reminded_at` / `turn_escalated_at` | `timestamptz NULL` | When this turn's reminder and escalation were sent. |
+
+- **Indexes:** `(assignee_id)` and `(turn_due_at)`, both partial on the three open states, and a
+  unique index on `notifications (user_id, type, payload->>'nsId')` for the unread reminder types,
+  which is what folds them (§65.4).
+- **Functions and triggers:** `skilly_add_business_days(timestamptz, int)` is the SQL twin of
+  `addBusinessDays` (a DB test pins them together). `trg_proposals_review_turn` starts a new turn on
+  a turn change and recomputes the instants and stamps on every write of `state`,
+  `target_namespace_id` or `turn_started_at` (§65.3). `trg_namespaces_review_target` re-dates a
+  namespace's open proposals when its target changes.
+- **Backfill.** `turn_started_at` is set as follows:
+  - for a `changes_requested` proposal, the time of its latest `proposal.request_changes` audit
+    entry;
+  - for a `proposed` or `under_review` proposal, the time of its latest `proposal.resubmit` audit
+    entry;
+  - otherwise, and for every decided proposal, `created_at`.
+
+  Every other column starts `NULL`. No namespace has a target yet, so the first sweep after the
+  migration sends nothing.
+- **GDPR erasure (§4)** unassigns the erased user's **open** proposals in the erasure transaction,
+  as §65.4 step 1 would, with the erasing admin as the audit actor. An erasure over SCIM is left to
+  the next sweep pass. A decided proposal keeps its assignee, which now shows the tombstone label.
+
+### 65.10 Other surfaces, API and audit
+- **MCP (§29).** `get_proposal` and `list_my_proposals` gain the read-only `assignee` (name) and
+  `reviewTarget` (`{ days, dueAt, overdue }`) fields. There is no assign tool: reviewing is not
+  reachable over MCP (§29).
+- **API summary:** `POST /api/proposals/:id/assign`, `GET /api/proposals/:id/assignable`,
+  `POST /api/proposal-imports/:id/assign`, and the new `assignee=`, `overdue=` and `ns=` parameters
+  on `GET /api/proposals?tab=review`. The new fields are on `GET /api/proposals/:id`,
+  `GET /api/namespaces/administered` and `GET|PATCH /api/namespaces/:id/settings`.
+- **Audit:**
+  - `proposal.assigned` records the proposal, `from`, `to` and `reason`
+    (`manual` | `start_review` | `import`), with the assigning reviewer as actor.
+  - `proposal.unassigned` records the proposal, `from` and `reason` (`manual` | `ineligible`). Its
+    actor is the reviewer, the erasing admin, or none for the sweep.
+  - Target changes use the existing `namespace.updated`.
+  - Reminders are **not** audited (notifications never are).
+- **Rate limit:** the assign endpoints share the `proposal-action` limit (60 per minute).
+
+### 65.11 Accepted trade-offs and out of scope
+- No holiday calendar and no time zone per namespace. A public holiday counts as a business day.
+- Escalation recipients are worked out from the proposal's current state. A proposal that was
+  assigned at its reminder and is unassigned before its escalation escalates to the platform
+  admins without its namespace admins having been reminded.
+- A reviewer who is assigned and then made ineligible and eligible again is not reassigned.
+- The previous assignee is not told about a reassign.
+- Deferred: automatic assignment (round-robin, load balancing), several assignees, an exclusive
+  lock, out-of-office handling, general bulk assignment, turnaround metrics over time, and assign
+  or reminder tools over MCP.
+
+### 65.12 Tests (ship with the change)
+- **Unit** (`@skilly/shared/review-target`): the validator (empty, 1, 30, 0, 31, a fraction, text);
+  `addBusinessDays` (a weekday start, Friday to Monday, Saturday and Sunday starts, crossing two
+  weekends, a 30-day target) and `businessDaysBetween`; the pill state for each threshold.
+- **Integration** (web API + DB):
+  - assign, reassign, unassign and self-assign with their audit rows and notifications, including
+    none on self-assign;
+  - 403 for a member, 404 for an outsider, 422 for the proposer or an ineligible user, and 409 on a
+    decided proposal;
+  - the Start review claim, which happens on an unassigned proposal only and never for the
+    submitter;
+  - a namespace-moving reviewer edit unassigns an assignee who isn't eligible there;
+  - `revise` and resubmit notify the assignee alone when the proposal is assigned, and the pool
+    when it isn't;
+  - the badge's reviewer half (assigned to someone else is not counted, and assign and unassign
+    re-arm it);
+  - the queue filters and their counts (`assignee`, `overdue`, `ns`, combined with `states` and
+    `import`);
+  - setting a target dates open proposals, and changing or clearing it re-dates them and clears
+    future stamps;
+  - *Assign all open* on an import;
+  - GDPR erasure unassigns open proposals only;
+  - the namespace settings round-trip and the administered counts.
+- **Integration** (worker + DB, clock injected):
+  - the four sweep steps, each sending once per turn;
+  - recipient selection for every branch of steps 2 and 3, including `global`, a namespace without
+    admins, and the submitter left out;
+  - folding into an unread row with its delivery bookkeeping kept, and a new row after it is read;
+  - a resubmit re-arms the reminder;
+  - the proposer reminder fires once and doesn't escalate;
+  - an ineligible assignee is cleared before reminders, and the pool is alerted only in the
+    reviewer turn.
+- **e2e:**
+  - a namespace admin sets a 1-day target on `/namespaces`;
+  - on a seeded proposal they choose **Assign to me**, and the queue row shows their name;
+  - *Assigned to me* and *Unassigned* narrow the list;
+  - a seeded proposal past its due instant shows **Overdue** and is listed by the *Overdue* filter;
+  - the proposer sees the *Reviewer* and *Review target* lines read-only.

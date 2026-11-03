@@ -54,6 +54,8 @@ import {
   repoLabel,
 } from "@skilly/shared";
 import { appendAudit } from "./audit";
+import { claimOnStartReview, proposalAssignmentView, type AssignmentView, type ReviewTargetView } from "./reviewAssign";
+import { nameSql } from "./userLabel";
 import { latestArtifactReport, recordAcknowledgement } from "./contentRisk";
 import { writeQualityForVersion, proposalQuality, type QualityFindingView } from "./quality";
 import { awardAchievement } from "./achievements";
@@ -568,9 +570,19 @@ async function notifyProposalCreated(
  */
 async function notifyReviewersNeedsReview(
   client: PoolClient,
-  input: { proposalId: string; namespaceId: string; submitterId: string; skillSlug: string; semver: string },
+  input: { proposalId: string; namespaceId: string; submitterId: string; skillSlug: string; semver: string; assigneeId?: string | null },
   type: "proposal.needs_review" | "proposal.revise" = "proposal.needs_review",
 ): Promise<void> {
+  // §65.1 decision 6: an ASSIGNED proposal's review-queue pings go to its assignee alone.
+  if (input.assigneeId) {
+    if (input.assigneeId === input.submitterId) return;
+    await client.query(
+      `insert into notifications (user_id, type, payload)
+       select u.id, $2, $3::jsonb from users u where u.id = $1 and u.status = 'active' and u.erased_at is null`,
+      [input.assigneeId, type, JSON.stringify({ proposalId: input.proposalId, skillSlug: input.skillSlug, semver: input.semver })],
+    );
+    return;
+  }
   await notifyNamespaceReviewers(client, {
     namespaceId: input.namespaceId,
     submitterId: input.submitterId,
@@ -702,11 +714,13 @@ interface ProposalRow {
   state: ProposalState;
   submitted_by: string;
   origin_request_id: string | null;
+  /** §65: the advisory assignee, or null. */
+  assignee_id: string | null;
 }
 
 async function loadProposal(db: Pool | PoolClient, id: string, opts: { forUpdate?: boolean } = {}): Promise<ProposalRow | null> {
   const { rows } = await db.query<ProposalRow>(
-    `select id, target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id
+    `select id, target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, assignee_id
        from proposals where id = $1${opts.forUpdate ? " for update" : ""}`,
     [id],
   );
@@ -1181,6 +1195,11 @@ export async function performProposalAction(
       [input.proposalId, decision.to, input.action === "revise" ? null : input.note ?? null, materializedVersionId ?? null, newSemver],
     );
 
+    // §65.2 the Start review claim: an unassigned proposal becomes the starting reviewer's.
+    if (input.action === "start_review") {
+      await claimOnStartReview(client, { id: input.proposalId, namespaceId: p.target_namespace_id, submittedBy: p.submitted_by }, input.actorUserId);
+    }
+
     await appendAudit(client, {
       actorUserId: input.actorUserId,
       action: `proposal.${input.action}`,
@@ -1210,6 +1229,7 @@ export async function performProposalAction(
         submitterId: p.submitted_by,
         skillSlug: pl.metadata.skillSlug,
         semver: p.proposed_semver,
+        assigneeId: p.assignee_id,
       }, "proposal.revise");
     } else {
       // Notify the submitter of the outcome.
@@ -1229,6 +1249,7 @@ export async function performProposalAction(
           submitterId: p.submitted_by,
           skillSlug: pl.metadata.skillSlug,
           semver: newSemver ?? p.proposed_semver,
+          assigneeId: p.assignee_id,
         });
       }
     }
@@ -1898,6 +1919,10 @@ export interface ReviewQueueItem {
   /** §64.7: the repository import this proposal came from (the queue row's chip), else null. */
   importId: string | null;
   importRepo: string | null;
+  /** §65.5: the advisory assignee, or null (*Unassigned*). */
+  assignee: { id: string; name: string } | null;
+  /** §65.5: the reviewer turn's due instant (UTC ISO) while the namespace has a target; else null. */
+  reviewDueAt: string | null;
 }
 
 interface QueueRow {
@@ -1915,6 +1940,9 @@ interface QueueRow {
   via_mcp_client: string | null;
   import_id: string | null;
   import_origin_url: string | null;
+  assignee_id: string | null;
+  assignee_name: string | null;
+  review_due_at: string | null;
 }
 
 // Resolve a display name even for not-yet-materialized skills by reading the latest revision.
@@ -1927,10 +1955,13 @@ const QUEUE_BASE_SELECT = `
            coalesce(s.title, lr.payload->'metadata'->>'title')     as title,
            su.display_name as submitted_by_name,
            p.via_mcp_client,
-           p.import_id, pi.origin_url as import_origin_url
+           p.import_id, pi.origin_url as import_origin_url,
+           p.assignee_id, ${nameSql("au.display_name", "au.email")} as assignee_name,
+           case when p.state in ('proposed','under_review') then p.turn_due_at end as review_due_at
       from proposals p
       join namespaces n on n.id = p.target_namespace_id
       join users su on su.id = p.submitted_by
+      left join users au on au.id = p.assignee_id
       left join skills s on s.id = p.target_skill_id
       left join proposal_imports pi on pi.id = p.import_id
       left join lateral (
@@ -1951,6 +1982,8 @@ function toQueueItem(r: QueueRow): ReviewQueueItem {
     viaMcpClient: r.via_mcp_client,
     importId: r.import_id,
     importRepo: r.import_origin_url ? repoLabel(r.import_origin_url) : null,
+    assignee: r.assignee_id ? { id: r.assignee_id, name: r.assignee_name ?? "Unknown user" } : null,
+    reviewDueAt: r.review_due_at,
   };
 }
 
@@ -1987,7 +2020,20 @@ export interface ReviewQueuePage {
 export async function listReviewQueue(
   pool: Pool,
   access: EffectiveAccess,
-  opts: { states?: readonly string[]; cursor?: string | null; limit?: number; importId?: string | null } = {},
+  opts: {
+    states?: readonly string[];
+    cursor?: string | null;
+    limit?: number;
+    importId?: string | null;
+    /** §65.5: `me` = assigned to the caller, `none` = unassigned. */
+    assignee?: "me" | "none" | null;
+    /** §65.5: reviewer-turn proposals past their due instant. */
+    overdue?: boolean;
+    /** §65.5: one namespace, by slug (outside the caller's scope → an empty list). */
+    namespaceSlug?: string | null;
+    /** The caller's user id — needed by `assignee: "me"`. */
+    userId?: string | null;
+  } = {},
 ): Promise<ReviewQueuePage> {
   const limit = Math.min(Math.max(opts.limit ?? REVIEW_PAGE_SIZE, 1), REVIEW_PAGE_SIZE);
 
@@ -2004,6 +2050,21 @@ export async function listReviewQueue(
   if (opts.importId) {
     scopeParams.push(opts.importId);
     scopeConds.push(`p.import_id = $${scopeParams.length}::uuid`);
+  }
+  // §65.5: the assignee, overdue and namespace filters narrow the counts too, like `import=`.
+  if (opts.assignee === "me") {
+    if (!opts.userId) return { items: [], nextCursor: null, counts: emptyStateCounts(), total: 0 };
+    scopeParams.push(opts.userId);
+    scopeConds.push(`p.assignee_id = $${scopeParams.length}::uuid`);
+  } else if (opts.assignee === "none") {
+    scopeConds.push(`p.assignee_id is null`);
+  }
+  if (opts.overdue) {
+    scopeConds.push(`p.state in ('proposed','under_review') and p.turn_due_at is not null and p.turn_due_at <= now()`);
+  }
+  if (opts.namespaceSlug) {
+    scopeParams.push(opts.namespaceSlug);
+    scopeConds.push(`p.target_namespace_id = (select id from namespaces where slug = $${scopeParams.length})`);
   }
 
   // Page query = scope + optional state filter + keyset cursor, NEWEST first.
@@ -2129,6 +2190,10 @@ export interface ProposalDetail {
   targetSkillCurrent: TargetSkillCurrent | null;
   /** §64.7: the repository import this proposal came from, or null. */
   import: { id: string; repo: string; originUrl: string; ref: string; commit: string | null; others: number } | null;
+  /** §65.6: the advisory assignee and what the viewer may do about it. */
+  assignment: AssignmentView;
+  /** §65.6: the reviewer turn's target and due instant, or null (no target / not the reviewer turn). */
+  reviewTarget: ReviewTargetView | null;
 }
 
 /** The target skill's live state, for the review page's old → new metadata diff (§8). */
@@ -2348,6 +2413,10 @@ export async function getProposalDetail(
     slugMatches,
     targetSkillCurrent,
     import: await proposalImportView(pool, p.id),
+    ...((await proposalAssignmentView(pool, p.id, access, actorUserId)) ?? {
+      assignment: { assignee: null, assignedAt: null, canAssign: false, canSelfAssign: false, viewerId: actorUserId },
+      reviewTarget: null,
+    }),
   };
 }
 

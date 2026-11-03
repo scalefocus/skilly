@@ -48,6 +48,7 @@ import { backfillContentDigests } from "./git/contentBackfill.js";
 import { sweepSearchIndex, reindexSearchLanguage } from "./searchIndex.js";
 import { sweepHype, HYPE_SWEEP_INTERVAL_MS } from "./hype.js";
 import { sweepUpstreamReleases, UPSTREAM_RELEASES_INTERVAL_MS } from "./upstreamReleases.js";
+import { sweepReviewReminders, REVIEW_REMINDER_INTERVAL_MS } from "./reviewReminders.js";
 import { sweepSearchGaps, reviewableGapCount, SEARCH_GAP_TICK_MS } from "./searchGaps.js";
 import { mcpRouter } from "./mcp/server.js";
 import { mcpOAuthRouter, mcpHousekeeping } from "./mcp/oauthRouter.js";
@@ -385,6 +386,25 @@ async function leaderLoops(): Promise<void> {
   };
   void upstreamSweep();
   setInterval(upstreamSweep, Number(process.env.UPSTREAM_RELEASES_INTERVAL_MS ?? UPSTREAM_RELEASES_INTERVAL_MS)); // 1h
+
+  // Review reminders (§65.4): clear assignees who can no longer review, then remind past each
+  // namespace's review target — overdue, the one escalation, and the proposer's turn. Every 15 min
+  // plus once at start; never overlaps itself. Nothing to do until a namespace sets a target.
+  let reviewRemindersRunning = false;
+  const reviewRemindersSweep = async () => {
+    if (!isLeader || reviewRemindersRunning) return;
+    reviewRemindersRunning = true;
+    try {
+      const r = await sweepReviewReminders(pool);
+      if (r.unassigned || r.overdue || r.escalated || r.proposer) console.log(JSON.stringify({ level: "info", msg: "review reminder sweep", ...r }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "review reminder sweep failed", err: String(err) }));
+    } finally {
+      reviewRemindersRunning = false;
+    }
+  };
+  void reviewRemindersSweep();
+  setInterval(reviewRemindersSweep, Number(process.env.REVIEW_REMINDER_INTERVAL_MS ?? REVIEW_REMINDER_INTERVAL_MS)); // 15 min
 
   // Content-risk re-scan (§37.5): check every published version at the current ruleset — the
   // backfill after this ships, and again after any ruleset bump. Batched; never overlaps itself;

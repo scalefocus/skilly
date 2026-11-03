@@ -42,6 +42,7 @@ export const EXCLUSIVE: readonly string[] = [
   "namespace-switches.spec.ts", // team-a namespace settings (require_review and friends)
   "policy.spec.ts", // policy rules apply to every proposal
   "quality.spec.ts", // AI integration config
+  "review-assignments.spec.ts", // team-a namespace settings (the review target dates every team-a proposal)
   "rum.spec.ts", // platform settings: RUM switch; the shared rum_daily rollup
   "search-fts.spec.ts", // search synonyms: every catalog search
   "search-gaps.spec.ts", // platform settings: the search-gap collection switch; posts an org-visible request

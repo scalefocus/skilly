@@ -25,6 +25,7 @@ import {
   searchGapNotificationContent,
   upstreamReleaseNotificationContent,
   importNotificationContent,
+  reviewNotificationContent,
   driftProposeUpdatePath,
   isFollowNotificationType,
   notificationTitle,
@@ -485,6 +486,18 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: `${imported.sentence} ${cta(imported.ctaLabel, imported.path)}`,
       webhook: { event: n.type, title: s, importId: p.importId ?? null, repo: p.repo ?? null, count: p.count ?? null, url: abs(imported.path) },
+    };
+  }
+
+  // proposal.assigned and the three review-target reminders (§65.8) — the shared wording; a folded
+  // reminder links to its one proposal, or to the queue filtered to the namespace's overdue work.
+  const review = reviewNotificationContent(n.type, p);
+  if (review) {
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${review.sentence} ${cta(review.ctaLabel, review.path)}`,
+      webhook: { event: n.type, title: s, ns: p.ns ?? null, count: p.count ?? null, proposalIds: p.proposalIds ?? (p.proposalId ? [p.proposalId] : null), url: abs(review.path) },
     };
   }
 

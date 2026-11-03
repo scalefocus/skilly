@@ -33,6 +33,7 @@ import type { PrereviewView } from "@skilly/shared/ai-prereview";
 import { formatStars } from "@skilly/shared/quality";
 import { useAiName } from "../../../components/AiName";
 import { PolicySection, PolicyOverrideList, type ProposalPolicyBlock } from "./PolicySection";
+import { ReviewAssignment, type AssignmentView, type ReviewTargetView } from "./ReviewAssignment";
 
 interface Finding { scanner: string; severity: string; rule: string; message: string; path?: string; line?: number; excerpt?: string; ruleset?: number }
 interface Meta {
@@ -93,6 +94,9 @@ interface Detail {
   aiDraftModel?: string | null;
   /** §64.7: the repository import this proposal came from, or null. */
   import?: { id: string; repo: string; originUrl: string; ref: string; commit: string | null; others: number } | null;
+  /** §65.6: the advisory assignee and the reviewer turn's target. */
+  assignment?: AssignmentView;
+  reviewTarget?: ReviewTargetView | null;
   /** §46.8 the AI pre-review of the latest revision (advisory; never gates accept). */
   aiPrereview?: PrereviewView | null;
   submitterCard: SubmitterCard | null;
@@ -590,6 +594,10 @@ function ProposalDetailInner() {
           ) : null}
           .
         </p>
+      )}
+      {/* §65.6: who is assigned, and the namespace's review target while the proposal waits on reviewers. */}
+      {data.assignment && (
+        <ReviewAssignment proposalId={data.id} assignment={data.assignment} reviewTarget={data.reviewTarget ?? null} onChanged={reload} />
       )}
 
       {/* Duplicate alert (§8): this new-skill proposal matches an existing skill the reviewer can

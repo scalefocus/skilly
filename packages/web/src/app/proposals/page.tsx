@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useApi, useEnterKey, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
+import { AssigneePicker, type AssignableReviewer } from "../../components/AssigneePicker";
+import { DuePill } from "../../components/DuePill";
 
 type ProposalState = "proposed" | "under_review" | "changes_requested" | "accepted" | "rejected";
 type Tab = "review" | "mine";
@@ -23,6 +25,10 @@ interface ProposalRow {
   /** §64.7: the repository import this proposal came from (the row's chip), else null. */
   importId?: string | null;
   importRepo?: string | null;
+  /** §65.5: the advisory assignee, or null (*Unassigned*). */
+  assignee?: { id: string; name: string } | null;
+  /** §65.5: the reviewer turn's due instant while the namespace has a review target. */
+  reviewDueAt?: string | null;
 }
 // Initial GET: the caller's own submissions (whole) + whether the review tab is shown.
 interface MetaResponse { mine: ProposalRow[]; canReview: boolean }
@@ -53,6 +59,9 @@ const STATE_FILTERS: { value: ProposalState; label: string }[] = [
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+type AssigneeFilter = "me" | "none" | null;
+const ALL_STATES = STATE_FILTERS.map((f) => f.value);
+
 function ProposalsInner() {
   const router = useRouter();
   const params = useSearchParams();
@@ -62,6 +71,15 @@ function ProposalsInner() {
   const importParam = params.get("import");
   const importId = importParam && UUID_RE.test(importParam) ? importParam : null;
   const tabParam = params.get("tab");
+  // §65.5: the reminder and namespace-page links open the queue pre-filtered — `assignee=me|none`,
+  // `overdue=1`, `ns=<slug>` (a removable chip) and `states=<csv>` (the proposer reminder's link).
+  const nsParam = params.get("ns")?.trim() || null;
+  const statesParam = params.get("states");
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>(() => {
+    const a = params.get("assignee");
+    return a === "me" || a === "none" ? a : null;
+  });
+  const [overdueFilter, setOverdueFilter] = useState(() => params.get("overdue") === "1");
   const { data: meta, loading, error } = useApi<MetaResponse>(importId ? `/api/proposals?import=${importId}` : "/api/proposals");
   const canReview = meta?.canReview ?? false;
   const mine = meta?.mine ?? [];
@@ -79,8 +97,9 @@ function ProposalsInner() {
     if (!meta || tab !== null) return;
     const t: Tab = tabParam === "mine" || !meta.canReview ? "mine" : "review";
     setTab(t);
-    setStates(defaultStates(t));
-  }, [meta, tab, tabParam]);
+    const fromUrl = (statesParam ?? "").split(",").filter((x): x is ProposalState => (ALL_STATES as string[]).includes(x));
+    setStates(fromUrl.length ? new Set(fromUrl) : defaultStates(t));
+  }, [meta, tab, tabParam, statesParam]);
 
   // Review queue is paginated server-side (newest-first, 100/batch). We keep the accumulated rows,
   // the next-batch cursor, and the per-state totals (for the chips + tab badge) in local state.
@@ -93,7 +112,7 @@ function ProposalsInner() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const reqRef = useRef(0); // guards against out-of-order responses when the filter changes fast
 
-  const fetchReview = useCallback(async (cursor: string | null, stateSet: Set<ProposalState>) => {
+  const fetchReview = useCallback(async (cursor: string | null, stateSet: Set<ProposalState>, assignee: AssigneeFilter, overdue: boolean) => {
     const myReq = ++reqRef.current;
     setReviewLoading(true);
     setReviewError(null);
@@ -102,6 +121,9 @@ function ProposalsInner() {
       if (stateSet.size) sp.set("states", [...stateSet].join(","));
       if (cursor) sp.set("cursor", cursor);
       if (importId) sp.set("import", importId);
+      if (assignee) sp.set("assignee", assignee);
+      if (overdue) sp.set("overdue", "1");
+      if (nsParam) sp.set("ns", nsParam);
       const r = await fetch(`/api/proposals?${sp.toString()}`);
       if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${r.status}`);
       const { review } = (await r.json()) as { review: ReviewPage };
@@ -116,20 +138,52 @@ function ProposalsInner() {
     } finally {
       if (myReq === reqRef.current) setReviewLoading(false);
     }
-  }, [importId]);
+  }, [importId, nsParam]);
 
   // (Re)load the first batch whenever the review tab is active and the state filter changes.
   useEffect(() => {
     if (tab !== "review" || !canReview) return;
     setReviewItems([]);
     setReviewCursor(null);
-    fetchReview(null, states);
-  }, [tab, states, canReview, fetchReview]);
+    fetchReview(null, states, assigneeFilter, overdueFilter);
+  }, [tab, states, canReview, fetchReview, assigneeFilter, overdueFilter]);
 
   const loadMore = useCallback(() => {
     if (tab !== "review" || reviewLoading || !reviewCursor) return;
-    fetchReview(reviewCursor, states);
-  }, [tab, reviewLoading, reviewCursor, states, fetchReview]);
+    fetchReview(reviewCursor, states, assigneeFilter, overdueFilter);
+  }, [tab, reviewLoading, reviewCursor, states, fetchReview, assigneeFilter, overdueFilter]);
+
+  // §65.5 *Assign all open*: every open proposal of the filtered import to one reviewer.
+  const [assigningImport, setAssigningImport] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignErr, setAssignErr] = useState<string | null>(null);
+  const assignAll = useCallback(async (r: AssignableReviewer) => {
+    if (!importId) return;
+    const open = reviewItems.filter((p) => p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested");
+    const others = open.filter((p) => p.assignee && p.assignee.id !== r.id).length;
+    if (!window.confirm(
+      `Assign ${open.length} open proposal${open.length === 1 ? "" : "s"} from ${reviewItems[0]?.importRepo ?? "this import"} to ${r.name}?` +
+      (others > 0 ? `\n\n${others} of them ${others === 1 ? "is" : "are"} assigned to someone else and will be reassigned.` : ""),
+    )) return;
+    setAssignBusy(true);
+    setAssignErr(null);
+    try {
+      const res = await fetch(`/api/proposal-imports/${importId}/assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assigneeId: r.id }),
+      });
+      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${res.status}`);
+      setAssigningImport(false);
+      setReviewItems([]);
+      setReviewCursor(null);
+      void fetchReview(null, states, assigneeFilter, overdueFilter);
+    } catch (e) {
+      setAssignErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAssignBusy(false);
+    }
+  }, [importId, reviewItems, fetchReview, states, assigneeFilter, overdueFilter]);
 
   // Reviewer housekeeping: permanently delete a queue proposal (spam/dupes/test/mistakes). Silent +
   // audited server-side; a 404 (already gone) is treated as success. On success we drop the row and
@@ -196,16 +250,28 @@ function ProposalsInner() {
   // Chip counts + "has anything" come from the server totals on the review tab (so they reflect the
   // whole backlog, not just the rows scrolled into view) and from the loaded list on the mine tab.
   const chipCount = (s: ProposalState) => (tab === "review" ? reviewCounts[s] ?? 0 : mine.filter((p) => p.state === s).length);
-  const hasAny = tab === "review" ? reviewTotal > 0 : mine.length > 0;
+  // A review-only filter can empty the list (the counts follow it, §65.5) — keep the chips so it can be cleared.
+  const reviewFiltered = tab === "review" && (assigneeFilter !== null || overdueFilter);
+  const hasAny = tab === "review" ? reviewTotal > 0 || reviewFiltered : mine.length > 0;
   const reviewInitialLoading = tab === "review" && reviewLoading && reviewItems.length === 0;
   const importRepo = [...reviewItems, ...mine].find((p) => p.importId === importId)?.importRepo ?? null;
   const filterImport = (id: string | null) => {
     const sp = new URLSearchParams();
     if (tab) sp.set("tab", tab);
     if (id) sp.set("import", id);
+    if (nsParam) sp.set("ns", nsParam);
     setTab(null);
     router.replace(`/proposals${sp.size ? `?${sp.toString()}` : ""}`);
   };
+  const clearNamespace = () => {
+    const sp = new URLSearchParams();
+    if (tab) sp.set("tab", tab);
+    if (importId) sp.set("import", importId);
+    if (assigneeFilter) sp.set("assignee", assigneeFilter);
+    if (overdueFilter) sp.set("overdue", "1");
+    router.replace(`/proposals?${sp.toString()}`);
+  };
+  const firstImportOpen = importId ? reviewItems.find((p) => p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested") : undefined;
 
   return (
     <div>
@@ -236,6 +302,35 @@ function ProposalsInner() {
         <div className="muted" data-testid="proposals-import-filter" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, fontSize: 13 }}>
           Showing only the proposals from the import of <strong className="mono">{importRepo ?? "a repository"}</strong>
           <button className="btn-ghost mono" style={{ fontSize: 12 }} onClick={() => filterImport(null)}>✕ show all</button>
+          {tab === "review" && firstImportOpen && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{ marginLeft: "auto" }}
+              onClick={() => { setAssignErr(null); setAssigningImport(true); }}
+              data-testid="assign-import"
+            >
+              Assign all open
+            </button>
+          )}
+        </div>
+      )}
+      {assigningImport && firstImportOpen && (
+        <AssigneePicker
+          proposalId={firstImportOpen.id}
+          title="Assign all open proposals"
+          busy={assignBusy}
+          error={assignErr}
+          onPick={(r) => void assignAll(r)}
+          onCancel={() => setAssigningImport(false)}
+        />
+      )}
+
+      {/* §65.5 one namespace (the Namespace administration counts and the reminder links). */}
+      {nsParam && tab === "review" && (
+        <div className="muted" data-testid="proposals-ns-filter" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, fontSize: 13 }}>
+          Namespace · <strong className="mono">{nsParam}</strong>
+          <button className="btn-ghost mono" style={{ fontSize: 12 }} onClick={clearNamespace}>✕ all namespaces</button>
         </div>
       )}
 
@@ -257,6 +352,33 @@ function ProposalsInner() {
               ✕ clear
             </button>
           )}
+          {/* §65.5 review-only filters: one assignee choice (or none) and Overdue, combined with the states. */}
+          {tab === "review" && (
+            <>
+              <span aria-hidden style={{ width: 1, height: 18, background: "var(--line)", margin: "0 4px" }} />
+              {(["me", "none"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  className={`facet${assigneeFilter === v ? " facet-on" : ""}`}
+                  aria-pressed={assigneeFilter === v}
+                  onClick={() => setAssigneeFilter((cur) => (cur === v ? null : v))}
+                  data-testid={`filter-assignee-${v}`}
+                >
+                  {v === "me" ? "Assigned to me" : "Unassigned"}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={`facet${overdueFilter ? " facet-on" : ""}`}
+                aria-pressed={overdueFilter}
+                onClick={() => setOverdueFilter((o) => !o)}
+                data-testid="filter-overdue"
+              >
+                Overdue
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -271,8 +393,8 @@ function ProposalsInner() {
       ) : tab === "review" && reviewError ? (
         <EmptyState icon="⚠" title="Couldn’t load the review queue" hint={reviewError} />
       ) : proposals.length === 0 ? (
-        states.size > 0
-          ? <EmptyState title="No proposals in the selected states" hint="Adjust the filters above or clear the selection." />
+        states.size > 0 || reviewFiltered
+          ? <EmptyState title="No proposals match these filters" hint="Adjust the filters above or clear the selection." />
           : tab === "review"
             ? <EmptyState title="Queue is clear" hint="No proposals are waiting on you right now." />
             : <EmptyState title="No submissions yet" hint="Propose a skill from the catalog and it'll show up here." />
@@ -301,8 +423,13 @@ function ProposalsInner() {
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); filterImport(p.importId!); }}
                       >Import · {p.importRepo ?? "repository"}</button></>
                     )}
+                    {/* §65.5 the assignee (or Unassigned) while the proposal is open. */}
+                    {(p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested") && (
+                      <> · <span data-testid="proposal-row-assignee">{p.assignee ? `reviewer ${p.assignee.name}` : "unassigned"}</span></>
+                    )}
                   </div>
                 </div>
+                {p.reviewDueAt && <DuePill dueAt={p.reviewDueAt} testId="proposal-row-due" />}
                 <Pill tone={STATE_TONE[p.state]}>{p.state.replace("_", " ")}</Pill>
                 {/* Reviewer-only housekeeping delete. Hidden for accepted (locked server-side —
                     provenance of a live version). Sibling button: isolate its click from the row link. */}

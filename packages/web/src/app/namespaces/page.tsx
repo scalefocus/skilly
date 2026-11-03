@@ -1,5 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useId, useState } from "react";
+import Link from "next/link";
+import { normalizeReviewTarget, reviewTargetError } from "@skilly/shared/review-target";
 import { useApi, Pill, EmptyState, ScrollToTop, Switch } from "../../components/ui";
 import { PolicyFlagsList, PolicyRulesEditor } from "../../components/PolicyRulesEditor";
 import { RequireAuth } from "../../components/RequireAuth";
@@ -21,6 +23,67 @@ interface NamespaceRow {
   marketplaceName: string;
   marketplaceSkillCount: number;
   marketplacePluginCount: number;
+  /** §65.3: the review target in business days, or null for none. */
+  reviewTargetDays: number | null;
+  /** §65.7: live open / unassigned / overdue proposal counts. */
+  openProposals: number;
+  unassignedProposals: number;
+  overdueProposals: number;
+}
+
+/**
+ * §65.7 the namespace's review target (empty = none, else 1–30 business days — the shared validator
+ * the server runs too) and its live proposal counts, each linking to the narrowed To review queue.
+ */
+function ReviewTargetField({ ns, busy, onSave }: { ns: NamespaceRow; busy: boolean; onSave: (days: number | null) => Promise<boolean> }) {
+  const id = useId();
+  const [text, setText] = useState(ns.reviewTargetDays == null ? "" : String(ns.reviewTargetDays));
+  const error = reviewTargetError(text);
+  const dirty = !error && normalizeReviewTarget(text) !== ns.reviewTargetDays;
+  const q = (extra: string) => `/proposals?tab=review&ns=${encodeURIComponent(ns.slug)}${extra}`;
+  return (
+    <div data-testid="ns-review-target">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <label htmlFor={id} style={{ fontSize: 13.5 }}>Review target</label>
+        <input
+          id={id}
+          className="input"
+          type="number"
+          min={1}
+          max={30}
+          step={1}
+          inputMode="numeric"
+          placeholder="none"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && dirty && !busy) { e.preventDefault(); void onSave(normalizeReviewTarget(text)); } }}
+          aria-describedby={`${id}-help`}
+          aria-invalid={!!error}
+          style={{ width: 90 }}
+          data-testid="ns-review-target-input"
+        />
+        <span className="muted" style={{ fontSize: 12.5 }}>business days</span>
+        <button type="button" className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave(normalizeReviewTarget(text))} data-testid="ns-review-target-save">
+          Save
+        </button>
+      </div>
+      <div id={`${id}-help`} className="muted" style={{ fontSize: 12, marginTop: 5 }}>
+        Proposals waiting longer than this remind their reviewer. Leave empty for no target.
+      </div>
+      {error && <div role="alert" style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 4 }}>{error}</div>}
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }} data-testid="ns-review-counts">
+        <Link href={q("")}>{ns.openProposals} open</Link>
+        {" · "}
+        <Link href={q("&assignee=none")}>{ns.unassignedProposals} unassigned</Link>
+        {ns.reviewTargetDays != null && (
+          <>
+            {" · "}
+            <Link href={q("&overdue=1")} style={ns.overdueProposals > 0 ? { color: "var(--danger)" } : undefined}>{ns.overdueProposals} overdue</Link>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // `watch` / `flash`: the last-watched card behavior (§30.6) — any pointer press or keyboard focus
@@ -141,6 +204,9 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
         onSave={(v) => patch({ maintainerContact: v }, null)}
       />
 
+      {/* --- Review target (§65.7) — editable for global too, unlike its review switch. */}
+      <ReviewTargetField ns={ns} busy={busy} onSave={(days) => patch({ reviewTargetDays: days }, "Review target saved.")} />
+
       {/* --- Claude plugin marketplace ------------------------------------ */}
       <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -216,8 +282,8 @@ function NamespacesInner() {
         <div className="eyebrow">Namespace administration</div>
         <h1 className="page-title">Run your namespaces.</h1>
         <p className="page-sub">
-          Settings for every namespace you administer — review policy, maintainer contact, and the Claude plugin
-          marketplace. Platform admins can also edit these from Administration.
+          Settings for every namespace you administer — review policy and target, maintainer contact, and the
+          Claude plugin marketplace. Platform admins can also edit most of these from Administration.
         </p>
       </div>
 

@@ -12,6 +12,7 @@ import { ideaNotificationContent } from "@skilly/shared/ideas";
 import { searchGapNotificationContent } from "@skilly/shared/search-gaps";
 import { driftProposeUpdatePath, upstreamReleaseNotificationContent } from "@skilly/shared/upstream-releases";
 import { importNotificationContent } from "@skilly/shared/repo-import";
+import { reviewNotificationContent } from "@skilly/shared/review-target";
 
 const PAGE = 100;
 
@@ -219,6 +220,8 @@ export default function NotificationsPage() {
             const upstream = upstreamReleaseNotificationContent(n.type, n.payload);
             // §64.7 a repository import's one notification — the shared sentence and the filtered queue.
             const imported = importNotificationContent(n.type, n.payload);
+            // §65.8 an assignment or a review-target reminder — the shared sentence and the CTA its email uses.
+            const review = reviewNotificationContent(n.type, n.payload);
             const driftPropose = driftProposeUpdatePath(n.type, n.payload);
             // §45.6 skill.deprecated: the successor (named only when THIS recipient could see it at insert).
             const succNs = n.type === "skill.deprecated" && typeof n.payload.successorNamespaceSlug === "string" ? n.payload.successorNamespaceSlug : null;
@@ -276,6 +279,14 @@ export default function NotificationsPage() {
                       </Link>
                     </>
                   )}
+                  {review && (
+                    <>
+                      <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-review">{review.sentence}</p>
+                      <Link href={review.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                        {review.ctaLabel.toLowerCase()} →
+                      </Link>
+                    </>
+                  )}
                   {idea && (
                     <>
                       <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-idea">{idea.sentence}</p>
@@ -285,7 +296,7 @@ export default function NotificationsPage() {
                       </Link>
                     </>
                   )}
-                  {!follow && proposalId && (
+                  {!follow && !review && proposalId && (
                     <Link href={`/proposals/${proposalId}${n.type === "proposal.policy_violation" ? "#policy" : ""}`} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                       view proposal →
                     </Link>
