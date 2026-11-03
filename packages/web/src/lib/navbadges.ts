@@ -57,14 +57,17 @@ export async function getNavBadges(access: EffectiveAccess & { userId: string | 
   // PROPOSER's turn (their half, below), NOT the reviewer's. Matched on `updated_at` so a RESUBMIT
   // (which moves it back to under_review but doesn't change created_at) re-arms the badge — the
   // reviewer-side mirror of the proposer being badged when changes are requested. §8.
+  // §65.5: a proposal assigned to SOMEONE ELSE isn't counted, and an assignment change re-arms the
+  // half — being assigned re-arms the assignee's badge, an unassign re-arms everyone's.
   let review = 0;
-  const reviewableStates = `p.state in ('proposed','under_review')`;
+  const reviewableStates = `p.state in ('proposed','under_review') and (p.assignee_id is null or p.assignee_id = $2::uuid)
+    and greatest(p.updated_at, coalesce(p.assignment_changed_at, p.updated_at)) > $1`;
   if (access.isPlatformAdmin) {
     review = Number(
       (
         await db.query<{ n: string }>(
-          `select count(*)::text as n from proposals p where ${reviewableStates} and p.updated_at > $1`,
-          [seen.reviewSeenAt],
+          `select count(*)::text as n from proposals p where ${reviewableStates}`,
+          [seen.reviewSeenAt, access.userId],
         )
       ).rows[0]?.n ?? 0,
     );
@@ -75,8 +78,8 @@ export async function getNavBadges(access: EffectiveAccess & { userId: string | 
         (
           await db.query<{ n: string }>(
             `select count(*)::text as n from proposals p
-              where ${reviewableStates} and p.updated_at > $1 and p.target_namespace_id = any($2::uuid[])`,
-            [seen.reviewSeenAt, nsIds],
+              where ${reviewableStates} and p.target_namespace_id = any($3::uuid[])`,
+            [seen.reviewSeenAt, access.userId, nsIds],
           )
         ).rows[0]?.n ?? 0,
       );

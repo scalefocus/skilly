@@ -20,6 +20,9 @@ export const M = {
   // §63.11 upstream release alerts.
   upstreamReleaseChecks: metrics.counter("skilly_upstream_release_checks_total", "Upstream release checks, by result (none|release|unchanged|error)"),
   upstreamReleaseNotifications: metrics.counter("skilly_upstream_release_notifications_total", "skill.upstream_release notifications created"),
+  // §65.4 review reminders: one count per proposal reminded, by kind (overdue|escalated|proposer).
+  reviewReminders: metrics.counter("skilly_review_reminders_total", "Proposals reminded past the review target, by kind (overdue|escalated|proposer)"),
+  reviewUnassignedIneligible: metrics.counter("skilly_review_unassigned_ineligible_total", "Assignees cleared because they could no longer review the proposal"),
   // §29 MCP server.
   mcpToolCalls: metrics.counter("skilly_mcp_tool_calls_total", "MCP tool calls, by tool and outcome"),
   mcpResourceReads: metrics.counter("skilly_mcp_resource_reads_total", "Skill content reads served over MCP"),

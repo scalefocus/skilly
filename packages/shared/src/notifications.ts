@@ -28,6 +28,11 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   // §64.7 — one notification per repository import, in place of one per imported skill.
   "proposal.import_needs_review": { title: "Skills imported for review", tone: "warn" },
   "proposal.import_submitted": { title: "Import submitted", tone: "ok" },
+  // §65.8 — review assignments and the namespace's review target.
+  "proposal.assigned": { title: "Proposal assigned to you", tone: "warn" },
+  "proposal.review_overdue": { title: "Review overdue", tone: "danger" },
+  "proposal.review_escalated": { title: "Review overdue — escalated", tone: "danger" },
+  "proposal.changes_reminder": { title: "Your proposal is waiting on you", tone: "warn" },
   "skill.new_version": { title: "New version published", tone: "ok" },
   "skill.marked_official": { title: "Skill marked official", tone: "ok" },
   "skill.drift": { title: "Upstream drift detected", tone: "danger" },

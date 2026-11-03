@@ -34,6 +34,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     requireReview?: unknown;
     maintainerContact?: unknown;
     marketplaceEnabled?: unknown;
+    reviewTargetDays?: unknown;
   };
 
   const patch: Parameters<typeof updateNamespaceSettings>[2] = {};
@@ -42,6 +43,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (body.maintainerContact === null || typeof body.maintainerContact === "string") {
     patch.maintainerContact = body.maintainerContact as string | null;
   }
+  // §65.3: null / "" clears the target; anything else is checked by the shared validator (422).
+  if (body.reviewTargetDays !== undefined) patch.reviewTargetDays = body.reviewTargetDays;
   if (Object.keys(patch).length === 0) return Response.json({ error: "nothing to update" }, { status: 422 });
 
   const prefix = await getMarketplaceNamePrefix();

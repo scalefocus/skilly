@@ -7,6 +7,7 @@ import { followNotificationContent, isFollowNotificationType } from "./follows.j
 import { NOTIFICATION_LABELS, notificationTitle } from "./notifications.js";
 import { formatStars } from "./quality-status.js";
 import { importNotificationContent } from "./repo-import.js";
+import { reviewNotificationContent } from "./review-target.js";
 import { textToHtmlFragment } from "./email-template.js";
 
 // ── Tiers (§48.3) ─────────────────────────────────────────────────────────────────────────────
@@ -20,6 +21,10 @@ export const DIGEST_FLOOR_TYPES = [
   "proposal.import_needs_review",
   "proposal.revise",
   "proposal.resubmit",
+  // §65.8 an assignment and the two reviewer-side review-target reminders: review duty.
+  "proposal.assigned",
+  "proposal.review_overdue",
+  "proposal.review_escalated",
 ] as const;
 
 /** Awareness types: digestible by default; the admin can switch each one off. */
@@ -54,6 +59,8 @@ export const DIGEST_OPTIONAL_TYPES = [
   "proposal.import_submitted",
   "proposal.start_review",
   "proposal.request_changes",
+  // §65.8 the proposer's one reminder when their changes-requested turn passes the review target.
+  "proposal.changes_reminder",
   "proposal.accept",
   "proposal.reject",
   "proposal.policy_violation",
@@ -98,6 +105,9 @@ export const DIGEST_FLOOR_LABELS: readonly string[] = [
   NOTIFICATION_LABELS["proposal.import_needs_review"]!.title,
   NOTIFICATION_LABELS["proposal.revise"]!.title,
   NOTIFICATION_LABELS["proposal.resubmit"]!.title,
+  NOTIFICATION_LABELS["proposal.assigned"]!.title,
+  NOTIFICATION_LABELS["proposal.review_overdue"]!.title,
+  NOTIFICATION_LABELS["proposal.review_escalated"]!.title,
 ];
 
 // ── Modes + settings (§48.2) ──────────────────────────────────────────────────────────────────
@@ -457,7 +467,9 @@ export function renderDigest(rows: readonly DigestRow[], opts: RenderDigestOptio
   const mineLines: Line[] = [...mine.entries()].map(([key, rs]) => {
     // §64.7 a repository import's confirmation links to the Mine tab filtered to that import.
     const importPath = key.startsWith("i:") ? importNotificationContent(rs[0]!.type, rs[0]!.payload ?? {})?.path ?? null : null;
-    const path = key.startsWith("p:") ? `/proposals/${key.slice(2)}` : key.startsWith("r:") ? `/requests/${key.slice(2)}` : importPath ?? "/notifications";
+    // §65.8 a folded review reminder names its proposals in `proposalIds`; it links where its email does.
+    const reviewPath = key.startsWith("x:") ? reviewNotificationContent(rs[0]!.type, rs[0]!.payload ?? {})?.path ?? null : null;
+    const path = key.startsWith("p:") ? `/proposals/${key.slice(2)}` : key.startsWith("r:") ? `/requests/${key.slice(2)}` : importPath ?? reviewPath ?? "/notifications";
     return { at: ms(rs[rs.length - 1]!.createdAt), rows: rs.length, text: link(rs.map(sentence).join(" "), path) };
   });
 

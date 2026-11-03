@@ -4,7 +4,7 @@
 // This is deliberately a DUAL surface, not a migration: Administration → Namespaces keeps every
 // control it had, and both paths write through here so validation and audit are identical.
 import type { EffectiveAccess } from "@skilly/shared";
-import { PUBLIC_SCOPE, canManageNamespaceSettings, marketplaceName, maintainerContactError, normalizeMaintainerContact } from "@skilly/shared";
+import { PUBLIC_SCOPE, canManageNamespaceSettings, marketplaceName, maintainerContactError, normalizeMaintainerContact, normalizeReviewTarget, reviewTargetError } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { marketplacePluginCount, marketplaceSkillCount, revokeNamespaceMarketplaceTokens } from "./marketplaces";
@@ -27,6 +27,26 @@ export interface NamespaceAdminView {
   marketplaceSkillCount: number;
   /** Plugins the marketplace publishes — one per category present, plus `general` (§30.3). */
   marketplacePluginCount: number;
+  /** §65.3: the review target in business days, or null for no target. */
+  reviewTargetDays: number | null;
+  /** §65.7: live proposal counts — open (the three open states), open with no assignee, and
+   *  reviewer-turn proposals past their due instant. */
+  openProposals: number;
+  unassignedProposals: number;
+  overdueProposals: number;
+}
+
+/** §65.7: one namespace's live open / unassigned / overdue proposal counts. */
+async function proposalCounts(namespaceId: string): Promise<{ open: number; unassigned: number; overdue: number }> {
+  const { rows } = await pool.query<{ open: number; unassigned: number; overdue: number }>(
+    `select count(*)::int as open,
+            count(*) filter (where assignee_id is null)::int as unassigned,
+            count(*) filter (where state in ('proposed','under_review') and turn_due_at is not null and turn_due_at <= now())::int as overdue
+       from proposals
+      where target_namespace_id = $1 and state in ('proposed','under_review','changes_requested')`,
+    [namespaceId],
+  );
+  return rows[0] ?? { open: 0, unassigned: 0, overdue: 0 };
 }
 
 /** Namespace ids the caller may administer: all of them for a platform admin, else the ones
@@ -46,29 +66,36 @@ export async function listAdministeredNamespaces(access: EffectiveAccess, prefix
   if (!access.isPlatformAdmin && ids.length === 0) return [];
   const { rows } = await pool.query<{
     id: string; slug: string; display_name: string; require_review: boolean;
-    maintainer_contact: string | null; marketplace_enabled: boolean;
+    maintainer_contact: string | null; marketplace_enabled: boolean; review_target_days: number | null;
   }>(
     access.isPlatformAdmin
-      ? `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled
+      ? `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled, review_target_days
            from namespaces order by slug`
-      : `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled
+      : `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled, review_target_days
            from namespaces where id = any($1::uuid[]) order by slug`,
     access.isPlatformAdmin ? [] : [ids],
   );
 
   return Promise.all(
-    rows.map(async (n) => ({
-      id: n.id,
-      slug: n.slug,
-      displayName: n.display_name,
-      requireReview: n.require_review,
-      requireReviewLocked: n.slug === GLOBAL_SLUG,
-      maintainerContact: n.maintainer_contact,
-      marketplaceEnabled: n.marketplace_enabled,
-      marketplaceName: marketplaceName(prefix, { kind: "namespace", namespaceSlug: n.slug }),
-      marketplaceSkillCount: await marketplaceSkillCount({ kind: "namespace", namespaceSlug: n.slug }, n.id),
-      marketplacePluginCount: await marketplacePluginCount({ kind: "namespace", namespaceSlug: n.slug }, n.id),
-    })),
+    rows.map(async (n) => {
+      const counts = await proposalCounts(n.id);
+      return {
+        id: n.id,
+        slug: n.slug,
+        displayName: n.display_name,
+        requireReview: n.require_review,
+        requireReviewLocked: n.slug === GLOBAL_SLUG,
+        maintainerContact: n.maintainer_contact,
+        marketplaceEnabled: n.marketplace_enabled,
+        marketplaceName: marketplaceName(prefix, { kind: "namespace", namespaceSlug: n.slug }),
+        marketplaceSkillCount: await marketplaceSkillCount({ kind: "namespace", namespaceSlug: n.slug }, n.id),
+        marketplacePluginCount: await marketplacePluginCount({ kind: "namespace", namespaceSlug: n.slug }, n.id),
+        reviewTargetDays: n.review_target_days,
+        openProposals: counts.open,
+        unassignedProposals: counts.unassigned,
+        overdueProposals: counts.overdue,
+      };
+    }),
   );
 }
 
@@ -76,6 +103,8 @@ export interface NamespaceSettingsPatch {
   requireReview?: boolean;
   maintainerContact?: string | null;
   marketplaceEnabled?: boolean;
+  /** §65.3: business days (1–30), or null for no target. Validated by the shared rule. */
+  reviewTargetDays?: unknown;
 }
 
 export type NamespaceSettingsResult =
@@ -96,9 +125,9 @@ export async function updateNamespaceSettings(
 ): Promise<NamespaceSettingsResult> {
   const { rows } = await pool.query<{
     id: string; slug: string; display_name: string; require_review: boolean;
-    maintainer_contact: string | null; marketplace_enabled: boolean;
+    maintainer_contact: string | null; marketplace_enabled: boolean; review_target_days: number | null;
   }>(
-    `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled
+    `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled, review_target_days
        from namespaces where id = $1`,
     [namespaceId],
   );
@@ -117,20 +146,30 @@ export async function updateNamespaceSettings(
     const contactError = maintainerContactError(patch.maintainerContact);
     if (contactError) return { ok: false, status: 422, error: contactError };
   }
+  // §65.3: the review target — empty or 1–30 business days, the same shared check the browser runs.
+  if (patch.reviewTargetDays !== undefined) {
+    const targetError = reviewTargetError(patch.reviewTargetDays);
+    if (targetError) return { ok: false, status: 422, error: targetError };
+  }
 
   const requireReview = patch.requireReview ?? before.require_review;
   const maintainerContact =
     patch.maintainerContact === undefined ? before.maintainer_contact : normalizeMaintainerContact(patch.maintainerContact);
   const marketplaceEnabled = patch.marketplaceEnabled ?? before.marketplace_enabled;
+  const reviewTargetDays =
+    patch.reviewTargetDays === undefined ? before.review_target_days : normalizeReviewTarget(patch.reviewTargetDays);
 
   // Disabling also clears the freshness stamp: the repo is deleted, so "not synced yet" is the
   // truth until the sweep rebuilds it after a re-enable (§30.5, §30.6 Page 3).
+  // A changed review target re-dates the namespace's open proposals in this same statement's
+  // transaction (the migration-0106 trigger, §65.3).
   await pool.query(
     `update namespaces
         set require_review = $2, maintainer_contact = $3, marketplace_enabled = $4,
-            marketplace_synced_at = case when $4::boolean then marketplace_synced_at else null end
+            marketplace_synced_at = case when $4::boolean then marketplace_synced_at else null end,
+            review_target_days = $5
       where id = $1`,
-    [namespaceId, requireReview, maintainerContact, marketplaceEnabled],
+    [namespaceId, requireReview, maintainerContact, marketplaceEnabled, reviewTargetDays],
   );
 
   // Turning the marketplace OFF revokes its tokens (§30.6): the repo stops being served at once
@@ -153,17 +192,22 @@ export async function updateNamespaceSettings(
         : { marketplaceEnabled: false, tokensRevoked },
     });
   }
-  if (requireReview !== before.require_review || maintainerContact !== before.maintainer_contact) {
+  if (
+    requireReview !== before.require_review ||
+    maintainerContact !== before.maintainer_contact ||
+    reviewTargetDays !== before.review_target_days
+  ) {
     await appendAudit(pool, {
       actorUserId,
       action: "namespace.updated",
       targetType: "namespace",
       targetId: before.slug,
       namespaceId,
-      before: { requireReview: before.require_review, maintainerContact: before.maintainer_contact },
-      after: { requireReview, maintainerContact },
+      before: { requireReview: before.require_review, maintainerContact: before.maintainer_contact, reviewTargetDays: before.review_target_days },
+      after: { requireReview, maintainerContact, reviewTargetDays },
     });
   }
+  const counts = await proposalCounts(before.id);
 
   return {
     ok: true,
@@ -179,6 +223,10 @@ export async function updateNamespaceSettings(
       marketplaceName: marketplaceName(prefix, { kind: "namespace", namespaceSlug: before.slug }),
       marketplaceSkillCount: await marketplaceSkillCount({ kind: "namespace", namespaceSlug: before.slug }, before.id),
       marketplacePluginCount: await marketplacePluginCount({ kind: "namespace", namespaceSlug: before.slug }, before.id),
+      reviewTargetDays,
+      openProposals: counts.open,
+      unassignedProposals: counts.unassigned,
+      overdueProposals: counts.overdue,
     },
   };
 }

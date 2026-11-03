@@ -170,6 +170,10 @@
     "./repo-import": {
       "types": "./dist/repo-import.d.ts",
       "default": "./dist/repo-import.js"
+    },
+    "./review-target": {
+      "types": "./dist/review-target.d.ts",
+      "default": "./dist/review-target.js"
     }
   },
   "scripts": {

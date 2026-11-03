@@ -809,11 +809,13 @@ export async function callTool(
     case "list_my_proposals": {
       const { rows } = await pool.query<{
         id: string; state: string; semver: string; ns_slug: string; created_at: string; updated_at: string; slug: string | null;
-      }>(
+      } & ReviewAssignmentCols>(
         `select p.id, p.state, p.proposed_semver as semver, n.slug as ns_slug, p.created_at, p.updated_at,
                 (select payload->'metadata'->>'skillSlug' from proposal_revisions
-                  where proposal_id = p.id order by revision_no desc limit 1) as slug
+                  where proposal_id = p.id order by revision_no desc limit 1) as slug,
+                ${REVIEW_ASSIGNMENT_SELECT}
            from proposals p join namespaces n on n.id = p.target_namespace_id
+           left join users au on au.id = p.assignee_id
           where p.submitted_by = $1
           order by p.updated_at desc limit 50`,
         [caller.userId],
@@ -828,6 +830,7 @@ export async function callTool(
           createdAt: r.created_at,
           updatedAt: r.updated_at,
           yourTurn: r.state === "changes_requested",
+          ...reviewAssignmentFields(r),
         })),
       });
     }
@@ -839,7 +842,7 @@ export async function callTool(
       if (!p) return toolError("no such proposal, or it isn't visible to you");
       const isReviewer = caller.access.isPlatformAdmin || caller.access.namespaceRoles.get(p.namespaceId) === "namespace_admin";
       if (p.submittedBy !== caller.userId && !isReviewer) return toolError("no such proposal, or it isn't visible to you");
-      const [rev, scan, msgs] = await Promise.all([
+      const [rev, scan, msgs, assign] = await Promise.all([
         pool.query<{ revision_no: number; payload: unknown; note: string | null; created_at: string }>(
           `select revision_no, payload, note, created_at from proposal_revisions
             where proposal_id = $1 order by revision_no desc limit 1`,
@@ -862,6 +865,13 @@ export async function callTool(
             order by m.created_at asc limit 50`,
           [id],
         ),
+        pool.query<ReviewAssignmentCols>(
+          `select p.state, ${REVIEW_ASSIGNMENT_SELECT}
+             from proposals p join namespaces n on n.id = p.target_namespace_id
+             left join users au on au.id = p.assignee_id
+            where p.id = $1`,
+          [id],
+        ),
       ]);
       return toolJson({
         proposalId: p.id,
@@ -870,6 +880,8 @@ export async function callTool(
         semver: p.proposedSemver,
         isNewVersion: p.targetSkillId !== null,
         yourTurn: p.submittedBy === caller.userId && p.state === "changes_requested",
+        // §65.10: who is assigned and the review target's due date — read-only (no assign tool).
+        ...(assign.rows[0] ? reviewAssignmentFields(assign.rows[0]) : { assignee: null, reviewTarget: null }),
         revisionNo: rev.rows[0]?.revision_no ?? null,
         payload: rev.rows[0]?.payload ?? null,
         scan: scan.rows[0] ? { severity: scan.rows[0].severity, findings: scan.rows[0].findings } : null,
@@ -1076,6 +1088,29 @@ export async function callTool(
     default:
       return toolError(`unknown tool: ${tool}`);
   }
+}
+
+/** §65.10: the columns behind `assignee` / `reviewTarget` (aliases `p` proposals, `n` namespaces, `au` the assignee). */
+const REVIEW_ASSIGNMENT_SELECT = `au.display_name as assignee_name, n.review_target_days,
+                case when p.state in ('proposed','under_review') then p.turn_due_at end as review_due_at,
+                (p.state in ('proposed','under_review') and p.turn_due_at is not null and p.turn_due_at <= now()) as review_overdue`;
+
+interface ReviewAssignmentCols {
+  assignee_name: string | null;
+  review_target_days: number | null;
+  review_due_at: string | null;
+  review_overdue: boolean;
+}
+
+/** §65.10 MCP `get_proposal` / `list_my_proposals`: who is assigned and the reviewer turn's due date (read-only). */
+function reviewAssignmentFields(r: ReviewAssignmentCols): {
+  assignee: string | null;
+  reviewTarget: { days: number; dueAt: string; overdue: boolean } | null;
+} {
+  return {
+    assignee: r.assignee_name,
+    reviewTarget: r.review_due_at && r.review_target_days ? { days: r.review_target_days, dueAt: r.review_due_at, overdue: r.review_overdue } : null,
+  };
 }
 
 /** §46.8 MCP `get_proposal`: the proposal's AI pre-review view, minus the reviewer affordances. */

@@ -193,7 +193,17 @@ export const GET = withSystemLog("/api/proposals", async function GET(req: Reque
     }
     const statesParam = url.searchParams.get("states");
     const states = statesParam ? statesParam.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
-    const review = await listReviewQueue(pool, access, { states, cursor: url.searchParams.get("cursor"), importId });
+    // §65.5: `assignee=me|none`, `overdue=1` and `ns=<slug>` narrow the list and its counts.
+    const assigneeParam = url.searchParams.get("assignee");
+    const review = await listReviewQueue(pool, access, {
+      states,
+      cursor: url.searchParams.get("cursor"),
+      importId,
+      assignee: assigneeParam === "me" || assigneeParam === "none" ? assigneeParam : null,
+      overdue: url.searchParams.get("overdue") === "1",
+      namespaceSlug: url.searchParams.get("ns")?.trim() || null,
+      userId: access.userId,
+    });
     return Response.json({ review });
   }
 

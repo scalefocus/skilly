@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.53.0",
+    date: "2026-11-03",
+    summary:
+      "Reviewers can now assign a proposal to one reviewer, and Start review claims it for you. Namespace admins can set a review target in business days on the Namespaces page; proposals then show a due date, and skilly reminds the reviewer when one is overdue, escalates once, and nudges proposers who haven't made requested changes.",
+  },
+  {
     version: "2.52.2",
     date: "2026-10-30",
     summary:
