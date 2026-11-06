@@ -167,6 +167,8 @@ export interface PlatformSettings {
   featureIdeasEnabled: boolean;
   /** §63.10 upstream release alerts on/off. Ships ON; OFF stops the sweep and hides the notices (rows kept). */
   upstreamReleasesEnabled: boolean;
+  /** §66.6 the home page's "Popular in your department" row on/off. Ships ON; OFF stores and deletes nothing. */
+  departmentPopularEnabled: boolean;
   /** §34.9 the stored search language (a PostgreSQL text-search configuration name). The database
    *  resolves what search actually uses (skilly_search_config(), falling back to english). */
   searchLanguage: string;
@@ -205,7 +207,7 @@ function coerceRumSampleRate(raw: unknown): number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100 ? n : RUM_SAMPLE_RATE_DEFAULT;
 }
 
-const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, bugReportsEnabled: true, featureIdeasEnabled: true, upstreamReleasesEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, aiTryEnabled: false, ...digestFields(() => undefined) };
+const DEFAULTS: PlatformSettings = { proposalsOpen: true, dateFormat: "eu", duplicateEnforcement: "block", maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES, uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES, chatPollIntervals: [...DEFAULT_CHAT_POLL_INTERVALS], installMaxTtlMonths: INSTALL_TTL_MONTHS_DEFAULT, maxFeaturedSkills: coerceMaxFeatured(undefined), marketplacePublicEnabled: false, marketplaceSyncMinutes: MARKETPLACE_SYNC_DEFAULT, marketplaceNamePrefix: DEFAULT_MARKETPLACE_NAME_PREFIX, mcpEnabled: true, mcpAccessTtlMinutes: coerceMcpAccessTtlMinutes(undefined), mcpRefreshTtlDays: coerceMcpRefreshTtlDays(undefined), mcpMaxInlineUploadBytes: coerceMcpInlineUploadBytes(undefined), mcpMaxResourceBytes: coerceMcpResourceBytes(undefined), achievementsEnabled: true, rumEnabled: true, rumSampleRate: RUM_SAMPLE_RATE_DEFAULT, rumFlushIntervals: [...DEFAULT_RUM_FLUSH_INTERVALS], surveyEnabled: true, bugReportsEnabled: true, featureIdeasEnabled: true, upstreamReleasesEnabled: true, departmentPopularEnabled: true, searchLanguage: "english", aiDisplayName: AI_DISPLAY_NAME_DEFAULT, aiTryEnabled: false, ...digestFields(() => undefined) };
 
 /** §48.2 the five digest keys, flattened into the settings shape (defaults applied). */
 function digestFields(get: (key: string) => unknown): Pick<PlatformSettings, "emailDigestsEnabled" | "emailDigestDefaultMode" | "emailDigestHour" | "emailDigestWeekday" | "emailDigestTypes"> {
@@ -262,6 +264,7 @@ async function loadPlatformSettings(db: Pool): Promise<PlatformSettings> {
     bugReportsEnabled: map.get("bug_reports_enabled") !== false,
     featureIdeasEnabled: map.get("feature_ideas_enabled") !== false,
     upstreamReleasesEnabled: map.get("upstream_releases_enabled") !== false,
+    departmentPopularEnabled: map.get("department_popular_enabled") !== false,
     searchLanguage: typeof map.get("search_language") === "string" ? (map.get("search_language") as string) : DEFAULTS.searchLanguage,
     aiDisplayName: coerceAiDisplayName(map.get("ai_display_name")),
     aiTryEnabled: map.get("ai_try_enabled") === true,
@@ -405,6 +408,21 @@ export async function setUpstreamReleasesEnabled(enabled: boolean, actorUserId: 
 /** Are §63 upstream release alerts on? Read by the skill page, Skip, the profile and the admin card. */
 export async function getUpstreamReleasesEnabled(db: Pool = pool): Promise<boolean> {
   return (await getPlatformSettings(db)).upstreamReleasesEnabled;
+}
+
+/**
+ * §66.6 the "Popular in your department" switch. OFF hides the home-page row and stops its query at
+ * once; nothing is stored for it, so there is nothing to delete or restore.
+ */
+export async function setDepartmentPopularEnabled(enabled: boolean, actorUserId: string): Promise<void> {
+  await writeSetting("department_popular_enabled", enabled, actorUserId);
+  await appendAudit(pool, {
+    actorUserId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: "department_popular_enabled",
+    after: { departmentPopularEnabled: enabled },
+  });
 }
 
 /** Is the §61 Try skills switch on? (Try also needs an Operational integration — lib/aiTry.ts.) */

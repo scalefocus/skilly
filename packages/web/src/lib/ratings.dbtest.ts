@@ -93,7 +93,10 @@ test("skill ratings: rollup trigger + aggregation + cascade", { skip: !enabled }
     await setRating(u[1]!, low, 2, null);
 
     const admin: EffectiveAccess = { isPlatformAdmin: true, namespaceRoles: new Map() };
-    const ranked = await searchSkills(admin, { sort: "top_rated", limit: 100 });
+    // Scoped to this test's namespace: the whole catalog is capped at 100 rows, and in a shared
+    // database (CI runs every dbtest file in parallel) other tests' skills push a 2-star skill —
+    // which ranks below every unrated one — past that cap.
+    const ranked = await searchSkills(admin, { sort: "top_rated", namespaceSlug: "rate-ns", limit: 100 });
     const hi = ranked.findIndex((r) => r.skillSlug === "rank-high");
     const lo = ranked.findIndex((r) => r.skillSlug === "rank-low");
     assert.ok(hi >= 0 && lo >= 0, "both ranked skills visible");

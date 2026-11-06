@@ -17,13 +17,14 @@ import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
 import { QualityLine } from "./QualityLine";
 import { PlatformPolicyRulesCard, PolicyFlagsAdminCard } from "./PolicyCards";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
+import { DEPARTMENT_POPULAR_MIN_COLLEAGUES, DEPARTMENT_POPULAR_WINDOW_DAYS } from "@skilly/shared/department-popular";
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
 interface Mapping { id: string; role: Role; namespaceId: string | null; groupId: string; groupDisplayName: string; groupExternalId: string }
 interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean; departmentPopularEnabled: boolean } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -41,7 +42,7 @@ const NS_PAGE = 100;
 // Every Administration card is collapsible (§5). The page owns each card's open/closed state,
 // persists it per-card (localStorage), and drives Expand all / Collapse all. Cards start collapsed.
 const ADMIN_CARD_IDS = [
-  "contribution", "duplicates", "upstreamreleases", "upload", "dateformat", "chatpoll", "installttl", "featuredcap",
+  "contribution", "duplicates", "upstreamreleases", "upload", "dateformat", "chatpoll", "installttl", "featuredcap", "departmentpopular",
   "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
   "achievements", "hype", "featureideas", "search", "contentrisk", "policyrules", "policy",
 ] as const;
@@ -319,6 +320,35 @@ function UpstreamReleasesSettings({
         checked={enabled}
         disabled={busy}
         onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ upstreamReleasesEnabled: next }) })}
+      />
+    </CollapsibleCard>
+  );
+}
+
+// Popular in your department (§66.6). Off hides the home-page row for everyone at once and stops its
+// query; nothing is stored for it, so turning it back on simply shows the row again.
+function DepartmentPopularSettings({
+  enabled, busy, call, open, onToggle,
+}: {
+  enabled: boolean;
+  busy: boolean;
+  call: (input: RequestInfo, init: RequestInit) => Promise<boolean>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <CollapsibleCard cardId="departmentpopular" title="Popular in your department" summary={enabled ? "on" : "off"} open={open} onToggle={onToggle}>
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
+        A home-page row of the skills people in each person&rsquo;s department are adopting. Uses each person&rsquo;s
+        department from Entra ID. A skill shows only once at least {DEPARTMENT_POPULAR_MIN_COLLEAGUES} colleagues adopted
+        it in the last {DEPARTMENT_POPULAR_WINDOW_DAYS} days, and nobody is named. People who hide their directory details
+        aren&rsquo;t counted.
+      </p>
+      <Switch
+        label="Show each person the skills popular in their department"
+        checked={enabled}
+        disabled={busy}
+        onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ departmentPopularEnabled: next }) })}
       />
     </CollapsibleCard>
   );
@@ -752,6 +782,9 @@ export default function AdminPage() {
       <MarketplaceSettings settings={data.settings} busy={busy} call={call} open={cards.open.marketplaces} onToggle={() => cards.toggle("marketplaces")} />
 
       <FeaturedCapSetting value={data.settings.maxFeaturedSkills} busy={busy} call={call} open={cards.open.featuredcap} onToggle={() => cards.toggle("featuredcap")} />
+
+      {/* Popular in your department (§66.6) — the home-page row's on/off */}
+      <DepartmentPopularSettings enabled={data.settings.departmentPopularEnabled} busy={busy} call={call} open={cards.open.departmentpopular} onToggle={() => cards.toggle("departmentpopular")} />
 
       {/* System message (§27) — header announcement banner */}
       <SystemBannerCard open={cards.open.systembanner} onToggle={() => cards.toggle("systembanner")} />
