@@ -14,9 +14,17 @@ export const DEPARTMENT_POPULAR_LIMIT = 6;
 /** How long one department's adopter counts are cached in the web process (§66.4). */
 export const DEPARTMENT_POPULAR_CACHE_MS = 10 * 60_000;
 
-/** SQL `btrim(x)` strips leading and trailing SPACES only — mirror exactly that, not String#trim. */
+/**
+ * SQL `btrim(x)` strips leading and trailing SPACES only — mirror exactly that, not String#trim.
+ * A linear scan from both ends, deliberately not a regex: `/ +$/` backtracks quadratically on a long
+ * run of spaces followed by a non-space, and the department is directory data we don't control.
+ */
 function btrim(raw: string): string {
-  return raw.replace(/^ +| +$/g, "");
+  let start = 0;
+  let end = raw.length;
+  while (start < end && raw.charCodeAt(start) === 32) start++;
+  while (end > start && raw.charCodeAt(end - 1) === 32) end--;
+  return raw.slice(start, end);
 }
 
 /**

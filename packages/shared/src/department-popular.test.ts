@@ -32,6 +32,15 @@ test("departmentKey trims and lower-cases, keeps inner spaces, and treats blank 
   assert.equal(departmentKey(undefined), null);
 });
 
+test("trimming is linear on long runs of spaces (no regex backtracking)", () => {
+  const spaces = " ".repeat(200_000);
+  const started = Date.now();
+  assert.equal(departmentKey(`${spaces}Eng${spaces}`), "eng");
+  assert.equal(departmentKey(`${spaces}x y${spaces}z`), `x y${spaces}z`, "inner runs are kept");
+  assert.equal(departmentLabel(spaces), null);
+  assert.ok(Date.now() - started < 1_000, "a 400k-character value trims in well under a second");
+});
+
 test("departmentLabel trims but keeps the capitals", () => {
   assert.equal(departmentLabel("  Research & Development "), "Research & Development");
   assert.equal(departmentLabel(" "), null);
