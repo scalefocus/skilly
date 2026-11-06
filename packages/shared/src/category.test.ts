@@ -35,6 +35,17 @@ test("categorySlug: empty when nothing survives; capped at the max", () => {
   assert.ok(isValidCategorySlug(categorySlug(hy)));
 });
 
+test("categorySlug: linear on long hyphen and punctuation runs (no regex backtracking)", () => {
+  const dashes = "-".repeat(200_000);
+  const started = Date.now();
+  assert.equal(categorySlug(`${dashes}x`), "x");
+  assert.equal(categorySlug(`x${dashes}`), "x");
+  assert.equal(categorySlug(`${dashes}a${dashes}b${dashes}`), "a-b");
+  assert.equal(categorySlug(`${"!".repeat(200_000)}data`), "data");
+  assert.equal(categorySlug(dashes), "");
+  assert.ok(Date.now() - started < 1_000, "200k-character names slug in well under a second");
+});
+
 test("categoryNameError: reserved `general` in any spelling, with an explanation", () => {
   for (const n of ["general", "General", " GENERAL ", "géneral", "general!"]) {
     const err = categoryNameError(n);

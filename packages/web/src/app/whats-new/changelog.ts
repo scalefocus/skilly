@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.55.1",
+    date: "2026-11-06",
+    summary:
+      "Security fixes: a category name made of a very long run of hyphens can no longer slow the server down while its slug is worked out, and the worker's query-string library is updated to a release that fixes a crash on crafted input. Nothing changes in how skilly looks or behaves.",
+  },
+  {
     version: "2.55.0",
     date: "2026-11-06",
     summary:
