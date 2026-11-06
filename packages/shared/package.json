@@ -119,6 +119,10 @@
       "types": "./dist/follows.d.ts",
       "default": "./dist/follows.js"
     },
+    "./visits": {
+      "types": "./dist/visits.d.ts",
+      "default": "./dist/visits.js"
+    },
     "./survey": {
       "types": "./dist/survey.d.ts",
       "default": "./dist/survey.js"

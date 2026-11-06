@@ -49,6 +49,7 @@ export const EXCLUSIVE: readonly string[] = [
   "search-gaps.spec.ts", // platform settings: the search-gap collection switch; posts an org-visible request
   "survey.spec.ts", // platform settings: survey + bug-report switches
   "upstream-releases.spec.ts", // seeds an upstream release on the seeded global/web-scraper (every platform admin sees it)
+  "visits-new-user.spec.ts", // platform settings: the visits switch and visits_since (every hover card)
 ];
 
 /** Phase 2: each group one worker, files in the order listed (keep each list alphabetical). */

@@ -40,6 +40,7 @@ export * from "./achievements.js";
 export * from "./icon.js";
 export * from "./search.js";
 export * from "./follows.js";
+export * from "./visits.js";
 export * from "./discussion.js";
 export * from "./survey.js";
 export * from "./collections.js";

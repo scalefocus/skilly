@@ -8,6 +8,7 @@ import { appendAudit } from "./audit";
 import { userLabel } from "./userLabel";
 import { invalidateLeaderboard } from "./leaderboard";
 import { invalidateLevels } from "./levels";
+import { invalidateNewcomers } from "./newcomers";
 import { unassignErasedUser } from "./reviewAssign";
 
 export interface UserSearchResult { userId: string; displayName: string; email: string; status: "active" | "inactive"; avatar: string | null }
@@ -147,6 +148,10 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // worker scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from feature_ideas where author_id = $1 and status <> 'published'`, [targetUserId]);
     await client.query(`delete from feature_idea_votes where user_id = $1`, [targetUserId]);
+    // Visit days (§67.7) are the person's activity history — personal data. first_seen is scrubbed
+    // below, so a tombstone never shows a Visits row, a New user row or the hat. Mirrored in worker
+    // scim/store.ts eraseUserByExternalId — keep the two in sync.
+    await client.query(`delete from user_visit_days where user_id = $1`, [targetUserId]);
 
     // Scrub + detach the row (tombstone). Detaching entra_object_id lets a returning person get a
     // brand-new account. The display label retains the former email ("<email> - Deleted") so a
@@ -165,6 +170,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
               surveys_enabled = true, survey_last_shown_at = null, survey_offer = null, survey_self_shown_at = null,
               email_digest = null, email_digest_last_run_at = null, email_digest_failures = 0,
               idea_attribution_hidden = false, idea_notifications = true, idea_votes_hidden = false,
+              first_seen = null,
               entra_object_id = null, status = 'inactive', erased_at = now()
         where id = $1`,
       [targetUserId, deletedLabel],
@@ -186,6 +192,8 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // Their badges and hero stamp are gone too — drop the cached level map so no ring survives
     // them on someone else's screen (§31.10).
     invalidateLevels();
+    // ...and their first visit, so no new-user hat survives them either (§67.7).
+    invalidateNewcomers();
     return { ok: true, transferred, skipped, creditsTransferred, creditsSkipped };
   } catch (e) {
     await client.query("rollback").catch(() => {});

@@ -6,7 +6,8 @@ import { hasDigestSettings, updateDigestSettings } from "../../../../lib/emailDi
 import { getHypeSettings, updateHypeSettings } from "../../../../lib/hype";
 import { hasHypeSettings, HYPE_SETTING_FIELDS, type HypeSettings } from "@skilly/shared/hype";
 import { getSearchGapSettings, hasSearchGapSettings, searchGapSettingFields, updateSearchGapSettings } from "../../../../lib/searchGaps";
-import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, setRumFlushIntervals, setSurveyEnabled, setBugReportsEnabled, setFeatureIdeasEnabled, setUpstreamReleasesEnabled, setDepartmentPopularEnabled, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
+import { invalidateNewcomers } from "../../../../lib/newcomers";
+import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, setRumFlushIntervals, setSurveyEnabled, setBugReportsEnabled, setFeatureIdeasEnabled, setUpstreamReleasesEnabled, setDepartmentPopularEnabled, setVisitsEnabled, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,7 @@ export async function PATCH(req: Request) {
     const r = await updateSearchGapSettings(access.userId, raw);
     if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
   }
-  const body = raw as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number; rumFlushIntervals?: string | number[]; surveyEnabled?: boolean; bugReportsEnabled?: boolean; featureIdeasEnabled?: boolean; upstreamReleasesEnabled?: boolean; departmentPopularEnabled?: boolean; searchLanguage?: string };
+  const body = raw as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number; rumFlushIntervals?: string | number[]; surveyEnabled?: boolean; bugReportsEnabled?: boolean; featureIdeasEnabled?: boolean; upstreamReleasesEnabled?: boolean; departmentPopularEnabled?: boolean; visitsEnabled?: boolean; searchLanguage?: string };
   if (typeof body.proposalsOpen === "boolean") await setProposalsOpen(body.proposalsOpen, access.userId);
   if (body.dateFormat === "eu" || body.dateFormat === "us") await setDateFormat(body.dateFormat, access.userId);
   if (body.duplicateEnforcement === "block" || body.duplicateEnforcement === "warn") await setDuplicateEnforcement(body.duplicateEnforcement, access.userId);
@@ -89,6 +90,11 @@ export async function PATCH(req: Request) {
   if (typeof body.upstreamReleasesEnabled === "boolean") await setUpstreamReleasesEnabled(body.upstreamReleasesEnabled, access.userId);
   // §66.6 the home page's "Popular in your department" row: on/off (the Administration card).
   if (typeof body.departmentPopularEnabled === "boolean") await setDepartmentPopularEnabled(body.departmentPopularEnabled, access.userId);
+  // §67.6 Visits & new users: dormant-not-destructive on/off (the Administration card).
+  if (typeof body.visitsEnabled === "boolean") {
+    await setVisitsEnabled(body.visitsEnabled, access.userId);
+    invalidateNewcomers(); // the hat disappears (or returns) on the next page load, not after the TTL
+  }
   if (body.rumSampleRate !== undefined) {
     try {
       await setRumSampleRate(body.rumSampleRate, access.userId);

@@ -24,7 +24,7 @@ interface Mapping { id: string; role: Role; namespaceId: string | null; groupId:
 interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean; departmentPopularEnabled: boolean } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean; departmentPopularEnabled: boolean; visitsEnabled: boolean } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -44,7 +44,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upstreamreleases", "upload", "dateformat", "chatpoll", "installttl", "featuredcap", "departmentpopular",
   "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
-  "achievements", "hype", "featureideas", "search", "contentrisk", "policyrules", "policy",
+  "achievements", "visits", "hype", "featureideas", "search", "contentrisk", "policyrules", "policy",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -349,6 +349,35 @@ function DepartmentPopularSettings({
         checked={enabled}
         disabled={busy}
         onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ departmentPopularEnabled: next }) })}
+      />
+    </CollapsibleCard>
+  );
+}
+
+// Visits & new users (§67.6). Off hides the hover card's Visits and New user rows and the new-user hat
+// for everyone. Visit days keep being recorded (and pruned at 28 days), so switching back is instant.
+function VisitsSettings({
+  enabled, busy, call, open, onToggle,
+}: {
+  enabled: boolean;
+  busy: boolean;
+  call: (input: RequestInfo, init: RequestInit) => Promise<boolean>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <CollapsibleCard cardId="visits" title="Visits & new users" summary={enabled ? "on" : "off"} open={open} onToggle={onToggle}>
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
+        A person&rsquo;s hover card says how often they use skilly (once a day, once a week, once a month, or in a blue
+        moon), and during their first month says they&rsquo;re new while their picture wears a small propeller beanie.
+        People can hide this on their profile. Off: hidden for everyone. Visits keep being recorded for 28 days, so
+        switching back on shows accurate values at once.
+      </p>
+      <Switch
+        label="Show visits and new users"
+        checked={enabled}
+        disabled={busy}
+        onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ visitsEnabled: next }) })}
       />
     </CollapsibleCard>
   );
@@ -800,6 +829,9 @@ export default function AdminPage() {
 
       {/* Achievements (§31) — the dormant-not-destructive on/off */}
       <AchievementsSettings enabled={data.settings.achievementsEnabled} busy={busy} call={call} open={cards.open.achievements} onToggle={() => cards.toggle("achievements")} />
+
+      {/* Visits & new users (§67.6) — the dormant-not-destructive on/off */}
+      <VisitsSettings enabled={data.settings.visitsEnabled} busy={busy} call={call} open={cards.open.visits} onToggle={() => cards.toggle("visits")} />
 
       {/* Hype (§50.8) — the switch, the budget, the two eligibility thresholds and the top N */}
       <HypeCard open={cards.open.hype} onToggle={() => cards.toggle("hype")} />

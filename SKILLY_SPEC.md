@@ -140,6 +140,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061 — it also keeps the user's installs out of their department's *Popular in* row, §66), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `idea_votes_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's picture from others in the *Upvoted by* bubbles of *Coming soon* items; their votes still count; migration 0102, §60), `upstream_release_notifications` (BOOLEAN NOT NULL DEFAULT true — the maintainer opt-out of `skill.upstream_release`; migration 0104, §63), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
+- `first_seen` (nullable `timestamptz`, migration 0108, §67.7) records the user's **first** authenticated activity: stamped once by the same `touchLastSeen` write, never moved afterwards, `NULL` = never visited. It drives the hover card's *Visits* and *New user* rows and the new-user hat (§67).
 
 ### `groups`
 - `id`, `entra_object_id` (unique), `display_name`, `created_at`, `updated_at`.
@@ -279,13 +280,16 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `user_follows` (migration 0078, detailed in §35)
 - `follower_id`, `followee_id` (both FK → `users`, CASCADE), `created_at`. **PK `(follower_id, followee_id)`**, plus `CHECK (follower_id <> followee_id)`, with an index on `(followee_id, created_at)`. Following a *person*, the counterpart of `skill_watches`. Unfollow hard-deletes the row. The rows drive the §35.6 follower notifications, the §35.7 leaderboard *followers* stat and the §35.8 badges. They are deleted in both directions on GDPR erasure (§4) and kept on deprovision.
 
+### `user_visit_days` (migration 0108, detailed in §67.7)
+- `user_id` (FK → `users`, CASCADE), `day` (`date`, a UTC calendar day). **PK `(user_id, day)`**, plus an index on `(day)` for the prune. One row per user per UTC day with any authenticated activity, written best-effort by `touchLastSeen` (§4). **Kept for 28 days**: a leader-only worker sweep deletes older rows daily. It is the only per-user activity history skilly keeps, and it feeds only the hover card's *Visits* row (§67.2). Deleted on GDPR erasure (§4); not audited.
+
 ### `skill_maintainers` is documented above (§19); `skill_ratings` above (§18).
 
 ### `pending_mirrors` (migration 0005)
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§66 department-row switch** (`department_popular_enabled` — default `true`, §66.6), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§66 department-row switch** (`department_popular_enabled` — default `true`, §66.6), the **§67 visits keys** (`visits_enabled` — default `true`, the *Visits & new users* switch; `visits_since` — the UTC date visit-day collection began, written once by migration 0108; §67.6), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -438,7 +442,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 
 ### Currently online (presence)
 - The **Monitoring** page (`/admin/rum`, §32.7 — the sidebar link labelled **"Monitoring"**) has a **"Currently online"** card, **platform-admins only**, listing the users active right now. It is the page's **first section**, above the telemetry settings card, and is a **collapsible card** using the same shared mechanism as the Administration cards (§5: collapsed by default, header = title + live user count + chevron, open state remembered per browser under the unchanged `skilly.admin.card.online-open` key). Everything below — the trend chart with its own range toggle, the DAU/WAU/MAU counters, the activity-window toggle, the search box and the infinite-scroll list — moves with it as **one unit**; nothing presence-related remains on the Administration page (no stub, no pointer — the changelog entry says where it went). The card keeps its **60s poll** even though the rest of the Monitoring page fetches on mount/range-change only, and it renders **regardless of the RUM empty state** (a deployment with no telemetry samples still shows who is online). Its chart range and window toggles stay **independent** of the page-level RUM range toggle (different preferences, different rollup rules). *History: this card lived on the Administration page until v2.7.0.*
-- **Presence is activity-window based, not session-based** (sessions are stateless JWTs with no server-side store, so there is nothing to enumerate). Every authenticated request resolves the user through the single `currentAccess()` choke point, which **stamps `users.last_seen = now()`** as a **fire-and-forget, best-effort** write: it never blocks or fails the request, and is **throttled in-process per user (~60s)** so the high call volume (page renders + the app's 60s background polls) doesn't translate into a write per request. A backgrounded tab stops refreshing (client polling pauses when hidden), which is the intended semantics.
+- **Presence is activity-window based, not session-based** (sessions are stateless JWTs with no server-side store, so there is nothing to enumerate). Every authenticated request resolves the user through the single `currentAccess()` choke point, which **stamps `users.last_seen = now()`** as a **fire-and-forget, best-effort** write: it never blocks or fails the request, and is **throttled in-process per user (~60s)** so the high call volume (page renders + the app's 60s background polls) doesn't translate into a write per request. A backgrounded tab stops refreshing (client polling pauses when hidden), which is the intended semantics. The same write also stamps **`users.first_seen`** once (`coalesce(first_seen, now())`) and, on a user's first stamp of a UTC day in that process, inserts that day into **`user_visit_days`** (§67.5) — the history behind the hover card's *Visits* row. Like `last_seen`, both are best-effort and never block or fail the request.
 - **Last-seen page.** Alongside `last_seen`, presence also tracks **which page the user was last on**, shown in the online list between the identity block and the "active … ago" pill (below). Captured **client-side**: the app shell watches the route (`usePathname`) and fires on every navigation (and on initial mount), resolving the current route to a short **human-readable label** — never a raw pathname or query string (invariant #6) — via a **static route→label map** for fixed pages (Overview, Catalog, Marketplaces, Propose a skill, Requests, Proposals, Leaderboard, Installed skills, Notifications, Profile, Usage, Audit, System log, Admin, Quick start, What's new), while the three dynamic-title pages **override** that default label once they've fetched their own data: `/skills/[ns]/[slug]` → `"Skill: <display name>"`, `/requests/[id]` → `"Request: <title>"`, `/proposals/[id]` → `"Proposal: <skill title>"`. The resolved label is POSTed to `POST /api/presence/page {label}` (auth required; a no-op — silent 401, no error surfaced — for a signed-out caller), which calls `touchLastSeen(userId, label)`, the **same choke point and same ~60s per-user throttle** `currentAccess()` uses: a beacon call inside another call's throttle window is dropped just like an extra plain stamp, so the shown page can lag the real navigation by up to the throttle window — an accepted trade-off, consistent with `last_seen`'s existing staleness. Plain `currentAccess()` stamps (no label) update `last_seen` only and never clear a previously-stamped `last_seen_page`. Rows with no page yet (pre-upgrade or never-beaconed) show **"—"** in that slot.
 - **Online = `last_seen` within a selectable activity window.** A **window selector** — **5 min (default) / 1 h / 8 h / 24 h / 30 d** — sits **just above the search box**, right-aligned in a header row that mirrors the trend chart's range toggle (the "Users active within the last …; reach out to start a direct message" caption is that row's left-hand label), so the viewing admin decides how generous "online" is (5 min comfortably absorbs the 60s poll cadence; the long windows turn the card into "active today"/"active this month"). The choice is a **per-admin view preference, remembered in the browser** (`skilly.online-window`, same localStorage mechanism as the chart windows) — it is *not* a platform setting and never affects other admins. The server accepts the window as a `window=<minutes>` query param but **validates it against the fixed option set** (anything else falls back to 5) — never an arbitrary interval from the client. Changing the window re-queries the list and count; the **DAU/WAU/MAU counters and the trend chart are unaffected** (their windows are fixed by definition). Only `status = 'active'` users appear (SCIM-deprovisioned users never show). The viewing admin sees themselves.
 - The section reuses the **maintainer card** (avatar + name + email), with the **last-seen page** label inserted between the name/email block and the tag slot — same row, muted/secondary text, truncated with an ellipsis (full value on hover via `title`) so a long resolved label never pushes the pill or breaks the row — then the relative activity ("active … ago") in the tag slot and the **"Reach out"** DM action kept, with **Follow / Unfollow** to its right (§35.4); there is no remove control. It shows a **live count**, a **search box** (ILIKE over name/email, debounced), and loads **100 at a time with infinite scroll**, ordered most-recently-active first. It polls every **60s** (visibility-aware): the count always refreshes, and the list refreshes only when it's safe to (scrolled to top, no active search) so it never yanks the admin's view mid-scroll/search.
@@ -493,6 +497,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Kept but de-identified** — they now render as **"`<their email> - Deleted`"** because the scrub set `users.display_name` to that label, and every view of authored content joins the live `users` row (via `userLabel`/`nameSql`), so **no edits to the child rows are needed**: their authored `messages` (general chat **and** review comments), `conversation_participants`, `proposals`, `proposal_revisions`, `skill_versions`. **Their skills remain.**
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
 - **Search gaps (§62.3):** nothing to erase — no search-gap row holds a searcher's user id.
+- **Visits (§67.7):** `user_visit_days` is **deleted** and the scrub sets `first_seen = null`, so an erased tombstone never shows a *Visits* row, a *New user* row or the new-user hat (it also reads "No directory information", §28).
 - **Review assignments (§65.9):** the user's **open** proposal assignments are cleared in the erasure transaction (audited `proposal.unassigned`, `reason: "ineligible"`, the erasing admin as actor; the pool is alerted when the proposal waits on reviewers). Decided proposals keep the assignee, now rendered with the tombstone label.
 - **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false`, `idea_notifications = true` and `idea_votes_hidden = false`.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
@@ -1856,7 +1861,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **AI integration (§40.9, all platform-admin):** `GET|PUT|PATCH|DELETE /api/admin/ai` (status / save-with-test / enable-disable / remove), `POST /api/admin/ai/models` (provider model list), `POST /api/admin/ai/test` (connectivity test of the form values). The token is write-only — no response ever contains it.
 
 **Misc**
-- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`** / **`bugReports`**, §36, and **`emailDigest`** / **`emailDigestOptions`**, §48.12, and **`upstreamReleaseNotifications`** / **`upstreamReleasesEnabled`** (read-only), §63.11), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `POST /api/me/survey/bug` (a bug report, §36.17), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
+- `GET|PATCH /api/me` (profile prefs incl. `emailNotifications`, `driftNotifications`, `newVersionNotifications`, §12, **`directoryHidden`**, §28, and **`achievementsHidden`** / **`timeZone`**, §31, and **`allowFollows`**, §35, and **`surveysEnabled`** / **`openSurvey`** / **`bugReports`**, §36, and **`emailDigest`** / **`emailDigestOptions`**, §48.12, and **`upstreamReleaseNotifications`** / **`upstreamReleasesEnabled`** (read-only), §63.11), `POST /api/me/features/used`, `POST /api/me/survey/check`, `POST /api/me/survey/start` (on-demand, §36.16), `POST /api/me/survey/close` and `POST /api/me/survey/responses` (the feedback survey, §36.10), `POST /api/me/survey/bug` (a bug report, §36.17), `PUT|DELETE /api/users/:id/follow` and `GET /api/me/following` (following people, §35.10), `POST /api/me/onboarded` and `POST /api/me/whats-new-seen {version}` (the two markers behind Quick start and the What's new update notice, §23), `GET /api/users/:id/card` (directory hover card — any signed-in user; **404** for an unknown id, §28; carries `achievementCount`, §31.5, and `visitFrequency` / `newUser`, §67.4), `GET /api/newcomers` (the page-wide new-user map behind the hat — any signed-in user, §67.3), `GET /api/users/:id/achievements` (the achievements hall — any signed-in user; **404** for unknown / erased / inactive, §31.8), `GET /api/users/suggest?q=&context=` (people typeahead — mentions + header people mode, §10/§24, and the `maintainer_contact` editor's typeahead on both of its surfaces, §30.6), `GET /api/stats`, `GET /api/leaderboard`, `GET /api/notifications` (+ read), `GET /api/nav-badges`, `POST /api/auth/clear-cookies` (sign-out, §5).
 - `GET /skill-icons/:sha256.png` — **unauthenticated**, content-addressed icon bytes (§33): immutable cache headers; **404** unknown. `GET /share-card/:token.png` — **unauthenticated** Open Graph image for a signed share link (§33): a valid, unexpired token renders the **per-skill 1200×630 card**; anything else renders the **static app-wide card** with 200 (no oracle). Neither route ever logs its path parameter.
 - `POST /api/csp-report` — CSP violation sink (§22): **unauthenticated** (browsers post without a session), rate-limited, body-size-capped; accepts `application/csp-report` + `application/reports+json`; structured-logs + increments `skilly_csp_reports_total`; **never** writes `audit_log` and never echoes credentials/query strings.
 - **Skill collections (§38.11):** `GET /api/collections/mine?skillId=` · `POST /api/collections` · `GET|PATCH|DELETE /api/collections/:id` · `PUT|DELETE /api/collections/:id/skills/:skillId` · `GET /api/collections/suggest?q=`. `GET /api/skills` gains **`?collection=<id>`** and **`?collectionsBy=<userId>`** (viewer-visibility-scoped).
@@ -4374,8 +4379,11 @@ Top to bottom, in a fixed max-width (~260px) card:
    never been seen. The admin-selected window (§4) is **not** used here and the **last-seen page is
    never shown**.
 3. **Email** — a real `mailto:` link (omitted for an erased tombstone, whose `email` is `''`).
-4. **Directory block** — **job title**, **department**, **office**, each line omitted when that
-   field is null/empty.
+4. **Directory block** — top to bottom: **Visits** (*Once a day* · *Once a week* · *Once a
+   month* · *In a blue moon* · *Never*, §67.2), **New user** (a full-width row with the small hat
+   icon, during the person's first 30 days, §67.3), then **job title**, **department**, **office**.
+   Each line is omitted when its value is null/empty; Visits and New user follow the same
+   `directory_hidden` opt-out as the three Entra fields, plus the `visits_enabled` switch (§67.6).
 5. **Level** — *"🏆 Level 7 — 7 of 20"*, or *"🏆 Hero — 20 of 20"* once `hero_at` is
    stamped (§31.10), linking to the person's hall (`/achievements/[userId]`, §31.5). This
    **replaces** the former *"N achievements"* count line: the count and the level are the same
@@ -4392,8 +4400,9 @@ Top to bottom, in a fixed max-width (~260px) card:
    erased, unknown). Its state comes from the page-wide `/api/me/following` cache, so it always
    agrees with any other Follow button for the same person on the page.
 
-- **"No directory information."** When **all three** directory fields are empty the block collapses
-  to that single muted line. Same for a user who has **opted out** (below), and for every
+- **"No directory information."** When the block has **no rows at all** — all three directory
+  fields empty, and no Visits or New user row (§67.4) — it collapses to that single muted line. A
+  person with nothing in Entra but a Visits value shows the Visits row alone, without the line. Same for a user who has **opted out** (below), and for every
   **non-person / unknown** bubble — an erased tombstone, or a bubble whose id resolves to nothing.
   The card still renders with the name, presence and (where present) email; it never becomes an
   error state.
@@ -4402,8 +4411,10 @@ Top to bottom, in a fixed max-width (~260px) card:
 
 ### Data & delivery
 - `GET /api/users/:id/card` → `{ userId, displayName, email, jobTitle, officeLocation, department,
-  lastSeen, online, achievementCount, achievementHero, followable }` (§31.5 — `number | null` and
-  `boolean`; `followable` is viewer-independent, §35.4). **Any signed-in user** may call it for **any** user id (there is no per-user
+  lastSeen, online, achievementCount, achievementHero, followable, visitFrequency, newUser }`
+  (§31.5 — `number | null` and `boolean`; `followable` is viewer-independent, §35.4;
+  `visitFrequency` is `"daily" | "weekly" | "monthly" | "rare" | "never" | null` and `newUser` a
+  boolean, both viewer-independent, §67.4). **Any signed-in user** may call it for **any** user id (there is no per-user
   visibility model — invariant #7 governs *skills*); **401** unauthenticated, **404** for an unknown
   id. `online` is computed server-side against the fixed 5-minute window so the client never has to
   know the rule.
@@ -4419,7 +4430,8 @@ Top to bottom, in a fixed max-width (~260px) card:
 - **The card never blocks on the network.** It opens immediately with the name and presence-free
   skeleton (the name is already a `UserBubble` prop), showing a muted placeholder where the
   directory block will land; a slow, failed or 404 response resolves to "No directory information".
-- Server side this is a **single indexed primary-key lookup** — no aggregate, no new cache layer.
+- Server side this is a **single indexed primary-key lookup**, plus a **≤ 28-row primary-key range
+  count** on `user_visit_days` for the Visits row (§67.4) — no new cache layer.
 
 ### Interaction — pointer
 - **Open** after **300 ms** of continuous hover on the bubble; **close** ~150 ms after the pointer
@@ -4467,7 +4479,9 @@ Top to bottom, in a fixed max-width (~260px) card:
   another user's browser) and the card shows "No directory information". **Name, email and presence
   are still shown** — those are already exposed across the app today. The same switch keeps the
   user's installs out of their department's *Popular in* row on colleagues' home pages (§66.6); the
-  profile copy says so while that row is switched on.
+  profile copy says so while that row is switched on. **Since §67 the same opt-out also hides the
+  Visits and New user rows and the new-user hat** (`visitFrequency: null`, `newUser: false`, absent
+  from `/api/newcomers`); the profile's *Directory details* copy says so (§67.6).
 - **Presence widening is deliberate and specced in §4** — the dot is the one genuinely *new* audience
   for an existing signal; everything else the card shows is either brand-new data (title/office/
   department) or already visible elsewhere.
@@ -15165,3 +15179,204 @@ adoption ledger `skill_installs` (§21) with a short cache.
     home page shows *"Popular in <department>"* right after Featured, with the skill and its
     *"👥 2 colleagues"* chip;
   - a platform admin turns the switch off on Administration, and the row is gone on reload.
+
+---
+
+## 67. Visit frequency and new users
+
+The directory hover card (§28) gains two rows at the top of its directory block. **Visits** says how
+often the person uses skilly: *Once a day*, *Once a week*, *Once a month*, *In a blue moon* or
+*Never*, worked out from the days they were active in the last four weeks. **New user** marks
+someone in their first 30 days, who also wears a small **propeller beanie** (the "noogler hat")
+above their avatar bubble everywhere in the app. Both follow the person's existing *Directory
+details* opt-out and a new platform switch. The feature adds the first per-user activity history
+skilly keeps: one row per user per active UTC day, kept for 28 days.
+
+### 67.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Visits counts the distinct active UTC days in the trailing 28 days.** | Four weeks reacts within weeks when habits change, and needs only 28 days of history per user. |
+| 2 | **A visit is the existing presence signal**: any signed-in browser activity that stamps `last_seen` through `currentAccess()` or the page beacon (§4). MCP sessions (worker) and git installs don't stamp it, so they don't count. | One definition of "active" across the Online dot, DAU/WAU/MAU and Visits. |
+| 3 | **The thresholds are pro-rated to the days observed**, and the row stays hidden until 7 days have been observed. | Without it everyone reads low for a month after release, and a new hire who visits daily reads *Once a month*. |
+| 4 | **A day is a UTC calendar day.** | Matches `daily_active_users` (§4). Over 28 days the time-zone edge is noise. |
+| 5 | **New user = first visit within the last 30 days.** | The plain reading of "first visited in the last month". |
+| 6 | **The existing `directory_hidden` opt-out hides Visits, New user and the hat.** | The rows sit in the directory block. One control covers what the card says about a person. |
+| 7 | **A platform switch, `visits_enabled` (default on), turns all three off. Collection keeps running.** | Some organizations need works-council sign-off before showing employee activity to colleagues. Because collection continues, switching back on is instant and accurate, and the 28-day prune bounds what is kept. |
+| 8 | **Viewer-independent.** Everyone sees the same thing, including platform admins and the person themselves. Only the label leaves the server, never day counts or dates. | No admin override and no profile preview. The card stays one shape per user. |
+| 9 | **Existing users' first visit is backfilled from `created_at`.** | `created_at` is never later than the first visit, so the backfill is exact for accounts created in the last 30 days and never makes an old account "new". |
+| 10 | **Inactive users:** Visits is computed as normal (it decays to *In a blue moon*), but there is **no** New user row and no hat. **Erased users:** nothing shows. | Visits stays truthful about a departed account. A deprovisioned account is not a newcomer to welcome. |
+| 11 | **A Hero's crown (§31.10) takes the hat's place** above the bubble. | Both sit at twelve o'clock above the bubble. Hero is rarer and permanent, and the card still says *New user*. |
+| 12 | **Touch keeps the long-press** (§28). | No gesture change. The rows appear in the same card on hover, focus and long-press. |
+
+### 67.2 Visits — the rule
+A shared pure function, `classifyVisits` in **`@skilly/shared/visits`** (a client-safe subpath that
+also exports the labels), takes the person's `first_seen`, the platform's `visits_since`, today's
+UTC date and the person's active-day count, and returns:
+
+```
+first_seen is NULL                          → never     "Never"
+start    = max(visits_since, first_seen as a UTC date, today − 27)
+observed = today − start + 1                (1 … 28 days, today included)
+observed < 7                                → null      (row hidden)
+active   = rows in user_visit_days for the person with day ≥ start
+active × 28 ≥ observed × 15                 → daily     "Once a day"
+active × 28 ≥ observed × 4                  → weekly    "Once a week"
+active ≥ 1                                  → monthly   "Once a month"
+active = 0                                  → rare      "In a blue moon"
+```
+
+- With a full window (`observed = 28`): **15–28** active days → *Once a day* (about most workdays),
+  **4–14** → *Once a week*, **1–3** → *Once a month*, **0** → *In a blue moon*.
+- Integer arithmetic only, so every boundary is exact and testable.
+- *Never* shows from day one because it needs no history. It means the person has never signed in,
+  typically an account SCIM provisioned that nobody has used yet.
+- Examples: a new hire on day 5 who visited every day → hidden. On day 9, having visited 8 of 9
+  days → *Once a day*. A long-standing user 10 days after release (`observed = 11`) who was active on
+  2 days → 56 ≥ 44 → *Once a week*.
+
+### 67.3 New users and the hat
+- **New user** = `first_seen > now() − 30 days`, `status = 'active'`, not erased, not
+  `directory_hidden`, and `visits_enabled` on.
+- **The hat.** Every `UserBubble` (§28 *Where it appears*) of a new user wears a small **propeller
+  beanie**: a static inline SVG of a classic four-colour panelled cap with a propeller on top. It is
+  a generic beanie, not a copy of any company's branded hat. Its colours are fixed in both themes,
+  like the leader badges (§21).
+  - **Placed like the Hero crown (§31.10):** centred over the top of the bubble (or of its level
+    ring), overflowing above it, with `pointer-events: none`, so the bubble's footprint and the
+    surrounding layout never change. An unringed bubble gets a same-size positioned wrapper to anchor
+    it.
+  - **Sized with the bubble** (about the crown's proportion) and floored so it stays recognisable on
+    the smallest avatars. The geometry lives in a small helper next to `levelRing`.
+  - `role="img"` with `aria-label="New user"`.
+  - **Not drawn for a Hero**, whose crown takes the spot.
+  - No animation.
+- **`GET /api/newcomers`** → `{ ids: string[] }`, every user who is a New user by the rule above. Any
+  signed-in user may call it (**401** otherwise). It is modelled on `/api/levels` (§31.10): one
+  page-wide map, cached ~60s server-side and deduped client-side through `cachedGet`, fetched only
+  once a bubble with a `userId` renders. There is **no per-caller merge**, so an opted-out caller is
+  absent from it too (decision 8). It returns `{ ids: [] }` while `visits_enabled` is off, and it is
+  small by construction: only the last 30 days' newcomers.
+
+### 67.4 The card
+- The directory block (§28, item 4) reads top to bottom:
+  1. **Visits**, as a label/value line (e.g. *Visits · Once a week*);
+  2. **New user**, a full-width row with the hat icon followed by *New user* (sentence case);
+  3. *Title*, *Department* and *Office*, as today.
+- The `GET /api/users/:id/card` payload gains `visitFrequency`
+  (`"daily" | "weekly" | "monthly" | "rare" | "never" | null`) and `newUser` (boolean). The client
+  maps the enum to the labels from `@skilly/shared/visits`.
+- `visitFrequency` is **null** when the person has opted out (`directory_hidden`), is erased, or
+  `visits_enabled` is off, or when fewer than 7 days have been observed (§67.2). `newUser` is
+  **false** in the same cases and whenever §67.3's rule doesn't hold.
+- A New user row can show while Visits is still hidden (a newcomer's first week).
+- "No directory information" shows only when the block would otherwise be empty (§28).
+- Server cost: the card's existing primary-key lookup, plus a range count over at most 28
+  `(user_id, day)` primary-key rows.
+
+### 67.5 Collecting visit days
+- `touchLastSeen` (§4) gains two effects, in the same fire-and-forget path and under the same ~60s
+  per-user throttle:
+  - `first_seen = coalesce(first_seen, now())`, folded into the existing
+    `update users set last_seen = …`;
+  - when the stamp is this process's first for that user on the current UTC day (an in-process
+    *user → last UTC day written* map), an
+    `insert into user_visit_days (user_id, day) values ($1, (now() at time zone 'utc')::date) on conflict do nothing`.
+- Both are best-effort, like `last_seen`. A failed insert clears that process's day marker so a
+  later stamp retries, and nothing ever blocks or fails the request. Several web replicas may insert
+  the same day; `on conflict do nothing` absorbs it.
+- **Prune:** the worker's leader-only daily sweep (alongside the DAU snapshot, §4) deletes
+  `user_visit_days` rows with `day < today − 27` (UTC). Collection and the prune run whatever
+  `visits_enabled` says.
+
+### 67.6 Privacy and controls
+- **Per-user opt-out: the existing *Directory details* control** on the profile page
+  (`directory_hidden`, §28). Its options stay *Shown* / *Hidden*; its copy changes so the person knows
+  what it now covers:
+  - intro: *"Hovering your avatar anywhere in skilly shows a small card with your job title,
+    department and office from Entra ID, and how often you visit. During your first month it also
+    says you're new, and your picture wears a new-user hat. You can keep all of this private."*;
+  - status line while shown: *"Your job title, department, office and visit activity show on your
+    card."*;
+  - status line while hidden: unchanged (*"Your card reads "No directory information". Your name,
+    email and online status still show."*).
+- **Platform switch: `visits_enabled`.** An Administration card titled **Visits & new users** with
+  the shared `Switch`, default **on**, header summary *on* / *off*, audited as `settings.updated`
+  like every setting. `GET|PATCH /api/admin/settings` gain `visitsEnabled` (platform admin). **Off:**
+  every card returns `visitFrequency: null` and `newUser: false`, and `/api/newcomers` returns
+  `{ ids: [] }`, so no rows and no hats show anywhere. Collection and the prune keep running
+  (dormant-not-destructive, like `achievements_enabled`, §31.7). The profile copy does not change
+  with the switch.
+- **`visits_since`** is written once by migration 0108 (that day's UTC date) and has no UI. It is the
+  pro-rating floor (§67.2).
+- **Not audited:** visit-day writes, `first_seen` stamps and card reads, like presence (§4). Only the
+  switch is.
+- **A new audience for a derived signal, deliberately.** Until now only platform admins saw
+  activity history (Monitoring, §4), and every user saw only a live presence dot (§28). Visits shows
+  any signed-in user a coarse frequency. The mitigations are the bucketed label (never counts or
+  dates), the opt-out, the platform switch and the 28-day retention.
+- **Invariant #3 is untouched:** nothing here references a skill.
+
+### 67.7 Data model (migration 0108)
+- **`users.first_seen`** `timestamptz NULL`. Backfill: `first_seen = created_at` where
+  `last_seen IS NOT NULL`, otherwise `NULL` (never visited).
+- **`user_visit_days`**: `user_id uuid NOT NULL` FK `users` `ON DELETE CASCADE`, `day date NOT NULL`,
+  PK `(user_id, day)`, index `(day)`. It starts empty. There is no history to backfill, because
+  `last_seen` holds only the latest activity.
+- **`platform_settings`:** `visits_since` = the migration's UTC date, inserted with
+  `on conflict do nothing` so a re-run never moves it. `visits_enabled` is not inserted; absent
+  means `true`.
+- **GDPR erasure (§4)** deletes the user's `user_visit_days` rows and sets `first_seen = null`, in the
+  erasure transaction, on both the admin and SCIM paths.
+- **Deprovision (SCIM inactive)** deletes nothing. Visits decays on its own, and the prune empties
+  the rows within 28 days.
+
+### 67.8 API summary
+- `GET /api/users/:id/card` gains `visitFrequency` and `newUser` (§67.4).
+- `GET /api/newcomers` → `{ ids: string[] }` (§67.3).
+- `GET|PATCH /api/admin/settings` gain `visitsEnabled` (§67.6).
+- `GET|PATCH /api/me` is unchanged: `directoryHidden` already carries the opt-out.
+
+### 67.9 Accepted trade-offs and out of scope
+- A visible tab left open and polling counts as a visit on every day it stays open, which is §4's
+  signal.
+- UTC days: someone working across UTC midnight counts two days.
+- An account older than 30 days whose first sign-in was recent (an old SCIM account first used last
+  week) is never "new", because the backfill uses `created_at`. This affects only first sign-ins
+  before release.
+- A long-standing user who is away during release week reads *In a blue moon* from day 7 until they
+  return.
+- Today counts in `observed` before the person has visited today, which costs them part of a day
+  early in the morning. This is immaterial over 28 days, and at the 7-day edge it errs on the low
+  side.
+- For the first 6 days after release, every Visits row except *Never* is hidden.
+- Deferred: Visits anywhere but the card (a profile preview, admin lists, the leaderboard), an admin
+  override, rules that depend on the viewer, a spinning propeller, days in the person's time zone,
+  and a configurable window or thresholds.
+
+### 67.10 Tests (ship with the change)
+- **Unit** (`@skilly/shared/visits`): `classifyVisits` at every boundary:
+  - `never` for a null `first_seen`, including during the first week;
+  - `observed` 6 (hidden) and 7 (shown);
+  - the full-window cut-offs 14/15, 3/4 and 0/1;
+  - a pro-rated window (`observed = 11`: 6 → daily, 5 → weekly, 2 → weekly, 1 → monthly,
+    0 → rare);
+  - `start` clamped by `visits_since`, by `first_seen` and by `today − 27`;
+  - a label for every enum value.
+- **Unit** (web): the hat geometry helper (size floor and offset), like `levelRing.test.ts`.
+- **Integration** (web API + DB):
+  - `touchLastSeen` stamps `first_seen` once and never moves it, and inserts one day row per UTC
+    day, idempotent across repeated stamps;
+  - the card returns each `visitFrequency` bucket from seeded day rows; `null` when
+    `directory_hidden`, erased, switched off or `observed < 7`; `never` for a never-seen user;
+  - the card's `newUser` is true at 29 days, false at 31, and false when inactive, opted out or
+    switched off;
+  - `/api/newcomers` includes a newcomer, excludes opted-out, inactive, erased and older-than-30-day
+    users, is empty while switched off, and returns 401 unauthenticated;
+  - `PATCH /api/admin/settings { visitsEnabled }` is platform-admin only and audited as
+    `settings.updated`;
+  - erasure deletes `user_visit_days` and nulls `first_seen`;
+  - the migration backfills `first_seen = created_at` for seen users and `NULL` for never-seen users,
+    and sets `visits_since` once.
+- **Worker:** the prune deletes rows before `today − 27` and keeps the 28-day window.
+- **e2e:** a seeded newcomer's bubble shows the hat; hovering it shows the *Visits* and *New user*
+  rows; with that person's directory details hidden, neither row nor the hat shows.
