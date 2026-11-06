@@ -88,7 +88,7 @@ export async function PATCH(req: Request) {
   if (typeof body.featureIdeasEnabled === "boolean") await setFeatureIdeasEnabled(body.featureIdeasEnabled, access.userId);
   // §63.10 upstream release alerts: dormant-not-destructive on/off (the Administration card).
   if (typeof body.upstreamReleasesEnabled === "boolean") await setUpstreamReleasesEnabled(body.upstreamReleasesEnabled, access.userId);
-  // §66.6 Visits & new users: dormant-not-destructive on/off (the Administration card).
+  // §67.6 Visits & new users: dormant-not-destructive on/off (the Administration card).
   if (typeof body.visitsEnabled === "boolean") {
     await setVisitsEnabled(body.visitsEnabled, access.userId);
     invalidateNewcomers(); // the hat disappears (or returns) on the next page load, not after the TTL

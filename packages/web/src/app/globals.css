@@ -1601,7 +1601,7 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
 }
 /* Long Entra job titles wrap onto more lines — never ellipsed (§28). */
 .dircard-val { overflow-wrap: anywhere; }
-/* §66.4 — the full-width New user row: the propeller beanie, then the words. */
+/* §67.4 — the full-width New user row: the propeller beanie, then the words. */
 .dircard-newuser { display: flex; align-items: center; gap: 7px; font-weight: 600; }
 .dircard-achievements {
   display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--accent-2);

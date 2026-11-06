@@ -342,7 +342,7 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // goes, and so does every vote they cast. Mirrored in web lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from feature_ideas where author_id = $1 and status <> 'published'`, [userId]);
     await client.query(`delete from feature_idea_votes where user_id = $1`, [userId]);
-    // Visit days (§66.7) are personal activity history; first_seen is scrubbed below. Mirrored in web
+    // Visit days (§67.7) are personal activity history; first_seen is scrubbed below. Mirrored in web
     // lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_visit_days where user_id = $1`, [userId]);
     // Scrub + detach the row (tombstone). Display label retains the former email

@@ -569,7 +569,7 @@ async function leaderLoops(): Promise<void> {
   await dauSweep();
   setInterval(dauSweep, Number(process.env.DAU_SNAPSHOT_INTERVAL_MS ?? 86_400_000)); // 24h
 
-  // Visit-day retention (SKILLY_SPEC.md §66.5): user_visit_days keeps only the 28-day Visits window.
+  // Visit-day retention (SKILLY_SPEC.md §67.5): user_visit_days keeps only the 28-day Visits window.
   // Daily, leader-only, and independent of the visits_enabled switch.
   const visitDaysPrune = async () => {
     if (!isLeader) return;

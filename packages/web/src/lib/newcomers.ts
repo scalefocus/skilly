@@ -1,9 +1,9 @@
-// New users (SKILLY_SPEC.md §66.3): the page-wide map behind the propeller-beanie hat every
+// New users (SKILLY_SPEC.md §67.3): the page-wide map behind the propeller-beanie hat every
 // `UserBubble` draws. Modelled on `lib/levels.ts` — one cached map per page, so a leaderboard with a
 // hundred bubbles issues one request, not a hundred.
 //
 // Unlike the level map there is NO per-caller merge: Visits, New user and the hat are
-// viewer-independent (§66.1 decision 8), so an opted-out caller is absent from their own view too,
+// viewer-independent (§67.1 decision 8), so an opted-out caller is absent from their own view too,
 // exactly as their card hides the rows.
 import type { Pool } from "pg";
 import { pool } from "./db";
@@ -39,7 +39,7 @@ export function invalidateNewcomers(): void {
 
 /**
  * The newcomer map, or `{ ids: [] }` while the `visits_enabled` switch is off — the hat disappears
- * everywhere with the card rows (§66.6). A non-default `db` (tests) bypasses the cache.
+ * everywhere with the card rows (§67.6). A non-default `db` (tests) bypasses the cache.
  */
 export async function getNewcomers(enabled: boolean, db: Pool = pool): Promise<NewcomerMap> {
   if (!enabled) return { ids: [] };

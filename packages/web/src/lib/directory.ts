@@ -32,10 +32,10 @@ export interface UserCard {
   /** §35.4 — active, not erased, allows follows. Viewer-independent: whether THIS viewer follows
    *  the person comes from `/api/me/following`, never from here. */
   followable: boolean;
-  /** §66.4 — the Visits label's key, or null when the row must not show (opted out, erased,
+  /** §67.4 — the Visits label's key, or null when the row must not show (opted out, erased,
    *  switched off, or fewer than 7 days observed). Only the label leaves the server, never days. */
   visitFrequency: VisitFrequency | null;
-  /** §66.3 — first visit within the last 30 days, active, not opted out, switch on. */
+  /** §67.3 — first visit within the last 30 days, active, not opted out, switch on. */
   newUser: boolean;
 }
 
@@ -48,7 +48,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * The three directory fields come back **null** when the user opted out (`directory_hidden`) or has
  * been erased — they are never serialized to another person's browser in that case. Name, email and
  * presence are unaffected by the opt-out; they are already visible across the app. The same opt-out
- * (and the `visits_enabled` switch) also hides Visits and New user (§66.4).
+ * (and the `visits_enabled` switch) also hides Visits and New user (§67.4).
  */
 export async function getUserCard(userId: string): Promise<UserCard | null> {
   if (!UUID_RE.test(userId)) return null; // malformed id → 404, not a Postgres cast error
@@ -104,7 +104,7 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
   // tombstone, and they have at least one badge — level 0 says nothing worth a line (§31.10).
   const achievementsVisible =
     r.achievements_enabled && !r.achievements_hidden && r.erased_at === null && Number(r.achievement_count) > 0;
-  // §66: Visits and New user ride on the same opt-out as the directory fields, plus the platform
+  // §67: Visits and New user ride on the same opt-out as the directory fields, plus the platform
   // switch. The label is computed here so day counts and dates never reach another browser.
   const visitsVisible = r.visits_enabled && !hidden;
   const visitFrequency = visitsVisible

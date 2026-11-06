@@ -7,7 +7,7 @@
 // Hovering (or long-pressing on touch, or focusing) a bubble opens the directory hover card — the
 // person's Entra job title / department / office, plus name, email, presence and their badges
 // spelled out (§28). A person in their first 30 days wears a small propeller beanie above the
-// bubble (§66.3).
+// bubble (§67.3).
 import { useApi } from "./ui";
 import { useDirectoryCard } from "./DirectoryCard";
 import { BADGE_META, badgeIcon, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
@@ -76,10 +76,10 @@ function LevelRing({ size, level, hero, children }: { size: number; level: numbe
   );
 }
 
-/** `GET /api/newcomers` (§66.3): one cached list per page, like `/api/levels`. */
+/** `GET /api/newcomers` (§67.3): one cached list per page, like `/api/levels`. */
 interface NewcomerMap { ids: string[] }
 
-/** The new-user propeller beanie (§66.3), centred over the top of the bubble (or its level ring) and
+/** The new-user propeller beanie (§67.3), centred over the top of the bubble (or its level ring) and
  *  overflowing above it — the same placement as the Hero crown, so the bubble's footprint and the
  *  surrounding layout never change. `base` is the width of what it sits on. */
 function WithHat({ base, children }: { base: number; children: React.ReactNode }) {
@@ -159,7 +159,7 @@ export function UserBubble({ name, avatar, size = 28, userId }: { name: string; 
   const { data: levelData } = useApi<LevelMap>(userId ? "/api/levels" : null);
   const level = (userId ? levelData?.levels?.[userId] : undefined) ?? 0;
   const hero = !!userId && !!levelData?.heroes?.includes(userId);
-  // New users wear the hat (§66.3) — same page-wide cached GET. Opted-out, inactive and erased people
+  // New users wear the hat (§67.3) — same page-wide cached GET. Opted-out, inactive and erased people
   // are absent from the list, and a Hero's crown takes the hat's spot.
   const { data: newcomerData } = useApi<NewcomerMap>(userId ? "/api/newcomers" : null);
   const hatted = showHat(userId, newcomerData?.ids, hero);

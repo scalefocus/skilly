@@ -1,4 +1,4 @@
-// New-user hat geometry (SKILLY_SPEC.md §66.3) — pure, so the sizing rules that keep the propeller
+// New-user hat geometry (SKILLY_SPEC.md §67.3) — pure, so the sizing rules that keep the propeller
 // beanie recognisable on a 20px chat avatar and proportional on a 52px profile one are unit-testable
 // without rendering React. `NewUserHat.tsx` owns the SVG; this owns the numbers.
 
@@ -28,7 +28,7 @@ export function hatGeometry(base: number): HatGeometry {
   return { width, height, top: -Math.round(height * ABOVE_RATIO) };
 }
 
-/** Whether a bubble wears the hat: a new user who isn't a Hero — the crown takes that spot (§66.1
+/** Whether a bubble wears the hat: a new user who isn't a Hero — the crown takes that spot (§67.1
  *  decision 11). No user id, no hat (the bubble is inert, §28). */
 export function showHat(userId: string | null | undefined, newcomerIds: readonly string[] | undefined, hero: boolean): boolean {
   return !!userId && !hero && !!newcomerIds?.includes(userId);

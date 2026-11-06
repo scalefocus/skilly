@@ -1,11 +1,11 @@
-// Live-DB integration test for the new-user map behind the hat (SKILLY_SPEC.md §66.3) and for
-// migration 0107's backfill (§66.7). Gated by SKILLY_DB_E2E=1.
+// Live-DB integration test for the new-user map behind the hat (SKILLY_SPEC.md §67.3) and for
+// migration 0108's backfill (§67.7). Gated by SKILLY_DB_E2E=1.
 //
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… node --import tsx --test src/lib/newcomers.dbtest.ts
 //
 // Covers: a user whose first visit is within 30 days is listed; opted-out, inactive, erased,
 // older-than-30-day and never-seen users are not; the switch-off path returns an empty list; and
-// re-running migration 0107 backfills first_seen = created_at only for live users who have visited,
+// re-running migration 0108 backfills first_seen = created_at only for live users who have visited,
 // without moving visits_since. The platform switch itself is passed in, not toggled here — the card
 // tests own that global key (directory.dbtest.ts).
 import { test } from "node:test";
@@ -65,7 +65,7 @@ test("newcomers: only active, visible people within 30 days of their first visit
   }
 });
 
-test("migration 0107: backfills first_seen from created_at for live visited users; visits_since never moves", { skip: !enabled }, async () => {
+test("migration 0108: backfills first_seen from created_at for live visited users; visits_since never moves", { skip: !enabled }, async () => {
   const visited = await mk("backfill-visited", { firstSeenDaysAgo: null });
   const neverSeen = await mk("backfill-never", { firstSeenDaysAgo: null });
   const tombstone = await mk("backfill-erased", { firstSeenDaysAgo: null, erased: true });
@@ -78,7 +78,7 @@ test("migration 0107: backfills first_seen from created_at for live visited user
   try {
     // The migration is idempotent by construction (IF NOT EXISTS, a NULL-only backfill, ON CONFLICT
     // DO NOTHING), so re-running the shipped file exercises its backfill against these fixtures.
-    const sql = readFileSync(resolve(process.cwd(), "../../db/migrations/0107_visit_days.sql"), "utf8");
+    const sql = readFileSync(resolve(process.cwd(), "../../db/migrations/0108_visit_days.sql"), "utf8");
     await pool.query(sql);
 
     const firstSeen = async (id: string) =>

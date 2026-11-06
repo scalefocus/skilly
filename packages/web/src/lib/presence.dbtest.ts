@@ -94,7 +94,7 @@ test("presence: a user who has never beaconed a page shows lastSeenPage null", {
   }
 });
 
-// --- Visit days and first_seen (§66.5) -----------------------------------------------------------
+// --- Visit days and first_seen (§67.5) -----------------------------------------------------------
 
 test("presence: a stamp sets first_seen once and records today's visit day exactly once", { skip: !enabled }, async () => {
   const mk = async (oid: string) => (await pool.query<{ id: string }>(

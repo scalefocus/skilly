@@ -1,4 +1,4 @@
-// Live-DB integration test for the visit-day prune (SKILLY_SPEC.md §66.5).
+// Live-DB integration test for the visit-day prune (SKILLY_SPEC.md §67.5).
 // Gated behind SKILLY_DB_E2E=1; requires a migrated Postgres at DATABASE_URL.
 //
 // Validates: rows older than the 28-day Visits window (day < today − 27, UTC) are deleted, while the

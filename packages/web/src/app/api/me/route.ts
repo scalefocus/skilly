@@ -299,7 +299,7 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.directoryHidden === "boolean") {
     await setUserDirectoryHidden(access.userId, body.directoryHidden);
-    // The same opt-out hides the new-user hat (§66.6) — drop the newcomer map so it leaves (or
+    // The same opt-out hides the new-user hat (§67.6) — drop the newcomer map so it leaves (or
     // returns to) other people's screens on their next page load instead of after the TTL.
     invalidateNewcomers();
   }

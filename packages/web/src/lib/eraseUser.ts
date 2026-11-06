@@ -148,7 +148,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // worker scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from feature_ideas where author_id = $1 and status <> 'published'`, [targetUserId]);
     await client.query(`delete from feature_idea_votes where user_id = $1`, [targetUserId]);
-    // Visit days (§66.7) are the person's activity history — personal data. first_seen is scrubbed
+    // Visit days (§67.7) are the person's activity history — personal data. first_seen is scrubbed
     // below, so a tombstone never shows a Visits row, a New user row or the hat. Mirrored in worker
     // scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from user_visit_days where user_id = $1`, [targetUserId]);
@@ -192,7 +192,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // Their badges and hero stamp are gone too — drop the cached level map so no ring survives
     // them on someone else's screen (§31.10).
     invalidateLevels();
-    // ...and their first visit, so no new-user hat survives them either (§66.7).
+    // ...and their first visit, so no new-user hat survives them either (§67.7).
     invalidateNewcomers();
     return { ok: true, transferred, skipped, creditsTransferred, creditsSkipped };
   } catch (e) {

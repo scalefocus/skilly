@@ -100,7 +100,7 @@ test("eraseUser: transfers install credits to the replacement (self-credits/dupl
        on conflict (entra_object_id) do update set email = excluded.email returning id`,
     )).rows[0]!.id;
     await install(s1, null, [victim2]);
-    // Visit history (§66.7): a first visit and two visit days, both personal data.
+    // Visit history (§67.7): a first visit and two visit days, both personal data.
     await pool.query(`update users set first_seen = now() - interval '3 days' where id = $1`, [victim2]);
     await pool.query(
       `insert into user_visit_days (user_id, day)

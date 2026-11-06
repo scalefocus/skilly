@@ -1,19 +1,19 @@
--- 0107: Visit frequency and new users (SKILLY_SPEC.md §66).
+-- 0108: Visit frequency and new users (SKILLY_SPEC.md §67).
 --
 --   users.first_seen     the user's FIRST authenticated activity, stamped once by touchLastSeen
 --                        (coalesce, never moved); NULL = never visited. Drives the hover card's
---                        Visits and New user rows and the new-user hat (§66.2, §66.3).
+--                        Visits and New user rows and the new-user hat (§67.2, §67.3).
 --   user_visit_days      one row per user per UTC day with any authenticated activity — the only
 --                        per-user activity history skilly keeps. Kept for 28 days (a leader-only
 --                        worker sweep prunes older rows daily); deleted on GDPR erasure (§4).
 --   visits_since         platform_settings: the UTC date collection began, the floor of the
---                        Visits pro-rating (§66.2). Written once here; a re-run never moves it.
+--                        Visits pro-rating (§67.2). Written once here; a re-run never moves it.
 --
 -- Backfill: existing users who have visited get first_seen = created_at. created_at is never later
 -- than a first visit, so this is exact for accounts created in the last 30 days and never makes an
--- old account "new" (§66.1 decision 9). Erased tombstones stay NULL. user_visit_days starts empty:
+-- old account "new" (§67.1 decision 9). Erased tombstones stay NULL. user_visit_days starts empty:
 -- last_seen holds only the latest activity, so there is no history to reconstruct.
--- `visits_enabled` is not inserted — absent means on (§66.6).
+-- `visits_enabled` is not inserted — absent means on (§67.6).
 -- (Table-level grants for skilly_app are inherited from the default privileges set in 0002.)
 BEGIN;
 

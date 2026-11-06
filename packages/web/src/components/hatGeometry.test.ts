@@ -1,4 +1,4 @@
-// Unit tests for the new-user hat's pure geometry and visibility rule (SKILLY_SPEC.md §66.3).
+// Unit tests for the new-user hat's pure geometry and visibility rule (SKILLY_SPEC.md §67.3).
 // Run via `pnpm --filter @skilly/web test:unit`.
 import { test } from "node:test";
 import assert from "node:assert/strict";

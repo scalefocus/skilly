@@ -1,4 +1,4 @@
-// Visit-day retention (worker, leader-only; SKILLY_SPEC.md §66.5). `user_visit_days` keeps one row
+// Visit-day retention (worker, leader-only; SKILLY_SPEC.md §67.5). `user_visit_days` keeps one row
 // per user per active UTC day for the hover card's Visits row, which only ever looks at the trailing
 // 28 days — so anything older is deleted once a day. Runs whatever `visits_enabled` says: the switch
 // only hides the rows, and this prune is what bounds what is kept.

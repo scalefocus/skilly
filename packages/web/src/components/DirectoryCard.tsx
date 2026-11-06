@@ -33,9 +33,9 @@ export interface UserCardData {
   achievementHero?: boolean;
   /** §35.4 — viewer-independent; the Follow ↔ Unfollow state comes from the page-wide store. */
   followable?: boolean;
-  /** §66.4 — the Visits row's key, or null when the row must not show. */
+  /** §67.4 — the Visits row's key, or null when the row must not show. */
   visitFrequency?: VisitFrequency | null;
-  /** §66.4 — the New user row (first 30 days). */
+  /** §67.4 — the New user row (first 30 days). */
   newUser?: boolean;
 }
 
@@ -309,7 +309,7 @@ function DirectoryCardBody({
         ["Office", data.officeLocation],
       ] as const).filter(([, v]) => !!v)
     : [];
-  // §66.4 — Visits then New user head the block. "No directory information" shows only when there
+  // §67.4 — Visits then New user head the block. "No directory information" shows only when there
   // is no row at all, so someone with nothing in Entra but a Visits value shows that row alone.
   const visits = data ? visitLabel(data.visitFrequency) : null;
   const newUser = data?.newUser === true;

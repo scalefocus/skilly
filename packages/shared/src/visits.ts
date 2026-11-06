@@ -1,21 +1,21 @@
-// Visit frequency and new users (SKILLY_SPEC.md §66). Pure and client-safe: the server classifies a
+// Visit frequency and new users (SKILLY_SPEC.md §67). Pure and client-safe: the server classifies a
 // person's recent visit days into one coarse label for the directory hover card (§28), and the
 // browser maps that label to its copy. Day counts and dates never leave the server — only the label.
 //
 // All days are UTC calendar days as `YYYY-MM-DD` strings (the shape Postgres `date::text` returns),
 // which compare correctly as plain strings.
 
-/** The trailing window Visits looks at, in UTC days (§66.1 decision 1). */
+/** The trailing window Visits looks at, in UTC days (§67.1 decision 1). */
 export const VISIT_WINDOW_DAYS = 28;
-/** Fewer observed days than this and the Visits row stays hidden (§66.1 decision 3). */
+/** Fewer observed days than this and the Visits row stays hidden (§67.1 decision 3). */
 export const VISIT_MIN_OBSERVED_DAYS = 7;
-/** Someone counts as a New user for this many days after their first visit (§66.1 decision 5). */
+/** Someone counts as a New user for this many days after their first visit (§67.1 decision 5). */
 export const NEW_USER_DAYS = 30;
 
 export const VISIT_FREQUENCIES = ["daily", "weekly", "monthly", "rare", "never"] as const;
 export type VisitFrequency = (typeof VISIT_FREQUENCIES)[number];
 
-/** The card copy for each frequency (§66.2). */
+/** The card copy for each frequency (§67.2). */
 export const VISIT_LABELS: Record<VisitFrequency, string> = {
   daily: "Once a day",
   weekly: "Once a week",
@@ -59,7 +59,7 @@ export interface VisitWindow {
 }
 
 /**
- * The window §66.2 counts over: it starts at the latest of the day collection began
+ * The window §67.2 counts over: it starts at the latest of the day collection began
  * (`visits_since`), the person's first visit, and `today − 27`. Null for someone who has never
  * visited. A missing `visitsSince` (no setting row) simply drops that floor.
  */
@@ -75,7 +75,7 @@ export function visitWindow(input: { firstSeen: Date | string | null; visitsSinc
 }
 
 /**
- * The person's visit frequency (§66.2), or null when the row must stay hidden because fewer than
+ * The person's visit frequency (§67.2), or null when the row must stay hidden because fewer than
  * VISIT_MIN_OBSERVED_DAYS have been observed. `activeDays` may hold days outside the window (the
  * caller passes the last 28 days); only days on or after the window's start count, and duplicates
  * count once.
@@ -99,7 +99,7 @@ export function classifyVisits(input: {
   return "rare";
 }
 
-/** First visit within the last NEW_USER_DAYS days (§66.3). Status, opt-out and the platform switch
+/** First visit within the last NEW_USER_DAYS days (§67.3). Status, opt-out and the platform switch
  *  are the caller's to check. */
 export function isNewUser(firstSeen: Date | string | null, now: Date = new Date()): boolean {
   if (firstSeen == null) return false;

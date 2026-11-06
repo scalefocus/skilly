@@ -32,7 +32,7 @@ export function sanitizePageLabel(raw: unknown): string | null {
 // replica throttles independently (worst case a few redundant writes); presence needn't be exact.
 const lastStampMs = new Map<string, number>();
 
-// The UTC day this process last recorded in `user_visit_days` for each user (§66.5), so the day row
+// The UTC day this process last recorded in `user_visit_days` for each user (§67.5), so the day row
 // is inserted once per user per day per replica rather than on every throttled stamp. Replicas that
 // insert the same day collide harmlessly on the primary key.
 const lastVisitDay = new Map<string, string>();
@@ -47,7 +47,7 @@ const lastVisitDay = new Map<string, string>();
  *
  * The same write stamps `first_seen` once (never moved afterwards) and, on this process's first
  * stamp of a UTC day for the user, records that day in `user_visit_days` — the history behind the
- * hover card's Visits row (§66.5). Both are as best-effort as `last_seen`.
+ * hover card's Visits row (§67.5). Both are as best-effort as `last_seen`.
  */
 export function touchLastSeen(userId: string, page?: string): void {
   const now = Date.now();

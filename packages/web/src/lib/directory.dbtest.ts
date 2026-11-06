@@ -102,7 +102,7 @@ test("getUserCard: unknown and malformed ids resolve to null, not an error", { s
   assert.equal(await getUserCard("not-a-uuid"), null);
 });
 
-// --- Visits and New user (§66.4) ----------------------------------------------------------------
+// --- Visits and New user (§67.4) ----------------------------------------------------------------
 // These tests pin `visits_since` to a date long ago (so every window is a full 28 days unless the
 // person's own first visit is recent) and restore it afterwards. Only cards read that key.
 

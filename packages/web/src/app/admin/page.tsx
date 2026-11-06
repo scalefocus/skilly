@@ -324,7 +324,7 @@ function UpstreamReleasesSettings({
   );
 }
 
-// Visits & new users (§66.6). Off hides the hover card's Visits and New user rows and the new-user hat
+// Visits & new users (§67.6). Off hides the hover card's Visits and New user rows and the new-user hat
 // for everyone. Visit days keep being recorded (and pruned at 28 days), so switching back is instant.
 function VisitsSettings({
   enabled, busy, call, open, onToggle,
@@ -797,7 +797,7 @@ export default function AdminPage() {
       {/* Achievements (§31) — the dormant-not-destructive on/off */}
       <AchievementsSettings enabled={data.settings.achievementsEnabled} busy={busy} call={call} open={cards.open.achievements} onToggle={() => cards.toggle("achievements")} />
 
-      {/* Visits & new users (§66.6) — the dormant-not-destructive on/off */}
+      {/* Visits & new users (§67.6) — the dormant-not-destructive on/off */}
       <VisitsSettings enabled={data.settings.visitsEnabled} busy={busy} call={call} open={cards.open.visits} onToggle={() => cards.toggle("visits")} />
 
       {/* Hype (§50.8) — the switch, the budget, the two eligibility thresholds and the top N */}

@@ -1,4 +1,4 @@
-// e2e: Visits, New user and the new-user hat (SKILLY_SPEC.md §66). A person in their first 30 days
+// e2e: Visits, New user and the new-user hat (SKILLY_SPEC.md §67). A person in their first 30 days
 // wears a propeller beanie above their avatar; their hover card shows a Visits row and a New user
 // row; the profile's Directory details opt-out and the admin Visits & new users switch both hide all
 // three; and the newcomer map refuses an anonymous caller.

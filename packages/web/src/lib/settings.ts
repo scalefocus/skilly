@@ -167,7 +167,7 @@ export interface PlatformSettings {
   featureIdeasEnabled: boolean;
   /** §63.10 upstream release alerts on/off. Ships ON; OFF stops the sweep and hides the notices (rows kept). */
   upstreamReleasesEnabled: boolean;
-  /** §66.6 Visits & new users on/off. Ships ON; OFF hides the card rows and the hat (collection keeps running). */
+  /** §67.6 Visits & new users on/off. Ships ON; OFF hides the card rows and the hat (collection keeps running). */
   visitsEnabled: boolean;
   /** §34.9 the stored search language (a PostgreSQL text-search configuration name). The database
    *  resolves what search actually uses (skilly_search_config(), falling back to english). */
@@ -460,13 +460,13 @@ export async function setAchievementsEnabled(enabled: boolean, actorUserId: stri
   });
 }
 
-/** Are §66 Visits & new users shown? Read by `/api/newcomers` (the hover card reads the key in its own query). */
+/** Are §67 Visits & new users shown? Read by `/api/newcomers` (the hover card reads the key in its own query). */
 export async function getVisitsEnabled(db: Pool = pool): Promise<boolean> {
   return (await getPlatformSettings(db)).visitsEnabled;
 }
 
 /**
- * §66.6 Visits & new users on/off. OFF is dormant-not-destructive: every card drops its Visits and
+ * §67.6 Visits & new users on/off. OFF is dormant-not-destructive: every card drops its Visits and
  * New user rows and the hat disappears, but visit days keep being recorded (and pruned at 28 days),
  * so switching back on is instant and accurate. Audited as a setting like every other toggle.
  */

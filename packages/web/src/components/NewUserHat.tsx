@@ -1,4 +1,4 @@
-// The new-user hat (SKILLY_SPEC.md §66.3): a generic propeller beanie — four coloured panels, a band
+// The new-user hat (SKILLY_SPEC.md §67.3): a generic propeller beanie — four coloured panels, a band
 // and a little propeller on top. Static, and fixed colours in both themes like the leader badges
 // (§21). Used above a new user's avatar bubble and, smaller, in their hover card's New user row.
 import { HAT_VIEW_HEIGHT, HAT_VIEW_WIDTH } from "./hatGeometry";
