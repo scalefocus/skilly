@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.54.0",
+    date: "2026-11-06",
+    summary:
+      "Hover cards now show how often a person visits (once a day, week or month, or in a blue moon), and people in their first month get a New user row and a propeller beanie on their picture. Visits appear after a week of history. Hide them under Directory details on your profile; platform admins have a Visits & new users switch.",
+  },
+  {
     version: "2.53.0",
     date: "2026-11-03",
     summary:

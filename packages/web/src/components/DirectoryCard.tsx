@@ -12,7 +12,9 @@ import { createPortal } from "react-dom";
 import { cachedGet } from "./ui";
 import { BADGE_META, badgeIcon, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
 import { levelLabel } from "@skilly/shared/achievements";
+import { visitLabel, type VisitFrequency } from "@skilly/shared/visits";
 import { FollowButton } from "./FollowButton";
+import { NewUserHat } from "./NewUserHat";
 
 /** `GET /api/users/:id/card`. Badges are NOT here — they come from the `/api/leaders` map the
  *  bubble already holds (§28). */
@@ -31,6 +33,10 @@ export interface UserCardData {
   achievementHero?: boolean;
   /** §35.4 — viewer-independent; the Follow ↔ Unfollow state comes from the page-wide store. */
   followable?: boolean;
+  /** §66.4 — the Visits row's key, or null when the row must not show. */
+  visitFrequency?: VisitFrequency | null;
+  /** §66.4 — the New user row (first 30 days). */
+  newUser?: boolean;
 }
 
 const OPEN_DELAY_MS = 300; // hover intent — a pointer crossing a dense table must not fire cards
@@ -303,6 +309,11 @@ function DirectoryCardBody({
         ["Office", data.officeLocation],
       ] as const).filter(([, v]) => !!v)
     : [];
+  // §66.4 — Visits then New user head the block. "No directory information" shows only when there
+  // is no row at all, so someone with nothing in Entra but a Visits value shows that row alone.
+  const visits = data ? visitLabel(data.visitFrequency) : null;
+  const newUser = data?.newUser === true;
+  const hasRows = !!visits || newUser || lines.length > 0;
 
   return (
     <>
@@ -324,13 +335,27 @@ function DirectoryCardBody({
       <div className="dircard-dir">
         {!data && !failed ? (
           <span className="muted">Loading…</span>
-        ) : lines.length ? (
-          lines.map(([label, value]) => (
-            <div key={label} className="dircard-line">
-              <span className="dircard-key">{label}</span>
-              <span className="dircard-val">{value}</span>
-            </div>
-          ))
+        ) : hasRows ? (
+          <>
+            {visits ? (
+              <div className="dircard-line" data-testid="dircard-visits">
+                <span className="dircard-key">Visits</span>
+                <span className="dircard-val">{visits}</span>
+              </div>
+            ) : null}
+            {newUser ? (
+              <div className="dircard-newuser" data-testid="dircard-newuser">
+                <NewUserHat width={16} height={11} />
+                <span>New user</span>
+              </div>
+            ) : null}
+            {lines.map(([label, value]) => (
+              <div key={label} className="dircard-line">
+                <span className="dircard-key">{label}</span>
+                <span className="dircard-val">{value}</span>
+              </div>
+            ))}
+          </>
         ) : (
           // Nothing in Entra, opted out, an erased tombstone, or the fetch failed — one honest line.
           <span className="muted">No directory information</span>

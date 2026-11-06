@@ -6,12 +6,15 @@
 // added here shows up everywhere at once (SKILLY_SPEC.md §4, §19, §21).
 // Hovering (or long-pressing on touch, or focusing) a bubble opens the directory hover card — the
 // person's Entra job title / department / office, plus name, email, presence and their badges
-// spelled out (§28).
+// spelled out (§28). A person in their first 30 days wears a small propeller beanie above the
+// bubble (§66.3).
 import { useApi } from "./ui";
 import { useDirectoryCard } from "./DirectoryCard";
 import { BADGE_META, badgeIcon, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
 import { ACHIEVEMENT_TOTAL, levelAriaLabel } from "@skilly/shared/achievements";
 import { ringDashArray, ringGeometry, showRing } from "./levelRing";
+import { hatGeometry, showHat } from "./hatGeometry";
+import { NewUserHat } from "./NewUserHat";
 
 export type { LeaderMetric, LeaderBadgeInfo } from "./leaderBadges";
 
@@ -73,6 +76,33 @@ function LevelRing({ size, level, hero, children }: { size: number; level: numbe
   );
 }
 
+/** `GET /api/newcomers` (§66.3): one cached list per page, like `/api/levels`. */
+interface NewcomerMap { ids: string[] }
+
+/** The new-user propeller beanie (§66.3), centred over the top of the bubble (or its level ring) and
+ *  overflowing above it — the same placement as the Hero crown, so the bubble's footprint and the
+ *  surrounding layout never change. `base` is the width of what it sits on. */
+function WithHat({ base, children }: { base: number; children: React.ReactNode }) {
+  const g = hatGeometry(base);
+  return (
+    <span style={{ position: "relative", display: "inline-grid", placeItems: "center", flexShrink: 0 }}>
+      {children}
+      <span
+        style={{
+          position: "absolute",
+          top: g.top,
+          left: "50%",
+          transform: "translateX(-50%)",
+          lineHeight: 0,
+          pointerEvents: "none",
+        }}
+      >
+        <NewUserHat width={g.width} height={g.height} label="New user" />
+      </span>
+    </span>
+  );
+}
+
 /** One leader badge — a small colored, icon-filled circle below the avatar. The all-time variant
  *  is the same icon with a tiny crown overlaid on top (30-day carries no crown). Scales down with
  *  the bubble it sits under, floored so the icon stays legible even on the smallest avatars.
@@ -129,6 +159,10 @@ export function UserBubble({ name, avatar, size = 28, userId }: { name: string; 
   const { data: levelData } = useApi<LevelMap>(userId ? "/api/levels" : null);
   const level = (userId ? levelData?.levels?.[userId] : undefined) ?? 0;
   const hero = !!userId && !!levelData?.heroes?.includes(userId);
+  // New users wear the hat (§66.3) — same page-wide cached GET. Opted-out, inactive and erased people
+  // are absent from the list, and a Hero's crown takes the hat's spot.
+  const { data: newcomerData } = useApi<NewcomerMap>(userId ? "/api/newcomers" : null);
+  const hatted = showHat(userId, newcomerData?.ids, hero);
   // The card reuses those same badges from memory — it never refetches them (§28).
   const { triggerProps, card } = useDirectoryCard(userId, name, badges);
 
@@ -149,7 +183,10 @@ export function UserBubble({ name, avatar, size = 28, userId }: { name: string; 
 
   // Level 0 → no ring at all, so a brand-new user's bubble is byte-for-byte what it was before this
   // feature (§31.10) — chat, request lists and admin tables don't sprout empty rings.
-  const ringed = showRing(level) ? <LevelRing size={size} level={level} hero={hero}>{bubble}</LevelRing> : bubble;
+  const ringedOnly = showRing(level) ? <LevelRing size={size} level={level} hero={hero}>{bubble}</LevelRing> : bubble;
+  // No hat → exactly the element above, so the many bubbles of people past their first month are
+  // unchanged. The hat sits on the ring when there is one.
+  const ringed = hatted ? <WithHat base={showRing(level) ? ringGeometry(size).outer : size}>{ringedOnly}</WithHat> : ringedOnly;
 
   // No badges → render exactly as before (no wrapper, no layout change) for the overwhelming
   // majority of avatars that aren't a current leader of anything. The card is portalled to

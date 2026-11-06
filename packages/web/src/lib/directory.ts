@@ -8,6 +8,7 @@ import { pool } from "./db";
 import { userLabel } from "./userLabel";
 import { ONLINE_WINDOW_MINUTES } from "./presence";
 import { followableSql } from "@skilly/shared/follows";
+import { classifyVisits, NEW_USER_DAYS, VISIT_WINDOW_DAYS, type VisitFrequency } from "@skilly/shared/visits";
 
 /** What `GET /api/users/:id/card` returns. Badges are deliberately NOT here — the bubble already
  *  holds the whole `/api/leaders` map for the page (§21) and reads them from memory. */
@@ -31,6 +32,11 @@ export interface UserCard {
   /** §35.4 — active, not erased, allows follows. Viewer-independent: whether THIS viewer follows
    *  the person comes from `/api/me/following`, never from here. */
   followable: boolean;
+  /** §66.4 — the Visits label's key, or null when the row must not show (opted out, erased,
+   *  switched off, or fewer than 7 days observed). Only the label leaves the server, never days. */
+  visitFrequency: VisitFrequency | null;
+  /** §66.3 — first visit within the last 30 days, active, not opted out, switch on. */
+  newUser: boolean;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -41,7 +47,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *
  * The three directory fields come back **null** when the user opted out (`directory_hidden`) or has
  * been erased — they are never serialized to another person's browser in that case. Name, email and
- * presence are unaffected by the opt-out; they are already visible across the app.
+ * presence are unaffected by the opt-out; they are already visible across the app. The same opt-out
+ * (and the `visits_enabled` switch) also hides Visits and New user (§66.4).
  */
 export async function getUserCard(userId: string): Promise<UserCard | null> {
   if (!UUID_RE.test(userId)) return null; // malformed id → 404, not a Postgres cast error
@@ -61,6 +68,13 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     achievement_hero: boolean;
     achievements_enabled: boolean;
     followable: boolean;
+    status: string;
+    first_seen: Date | null;
+    recently_first_seen: boolean;
+    visit_days: string[];
+    today: string;
+    visits_since: string | null;
+    visits_enabled: boolean;
   }>(
     `select id, display_name, email, job_title, office_location, department, directory_hidden,
             erased_at, last_seen, ${followableSql("users")} as followable,
@@ -68,9 +82,17 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
             achievements_hidden,
             (select count(*) from user_achievements ua where ua.user_id = users.id) as achievement_count,
             (hero_at is not null) as achievement_hero,
-            coalesce((select value from platform_settings where key = 'achievements_enabled') <> 'false'::jsonb, true) as achievements_enabled
+            coalesce((select value from platform_settings where key = 'achievements_enabled') <> 'false'::jsonb, true) as achievements_enabled,
+            status, first_seen,
+            (first_seen is not null and first_seen > now() - make_interval(days => $3::int)) as recently_first_seen,
+            array(select d.day::text from user_visit_days d
+                   where d.user_id = users.id and d.day > (now() at time zone 'utc')::date - $4::int
+                   order by d.day) as visit_days,
+            ((now() at time zone 'utc')::date)::text as today,
+            (select value #>> '{}' from platform_settings where key = 'visits_since') as visits_since,
+            coalesce((select value from platform_settings where key = 'visits_enabled') <> 'false'::jsonb, true) as visits_enabled
        from users where id = $1`,
-    [userId, ONLINE_WINDOW_MINUTES],
+    [userId, ONLINE_WINDOW_MINUTES, NEW_USER_DAYS, VISIT_WINDOW_DAYS],
   );
   const r = rows[0];
   if (!r) return null;
@@ -82,6 +104,13 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
   // tombstone, and they have at least one badge — level 0 says nothing worth a line (§31.10).
   const achievementsVisible =
     r.achievements_enabled && !r.achievements_hidden && r.erased_at === null && Number(r.achievement_count) > 0;
+  // §66: Visits and New user ride on the same opt-out as the directory fields, plus the platform
+  // switch. The label is computed here so day counts and dates never reach another browser.
+  const visitsVisible = r.visits_enabled && !hidden;
+  const visitFrequency = visitsVisible
+    ? classifyVisits({ firstSeen: r.first_seen, visitsSince: r.visits_since, today: r.today, activeDays: r.visit_days ?? [] })
+    : null;
+  const newUser = visitsVisible && r.status === "active" && r.recently_first_seen === true;
   return {
     userId: r.id,
     displayName: userLabel(r.display_name, r.email),
@@ -94,6 +123,8 @@ export async function getUserCard(userId: string): Promise<UserCard | null> {
     achievementCount: achievementsVisible ? Number(r.achievement_count) : null,
     achievementHero: achievementsVisible && r.achievement_hero === true,
     followable: r.followable === true,
+    visitFrequency,
+    newUser,
   };
 }
 

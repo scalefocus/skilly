@@ -94,6 +94,52 @@ test("presence: a user who has never beaconed a page shows lastSeenPage null", {
   }
 });
 
+// --- Visit days and first_seen (§66.5) -----------------------------------------------------------
+
+test("presence: a stamp sets first_seen once and records today's visit day exactly once", { skip: !enabled }, async () => {
+  const mk = async (oid: string) => (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name, status) values ($1, $1 || '@org', $1, 'active')
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+    [oid],
+  )).rows[0]!.id;
+  const fresh = await mk("presence-visit-fresh");
+  const veteran = await mk("presence-visit-veteran");
+  await pool.query(`delete from user_visit_days where user_id in ($1,$2)`, [fresh, veteran]);
+  await pool.query(`update users set first_seen = null, last_seen = null where id = $1`, [fresh]);
+  await pool.query(`update users set first_seen = '2025-01-01T08:00:00Z' where id = $1`, [veteran]);
+  const visitDays = async (id: string) =>
+    (await pool.query<{ day: string }>(`select day::text as day from user_visit_days where user_id = $1 order by day`, [id])).rows.map((r) => r.day);
+  const today = (await pool.query<{ d: string }>(`select ((now() at time zone 'utc')::date)::text as d`)).rows[0]!.d;
+  try {
+    // A first-ever stamp: first_seen lands, and so does today's visit day.
+    touchLastSeen(fresh);
+    await settle();
+    const f = (await pool.query<{ first_seen: Date | null }>(`select first_seen from users where id = $1`, [fresh])).rows[0]!;
+    assert.ok(f.first_seen, "first_seen is stamped on the first visit");
+    assert.deepEqual(await visitDays(fresh), [today]);
+
+    // Repeated stamps the same day (throttled or not) never add a second row.
+    touchLastSeen(fresh);
+    touchLastSeen(fresh, "Catalog");
+    await settle();
+    assert.deepEqual(await visitDays(fresh), [today]);
+
+    // Another replica inserting the same day collides harmlessly on the primary key.
+    await pool.query(`insert into user_visit_days (user_id, day) values ($1, $2::date) on conflict do nothing`, [fresh, today]);
+    assert.deepEqual(await visitDays(fresh), [today]);
+
+    // A user who visited before keeps their first_seen — the stamp never moves it.
+    touchLastSeen(veteran);
+    await settle();
+    const v = (await pool.query<{ first_seen: Date }>(`select first_seen from users where id = $1`, [veteran])).rows[0]!;
+    assert.equal(new Date(v.first_seen).toISOString(), "2025-01-01T08:00:00.000Z");
+    assert.deepEqual(await visitDays(veteran), [today]);
+  } finally {
+    // user_visit_days cascades with the users row.
+    await pool.query(`delete from users where id in ($1,$2)`, [fresh, veteran]).catch(() => {});
+  }
+});
+
 // --- Active-users trend series: span-adaptive bucketing (§4) -------------------------------------
 // `getActiveUserSeries` reads min(day) across the WHOLE daily_active_users table to size the span,
 // so these tests own the table: they snapshot it, replace it with fixtures, and restore it in a

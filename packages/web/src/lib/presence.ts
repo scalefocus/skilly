@@ -32,6 +32,11 @@ export function sanitizePageLabel(raw: unknown): string | null {
 // replica throttles independently (worst case a few redundant writes); presence needn't be exact.
 const lastStampMs = new Map<string, number>();
 
+// The UTC day this process last recorded in `user_visit_days` for each user (§66.5), so the day row
+// is inserted once per user per day per replica rather than on every throttled stamp. Replicas that
+// insert the same day collide harmlessly on the primary key.
+const lastVisitDay = new Map<string, string>();
+
 /**
  * Record that `userId` is active right now — fire-and-forget and throttled. NEVER throws and never
  * blocks the caller: presence is best-effort and must not affect request handling. Called from the
@@ -39,6 +44,10 @@ const lastStampMs = new Map<string, number>();
  * `/api/presence/page` beacon (§4) — both share the SAME per-user throttle, so a beacon landing
  * inside another call's throttle window is dropped just like an extra plain stamp, and a plain
  * stamp (no `page`) never clears a previously-recorded `last_seen_page`.
+ *
+ * The same write stamps `first_seen` once (never moved afterwards) and, on this process's first
+ * stamp of a UTC day for the user, records that day in `user_visit_days` — the history behind the
+ * hover card's Visits row (§66.5). Both are as best-effort as `last_seen`.
  */
 export function touchLastSeen(userId: string, page?: string): void {
   const now = Date.now();
@@ -46,12 +55,22 @@ export function touchLastSeen(userId: string, page?: string): void {
   if (prev && now - prev < STAMP_THROTTLE_MS) return;
   lastStampMs.set(userId, now); // set BEFORE the async write so concurrent calls don't stampede
   const query = page
-    ? pool.query(`update users set last_seen = now(), last_seen_page = $2 where id = $1`, [userId, page])
-    : pool.query(`update users set last_seen = now() where id = $1`, [userId]);
+    ? pool.query(`update users set last_seen = now(), first_seen = coalesce(first_seen, now()), last_seen_page = $2 where id = $1`, [userId, page])
+    : pool.query(`update users set last_seen = now(), first_seen = coalesce(first_seen, now()) where id = $1`, [userId]);
   void query.catch(() => {
     // best-effort: drop the throttle stamp so a later request retries the write
     lastStampMs.delete(userId);
   });
+
+  const today = new Date(now).toISOString().slice(0, 10); // UTC day
+  if (lastVisitDay.get(userId) === today) return;
+  lastVisitDay.set(userId, today);
+  void pool
+    .query(`insert into user_visit_days (user_id, day) values ($1, (now() at time zone 'utc')::date) on conflict do nothing`, [userId])
+    .catch(() => {
+      // best-effort: forget the day so a later stamp retries the insert
+      if (lastVisitDay.get(userId) === today) lastVisitDay.delete(userId);
+    });
 }
 
 export interface OnlineUser {

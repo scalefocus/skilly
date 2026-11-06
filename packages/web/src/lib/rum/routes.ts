@@ -111,6 +111,7 @@ export const RUM_API_ROUTES: readonly string[] = [
   "/api/namespaces/[id]/settings",
   "/api/namespaces/administered",
   "/api/nav-badges",
+  "/api/newcomers",
   "/api/notifications",
   "/api/notifications/read",
   "/api/pointer/refs",

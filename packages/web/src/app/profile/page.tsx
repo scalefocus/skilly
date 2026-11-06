@@ -178,8 +178,9 @@ function DirectoryPref() {
     <section className="reveal" style={{ marginBottom: 30 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Directory details</h2>
       <p className="page-sub" style={{ marginBottom: 16 }}>
-        Hovering your avatar anywhere in skilly shows a small card with your job title, department and office, taken
-        from Entra ID. You can keep those three private.
+        Hovering your avatar anywhere in skilly shows a small card with your job title, department and office from
+        Entra ID, and how often you visit. During your first month it also says you&rsquo;re new, and your picture wears
+        a new-user hat. You can keep all of this private.
       </p>
       <div className="sort-toggle" role="group" aria-label="Directory details visibility">
         {opts.map((o) => {
@@ -202,7 +203,7 @@ function DirectoryPref() {
       <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
         {data.directoryHidden
           ? "Your card reads “No directory information”. Your name, email and online status still show."
-          : "Your job title, department and office show on your card."}
+          : "Your job title, department, office and visit activity show on your card."}
       </p>
     </section>
   );

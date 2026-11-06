@@ -37,6 +37,7 @@ import { notifyNewSystemEvents } from "./notify/systemLog.js";
 import { refreshPointerVersions } from "./git/pointerRefresh.js";
 import { recomputeRelatedSkills } from "./related.js";
 import { recordDailyActiveUsers } from "./dau.js";
+import { pruneVisitDays } from "./visits.js";
 import { rollupRum, pruneRum } from "./rum.js";
 import { pruneAiUsage } from "@skilly/shared/ai";
 import { preScanPointerProposals } from "./git/proposalPreScan.js";
@@ -567,6 +568,20 @@ async function leaderLoops(): Promise<void> {
   };
   await dauSweep();
   setInterval(dauSweep, Number(process.env.DAU_SNAPSHOT_INTERVAL_MS ?? 86_400_000)); // 24h
+
+  // Visit-day retention (SKILLY_SPEC.md §66.5): user_visit_days keeps only the 28-day Visits window.
+  // Daily, leader-only, and independent of the visits_enabled switch.
+  const visitDaysPrune = async () => {
+    if (!isLeader) return;
+    try {
+      const deleted = await pruneVisitDays(pool);
+      console.log(JSON.stringify({ level: "info", msg: "pruned visit days", deleted }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "visit-day prune failed", err: String(err) }));
+    }
+  };
+  await visitDaysPrune();
+  setInterval(visitDaysPrune, Number(process.env.VISIT_DAYS_PRUNE_INTERVAL_MS ?? 86_400_000)); // 24h
 
   // Real user monitoring rollup (SKILLY_SPEC.md §32.3): upsert rum_daily for today + yesterday
   // (UTC) from the raw samples, hourly. Raw samples live 30 days, so a missed run self-heals.

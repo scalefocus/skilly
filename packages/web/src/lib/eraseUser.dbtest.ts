@@ -100,12 +100,23 @@ test("eraseUser: transfers install credits to the replacement (self-credits/dupl
        on conflict (entra_object_id) do update set email = excluded.email returning id`,
     )).rows[0]!.id;
     await install(s1, null, [victim2]);
+    // Visit history (§66.7): a first visit and two visit days, both personal data.
+    await pool.query(`update users set first_seen = now() - interval '3 days' where id = $1`, [victim2]);
+    await pool.query(
+      `insert into user_visit_days (user_id, day)
+       select $1, (now() at time zone 'utc')::date - g from generate_series(0, 1) g on conflict do nothing`,
+      [victim2],
+    );
     const r2 = await eraseUser(actor, victim2, null);
     assert.equal(r2.ok, true, `no-target erase succeeded: ${JSON.stringify(r2)}`);
     if (!r2.ok) return;
     assert.equal(r2.creditsTransferred, 0);
     assert.equal(r2.creditsSkipped, 0);
     assert.equal(await count(victim2), 0, "no-target erasure still deletes credits");
+    const visits = await pool.query<{ n: string }>(`select count(*)::text as n from user_visit_days where user_id = $1`, [victim2]);
+    assert.equal(visits.rows[0]!.n, "0", "erasure deletes the visit days");
+    const fs = await pool.query<{ first_seen: Date | null }>(`select first_seen from users where id = $1`, [victim2]);
+    assert.equal(fs.rows[0]!.first_seen, null, "erasure scrubs first_seen");
 
     // cleanup (install_credits cascade with access_log; users/namespace stay — erased tombstones
     // are referenced by audit_log, which is append-only)

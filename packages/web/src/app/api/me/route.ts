@@ -28,6 +28,7 @@ import {
 } from "../../../lib/settings";
 import { invalidateLeaderboard } from "../../../lib/leaderboard";
 import { invalidateLevels } from "../../../lib/levels";
+import { invalidateNewcomers } from "../../../lib/newcomers";
 import { setUserTimeZone } from "../../../lib/achievements";
 import { validateTimeZone } from "@skilly/shared/achievements";
 import { getOpenSurvey, selfSurveyStatus, setUserSurveysEnabled } from "../../../lib/survey";
@@ -298,6 +299,9 @@ export async function PATCH(req: Request) {
   }
   if (typeof body.directoryHidden === "boolean") {
     await setUserDirectoryHidden(access.userId, body.directoryHidden);
+    // The same opt-out hides the new-user hat (§66.6) — drop the newcomer map so it leaves (or
+    // returns to) other people's screens on their next page load instead of after the TTL.
+    invalidateNewcomers();
   }
   if (typeof body.achievementsHidden === "boolean") {
     await setUserAchievementsHidden(access.userId, body.achievementsHidden);
