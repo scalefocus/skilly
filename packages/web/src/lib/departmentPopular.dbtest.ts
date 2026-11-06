@@ -202,5 +202,9 @@ test("popular in your department: window, floor, matching, who counts, filters, 
     resetDepartmentPopularCache();
     await q(`delete from skill_installs where skill_id in (select id from skills where namespace_id = any($1::uuid[]))`, [[ns, otherNs]]);
     await q(`delete from skill_namespace_grants where skill_id in (select id from skills where namespace_id = any($1::uuid[]))`, [[ns, otherNs]]);
+    // Leave the fixtures archived, not active: other dbtest files share this database (in parallel
+    // in CI), and catalog-wide listings are capped, so ~20 extra active skills can crowd them out.
+    // The next run's mkSkill reactivates them.
+    await q(`update skills set status = 'archived' where namespace_id = any($1::uuid[])`, [[ns, otherNs]]);
   }
 });
