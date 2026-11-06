@@ -162,6 +162,9 @@ export async function GET() {
     ideaNotifications: prefs?.idea_notifications ?? true,
     // §28 directory opt-out: hide job title / office / department from other people's hover cards.
     directoryHidden: prefs?.directory_hidden ?? false,
+    // §66.6 whether the "Popular in your department" row is on — the Directory details copy says the
+    // opt-out also keeps your installs out of that row only while it is.
+    departmentPopularEnabled: settings.departmentPopularEnabled,
     // §31 achievements opt-out: hide earned badges from other people (the hall + hover card).
     achievementsHidden: prefs?.achievements_hidden ?? false,
     // §35.3 "Allow others to follow me" — off pauses every follow on the user.

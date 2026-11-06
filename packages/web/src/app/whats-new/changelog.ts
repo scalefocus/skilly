@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.54.0",
+    date: "2026-11-06",
+    summary:
+      "The home page has a new “Popular in your department” row: skills that at least two people in your Entra department adopted in the last 90 days, with a count but never names. Skills you already have are left out. Hiding your directory details on your profile also keeps your installs out of it, and platform admins can switch the row off on Administration.",
+  },
+  {
     version: "2.53.0",
     date: "2026-11-03",
     summary:
