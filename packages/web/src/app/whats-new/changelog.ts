@@ -21,6 +21,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Hover cards now show how often a person visits (once a day, week or month, or in a blue moon), and people in their first month get a New user row and a propeller beanie on their picture. Visits appear after a week of history. Hide them under Directory details on your profile; platform admins have a Visits & new users switch.",
   },
   {
+    version: "2.54.0",
+    date: "2026-11-06",
+    summary:
+      "The home page has a new “Popular in your department” row: skills that at least two people in your Entra department adopted in the last 90 days, with a count but never names. Skills you already have are left out. Hiding your directory details on your profile also keeps your installs out of it, and platform admins can switch the row off on Administration.",
+  },
+  {
     version: "2.53.0",
     date: "2026-11-03",
     summary:

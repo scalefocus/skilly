@@ -136,8 +136,8 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `users`
 - `id`, `entra_object_id` (unique, **nullable** — erasure detaches it to NULL, §4; the unique index permits many NULLs), `email`, `display_name`, `status` (active|inactive), `created_at`, `updated_at`, `avatar`, `last_seen`, `last_seen_page`.
-- **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected).
-- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `idea_votes_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's picture from others in the *Upvoted by* bubbles of *Coming soon* items; their votes still count; migration 0102, §60), `upstream_release_notifications` (BOOLEAN NOT NULL DEFAULT true — the maintainer opt-out of `skill.upstream_release`; migration 0104, §63), `erased_at` (GDPR tombstone marker, §4).
+- **Directory profile** (migration 0061, §5/§28): `job_title`, `office_location`, `department` — all nullable `text`, mirroring the Entra `jobTitle` / `officeLocation` / `department` attributes. Display-only (the hover card, §28); **nothing in RBAC, visibility or governance reads them** (invariant #1 unaffected). `department` has one further reader, aggregate-only: the home page's *Popular in your department* row (§66) groups adoption counts by it, matched trimmed and case-insensitively (partial expression index on `lower(btrim(department))`, migration 0107).
+- Per-user preferences/state: `date_format` (`eu`|`us`, nullable — overrides the platform default, §13), `leaderboard_hidden` (opt-out of the contributor leaderboard, §21), `directory_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing job title / office / department in the hover card, §28; migration 0061 — it also keeps the user's installs out of their department's *Popular in* row, §66), `email_notifications` (BOOLEAN NOT NULL DEFAULT true — the email-channel opt-out, §12; migration 0053), `drift_notifications` / `new_version_notifications` (both BOOLEAN NOT NULL DEFAULT true — the per-type maintainer-notification opt-outs, §12; migration 0057), `catalog_seen_at` / `review_seen_at` / `system_log_seen_at` / `requests_seen_at` (nav "last viewed" markers for the new-since-last-visit badges, §10/§25/§26), `whats_new_seen_version` (TEXT, nullable, a semver string, **no back-fill**; migration 0067 — the highest app version whose release notes the user has been shown, or silently advanced past; drives the once-per-release *What's new* update notice, §23; stamped on dismissal, not on display), `achievements_hidden` (BOOLEAN NOT NULL DEFAULT false — opt-out of showing achievements to others, §31; migration 0071), `time_zone` (TEXT, nullable — the browser-reported IANA zone behind the Night Shift / Weekend Warrior badges, §31.3; migration 0071), `hero_at` (TIMESTAMPTZ, nullable — the moment the user first held **every** badge in the catalog; the permanent-Hero high-water stamp behind the level, §31.10; migration 0072), `allow_follows` (BOOLEAN NOT NULL DEFAULT true — *Allow others to follow me*; off pauses every follow on the user, §35.3; migration 0078), `surveys_enabled` (BOOLEAN NOT NULL DEFAULT true — the feedback-survey opt-out, §36.7), `survey_last_shown_at` (TIMESTAMPTZ, nullable — the last survey offer's stamp behind the 30-day floor and the 90-day fallback; staggered at launch, §36.13) and `survey_offer` (JSONB, nullable — the currently open survey offer, §36.2) (all three migration 0079), `survey_self_shown_at` (TIMESTAMPTZ, nullable — when the user last opened an on-demand survey; drives its 7-day cooldown, §36.16; migration 0080), `email_digest` (TEXT, nullable — `immediate` | `daily` | `weekly`; `NULL` = the organization default), `email_digest_last_run_at` (TIMESTAMPTZ, nullable) and `email_digest_failures` (SMALLINT NOT NULL DEFAULT 0) (all three migration 0093, the email digest, §48), `idea_attribution_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's name on their published feature ideas) and `idea_notifications` (BOOLEAN NOT NULL DEFAULT true — a platform admin's opt-out of `idea.submitted`) (both migration 0100, feature ideas, §60), `idea_votes_hidden` (BOOLEAN NOT NULL DEFAULT false — hides the user's picture from others in the *Upvoted by* bubbles of *Coming soon* items; their votes still count; migration 0102, §60), `upstream_release_notifications` (BOOLEAN NOT NULL DEFAULT true — the maintainer opt-out of `skill.upstream_release`; migration 0104, §63), `erased_at` (GDPR tombstone marker, §4).
 - Provisioned/updated via **SCIM**. JIT may backfill the *own* profile on first login if SCIM hasn't synced yet.
 - `last_seen` (nullable `timestamptz`, indexed `DESC`) records the user's most recent authenticated activity; `last_seen_page` (nullable `text`) records a human-readable label of the page they were last on — see **Currently online** (§4).
 - `first_seen` (nullable `timestamptz`, migration 0108, §67.7) records the user's **first** authenticated activity: stamped once by the same `touchLastSeen` write, never moved afterwards, `NULL` = never visited. It drives the hover card's *Visits* and *New user* rows and the new-user hat (§67).
@@ -289,7 +289,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§67 visits keys** (`visits_enabled` — default `true`, the *Visits & new users* switch; `visits_since` — the UTC date visit-day collection began, written once by migration 0108; §67.6), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§66 department-row switch** (`department_popular_enabled` — default `true`, §66.6), the **§67 visits keys** (`visits_enabled` — default `true`, the *Visits & new users* switch; `visits_since` — the UTC date visit-day collection began, written once by migration 0108; §67.6), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -573,8 +573,10 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 
 ### Directory profile (job title, office, department)
 - `users.job_title`, `users.office_location`, `users.department` (§3) mirror the Entra `jobTitle`,
-  `officeLocation` and `department` attributes. They exist **solely to power the directory hover
-  card (§28)** — no role, gate, filter or notification reads them.
+  `officeLocation` and `department` attributes. They exist **to power the directory hover card
+  (§28)**. The one other reader is `department`, which the home page's *Popular in your department*
+  row (§66) uses to group adoption counts, never to decide access. No role, gate or notification
+  reads them.
 - **Two writers, and both overwrite unconditionally** — deliberately *unlike* `avatar`, which is
   only ever filled when missing (`setUserAvatarIfMissing`). A promotion, a re-org or an office move
   must propagate; a stale title must never survive. A Graph value that is absent or empty writes
@@ -950,7 +952,8 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     (click to remove). Hidden on archived / not-yet-installable skills and for everyone who is not a
     platform admin.
   - **Home page:** a **"Featured skills"** card section placed **immediately below the stats row**
-    (and **above the "installing is one command" explainer**) — since §50, the **"Hyped skills"**
+    (and **above the "installing is one command" explainer**; since §66 the **"Popular in
+    *<department>*"** row, when it renders, sits between Featured and the explainer) — since §50, the **"Hyped skills"**
     section, when it renders, sits **between the stats row and Featured** (§50.6). **Authenticated users only**
     (signed-out visitors never see it). Cards are **visibility-filtered per viewer** (invariant #3),
     ordered **most-recently-featured first**, and include **only skills with a live published
@@ -1234,6 +1237,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Marketplace manifest.** Tags used to fill the per-plugin `keywords` array; with plugins grouped by category (§30.3) it now carries the member skills' titles and slugs, and the §30.5 content hash covers category slugs instead of tags.
 - **Ranking:** with a query active, the **"Relevance"** sort (the default) orders by **match-quality tier** — every word in the name › every word within name/description/categories › every word anywhere (usage and body included) › *(any-word fallback only)* some words › substring/typo only — and, **within a tier**, by popularity (`install_count`), then the **Bayesian-smoothed rating (§18)**, then Official (§34.6). With no query, popularity leads. A dedicated **"Top rated"** sort orders the same match set by the smoothed rating directly, **"Latest"** by most-recent version. A star value is never a match term.
 - **"Skills you might like" (related skills):** the skill **detail page** ends with a *"Skills you might like"* section — up to **3** other skills **most often installed together** with this one (pure **co-install** signal, no content similarity). Computed **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the per-`(user, skill)` adoption ledger `skill_installs` (§21): two skills are related when the same users adopted both; `shared_count` = number of shared adopters. Stored in **`related_skills`** (migration 0046) as a wider top-N candidate list per skill so the read path (`relatedSkills` → `GET /api/skills/:ns/:slug/related`) can **visibility-filter per viewer** (invariant #3 — restricted skills never surface to outsiders) and still fill the **top 3 the viewer can see** **and hasn't adopted yet**, ranked by shared adopters then `install_count`. Active skills only. **Already-installed exclusion:** a neighbour the viewer has adopted (a `skill_installs` row — git install **or** first download, uninstall-agnostic) is dropped. **Empty-state:** if there were visible neighbours but the viewer has installed **all** of them, the section shows *"You have all related skills."*; if there were **no** visible neighbours to begin with (a new/low-adoption skill, or all its neighbours restricted-invisible), the section is **hidden** entirely. (`relatedSkills` returns `{ related, allInstalled }` to tell those two empty cases apart; the nightly rebuild means a brand-new skill won't appear as a neighbour until the next run.)
+- **"Popular in your department" (home page):** up to 6 skills that at least 2 people in the viewer's Entra department first adopted (`skill_installs`, §21) in the last 90 days, ranked by how many did, with skills the viewer has adopted left out and only a count shown, never names. Visibility-filtered per viewer (invariant #3). A live query with a 10-minute cache per department, switchable off by platform admins; the *Directory details* opt-out keeps a person out of the counts. Full rules in §66.
 - **On-demand rebuild (Administration → Maintenance):** a **platform admin** can trigger the recompute without waiting for the nightly run, via a **"Rebuild now"** button in a **Maintenance / background jobs** card. Because the batch job lives on the worker, the button doesn't run it inline — it **signals** the worker: the route (`POST /api/admin/jobs/related-rebuild`, platform-admin only, **audited** as `job.related_rebuild_requested`) sets `platform_settings.related_rebuild_requested_at`; the worker's short **signal poll** (leader-only) picks it up, runs `recomputeRelatedSkills`, and **clears** the flag. The recompute takes a **Postgres advisory lock** so a manual run and the nightly sweep never collide (the second caller skips). Both runs stamp `related_last_run_at` + `related_last_run_count` into `platform_settings`, which the card shows ("last rebuilt … · N links"); `GET /api/admin/jobs/related-rebuild` returns that status and whether a run is in flight, and the button polls it (idle → *Rebuilding…* → done).
 
 ---
@@ -1776,6 +1780,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 **Catalog & skills**
 - `GET /api/skills` — search/list (visibility-filtered, faceted); `q` runs the §34 engine and the response is `{ skills, matchMode }` (`"all" | "any"`, `null` without a query). `updates=1` is the owner-only *Updates available* facet, and each row carries `upstreamUpdate` for effective maintainers and platform admins only (§63.11).
 - `GET /api/skills/featured` — the **Featured skills** home-page feed (§7): visibility-filtered, **live-published only**, most-recent-featured first, **not** sliced to the cap; an empty result ⇒ the section is omitted.
+- `GET /api/skills/department-popular` — the **Popular in your department** home-page row (§66.7): `{ department, windowDays, skills }`, each card with its `colleagues` count; visibility-filtered, the viewer's own adoptions left out, capped at 6; `department: null` and no skills when the viewer has no department or the switch is off.
 - `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7) + `deprecation` / `replaces[]` / `canDeprecate` (§45.8).
 - `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once **and only for a same-site request** (a `Sec-Fetch-Site: cross-site` navigation is served but never counted — a GET must not be a cross-site state trigger, §49.9), and **never listed as an installation** on the Installed Skills page (§23).
 - `POST /api/skills/:ns/:slug/install` — mint a **reusable** skill-scoped install command (interactive); body `{ semver?, expiresAt?, system? }` — `system: true` mints a **system installation** (§23), **platform-admin only, re-verified server-side**; **409** for a not-yet-`git_published` version (§6/§23). *(Endpoint is `install`, not `install-url`; tokens are reusable, not one-time.)*
@@ -4472,10 +4477,11 @@ Top to bottom, in a fixed max-width (~260px) card:
   `users.directory_hidden` via `GET|PATCH /api/me` (same pattern as `leaderboardHidden`). While set,
   `GET /api/users/:id/card` returns **null** for all three fields (they are never serialized to
   another user's browser) and the card shows "No directory information". **Name, email and presence
-  are still shown** — those are already exposed across the app today. **Since §67 the same opt-out
-  also hides the Visits and New user rows and the new-user hat** (`visitFrequency: null`,
-  `newUser: false`, absent from `/api/newcomers`); the profile's *Directory details* copy says so
-  (§67.6).
+  are still shown** — those are already exposed across the app today. The same switch keeps the
+  user's installs out of their department's *Popular in* row on colleagues' home pages (§66.6); the
+  profile copy says so while that row is switched on. **Since §67 the same opt-out also hides the
+  Visits and New user rows and the new-user hat** (`visitFrequency: null`, `newUser: false`, absent
+  from `/api/newcomers`); the profile's *Directory details* copy says so (§67.6).
 - **Presence widening is deliberate and specced in §4** — the dot is the one genuinely *new* audience
   for an existing signal; everything else the card shows is either brand-new data (title/office/
   department) or already visible elsewhere.
@@ -10813,7 +10819,7 @@ notifying the people who run the skill, and leaving an in-band hint in the git-s
 | 7 | **Authority = archive's**: platform admin (any), owning-namespace admin. Not maintainers, not grantee-namespace admins, **no MCP tool**. | Deprecation retires something people depend on; it is governance, not maintenance. The MCP exclusion list already names catalog governance (§29). |
 | 8 | **Notify once**, to watchers ∪ effective maintainers ∪ current installers, emailed, no per-type opt-out; re-notify only when the successor changes. | The people who run the skill must hear it; a note edit is not a new event. |
 | 9 | **Deprecated skills stay in search and the catalog**, sorted after live ones; no new filter. | Hiding them breaks "find the thing I installed"; a visible marker plus sort penalty is enough. |
-| 10 | **Excluded from** Featured (cleared on deprecate), recommendations (§3 `related_skills`), request fulfilment (§26) and promotion to global (§8). **Official is left alone.** | Those surfaces *promote* a skill; promoting a retired one is a contradiction. Official is a provenance claim, not a promotion. |
+| 10 | **Excluded from** Featured (cleared on deprecate), recommendations (§3 `related_skills`, and the home page's *Popular in your department* row, §66), request fulfilment (§26) and promotion to global (§8). **Official is left alone.** | Those surfaces *promote* a skill; promoting a retired one is a contradiction. Official is a provenance claim, not a promotion. |
 | 11 | **Independent of `status`.** Archiving a deprecated skill keeps the marker stored; restore re-applies it. Un-deprecating clears all four columns. | One axis per concept; no state explosion. |
 
 ### 45.2 Data model (migration 0089)
@@ -14173,7 +14179,8 @@ like the other facet counts:
   detectedAt }, proposal?: { id }, skipped?: { ref, byName, at }, proposePath }`. Its `pointer`
   block gains the pinned `ref` (§63.9).
 - Every listing that returns catalog cards (`GET /api/skills`, `/api/skills/featured`,
-  `/api/skills/hyped` and `/api/skills/:ns/:slug/related`) gains a per-row `upstreamUpdate`,
+  `/api/skills/hyped`, `/api/skills/department-popular` (§66) and `/api/skills/:ns/:slug/related`)
+  gains a per-row `upstreamUpdate`,
   non-null **only** for effective maintainers and platform admins while the pill shows (§63.7):
   `{ state: "available" | "proposed", kind: "release" | "branch_drift", currentRef, baselineSemver,
   releaseRef?, bump? }`.
@@ -14996,6 +15003,182 @@ count, byName }`. The three reminders carry `{ nsId, ns, days, count, proposalId
   - *Assigned to me* and *Unassigned* narrow the list;
   - a seeded proposal past its due instant shows **Overdue** and is listed by the *Overdue* filter;
   - the proposer sees the *Reviewer* and *Review target* lines read-only.
+
+---
+
+## 66. Popular in your department
+
+The home page gains a **"Popular in *<department>*"** row: up to six skills that people in the
+viewer's Entra department first adopted in the last 90 days, ranked by how many of them did. It is a
+discovery row, so skills the viewer already has are left out. A skill needs at least **two**
+colleagues before it can appear, and the row shows how many, never who. The department is
+`users.department` (§5), and this is the first feature to read it for anything but the hover card
+(§28). A platform switch turns the row off, and each person can keep their own installs out of it with
+the existing *Directory details* opt-out. Nothing new is stored: the row is a live query over the
+adoption ledger `skill_installs` (§21) with a short cache.
+
+### 66.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Adopting means a first adoption in the trailing 90 days.** A colleague counts for a skill when their `skill_installs` row (§21: the first clone, first download or first MCP read, three doors to one adoption) has `first_at` within the last 90 days. Re-clones, later versions and uninstalls change nothing. | "Adopting" is about what people are picking up now. The ledger is the de-duplicated signal behind install counts and *Skills you might like* (§10), so re-cloning can't inflate it. Ninety days leaves mid-size departments enough data. |
+| 2 | **Same department means trimmed, case-insensitive equality** of `users.department`. A value that is empty after trimming is no department. There is no alias table. | `Engineering` and `engineering ` are one team. `R&D` against `Research & Development` is the tenant's Entra hygiene, not a new admin screen. |
+| 3 | **Colleagues count by their department today, and only while active**: `status = 'active'`, not erased. Nothing is stamped at adoption time. | Someone who moves teams takes their recent adoptions with them, and a leaver drops out. A stamp at adoption time couldn't be backfilled, so the row would start empty. |
+| 4 | **A skill needs at least 2 colleague adopters** in the window. | With one adopter the row would show exactly what one named person installed, which today only the skill's owners can see (§21). Two is the accepted floor (§66.8). |
+| 5 | **The card shows the count, never the people**: *"👥 3 colleagues"*. No names, avatars or hover list. | The count is the signal. Who adopted what stays on `/usage`, for the skill's owners. |
+| 6 | **Skills the viewer has adopted are left out**: any `skill_installs` row for the viewer and the skill, whether or not they uninstalled, the *Skills you might like* rule (§10). | It is a discovery row. It also means the viewer's own adoption never counts toward a skill they see. |
+| 7 | **Ranked by colleague adopters**, then the most recent of those adoptions, then the global `install_count`, then title. **Up to 6 cards** and no *see all* page. | The most-shared skill first, and the fresher one breaks a tie. Six is the *Recently published* grid. |
+| 8 | **The row sits right after Featured**, before the *Installing is one command* explainer. | The organization-wide spotlights (Hyped, Featured) first, then the personal row. |
+| 9 | **No empty state.** The row is omitted when the switch is off, when the viewer has no department, and when nothing qualifies once the viewer's filters are applied. | The rule Hyped and Featured follow. A permanent empty card would nag people the row can't serve. |
+| 10 | **The heading names the viewer's own department**, as Entra spells it for them. | *"Popular in Engineering"* says what the row is without a second line of explanation. |
+| 11 | **The opt-out is the existing *Directory details* switch** (`directory_hidden`, §28). A person who hides their directory details is never counted for any department. They still see the row for their own. | Someone who keeps their department private shouldn't have their installs grouped under it. One switch, not two. |
+| 12 | **One platform switch, `department_popular_enabled`, on by default.** The floor (2), window (90 days) and cap (6) are code constants. | Some organizations (a works council, for example) will want department-level signals off. Nobody has asked to tune the rules. |
+| 13 | **A live query with a 10-minute cache per department.** No new table and no worker job. | New adoptions show within minutes. Everyone in a department shares the expensive part, and the per-viewer filters are cheap. |
+| 14 | **Only promotable skills**: active, with a live published version (the Featured rule, §7), not deprecated (§45 decision 10), and visible to the viewer through the shared predicate (invariant #3, including §42 grants). | The row promotes skills, and it must never reveal a restricted one. |
+
+### 66.2 Who counts and what qualifies
+- **The viewer's department key** is `lower(btrim(users.department))` for the viewer. NULL, or empty
+  after trimming, means no department, and the row is omitted. The heading shows `btrim(department)`
+  with its own capitals. The viewer's own `directory_hidden` doesn't hide the row from them: the
+  department is theirs, and it is shown only to them.
+- **An adopter** for a department key is a user who:
+  - is `status = 'active'` with `erased_at IS NULL`;
+  - has `directory_hidden = false`;
+  - has `lower(btrim(department))` equal to the key;
+  - has a `skill_installs` row for the skill with `first_at >= now() - 90 days`.
+  System installations have no user and never count (§23). An adopter needs no access check: they
+  adopted the skill, so they could see it.
+- **A qualifying skill** for a viewer:
+  - has **at least 2 adopters** in the viewer's department;
+  - is active (not archived) and has a live published version, the Featured feed's predicate (§7);
+  - is not deprecated (§45);
+  - is visible to the viewer through the shared visibility predicate (invariant #3; §42 grants
+    count);
+  - has no `skill_installs` row for the viewer (decision 6).
+- Because a skill the viewer adopted is never shown, the viewer is never part of a count they see. A
+  shown count is always colleagues only.
+
+### 66.3 Ranking, cap and constants
+- **Order:** adopters descending, then the latest `first_at` among those adopters descending, then
+  `skills.install_count` descending, then title ascending, then the skill id, so the order is stable.
+- **Cap:** the first **6** qualifying skills.
+- **Constants** live in `@skilly/shared/department-popular`, a client-safe subpath, because the
+  page's copy uses the window too: `DEPARTMENT_POPULAR_WINDOW_DAYS = 90`,
+  `DEPARTMENT_POPULAR_MIN_COLLEAGUES = 2`, `DEPARTMENT_POPULAR_LIMIT = 6`, and
+  `departmentKey(raw)` (trim spaces, lower-case; empty → `null`). Inner spaces are kept as they are.
+  Like SQL `btrim()`, only spaces are trimmed (not tabs or line breaks). The query compares
+  `lower(btrim(department))` on **both** sides in SQL; the web uses `departmentKey` only to tell
+  whether the viewer has a department and as the cache key, so the two can never disagree about
+  who matches.
+
+### 66.4 Computation and cache
+- **Step 1, per department (cached).** For a department key: every skill with at least 2 adopters
+  (§66.2), with its adopter count and latest adoption time. This list is never sent to a browser as it
+  is. It is cached **in the web process for 10 minutes**, keyed by the department key. v1 runs one web
+  instance (HA is deferred, §16).
+- **Step 2, per viewer (every request, live).** Join the cached list to `skills`. Keep the skills
+  that are eligible and visible to the viewer and that the viewer hasn't adopted (§66.2), order them
+  by §66.3, take 6, and build the cards with the shared catalog-card builder that the Featured and
+  Hyped feeds use.
+- **How fresh it is.** The switch is read on every request (through the usual short platform-settings
+  cache), so turning it off removes the row at once. The viewer's own new adoption drops that skill at
+  once, because step 2 is live. A colleague's new adoption, a department change, a deactivation or
+  someone turning on the opt-out shows within **10 minutes** (§66.8).
+- **Index:** migration **0107** adds a partial expression index on `users (lower(btrim(department)))
+  WHERE department IS NOT NULL`. Step 1 starts from the department's users and reaches their
+  adoptions through the existing `idx_skill_installs_user`.
+
+### 66.5 The home page
+- A section **right after Featured** and before the *Installing is one command* explainer, so the
+  order is: stats → Hyped → Featured → **Popular in *<department>*** → explainer → Recently
+  published. Authenticated users only. `data-testid="department-popular-section"`.
+- **Heading:** *"Popular in Engineering"*, the viewer's trimmed department. A long name wraps.
+  **Subline** (muted): *"What your colleagues adopted in the last 90 days."*
+- **Cards:** the same `SkillCard` the Featured and Hyped sections use, with everything those cards
+  already carry (Official, the 🔥 hype pill, the §63 update pill). Each card also gets a chip
+  *"👥 N colleagues"*. N is always at least 2, so the plural always fits. The chip's tooltip reads
+  *"N people in your department adopted this in the last 90 days"*. It is a tab in the card's
+  top-right corner (the corner the catalog's *new* tab uses, which never shows on a home feed), and
+  the card's top padding grows so the tab never covers a pill. The description absorbs the
+  difference, so the card keeps the fixed height every grid card has (§14).
+- No *see all* link. On phones the section uses the same card grid as the others.
+- Omitted entirely in each case in decision 9. Overlap with Hyped, Featured or Recently published is
+  allowed: the sections are independent.
+
+### 66.6 Administration and Profile
+- **Administration → Popular in your department**: a collapsible card (card id `departmentpopular`,
+  platform admins only, collapsed by default, placed right after **Featured skills cap**, summary
+  `on` / `off`). It has one shared `Switch`, *Show each person the skills popular in their
+  department*, saved through `PATCH /api/admin/settings { departmentPopularEnabled }` and audited as
+  `settings.updated`. The card's explainer: *"Uses each person's department from Entra ID. A skill
+  shows only once at least two colleagues adopted it in the last 90 days, and nobody is named. People
+  who hide their directory details aren't counted."* Turning the switch off stores and deletes
+  nothing: the row stops rendering and the query stops running.
+- **Profile → Directory details** (§28): while the switch is on, the intro gains a sentence, *"Hiding
+  them also keeps your installs out of the "Popular in your department" row on your colleagues' home
+  pages."*, and the *Hidden* note becomes *"Your card reads "No directory information", and your
+  installs don't count toward your department's popular skills. Your name, email and online status
+  still show."* While the switch is off, both read as today. `GET /api/me` returns
+  `departmentPopularEnabled` (read-only).
+
+### 66.7 API, audit and other surfaces
+- **`GET /api/skills/department-popular`** → `{ department: string | null, windowDays: 90, skills:
+  Array<CatalogEntry & { colleagues: number }> }`. Authenticated users only (`401` otherwise).
+  `department` is the viewer's trimmed department. It is `null`, with `skills: []`, when the viewer has
+  no department **or the switch is off**: never a `404`, so the home page needs no special case.
+  `skills` is already filtered, ordered and capped. Each row carries the usual card fields, including
+  `upstreamUpdate` (§63.11).
+- **Not audited** and not logged: it is a read, like every other home feed. It writes no
+  `usage_events` or `access_log` row. Only the switch is audited, as `settings.updated`.
+- **GDPR erasure (§4)** already sets `department` to NULL and stamps `erased_at`, so an erased user
+  never counts. There is nothing extra to scrub.
+- **Unaffected:** search ranking, catalog sorts and filters, *Skills you might like*, the
+  leaderboard, notifications, email digests and MCP. Department still gates nothing (invariant #1).
+
+### 66.8 Accepted trade-offs and out of scope
+- **The floor of 2 can be beaten by elimination in a tiny department.** If you have only two
+  colleagues and a card says *"2 colleagues"*, you know both of them adopted the skill. The floor stops
+  a single person being singled out, not *"everyone did it"*. This is accepted, along with the
+  opt-out.
+- Department variants Entra spells differently are treated as different departments.
+- An opt-out, a team move or a deactivation can take up to 10 minutes to reach the row.
+- An adoption counts for the colleague's current department, even if they were in another one when
+  they adopted the skill.
+- The department is as of the colleague's last sign-in or the last Graph sweep (§5). Every adopter
+  has signed in at least once, because each door to adoption needs a session, so every adopter has a
+  department if Entra holds one.
+- **Out of scope:** a department filter or sort in the catalog; *"N in your department"* on the detail
+  page or on catalog cards; other groupings (office, manager chain, Entra groups); a department alias
+  table; admin-tunable floor, window or cap; notifications or digests about department trends.
+
+### 66.9 Tests (ship with the change)
+- **Unit** (`@skilly/shared/department-popular`): `departmentKey` (trailing and leading spaces,
+  mixed case, whitespace only → `null`, `null` → `null`, inner spaces kept); the constants' values.
+- **Integration** (`lib/departmentPopular.dbtest.ts`, live DB, clock injected; like every other
+  `*.dbtest.ts` it drives the lib, not the route handler):
+  - two colleagues adopting within 90 days put the skill on the row with `colleagues: 2`; one
+    doesn't; an adoption 91 days ago doesn't count;
+  - `Engineering`, `engineering ` and `ENGINEERING` match each other, and `Engineering Ops` doesn't
+    match;
+  - inactive, erased and `directory_hidden` colleagues aren't counted;
+  - a skill the viewer adopted is left out, even after an uninstall;
+  - a restricted skill the viewer can't see is left out, and one shared to the viewer's namespace
+    through a §42 grant is shown;
+  - archived, deprecated and no-live-version skills are left out;
+  - a system installation doesn't count;
+  - the order with each tie-break, and the cap of 6;
+  - no department, or a whitespace-only one, gives `department: null` and `skills: []`, and so does
+    the switch off;
+  - the cache: a second call within 10 minutes reuses step 1, a colleague's new adoption appears
+    after the TTL (simulated by clearing the cache), and the viewer's own adoption drops the skill at
+    once;
+  - switching it off writes `settings.updated`. (The `403` for a user who isn't a platform admin is
+    the existing guard on `PATCH /api/admin/settings`, shared by every switch.)
+- **e2e:**
+  - signed out, the feed answers `401`;
+  - with two seeded colleagues in the dev user's department who have adopted a seeded skill, the
+    home page shows *"Popular in <department>"* right after Featured, with the skill and its
+    *"👥 2 colleagues"* chip;
+  - a platform admin turns the switch off on Administration, and the row is gone on reload.
 
 ---
 

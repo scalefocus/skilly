@@ -30,6 +30,7 @@ export const EXCLUSIVE: readonly string[] = [
   "ai-quality-draft.spec.ts", // AI integration config
   "ai-try.spec.ts", // AI integration config + the platform Try switch
   "chunked-upload.spec.ts", // platform settings: chunked upload switch (every upload)
+  "department-popular.spec.ts", // platform settings: the department-row switch (every user's home page)
   "deprecation.spec.ts", // deprecates the seeded global/lint-fixer
   "email-digests.spec.ts", // platform settings: digest switch and defaults
   "email-notifications.spec.ts", // the platform email wrapper (Administration card)

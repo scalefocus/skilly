@@ -38,6 +38,8 @@ interface Me {
   upstreamReleaseNotifications?: boolean;
   upstreamReleasesEnabled?: boolean;
   directoryHidden: boolean;
+  /** §66.6 whether the home page's "Popular in your department" row is on (the opt-out covers it too). */
+  departmentPopularEnabled?: boolean;
   /** §60.9 feature ideas: the attribution opt-out and an admin's review-queue opt-out. */
   ideaAttributionHidden?: boolean;
   ideaVotesHidden?: boolean;
@@ -160,6 +162,7 @@ function DirectoryPref() {
   const { data, reload } = useApi<Me>("/api/me");
   const [busy, setBusy] = useState(false);
   if (!data) return <div className="skeleton" style={{ height: 70, borderRadius: "var(--radius)" }} />;
+  const deptRow = data.departmentPopularEnabled === true;
 
   const choose = async (hidden: boolean) => {
     if (hidden === data.directoryHidden) return;
@@ -181,6 +184,8 @@ function DirectoryPref() {
         Hovering your avatar anywhere in skilly shows a small card with your job title, department and office from
         Entra ID, and how often you visit. During your first month it also says you&rsquo;re new, and your picture wears
         a new-user hat. You can keep all of this private.
+        {/* §66.6 the same switch keeps your installs out of your department's home-page row. */}
+        {deptRow && <> Hiding them also keeps your installs out of the &ldquo;Popular in your department&rdquo; row on your colleagues&rsquo; home pages.</>}
       </p>
       <div className="sort-toggle" role="group" aria-label="Directory details visibility">
         {opts.map((o) => {
@@ -202,7 +207,9 @@ function DirectoryPref() {
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
         {data.directoryHidden
-          ? "Your card reads “No directory information”. Your name, email and online status still show."
+          ? deptRow
+            ? "Your card reads “No directory information”, and your installs don’t count toward your department’s popular skills. Your name, email and online status still show."
+            : "Your card reads “No directory information”. Your name, email and online status still show."
           : "Your job title, department, office and visit activity show on your card."}
       </p>
     </section>

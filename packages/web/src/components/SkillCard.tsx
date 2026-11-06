@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { agentLabel } from "@skilly/shared/agents";
 import { upstreamPillLabel, upstreamPillTitle, type UpstreamCardUpdate } from "@skilly/shared/upstream-releases";
+import { colleaguesLabel, colleaguesTitle } from "@skilly/shared/department-popular";
 import { Pill, formatCount } from "./ui";
 import { useDateFmt } from "./DateFormat";
 import { plainText, descTooltip } from "../lib/cardText";
@@ -48,6 +49,19 @@ export interface CatalogEntry {
   hype?: { count: number; top: boolean } | null;
   /** §63.7 the upstream pill — present only for effective maintainers and platform admins. */
   upstreamUpdate?: UpstreamCardUpdate | null;
+  /** §66.5 the home page's department row only: how many colleagues adopted it in the window. */
+  colleagues?: number;
+}
+
+/** §66.5 the "👥 N colleagues" tab on a department-row card — a count, never who. It takes the
+ *  top-right corner the "new" tab uses on catalog cards (that tab never shows on a home feed). */
+function ColleaguesTab({ n }: { n: number }) {
+  const title = colleaguesTitle(n);
+  return (
+    <span className="chip chip-colleagues" title={title} aria-label={title} data-testid="colleagues-chip">
+      <span aria-hidden>👥</span> {colleaguesLabel(n)}
+    </span>
+  );
 }
 
 /** §45.5 the `deprecated` pill — its tooltip / accessible name carries the full sentence. */
@@ -124,9 +138,9 @@ function WatchBadge({ s }: { s: CatalogEntry }) {
 
 export function SkillCard({ s, index = 0 }: { s: CatalogEntry; index?: number }) {
   return (
-    <Link href={`/skills/${s.namespaceSlug}/${s.skillSlug}`} className="card skill-card reveal" style={{ animationDelay: `${Math.min(index, 11) * 45}ms` }}>
-      {/* Absolutely pinned to the card's top-right corner (see .skill-card > .chip-new). */}
-      <NewBadge s={s} />
+    <Link href={`/skills/${s.namespaceSlug}/${s.skillSlug}`} className={`card skill-card reveal${s.colleagues ? " has-colleagues" : ""}`} style={{ animationDelay: `${Math.min(index, 11) * 45}ms` }}>
+      {/* Absolutely pinned to the card's top-right corner (see .skill-card > .chip-new / .chip-colleagues). */}
+      {s.colleagues ? <ColleaguesTab n={s.colleagues} /> : <NewBadge s={s} />}
       {/* Capped at two rows (see .skill-card-top): governance pills get first claim on the height
           budget, and only a trailing pill is ever dropped — never the card's footer. */}
       <div className="meta skill-card-top">

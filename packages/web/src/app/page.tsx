@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useApi, useEnterKey, ScrollToTop, formatCount } from "../components/ui";
 import { SkillCard, type CatalogEntry } from "../components/SkillCard";
+import { DEPARTMENT_POPULAR_WINDOW_DAYS } from "@skilly/shared/department-popular";
 
 export default function Overview() {
   const { status } = useSession();
@@ -23,6 +24,14 @@ export default function Overview() {
   // switched off) ⇒ the section is omitted entirely, like Featured.
   const { data: hypedData } = useApi<{ skills: CatalogEntry[] }>(authed ? "/api/skills/hyped" : null);
   const hypedSkills = hypedData?.skills ?? [];
+  // Popular in your department (§66.5): skills colleagues in the viewer's Entra department first
+  // adopted in the window, the viewer's own adoptions left out. No department, the switch off, or
+  // nothing qualifying ⇒ the section is omitted entirely, like Hyped and Featured.
+  const { data: deptData } = useApi<{ department: string | null; windowDays: number; skills: CatalogEntry[] }>(
+    authed ? "/api/skills/department-popular" : null,
+  );
+  const department = deptData?.department ?? null;
+  const deptSkills = deptData?.skills ?? [];
   const skills = data?.skills ?? [];
   const hosted = skills.filter((s) => s.type === "hosted").length;
   const pointer = skills.filter((s) => s.type === "pointer").length;
@@ -78,6 +87,22 @@ export default function Overview() {
           </div>
           <div className="card-grid">
             {featuredSkills.map((s, i) => (
+              <SkillCard key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} index={i} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {authed && department && deptSkills.length > 0 && (
+        <section className="reveal" style={{ animationDelay: "130ms", marginBottom: 44 }} data-testid="department-popular-section">
+          <div style={{ marginBottom: 18 }}>
+            <h2 style={{ fontFamily: "var(--font-display)", fontSize: 24, overflowWrap: "anywhere" }}>Popular in {department}</h2>
+            <p className="muted" style={{ fontSize: 13.5, marginTop: 4 }}>
+              What your colleagues adopted in the last {deptData?.windowDays ?? DEPARTMENT_POPULAR_WINDOW_DAYS} days.
+            </p>
+          </div>
+          <div className="card-grid">
+            {deptSkills.map((s, i) => (
               <SkillCard key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} index={i} />
             ))}
           </div>

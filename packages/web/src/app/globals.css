@@ -572,6 +572,21 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
   border-bottom: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
   border-top-right-radius: var(--radius); border-bottom-left-radius: 10px;
 }
+/* §66.5 the "👥 N colleagues" tab on the home page's department row: the same top-right corner as
+   the "new" tab (which never shows on a home feed), in sentence case. The card drops its top meta a
+   little (.has-colleagues) so the tab never sits over a pill; the description box absorbs the
+   difference, so the card's fixed height (§14) is unchanged. */
+.skill-card > .chip-colleagues {
+  position: absolute; top: 0; right: 0; z-index: 1;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  background: var(--accent-soft); color: var(--accent-2);
+  border: 0; border-radius: 0; padding: 5px 11px; cursor: help;
+  font-weight: 600; font-size: 11px;
+  border-left: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
+  border-bottom: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
+  border-top-right-radius: var(--radius); border-bottom-left-radius: 10px;
+}
+.skill-card.has-colleagues { padding-top: 34px; }
 /* List row: a tab that spans the FULL height of the row, flush to the right edge. The row
    reserves right padding (.has-new) so its content never slides under the tab. */
 .skill-row.has-new { padding-right: 64px; }

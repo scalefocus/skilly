@@ -178,6 +178,10 @@
     "./review-target": {
       "types": "./dist/review-target.d.ts",
       "default": "./dist/review-target.js"
+    },
+    "./department-popular": {
+      "types": "./dist/department-popular.d.ts",
+      "default": "./dist/department-popular.js"
     }
   },
   "scripts": {
