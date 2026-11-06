@@ -16,19 +16,32 @@ export const CATEGORY_SLUG_MAX = 64;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 /**
+ * Strip leading and trailing `-` with a linear scan from both ends — deliberately not a regex:
+ * `/-+$/` backtracks polynomially on a long run of `-` followed by another character, and a
+ * category name is user input (CodeQL js/polynomial-redos).
+ */
+function trimHyphens(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && s.charCodeAt(start) === 45) start++;
+  while (end > start && s.charCodeAt(end - 1) === 45) end--;
+  return s.slice(start, end);
+}
+
+/**
  * Derive a category slug from its name: lowercase → NFKD with diacritics stripped → every run of
  * non-[a-z0-9] becomes one `-` → leading/trailing `-` trimmed → capped at CATEGORY_SLUG_MAX.
  * Returns "" when nothing survives (the caller rejects that — `categoryNameError`).
  */
 export function categorySlug(name: string): string {
-  const base = name
+  const collapsed = name
     .trim()
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "") // combining marks left behind by NFKD
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const capped = base.slice(0, CATEGORY_SLUG_MAX).replace(/-+$/g, "");
+    .replace(/[^a-z0-9]+/g, "-");
+  const base = trimHyphens(collapsed);
+  const capped = trimHyphens(base.slice(0, CATEGORY_SLUG_MAX));
   return SLUG_RE.test(capped) ? capped : "";
 }
 
