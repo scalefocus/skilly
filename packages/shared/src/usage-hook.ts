@@ -57,8 +57,10 @@ export interface UsageManifest {
  * `SKILLY_DEV_USAGE_KEY` on a dev instance, so one machine can hold a key per instance (§68.4).
  */
 export function usageKeyEnvVar(marketplaceNamePrefix: string): string {
-  const p = marketplaceNamePrefix.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  return `${p || "SKILLY"}_USAGE_KEY`;
+  // Split on runs of non-alphanumerics and drop the empties: linear, with no anchored `_+`
+  // alternation to backtrack on (CodeQL js/polynomial-redos), and leading/trailing runs fall away.
+  const parts = marketplaceNamePrefix.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  return `${parts.join("_") || "SKILLY"}_USAGE_KEY`;
 }
 
 /** The `~/.claude/settings.json` fragment a sharer pastes (§68.4). Never the project's settings. */
