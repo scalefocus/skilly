@@ -12,6 +12,7 @@ import { UserBubble } from "../../../components/UserBubble";
 import { FollowButton } from "../../../components/FollowButton";
 import { ExpiryPicker } from "../../../components/ExpiryPicker";
 import { MarketplaceAddCommand, type MarketplaceMint } from "../../../components/MarketplaceAddCommand";
+import { ShareUsageCheckbox, useUsageSharing } from "../../../components/UsageShare";
 import { useDateFmt } from "../../../components/DateFormat";
 import { filterDirectory, syncedLabel, type AddedState, type DirectoryContact } from "../../../lib/marketplaceDirectoryFilter";
 
@@ -87,6 +88,9 @@ function InstallPanel({ row, maxMonths }: { row: Row; maxMonths: number }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [minted, setMinted] = useState<MarketplaceMint | null>(null);
+  // §68.4 the Share usage tick — unticked by default; mints the caller's usage key alongside.
+  const [shareUsage, setShareUsage] = useState(false);
+  const usage = useUsageSharing();
 
   const mint = async () => {
     if (pending) {
@@ -97,16 +101,17 @@ function InstallPanel({ row, maxMonths }: { row: Row; maxMonths: number }) {
     setErr(null);
     try {
       const body = row.scope === "public"
-        ? { scope: "public", expiresAt: expiry }
-        : { scope: "namespace", namespaceSlug: row.namespaceSlug, expiresAt: expiry };
+        ? { scope: "public", expiresAt: expiry, shareUsage }
+        : { scope: "namespace", namespaceSlug: row.namespaceSlug, expiresAt: expiry, shareUsage };
       const r = await fetch("/api/marketplaces/tokens", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
       const j = (await r.json().catch(() => ({}))) as MarketplaceMint & { error?: string };
-      if (!r.ok) throw new Error(j.error ?? "Failed to generate");
+      if (!r.ok) throw new Error(j.error === "usage_key_exists" ? "You already share usage — manage it in My marketplaces." : (j.error ?? "Failed to generate"));
       setMinted(j);
+      if (j.usageKey) usage.reload();
     } catch (e) {
       setErr(String((e as Error).message));
     } finally {
@@ -123,6 +128,7 @@ function InstallPanel({ row, maxMonths }: { row: Row; maxMonths: number }) {
           {busy ? "Working…" : "Generate add command"}
         </button>
       </div>
+      {!minted && <ShareUsageCheckbox state={usage.state} checked={shareUsage} onChange={setShareUsage} disabled={busy} />}
       {err && <div role="alert" style={{ marginTop: 8, fontSize: 13, color: "var(--danger)" }}>{err}</div>}
       {minted && (
         <>

@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.56.0",
+    date: "2026-11-09",
+    summary:
+      "Usage insights: maintainers can now see how often a skill is used in Claude Code, not only installed. Once a platform admin turns it on, every marketplace plugin carries a small reporting hook; tick “Share usage” when adding a marketplace (or on My marketplaces) and paste the key into your Claude Code settings. Uses appear as a third metric on the Usage dashboard, per skill, version and day — never per person.",
+  },
+  {
     version: "2.55.1",
     date: "2026-11-06",
     summary:

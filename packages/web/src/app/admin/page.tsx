@@ -24,7 +24,7 @@ interface Mapping { id: string; role: Role; namespaceId: string | null; groupId:
 interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
-interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean; departmentPopularEnabled: boolean; visitsEnabled: boolean } }
+interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean; departmentPopularEnabled: boolean; visitsEnabled: boolean; usageInsightsEnabled: boolean } }
 
 // Selectable max hosted-bundle upload sizes — must match BUNDLE_SIZE_OPTIONS in lib/settings.
 const BUNDLE_SIZE_CHOICES: { bytes: number; label: string }[] = [
@@ -44,7 +44,7 @@ const NS_PAGE = 100;
 const ADMIN_CARD_IDS = [
   "contribution", "duplicates", "upstreamreleases", "upload", "dateformat", "chatpoll", "installttl", "featuredcap", "departmentpopular",
   "systembanner", "mcp", "ai", "email", "scim", "platformadmins", "maintenance", "deleteuser", "namespaces", "marketplaces",
-  "achievements", "visits", "hype", "featureideas", "search", "contentrisk", "policyrules", "policy",
+  "achievements", "visits", "usageinsights", "hype", "featureideas", "search", "contentrisk", "policyrules", "policy",
 ] as const;
 type CardId = (typeof ADMIN_CARD_IDS)[number];
 
@@ -378,6 +378,36 @@ function VisitsSettings({
         checked={enabled}
         disabled={busy}
         onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ visitsEnabled: next }) })}
+      />
+    </CollapsibleCard>
+  );
+}
+
+// Usage insights (§68.8). On: the next marketplace sweep ships a small reporting hook in every plugin
+// (every plugin's version bumps once) and /usage gains the uses metric. People report only if they
+// chose Share usage. Off removes the hook on the next sweep; recorded counts are kept either way.
+function UsageInsightsSettings({
+  enabled, busy, call, open, onToggle,
+}: {
+  enabled: boolean;
+  busy: boolean;
+  call: (input: RequestInfo, init: RequestInit) => Promise<boolean>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <CollapsibleCard cardId="usageinsights" title="Usage insights" summary={enabled ? "on" : "off"} open={open} onToggle={onToggle}>
+      <p className="muted" style={{ fontSize: 13.5, marginBottom: 16 }}>
+        Maintainers see how often a skill is <em>used</em>, not only installed. When on, every Claude plugin marketplace
+        plugin carries a small reporting hook; turning this on or off updates every plugin&rsquo;s version once. People
+        report only if they chose <em>Share usage</em> when adding a marketplace (or on My marketplaces), and counts
+        are per skill, version and day &mdash; never per person. Uses appear on the Usage dashboard, for owners only.
+      </p>
+      <Switch
+        label="Collect usage from Claude Code plugins"
+        checked={enabled}
+        disabled={busy}
+        onChange={(next) => void call(`/api/admin/settings`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ usageInsightsEnabled: next }) })}
       />
     </CollapsibleCard>
   );
@@ -832,6 +862,9 @@ export default function AdminPage() {
 
       {/* Visits & new users (§67.6) — the dormant-not-destructive on/off */}
       <VisitsSettings enabled={data.settings.visitsEnabled} busy={busy} call={call} open={cards.open.visits} onToggle={() => cards.toggle("visits")} />
+
+      {/* Usage insights (§68.8) — off by default; ships the usage hook in every marketplace plugin */}
+      <UsageInsightsSettings enabled={data.settings.usageInsightsEnabled} busy={busy} call={call} open={cards.open.usageinsights} onToggle={() => cards.toggle("usageinsights")} />
 
       {/* Hype (§50.8) — the switch, the budget, the two eligibility thresholds and the top N */}
       <HypeCard open={cards.open.hype} onToggle={() => cards.toggle("hype")} />

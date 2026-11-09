@@ -182,6 +182,10 @@
     "./department-popular": {
       "types": "./dist/department-popular.d.ts",
       "default": "./dist/department-popular.js"
+    },
+    "./usage-hook": {
+      "types": "./dist/usage-hook.d.ts",
+      "default": "./dist/usage-hook.js"
     }
   },
   "scripts": {

@@ -152,6 +152,9 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // below, so a tombstone never shows a Visits row, a New user row or the hat. Mirrored in worker
     // scim/store.ts eraseUserByExternalId — keep the two in sync.
     await client.query(`delete from user_visit_days where user_id = $1`, [targetUserId]);
+    // Usage key (§68.6): the person's Claude Code hook is refused from now on. No usage row holds a
+    // user id, so there is nothing else to erase. Mirrored in worker scim/store.ts.
+    await client.query(`delete from usage_report_keys where user_id = $1`, [targetUserId]);
 
     // Scrub + detach the row (tombstone). Detaching entra_object_id lets a returning person get a
     // brand-new account. The display label retains the former email ("<email> - Deleted") so a

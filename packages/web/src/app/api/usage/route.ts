@@ -4,7 +4,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
-import { getUsageDashboard, SERIES_DAYS_CHOICES, type SeriesRangeOpt } from "../../../lib/usage";
+import { getUsageDashboard, SERIES_DAYS_CHOICES, type SeriesRangeOpt, type UsageSort } from "../../../lib/usage";
 import { enforceRateLimit } from "../../../lib/ratelimit";
 import { withSystemLog } from "../../../lib/apiLog";
 
@@ -29,6 +29,9 @@ export const GET = withSystemLog("/api/usage", async function GET(req: Request) 
       ? (raw as SeriesRangeOpt)
       : 30;
   const q = url.searchParams.get("q")?.slice(0, 120) ?? undefined;
+  // §68.7: `sort=uses` (or views) orders the returned list; anything else is the default (installs).
+  const s = url.searchParams.get("sort");
+  const sort: UsageSort = s === "uses" || s === "views" ? s : "installs";
 
-  return Response.json(await getUsageDashboard(access, access.userId, range, q));
+  return Response.json(await getUsageDashboard(access, access.userId, range, q, sort));
 });

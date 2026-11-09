@@ -14,9 +14,15 @@ import {
   MARKETPLACE_PATH_PREFIX,
   PLUGIN_ROOT,
   SKILLS_DIR,
+  USAGE_HOOK_SCRIPT_PATH,
+  USAGE_HOOK_SOURCE,
+  USAGE_MANIFEST_PATH,
+  appendUsageHooks,
   buildMarketplaceJson,
   buildPluginJson,
+  buildUsageManifest,
   isComponentPath,
+  marketplaceName,
   marketplaceRepoKey,
   mergeComponentJson,
   planPluginLayout,
@@ -116,6 +122,15 @@ export interface MarketplaceMemberBuild {
   skillDir: string;
   /** The skill bundle's files, paths relative to the BUNDLE root (SKILL.md at the root). */
   files: SkillFile[];
+  /** Skill id + served semver — what the §68.3 usage manifest names. Required when `usage` is set. */
+  skillId?: string;
+  semver?: string;
+}
+
+/** §68.3: ship the usage hook in every plugin. Absent ⇒ the switch is off and nothing is added. */
+export interface UsageHookInput {
+  registryBaseUrl: string;
+  envVar: string;
 }
 
 export interface MarketplacePluginBuild {
@@ -146,6 +161,9 @@ export interface SynthesizeMarketplaceInput {
   notes?: string[];
   /** deterministic ISO date for author/committer (tests pass a fixed value) */
   date?: string;
+  /** Usage insights on (§68): every plugin gets `.skilly/usage.mjs` + `.skilly/usage.json` and the
+   *  two hooks.json entries, appended after any member-hoisted hooks. */
+  usage?: UsageHookInput;
 }
 
 const JSON_COMPONENT_FILES = new Set(["hooks.json", "mcp.json", "lsp.json"]);
@@ -161,6 +179,7 @@ const JSON_COMPONENT_FILES = new Set(["hooks.json", "mcp.json", "lsp.json"]);
  *   plugins/<category|general>/skills/<skillDir>/…   <- each member's skill content
  *   plugins/<category|general>/{hooks,mcp,lsp}.json  <- merged hoisted components, when any
  *   plugins/<category|general>/{commands,agents}/…
+ *   plugins/<category|general>/.skilly/usage.{mjs,json} <- the §68.3 usage hook, while the switch is on
  */
 export async function synthesizeMarketplace(input: SynthesizeMarketplaceInput): Promise<{ commit: string; collisions: ComponentCollision[] }> {
   const { bareRepoPath, plugins } = input;
@@ -218,6 +237,27 @@ export async function synthesizeMarketplace(input: SynthesizeMarketplaceInput): 
         dirOwners.set(move.to, m);
         files.push({ path: `${PLUGIN_ROOT}/${pluginSlug}/${move.to}`, bytes: src.bytes, mode: src.mode });
       }
+    }
+
+    if (input.usage) {
+      // §68.3: the reporter, its member manifest, and the two hook entries — appended LAST, by
+      // array concatenation, so a member's own hooks are never displaced.
+      const cur = jsonAcc.get("hooks.json");
+      jsonAcc.set("hooks.json", { value: appendUsageHooks(cur?.value ?? null), owner: cur?.owner ?? p.members[0]! });
+      components.hooks = true;
+      files.push({ path: `${PLUGIN_ROOT}/${pluginSlug}/${USAGE_HOOK_SCRIPT_PATH}`, bytes: new TextEncoder().encode(USAGE_HOOK_SOURCE) });
+      files.push({
+        path: `${PLUGIN_ROOT}/${pluginSlug}/${USAGE_MANIFEST_PATH}`,
+        bytes: json(
+          buildUsageManifest({
+            registryBaseUrl: input.usage.registryBaseUrl,
+            envVar: input.usage.envVar,
+            marketplaceName: marketplaceName(input.manifest.prefix, input.manifest.scope),
+            pluginSlug,
+            members: p.members.map((m) => ({ skillDir: m.skillDir, skillId: m.skillId ?? "", semver: m.semver ?? "" })),
+          }),
+        ),
+      });
     }
 
     for (const [name, { value }] of jsonAcc) files.push({ path: `${PLUGIN_ROOT}/${pluginSlug}/${name}`, bytes: json(value) });

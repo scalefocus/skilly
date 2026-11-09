@@ -6,6 +6,7 @@ import { PUBLIC_SCOPE, marketplaceName } from "@skilly/shared";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { listMarketplaces } from "../../../lib/marketplaces";
+import { usageSharingState } from "../../../lib/usageKey";
 import { getMarketplaceNamePrefix, getMarketplacePublicEnabled } from "../../../lib/settings";
 
 export const dynamic = "force-dynamic";
@@ -18,14 +19,17 @@ export async function GET() {
   if (!access.userId) return Response.json({ marketplaces: [] });
 
   const prefix = await getMarketplaceNamePrefix();
-  const [marketplaces, publicEnabled] = await Promise.all([
+  const [marketplaces, publicEnabled, usageSharing] = await Promise.all([
     listMarketplaces(access.userId, prefix),
     getMarketplacePublicEnabled(),
+    usageSharingState(access.userId),
   ]);
   // The public marketplace is open to every authenticated user, so the page offers it directly —
   // there is no admin surface a regular consumer could otherwise reach to add it (§30.4).
   return Response.json({
     marketplaces,
     publicMarketplace: { enabled: publicEnabled, name: marketplaceName(prefix, PUBLIC_SCOPE) },
+    // §68.4 the Usage sharing card: the platform switch, the variable name and the caller's key state.
+    usageSharing,
   });
 }

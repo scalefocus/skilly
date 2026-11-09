@@ -53,7 +53,7 @@ import { sweepReviewReminders, REVIEW_REMINDER_INTERVAL_MS } from "./reviewRemin
 import { sweepSearchGaps, reviewableGapCount, SEARCH_GAP_TICK_MS } from "./searchGaps.js";
 import { mcpRouter } from "./mcp/server.js";
 import { mcpOAuthRouter, mcpHousekeeping } from "./mcp/oauthRouter.js";
-import { metrics, METRICS_CONTENT_TYPE, constantTimeEqual, foldSearchGapDays } from "@skilly/shared";
+import { metrics, METRICS_CONTENT_TYPE, constantTimeEqual, foldSearchGapDays, foldSkillUsageDays } from "@skilly/shared";
 import { M } from "./metrics.js";
 
 const PORT = Number(process.env.WORKER_PORT ?? 4000);
@@ -652,6 +652,24 @@ async function leaderLoops(): Promise<void> {
   };
   await searchGapHousekeeping();
   setInterval(searchGapHousekeeping, Number(process.env.SEARCH_GAP_HOUSEKEEPING_INTERVAL_MS ?? 3_600_000)); // 1h
+
+  // Usage-insights housekeeping (§68.6), whatever the switch says: fold each finished UTC day's hits
+  // into the daily counts and delete those hits and that day's salt, so no reporter hash outlives
+  // its day. Same cadence as the search-gap fold.
+  const usageHousekeeping = async () => {
+    if (!isLeader) return;
+    const client = await pool.connect();
+    try {
+      const r = await foldSkillUsageDays(client);
+      if (r.foldedDays > 0) console.log(JSON.stringify({ level: "info", msg: "usage insights housekeeping", ...r }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "usage insights housekeeping failed", err: String(err) }));
+    } finally {
+      client.release();
+    }
+  };
+  await usageHousekeeping();
+  setInterval(usageHousekeeping, Number(process.env.SEARCH_GAP_HOUSEKEEPING_INTERVAL_MS ?? 3_600_000)); // 1h
 
   // AI usage housekeeping (§40.3): ai_usage rows older than 365 days.
   const aiUsagePrune = async () => {
