@@ -7,7 +7,7 @@ import { getHypeSettings, updateHypeSettings } from "../../../../lib/hype";
 import { hasHypeSettings, HYPE_SETTING_FIELDS, type HypeSettings } from "@skilly/shared/hype";
 import { getSearchGapSettings, hasSearchGapSettings, searchGapSettingFields, updateSearchGapSettings } from "../../../../lib/searchGaps";
 import { invalidateNewcomers } from "../../../../lib/newcomers";
-import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, setRumFlushIntervals, setSurveyEnabled, setBugReportsEnabled, setFeatureIdeasEnabled, setUpstreamReleasesEnabled, setDepartmentPopularEnabled, setVisitsEnabled, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
+import { getPlatformSettings, setProposalsOpen, setDateFormat, setDuplicateEnforcement, setMaxBundleBytes, setUploadChunkMb, setChatPollIntervals, setInstallMaxTtlMonths, setMaxFeaturedSkills, setMcpEnabled, setMcpAccessTtlMinutes, setMcpRefreshTtlDays, setMcpMaxInlineUploadBytes, setMcpMaxResourceBytes, setMarketplacePublicEnabled, setMarketplaceSyncMinutes, setMarketplaceNamePrefix, setAchievementsEnabled, setRumEnabled, setRumSampleRate, setRumFlushIntervals, setSurveyEnabled, setBugReportsEnabled, setFeatureIdeasEnabled, setUpstreamReleasesEnabled, setDepartmentPopularEnabled, setVisitsEnabled, setUsageInsightsEnabled, BUNDLE_SIZE_OPTIONS } from "../../../../lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +41,7 @@ export async function PATCH(req: Request) {
     const r = await updateSearchGapSettings(access.userId, raw);
     if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
   }
-  const body = raw as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number; rumFlushIntervals?: string | number[]; surveyEnabled?: boolean; bugReportsEnabled?: boolean; featureIdeasEnabled?: boolean; upstreamReleasesEnabled?: boolean; departmentPopularEnabled?: boolean; visitsEnabled?: boolean; searchLanguage?: string };
+  const body = raw as { proposalsOpen?: boolean; dateFormat?: string; duplicateEnforcement?: string; maxBundleBytes?: number; uploadChunkMb?: number; chatPollIntervals?: string | number[]; installMaxTtlMonths?: number; maxFeaturedSkills?: number; mcpEnabled?: boolean; mcpAccessTtlMinutes?: number; mcpRefreshTtlDays?: number; mcpMaxInlineUploadBytes?: number; mcpMaxResourceBytes?: number; marketplacePublicEnabled?: boolean; marketplaceSyncMinutes?: number; marketplaceNamePrefix?: string; achievementsEnabled?: boolean; rumEnabled?: boolean; rumSampleRate?: number; rumFlushIntervals?: string | number[]; surveyEnabled?: boolean; bugReportsEnabled?: boolean; featureIdeasEnabled?: boolean; upstreamReleasesEnabled?: boolean; departmentPopularEnabled?: boolean; visitsEnabled?: boolean; usageInsightsEnabled?: boolean; searchLanguage?: string };
   if (typeof body.proposalsOpen === "boolean") await setProposalsOpen(body.proposalsOpen, access.userId);
   if (body.dateFormat === "eu" || body.dateFormat === "us") await setDateFormat(body.dateFormat, access.userId);
   if (body.duplicateEnforcement === "block" || body.duplicateEnforcement === "warn") await setDuplicateEnforcement(body.duplicateEnforcement, access.userId);
@@ -95,6 +95,8 @@ export async function PATCH(req: Request) {
     await setVisitsEnabled(body.visitsEnabled, access.userId);
     invalidateNewcomers(); // the hat disappears (or returns) on the next page load, not after the TTL
   }
+  // §68.8 Usage insights: ships (or removes) the usage hook on the next marketplace sweep; counts are kept.
+  if (typeof body.usageInsightsEnabled === "boolean") await setUsageInsightsEnabled(body.usageInsightsEnabled, access.userId);
   if (body.rumSampleRate !== undefined) {
     try {
       await setRumSampleRate(body.rumSampleRate, access.userId);

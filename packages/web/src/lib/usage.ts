@@ -3,21 +3,65 @@
 // "can you govern/own the skill" (reuses §19): platform admin → all + platform aggregate,
 // namespace admin → their namespaces + namespace aggregate, maintainer → only their skills.
 import { pool } from "./db";
-import type { EffectiveAccess } from "@skilly/shared";
+import { compareSemver, type EffectiveAccess } from "@skilly/shared";
+import { getUsageInsightsEnabled } from "./settings";
 
 export interface MetricWindows {
   d1: number; d1Prev: number; d7: number; d7Prev: number; d30: number; d30Prev: number; all: number;
 }
-/** Daily series aligned to UsageDashboard.seriesDays (oldest → newest). §21 "Graphs". */
-export interface DailySeries { views: number[]; installs: number[] }
-export interface SkillUsage { namespaceSlug: string; skillSlug: string; title: string; toolHarness: string; views: MetricWindows; installs: MetricWindows; daily: DailySeries }
-export interface UsageAggregate { scope: "platform" | "namespace"; views: MetricWindows; installs: MetricWindows; series: DailySeries }
+/** Daily series aligned to UsageDashboard.seriesDays (oldest → newest). §21 "Graphs".
+ *  `uses` (§68.7) is present only while Usage insights is on. */
+export interface DailySeries { views: number[]; installs: number[]; uses?: number[] }
+/** §68.7: uses are counted per UTC day, so their windows are whole days — `d1` is TODAY (the UTC day
+ *  so far) and `d1Prev` yesterday, where views/installs read a rolling 24h. Same shape on purpose. */
+export interface SkillUsage { namespaceSlug: string; skillSlug: string; title: string; toolHarness: string; views: MetricWindows; installs: MetricWindows; uses?: MetricWindows; daily: DailySeries }
+export interface UsageAggregate { scope: "platform" | "namespace"; views: MetricWindows; installs: MetricWindows; uses?: MetricWindows; series: DailySeries }
 export interface UsageDashboard {
   aggregate: UsageAggregate | null;
   skills: SkillUsage[];
   /** ISO dates (DB-clock days, oldest → newest) for all daily buckets — one shared time axis. */
   seriesDays: string[];
+  /** §68.7: when false, no `uses` field appears anywhere in this payload. */
+  usageInsightsEnabled: boolean;
 }
+
+/** Sort options for the list (§68.7 adds `uses`). */
+export type UsageSort = "installs" | "views" | "uses";
+
+// ---------------------------------------------------------------------------
+// Uses (§68.7): folded daily rows + today's live hits, as one relation
+// ---------------------------------------------------------------------------
+
+const UTC_TODAY = `(now() at time zone 'UTC')::date`;
+
+/**
+ * The uses relation `(day, skill_id, uses, people)`: the folded `skill_usage_daily` rows plus
+ * today's `skill_usage_hits` counted live. `where(alias)` scopes both halves identically. People
+ * are exact per (skill, day) and must never be summed across skills or days.
+ */
+function usesRelation(where: (alias: string) => string): string {
+  return `(select d.day, d.skill_id, d.uses, d.people from skill_usage_daily d where ${where("d")}
+           union all
+           select h.day, h.skill_id, count(*)::int, count(distinct h.reporter_hash)::int
+             from skill_usage_hits h where ${where("h")} group by h.day, h.skill_id)`;
+}
+
+/** The §68.7 windows over whole UTC days: today / yesterday, 7d / prior 7d, 30d / prior 30d, all. */
+function usesWindowCols(): string {
+  const t = UTC_TODAY;
+  return `
+    coalesce(sum(uses) filter (where day = ${t}), 0)::int as d1,
+    coalesce(sum(uses) filter (where day = ${t} - 1), 0)::int as d1_prev,
+    coalesce(sum(uses) filter (where day >= ${t} - 6), 0)::int as d7,
+    coalesce(sum(uses) filter (where day >= ${t} - 13 and day < ${t} - 6), 0)::int as d7_prev,
+    coalesce(sum(uses) filter (where day >= ${t} - 29), 0)::int as d30,
+    coalesce(sum(uses) filter (where day >= ${t} - 59 and day < ${t} - 29), 0)::int as d30_prev,
+    coalesce(sum(uses), 0)::int as total`;
+}
+
+const bySkill = (a: string) => `${a}.skill_id = any($1::uuid[])`;
+const everySkill = () => `true`;
+const byNamespace = (a: string) => `${a}.skill_id in (select id from skills where namespace_id = any($1::uuid[]))`;
 
 /** Chartable ranges (§21): daily buckets over 7/30/90 days; default 30. Plus "all" — the dashboard
  *  chart can span all time, stepping the bucket up (day→week→month) so the point count stays
@@ -84,19 +128,21 @@ const zeros = (n: number) => new Array<number>(n).fill(0);
 // Bucket-step literals for adaptive ("all") axes. Trusted — never user input.
 const SERIES_BUCKET_INTERVAL: Record<"day" | "week" | "month", string> = { day: "1 day", week: "1 week", month: "1 month" };
 
-/** Earliest view/install instant in the caller's scope (for the "all-time" axis start), or null. */
+/** Earliest view/install/use instant in the caller's scope (for the "all-time" axis start), or null. */
 async function earliestEventInScope(isPlatformAdmin: boolean, ids: string[]): Promise<string | null> {
   if (isPlatformAdmin) {
     const { rows } = await pool.query<{ m: string | null }>(
       `select least((select min(created_at) from usage_events),
-                    (select min(created_at) from access_log where source = 'git'))::text as m`,
+                    (select min(created_at) from access_log where source = 'git'),
+                    (select min(day)::timestamptz from skill_usage_daily))::text as m`,
     );
     return rows[0]?.m ?? null;
   }
   if (!ids.length) return null;
   const { rows } = await pool.query<{ m: string | null }>(
     `select least((select min(created_at) from usage_events where skill_id = any($1::uuid[])),
-                  (select min(created_at) from access_log where source = 'git' and skill_id = any($1::uuid[])))::text as m`,
+                  (select min(created_at) from access_log where source = 'git' and skill_id = any($1::uuid[])),
+                  (select min(day)::timestamptz from skill_usage_daily where skill_id = any($1::uuid[])))::text as m`,
     [ids],
   );
   return rows[0]?.m ?? null;
@@ -132,8 +178,10 @@ async function resolveSeriesAxis(range: SeriesRangeOpt, isPlatformAdmin: boolean
  * sparklines) + the aggregate they may see (with its own daily series for the chart).
  * `range` picks the charted span (7/30/90/all, §21) — the number-strip windows are unaffected.
  */
-export async function getUsageDashboard(access: EffectiveAccess, userId: string, range: SeriesRangeOpt = 30, q?: string): Promise<UsageDashboard> {
+export async function getUsageDashboard(access: EffectiveAccess, userId: string, range: SeriesRangeOpt = 30, q?: string, sort: UsageSort = "installs"): Promise<UsageDashboard> {
   const adminNs = adminNamespaces(access);
+  // §68.7: uses appear only while the switch is on — absent, not zero, when it is off.
+  const usesOn = await getUsageInsightsEnabled();
   // Text filter over the entitled list, applied server-side so search spans the whole list (not
   // just the page the client has scrolled into view). LIKE wildcards in user input are escaped —
   // a literal "%"/"_" matches itself.
@@ -186,6 +234,21 @@ export async function getUsageDashboard(access: EffectiveAccess, userId: string,
     const imap = new Map(installs.rows.map((r) => [r.skill_id, r]));
     const vSeries = bucketize(axis, vDaily.rows);
     const iSeries = bucketize(axis, iDaily.rows);
+    // §68.7 uses: the folded days plus today's live hits, windowed over whole UTC days.
+    let umap = new Map<string, WRow>();
+    let uSeries = new Map<string, number[]>();
+    if (usesOn) {
+      const [uses, uDaily] = await Promise.all([
+        pool.query<WRow & { skill_id: string }>(`select u.skill_id, ${usesWindowCols()} from ${usesRelation(bySkill)} u group by u.skill_id`, [ids]),
+        pool.query<{ key: string; day: string; n: number }>(
+          `select u.skill_id as key, ${trunc("u.day")}::date::text as day, sum(u.uses)::int as n
+             from ${usesRelation(bySkill)} u where ${since("u.day", 2)} group by u.skill_id, 2`,
+          [ids, axisStart],
+        ),
+      ]);
+      umap = new Map(uses.rows.map((r) => [r.skill_id, r]));
+      uSeries = bucketize(axis, uDaily.rows);
+    }
     for (const s of entitled) {
       skills.push({
         namespaceSlug: s.ns_slug,
@@ -194,12 +257,25 @@ export async function getUsageDashboard(access: EffectiveAccess, userId: string,
         toolHarness: s.tool_harness,
         views: toWindows(vmap.get(s.id)),
         installs: toWindows(imap.get(s.id)),
-        daily: { views: vSeries.get(s.id) ?? zeros(axis.length), installs: iSeries.get(s.id) ?? zeros(axis.length) },
+        ...(usesOn ? { uses: toWindows(umap.get(s.id)) } : {}),
+        daily: {
+          views: vSeries.get(s.id) ?? zeros(axis.length),
+          installs: iSeries.get(s.id) ?? zeros(axis.length),
+          ...(usesOn ? { uses: uSeries.get(s.id) ?? zeros(axis.length) } : {}),
+        },
       });
     }
-    // Default sort: 30d installs desc, then 30d views, then title. The full list is returned; the
-    // client paginates it (renders 100 at a time, growing on scroll), so nothing is dropped here.
-    skills.sort((a, b) => b.installs.d30 - a.installs.d30 || b.views.d30 - a.views.d30 || a.title.localeCompare(b.title));
+    // Default sort: 30d installs desc, then 30d views, then title (`sort=uses`: 30d uses first,
+    // §68.7). The full list is returned; the client paginates it (renders 100 at a time, growing on
+    // scroll), so nothing is dropped here.
+    const u30 = (s: SkillUsage) => s.uses?.d30 ?? 0;
+    skills.sort((a, b) =>
+      sort === "uses" && usesOn
+        ? u30(b) - u30(a) || b.installs.d30 - a.installs.d30 || a.title.localeCompare(b.title)
+        : sort === "views"
+          ? b.views.d30 - a.views.d30 || b.installs.d30 - a.installs.d30 || a.title.localeCompare(b.title)
+          : b.installs.d30 - a.installs.d30 || b.views.d30 - a.views.d30 || a.title.localeCompare(b.title),
+    );
   }
 
   // 3. Aggregate: platform-wide (global admin) or per-namespace (namespace admin). Maintainers:
@@ -227,6 +303,18 @@ export async function getUsageDashboard(access: EffectiveAccess, userId: string,
       installs: toWindows(i.rows[0]),
       series: { views: flat(bucketize(axis, vs.rows)), installs: flat(bucketize(axis, is.rows)) },
     };
+    if (usesOn) {
+      // Aggregates sum uses, never people (§68.7).
+      const [u, us] = await Promise.all([
+        pool.query<WRow>(`select ${usesWindowCols()} from ${usesRelation(everySkill)} u`),
+        pool.query<{ key: string; day: string; n: number }>(
+          `select 'x' as key, ${trunc("u.day")}::date::text as day, sum(u.uses)::int as n from ${usesRelation(everySkill)} u where ${since("u.day", 1)} group by 2`,
+          [axisStart],
+        ),
+      ]);
+      aggregate.uses = toWindows(u.rows[0]);
+      aggregate.series.uses = flat(bucketize(axis, us.rows));
+    }
   } else if (adminNs.length) {
     const [v, i, vs, is] = await Promise.all([
       pool.query<WRow>(`select ${windowCols("created_at")} from usage_events where namespace_id = any($1::uuid[])`, [adminNs]),
@@ -249,9 +337,76 @@ export async function getUsageDashboard(access: EffectiveAccess, userId: string,
       installs: toWindows(i.rows[0]),
       series: { views: flat(bucketize(axis, vs.rows)), installs: flat(bucketize(axis, is.rows)) },
     };
+    if (usesOn) {
+      const [u, us] = await Promise.all([
+        pool.query<WRow>(`select ${usesWindowCols()} from ${usesRelation(byNamespace)} u`, [adminNs]),
+        pool.query<{ key: string; day: string; n: number }>(
+          `select 'x' as key, ${trunc("u.day")}::date::text as day, sum(u.uses)::int as n from ${usesRelation(byNamespace)} u where ${since("u.day", 2)} group by 2`,
+          [adminNs, axisStart],
+        ),
+      ]);
+      aggregate.uses = toWindows(u.rows[0]);
+      aggregate.series.uses = flat(bucketize(axis, us.rows));
+    }
   }
 
-  return { aggregate, skills, seriesDays: axis };
+  return { aggregate, skills, seriesDays: axis, usageInsightsEnabled: usesOn };
+}
+
+// ---------------------------------------------------------------------------
+// Uses breakdown (§68.7) — per day, per version, per trigger; never a person
+// ---------------------------------------------------------------------------
+
+export interface UsesBreakdown {
+  /** Per bucket over the breakdown range; `people` only in day buckets (null in week/month). */
+  series: { date: string; uses: number; people: number | null }[];
+  /** Newest version first. */
+  versions: { semver: string; uses: number }[];
+  triggers: { user: number; model: number };
+  total: number;
+}
+
+/** The first UTC day of a breakdown range, as a trusted SQL expression; null = all time. */
+function usesRangeFloor(range: SeriesRange): string | null {
+  if (range === "all") return null;
+  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
+  return `${UTC_TODAY} - ${days - 1}`;
+}
+
+/**
+ * Uses for ONE skill over the breakdown range, on the same bucket axis as the views/installs
+ * series so the expanded chart carries all three. Entitlement is checked by the route.
+ */
+export async function getUsesBreakdown(skillId: string, range: SeriesRange, axis: readonly string[], bucket: "day" | "week" | "month"): Promise<UsesBreakdown> {
+  const floor = usesRangeFloor(range);
+  const inRange = (a: string) => (floor ? `and ${a}.day >= ${floor}` : "");
+  const one = (a: string) => `${a}.skill_id = $1 ${inRange(a)}`;
+  const detail = `(select d.day, d.semver, d.trigger, d.uses from skill_usage_daily_detail d where ${one("d")}
+                   union all
+                   select h.day, h.semver, h.trigger, count(*)::int from skill_usage_hits h where ${one("h")} group by h.day, h.semver, h.trigger)`;
+  const [series, versions, triggers] = await Promise.all([
+    pool.query<{ day: string; uses: number; people: number }>(
+      `select date_trunc('${bucket}', u.day)::date::text as day, sum(u.uses)::int as uses, sum(u.people)::int as people
+         from ${usesRelation(one)} u group by 1`,
+      [skillId],
+    ),
+    pool.query<{ semver: string; uses: number }>(`select x.semver, sum(x.uses)::int as uses from ${detail} x group by x.semver`, [skillId]),
+    pool.query<{ trigger: "user" | "model"; uses: number }>(`select x.trigger, sum(x.uses)::int as uses from ${detail} x group by x.trigger`, [skillId]),
+  ]);
+  const byDay = new Map(series.rows.map((r) => [r.day, r]));
+  const trig = { user: 0, model: 0 };
+  for (const r of triggers.rows) trig[r.trigger] = r.uses;
+  return {
+    series: axis.map((d) => {
+      const r = byDay.get(d);
+      // People are exact only per (skill, day): a week or month bucket would double-count a person
+      // seen on two days, so it carries none (§68.7).
+      return { date: d, uses: r?.uses ?? 0, people: bucket === "day" ? (r?.people ?? 0) : null };
+    }),
+    versions: versions.rows.map((r) => ({ semver: r.semver, uses: r.uses })).sort((a, b) => compareSemver(b.semver, a.semver)),
+    triggers: trig,
+    total: trig.user + trig.model,
+  };
 }
 
 // Per-skill trend chart on the detail page (§21). The toggle offers 7d / 30d / 90d / all-time.
@@ -323,6 +478,8 @@ export interface UsageBreakdown {
   systemInstalls: number;
   /** Views+installs over the SAME range as the lists, so the chart above them matches the filter. */
   series: SkillSeries;
+  /** §68.7 — present only while Usage insights is on. */
+  uses?: UsesBreakdown;
 }
 
 const RANGE_INTERVAL: Record<Exclude<SeriesRange, "all">, string> = { "7d": "7 days", "30d": "30 days", "90d": "90 days" };
@@ -364,11 +521,13 @@ export async function getBreakdown(skillId: string, createdAtIso: string, range:
     getSkillSeries(skillId, createdAtIso, range),
   ]);
 
+  const uses = (await getUsageInsightsEnabled()) ? await getUsesBreakdown(skillId, range, series.points.map((p) => p.date), series.bucket) : undefined;
   return {
     viewers: viewers.rows.map((r) => ({ displayName: r.display_name, email: r.email, count: r.n })),
     installers: installers.rows.map((r) => ({ displayName: r.display_name, email: r.email, count: r.n })),
     anonymousInstalls: anon.rows[0]?.n ?? 0,
     systemInstalls: system.rows[0]?.n ?? 0,
     series,
+    ...(uses ? { uses } : {}),
   };
 }

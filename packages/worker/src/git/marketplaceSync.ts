@@ -21,6 +21,7 @@ import {
   pluginVersion,
   resolveLatest,
   namespaceMarketplaceSkillSql,
+  usageKeyEnvVar,
   validateMarketplacePrefix,
   GENERAL_PLUGIN_SLUG,
   type MarketplaceScope,
@@ -80,11 +81,11 @@ interface CategoryRow {
   description: string | null;
 }
 
-/** Platform settings this sweep reads (§30.2, §30.5). Falls back to the shipped defaults. */
-export async function marketplaceSettings(pool: Pool): Promise<{ publicEnabled: boolean; syncMinutes: number; prefix: string }> {
+/** Platform settings this sweep reads (§30.2, §30.5, §68.8). Falls back to the shipped defaults. */
+export async function marketplaceSettings(pool: Pool): Promise<{ publicEnabled: boolean; syncMinutes: number; prefix: string; usageInsightsEnabled: boolean }> {
   const { rows } = await pool.query<{ key: string; value: unknown }>(
     `select key, value from platform_settings
-      where key in ('marketplace_public_enabled', 'marketplace_sync_minutes', 'marketplace_name_prefix')`,
+      where key in ('marketplace_public_enabled', 'marketplace_sync_minutes', 'marketplace_name_prefix', 'usage_insights_enabled')`,
   );
   const map = new Map(rows.map((r) => [r.key, r.value]));
   const minutes = map.get("marketplace_sync_minutes");
@@ -93,7 +94,17 @@ export async function marketplaceSettings(pool: Pool): Promise<{ publicEnabled: 
     publicEnabled: map.get("marketplace_public_enabled") === true,
     syncMinutes: Number.isInteger(minutes) && (minutes as number) >= 1 && (minutes as number) <= 1440 ? (minutes as number) : 30,
     prefix: typeof prefix === "string" && validateMarketplacePrefix(prefix) === null ? prefix : DEFAULT_MARKETPLACE_NAME_PREFIX,
+    usageInsightsEnabled: map.get("usage_insights_enabled") === true,
   };
+}
+
+/**
+ * §68.3: what the usage hook's inputs contribute to the content hash and every plugin fingerprint —
+ * the switch, the registry base and the key's variable name. "" while the switch is off, so
+ * toggling it rebuilds every marketplace and bumps every plugin exactly once.
+ */
+export function usageHookKey(usage: { registryBaseUrl: string; envVar: string } | null): string {
+  return usage ? `usage|${usage.registryBaseUrl}|${usage.envVar}` : "";
 }
 
 /** The `marketplace_plugins.marketplace_key` for a target (§3). */
@@ -108,7 +119,7 @@ export function marketplaceKey(scope: MarketplaceScope, namespaceId: string | nu
  * `version`, read back on the next pass. Merged component files are a function of the bundle
  * content (`content_sha256`), so they are covered transitively.
  */
-export function contentHash(rows: readonly SkillRow[]): string {
+export function contentHash(rows: readonly SkillRow[], extra = ""): string {
   const h = createHash("sha256");
   const sorted = [...rows].sort((a, b) => a.ns_slug.localeCompare(b.ns_slug) || a.slug.localeCompare(b.slug));
   for (const r of sorted) {
@@ -118,6 +129,9 @@ export function contentHash(rows: readonly SkillRow[]): string {
     h.update([r.ns_slug, r.slug, r.title, r.description ?? "", (r.category_slugs ?? []).join(","), r.semver, r.content_sha256 ?? r.artifact_object_key ?? "", deprecationKey(r)].join("\u001f"));
     h.update("\u001e");
   }
+  // Non-skill inputs that change the served bytes (the §68.3 usage hook). "" keeps every hash
+  // computed before this field existed identical, so shipping it rebuilds nothing by itself.
+  if (extra) h.update(`\u001d${extra}`);
   return h.digest("hex").slice(0, 16);
 }
 
@@ -134,6 +148,7 @@ export function deprecationKey(r: Pick<SkillRow, "deprecated_at" | "deprecation_
 export function pluginFingerprint(
   members: readonly { skillDir: string; skillId: string; semver: string; contentSha256: string | null; deprecation?: string }[],
   componentFiles: readonly string[],
+  extra = "",
 ): string {
   const h = createHash("sha256");
   for (const m of [...members].sort((a, b) => a.skillDir.localeCompare(b.skillDir))) {
@@ -141,6 +156,8 @@ export function pluginFingerprint(
     h.update("\u001e");
   }
   h.update([...componentFiles].sort().join("\u001f"));
+  // The §68.3 usage hook is delivered bytes too: on/off, base URL and variable name all bump.
+  if (extra) h.update(`\u001d${extra}`);
   return h.digest("hex").slice(0, 16);
 }
 
@@ -293,9 +310,12 @@ function describeComponentCollision(c: ComponentCollision): string {
  * a failure is logged and the next pass retries it.
  */
 export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): Promise<number> {
-  const { publicEnabled, prefix } = await marketplaceSettings(pool);
+  const { publicEnabled, prefix, usageInsightsEnabled } = await marketplaceSettings(pool);
   const cap = bundleContentCap(await getMaxBundleBytes(pool));
   const registryBase = process.env.SKILLY_REGISTRY_URL ?? "";
+  // §68.3: the hook needs somewhere to report to; without a registry base it is not shipped.
+  const usage = usageInsightsEnabled && registryBase ? { registryBaseUrl: registryBase, envVar: usageKeyEnvVar(prefix) } : null;
+  const usageKey = usageHookKey(usage);
   const { rows: categories } = await pool.query<CategoryRow>(`select slug, name, description from categories`);
   await sweepOrphanCounters(pool);
   let rebuilt = 0;
@@ -310,7 +330,7 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
       }
 
       const skills = await qualifyingSkills(pool, target.scope, target.namespaceId);
-      const hash = contentHash(skills);
+      const hash = contentHash(skills, usageKey);
       const prevHash = await previousHash(dir);
       if (prevHash !== null && prevHash === hash) {
         // Nothing changed — no commit, no consumer churn. Still "synced": the catalog was checked
@@ -350,6 +370,7 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
           const fp = pluginFingerprint(
             members.map((m) => ({ skillDir: m.skillDir, skillId: m.row.skill_id, semver: m.row.semver, contentSha256: m.row.content_sha256, deprecation: deprecationKey(m.row) })),
             [...componentFiles],
+            usageKey,
           );
           const counter = await pluginCounter(client, key, g.slug, fp);
           if (counter.bumped) notes.push(`plugin ${g.slug} ${counter.previous === null ? "new" : pluginVersion(counter.previous)} -> ${pluginVersion(counter.n)}`);
@@ -363,7 +384,7 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
               category: g.slug === GENERAL_PLUGIN_SLUG ? null : g.slug,
               homepage: pluginHomepage(registryBase, target.scope, g, nsDisplayName),
             },
-            members: members.map((m) => ({ namespaceSlug: m.namespaceSlug, skillSlug: m.skillSlug, skillDir: m.skillDir, files: m.files })),
+            members: members.map((m) => ({ namespaceSlug: m.namespaceSlug, skillSlug: m.skillSlug, skillDir: m.skillDir, files: m.files, skillId: m.row.skill_id, semver: m.row.semver })),
           });
         }
 
@@ -375,6 +396,7 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
           served,
           change: diffChange(prevServed, served),
           notes,
+          usage: usage ?? undefined,
         });
 
         for (const c of grouped.collisions) {

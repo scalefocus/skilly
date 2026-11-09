@@ -19,7 +19,8 @@ import {
 import { authOptions } from "../../../../lib/auth";
 import { resolveUserAccess } from "../../../../lib/access";
 import { mintMarketplaceToken } from "../../../../lib/marketplaces";
-import { getInstallMaxTtlMonths, getMarketplaceNamePrefix, getMarketplacePublicEnabled, installExpiryCeiling } from "../../../../lib/settings";
+import { mintCallerUsageKey, type MintedUsageKey } from "../../../../lib/usageKey";
+import { getInstallMaxTtlMonths, getMarketplaceNamePrefix, getMarketplacePublicEnabled, getUsageInsightsEnabled, installExpiryCeiling } from "../../../../lib/settings";
 import { pool } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +32,7 @@ export async function POST(req: Request) {
   const access = await resolveUserAccess(oid);
   if (!access.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const body = (await req.json().catch(() => ({}))) as { scope?: string; namespaceSlug?: string; expiresAt?: string | null };
+  const body = (await req.json().catch(() => ({}))) as { scope?: string; namespaceSlug?: string; expiresAt?: string | null; shareUsage?: boolean };
 
   let scope: MarketplaceScope;
   let namespaceId: string | null = null;
@@ -73,6 +74,15 @@ export async function POST(req: Request) {
     expiresAt = d;
   }
 
+  // §68.4: "Share usage" ticked — the consumer's usage key is minted alongside, shown once. A holder
+  // cannot be re-shown their key (hashed at rest), so a second mint is a 409 before anything else.
+  let usageKey: MintedUsageKey | null = null;
+  if (body.shareUsage === true) {
+    if (!(await getUsageInsightsEnabled())) return Response.json({ error: "usage insights are not enabled" }, { status: 404 });
+    usageKey = await mintCallerUsageKey(access.userId);
+    if (!usageKey) return Response.json({ error: "usage_key_exists" }, { status: 409 });
+  }
+
   const { raw } = await mintMarketplaceToken(access.userId, { scope, namespaceId }, expiresAt);
   const prefix = await getMarketplaceNamePrefix();
   const registryBaseUrl = process.env.SKILLY_REGISTRY_URL ?? new URL(req.url).origin;
@@ -98,5 +108,7 @@ export async function POST(req: Request) {
     plainCommand: buildMarketplaceAddCommandPlain({ registryBaseUrl, scope }),
     plainShellCommand: buildMarketplaceShellCommandPlain({ registryBaseUrl, scope }),
     expiresAt: expiresAt?.toISOString() ?? null,
+    // §68.4 — only when Share usage was ticked and the caller held no key.
+    ...(usageKey ? { usageKey } : {}),
   });
 }

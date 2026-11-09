@@ -6,6 +6,7 @@ import { useApi, Pill, EmptyState, ScrollToTop } from "../../components/ui";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useDateFmt } from "../../components/DateFormat";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
+import { UsageSharingCard, type UsageSharingState } from "../../components/UsageShare";
 import { filterMarketplaces } from "../../lib/marketplaceFilter";
 
 /** One added Claude plugin marketplace (SKILLY_SPEC.md §30.6). */
@@ -33,7 +34,7 @@ function MarketplacesInner() {
   const fmt = useDateFmt();
   const q = (useSearchParams().get("q") ?? "").trim();
   const { data: me } = useApi<{ installMaxTtlMonths?: number }>("/api/me");
-  const { data, loading, error, reload } = useApi<{ marketplaces: Marketplace[] }>("/api/marketplaces");
+  const { data, loading, error, reload } = useApi<{ marketplaces: Marketplace[]; usageSharing?: UsageSharingState }>("/api/marketplaces");
   const marketplaces = data?.marketplaces ?? [];
   const filtered = filterMarketplaces(marketplaces, q);
 
@@ -100,6 +101,9 @@ function MarketplacesInner() {
       {msg && (
         <div style={{ marginBottom: 14, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>
       )}
+
+      {/* §68.4 Usage sharing — above the token rows, only while the platform switch is on. */}
+      {data?.usageSharing?.enabled && <UsageSharingCard state={data.usageSharing} onChanged={reload} />}
 
       {error ? (
         <EmptyState icon="⚠" title="Couldn’t load your marketplaces" hint={error} />

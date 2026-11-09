@@ -20,10 +20,12 @@ const WindowChart = dynamic(() => import("./UsageCharts").then((m) => m.WindowCh
 });
 
 interface MetricWindows { d1: number; d1Prev: number; d7: number; d7Prev: number; d30: number; d30Prev: number; all: number }
-interface DailySeries { views: number[]; installs: number[] }
-interface SkillUsage { namespaceSlug: string; skillSlug: string; title: string; toolHarness: string; views: MetricWindows; installs: MetricWindows; daily: DailySeries }
-interface UsageAggregate { scope: "platform" | "namespace"; views: MetricWindows; installs: MetricWindows; series: DailySeries }
-interface UsageDashboard { aggregate: UsageAggregate | null; skills: SkillUsage[]; seriesDays: string[] }
+interface DailySeries { views: number[]; installs: number[]; uses?: number[] }
+// `uses` (§68.7) is present only while Usage insights is on; its d1 is TODAY (a whole UTC day), not 24h.
+interface SkillUsage { namespaceSlug: string; skillSlug: string; title: string; toolHarness: string; views: MetricWindows; installs: MetricWindows; uses?: MetricWindows; daily: DailySeries }
+interface UsageAggregate { scope: "platform" | "namespace"; views: MetricWindows; installs: MetricWindows; uses?: MetricWindows; series: DailySeries }
+interface UsageDashboard { aggregate: UsageAggregate | null; skills: SkillUsage[]; seriesDays: string[]; usageInsightsEnabled: boolean }
+interface UsesBreakdown { series: { date: string; uses: number; people: number | null }[]; versions: { semver: string; uses: number }[]; triggers: { user: number; model: number }; total: number }
 
 // One range vocabulary for every filter on the page (matches the skill-detail chart): 7d/30d/90d/All.
 type SkillRange = "7d" | "30d" | "90d" | "all";
@@ -52,6 +54,7 @@ interface Breakdown {
   anonymousInstalls: number;
   systemInstalls: number;
   series: { bucket: "hour" | "day" | "week" | "month"; points: { date: string; views: number; installs: number }[] };
+  uses?: UsesBreakdown;
 }
 const RANGE_LABEL: Record<SkillRange, string> = { "7d": "last 7 days", "30d": "last 30 days", "90d": "last 90 days", all: "all time" };
 
@@ -76,12 +79,13 @@ const WINDOWS: { key: keyof Pick<MetricWindows, "d1" | "d7" | "d30" | "all">; pr
   { key: "all", label: "all" },
 ];
 
-function MetricStrip({ m }: { m: MetricWindows }) {
+// `firstLabel`: uses are counted per UTC day (§68.7), so their first column is "today", not "24h".
+function MetricStrip({ m, firstLabel = "24h" }: { m: MetricWindows; firstLabel?: string }) {
   return (
     <div className="metric-strip" style={{ display: "flex", gap: 14 }}>
       {WINDOWS.map((w) => (
         <div key={w.label} style={{ minWidth: 44 }}>
-          <div className="mono" style={{ fontSize: 10.5, color: "var(--faint)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{w.label}</div>
+          <div className="mono" style={{ fontSize: 10.5, color: "var(--faint)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{w.key === "d1" ? firstLabel : w.label}</div>
           <div style={{ fontSize: 17, fontFamily: "var(--font-display)", lineHeight: 1.15 }}>{formatCount(m[w.key])}</div>
           {w.prev ? <Delta cur={m[w.key]} prev={m[w.prev]} /> : <span style={{ fontSize: 11, color: "transparent" }}>·</span>}
         </div>
@@ -90,6 +94,15 @@ function MetricStrip({ m }: { m: MetricWindows }) {
   );
 }
 
+/** §68.7 — once per page, and again in the row's Uses panel: what "uses" are and why they're a floor. */
+function UsesFootnote({ style }: { style?: React.CSSProperties }) {
+  return (
+    <p className="muted" data-testid="uses-footnote" style={{ fontSize: 12, margin: 0, ...style }}>
+      <strong style={{ fontWeight: 600 }}>Uses</strong> are reported by Claude Code plugins installed from a skilly marketplace, by people who chose
+      to share usage. A lower bound: skills installed with <code>npx skills add</code> or used through MCP are not counted.
+    </p>
+  );
+}
 
 function Usage() {
   // The chosen windows are remembered across visits (SKILLY_SPEC.md §21). The platform-totals
@@ -108,8 +121,8 @@ function Usage() {
   // Client-side refinement chips (catalog-style) over the returned page.
   const [nsFilter, setNsFilter] = useState<string | null>(null);
   const [toolFilter, setToolFilter] = useState<string | null>(null);
-  // Sort the skill list by all-time total installs or views (catalog-style toggle).
-  const [sortBy, setSortBy] = useState<"installs" | "views">("installs");
+  // Sort the skill list by all-time total installs, views or uses (catalog-style toggle).
+  const [sortBy, setSortBy] = useState<"installs" | "views" | "uses">("installs");
   // Infinite scroll: render the first USAGE_PAGE rows, then USAGE_PAGE more each time the sentinel
   // scrolls into view. Reset whenever the filtered/sorted set changes so we always start at the top.
   const [visible, setVisible] = useState(USAGE_PAGE);
@@ -139,12 +152,16 @@ function Usage() {
   // Sort by the chosen all-time total, with deterministic tiebreakers (the other metric, then
   // title) so a filtered subset where many skills tie (e.g. all 0 installs) still orders sensibly
   // instead of falling back to the server's incoming order.
+  const usesOn = data.usageInsightsEnabled;
+  const usesAll = (s: SkillUsage) => s.uses?.all ?? 0;
   const shown = data.skills
     .filter((s) => (!nsFilter || s.namespaceSlug === nsFilter) && (!toolFilter || s.toolHarness === toolFilter))
     .sort((a, b) =>
-      sortBy === "installs"
-        ? b.installs.all - a.installs.all || b.views.all - a.views.all || a.title.localeCompare(b.title)
-        : b.views.all - a.views.all || b.installs.all - a.installs.all || a.title.localeCompare(b.title),
+      sortBy === "uses" && usesOn
+        ? usesAll(b) - usesAll(a) || b.installs.all - a.installs.all || a.title.localeCompare(b.title)
+        : sortBy === "views"
+          ? b.views.all - a.views.all || b.installs.all - a.installs.all || a.title.localeCompare(b.title)
+          : b.installs.all - a.installs.all || b.views.all - a.views.all || a.title.localeCompare(b.title),
     );
 
   return (
@@ -178,13 +195,21 @@ function Usage() {
               <div className="nav-label" style={{ padding: "0 0 8px" }}>Views</div>
               <MetricStrip m={data.aggregate.views} />
             </div>
+            {usesOn && data.aggregate.uses && (
+              <div className="usage-metric-block" data-testid="aggregate-uses">
+                <div className="nav-label" style={{ padding: "0 0 8px" }}>Uses</div>
+                <MetricStrip m={data.aggregate.uses} firstLabel="today" />
+              </div>
+            )}
           </div>
           <UsageChart days={data.seriesDays} series={data.aggregate.series} />
           <div className="muted mono" style={{ fontSize: 11, marginTop: 6 }}>
-            <span style={{ color: "var(--accent)" }}>—</span> installs · <span style={{ color: "var(--faint)" }}>—</span> views · {range === "all" ? "all time" : `last ${range} days`}
+            <span style={{ color: "var(--accent)" }}>—</span> installs · <span style={{ color: "var(--faint)" }}>—</span> views · {usesOn && <><span style={{ color: "var(--accent-2)" }}>┄</span> uses · </>}{range === "all" ? "all time" : `last ${range} days`}
           </div>
+          {usesOn && <UsesFootnote style={{ marginTop: 10 }} />}
         </section>
       )}
+      {usesOn && !data.aggregate && <UsesFootnote style={{ marginBottom: 16 }} />}
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22 }}>Skills</h2>
@@ -193,6 +218,7 @@ function Usage() {
           <div className="sort-toggle" role="group" aria-label="Sort by">
             <button type="button" className={`sort-opt${sortBy === "installs" ? " sort-on" : ""}`} onClick={() => setSortBy("installs")}>Installs</button>
             <button type="button" className={`sort-opt${sortBy === "views" ? " sort-on" : ""}`} onClick={() => setSortBy("views")}>Views</button>
+            {usesOn && <button type="button" className={`sort-opt${sortBy === "uses" ? " sort-on" : ""}`} onClick={() => setSortBy("uses")}>Uses</button>}
           </div>
         </div>
       </div>
@@ -296,6 +322,12 @@ function SkillRow({ s, seriesDays, skillRange, onPickRange }: { s: SkillUsage; s
           <div className="nav-label" style={{ padding: "0 0 6px" }}>Views</div>
           <MetricStrip m={s.views} />
         </div>
+        {s.uses && (
+          <div className="usage-metric-block" data-testid="row-uses">
+            <div className="nav-label" style={{ padding: "0 0 6px" }}>Uses</div>
+            <MetricStrip m={s.uses} firstLabel="today" />
+          </div>
+        )}
       </div>
 
       {open && (
@@ -304,9 +336,13 @@ function SkillRow({ s, seriesDays, skillRange, onPickRange }: { s: SkillUsage; s
               the chart and the viewers/installers lists always show the same period. */}
           {bd ? (
             <>
-              <WindowChart points={bd.series.points} bucket={bd.series.bucket} height={150} />
+              <WindowChart
+                points={bd.uses ? bd.series.points.map((p, i) => ({ ...p, uses: bd.uses!.series[i]?.uses ?? 0, people: bd.uses!.series[i]?.people ?? null })) : bd.series.points}
+                bucket={bd.series.bucket}
+                height={150}
+              />
               <div className="muted mono" style={{ fontSize: 11, margin: "6px 0 14px" }}>
-                <span style={{ color: "var(--accent)" }}>—</span> installs · <span style={{ color: "var(--faint)" }}>—</span> views · {RANGE_LABEL[skillRange]}
+                <span style={{ color: "var(--accent)" }}>—</span> installs · <span style={{ color: "var(--faint)" }}>—</span> views · {bd.uses && <><span style={{ color: "var(--accent-2)" }}>┄</span> uses · </>}{RANGE_LABEL[skillRange]}
               </div>
             </>
           ) : (
@@ -333,10 +369,45 @@ function SkillRow({ s, seriesDays, skillRange, onPickRange }: { s: SkillUsage; s
                 ].filter(Boolean).join(" · ") || null}
               />
               <PeopleList title="Top viewers" people={bd.viewers} extra={null} />
+              {bd.uses && <UsesPanel u={bd.uses} rangeLabel={RANGE_LABEL[skillRange]} />}
             </div>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** §68.7 the row's Uses panel: by version (newest first) and by trigger. Never a person. */
+function UsesPanel({ u, rangeLabel }: { u: UsesBreakdown; rangeLabel: string }) {
+  const pct = (n: number) => (u.total > 0 ? `${Math.round((n / u.total) * 100)}%` : "—");
+  return (
+    <div style={{ minWidth: 240 }} data-testid="uses-panel">
+      <div className="nav-label" style={{ padding: "0 0 8px" }}>Uses · {rangeLabel}</div>
+      {u.total === 0 ? (
+        <div className="muted" style={{ fontSize: 13 }}>None in this window.</div>
+      ) : (
+        <div className="rows">
+          <div className="row">
+            <div className="grow"><div className="ttl">Typed by a person</div></div>
+            <span className="muted mono" style={{ fontSize: 11, marginRight: 8 }}>{pct(u.triggers.user)}</span>
+            <span className="chip">{formatCount(u.triggers.user)}</span>
+          </div>
+          <div className="row">
+            <div className="grow"><div className="ttl">Chosen by Claude</div></div>
+            <span className="muted mono" style={{ fontSize: 11, marginRight: 8 }}>{pct(u.triggers.model)}</span>
+            <span className="chip">{formatCount(u.triggers.model)}</span>
+          </div>
+          {u.versions.map((v) => (
+            <div className="row" key={v.semver}>
+              <div className="grow"><div className="ttl mono" style={{ fontSize: 12 }}>v{v.semver}</div></div>
+              <span className="muted mono" style={{ fontSize: 11, marginRight: 8 }}>{pct(v.uses)}</span>
+              <span className="chip">{formatCount(v.uses)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <UsesFootnote style={{ marginTop: 8 }} />
     </div>
   );
 }

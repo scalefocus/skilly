@@ -20,7 +20,7 @@ import {
   SKILLS_SIDECAR_PATH,
   type MarketplacePluginBuild,
 } from "./marketplace.js";
-import { contentHash, diffChange, pluginFingerprint, marketplaceKey } from "./marketplaceSync.js";
+import { contentHash, diffChange, pluginFingerprint, marketplaceKey, usageHookKey } from "./marketplaceSync.js";
 import { runGit } from "./synth.js";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -183,6 +183,79 @@ test("synthesis lays out category plugins with member skills, merges components,
 
 test("dec helper sanity", () => {
   assert.equal(dec(enc("x")), "x");
+});
+
+// §68.3: with usage insights on, every plugin carries the reporter, its member manifest and the two
+// hook entries — appended AFTER a member's own hooks; with it off, none of the three exist.
+test("synthesis ships the usage hook in every plugin when asked, appended after member hooks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "skilly-mkt-"));
+  try {
+    const dir = marketplaceRepoDir(root, PUBLIC);
+    const manifest = { prefix: "skilly", scope: PUBLIC, ownerName: "skilly.test", version: "h1" };
+    const memberHooks = JSON.stringify({ hooks: { PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo member" }] }] } });
+    const plugins = [
+      build("docs", "1.0.1", [{ ns: "t", slug: "a", dir: "t-a", extra: [{ path: "hooks.json", body: memberHooks }] }]),
+      build("general", "1.0.1", [{ ns: "t", slug: "b", dir: "t-b" }]),
+    ];
+    plugins[0]!.members[0]!.skillId = "11111111-1111-4111-8111-111111111111";
+    plugins[0]!.members[0]!.semver = "1.2.3";
+    plugins[1]!.members[0]!.skillId = "22222222-2222-4222-8222-222222222222";
+    plugins[1]!.members[0]!.semver = "0.1.0";
+    const served = [{ namespaceSlug: "t", skillSlug: "a", semver: "1.2.3" }, { namespaceSlug: "t", skillSlug: "b", semver: "0.1.0" }];
+
+    await synthesizeMarketplace({
+      bareRepoPath: dir, manifest, plugins, served, change: { added: ["a", "b"], updated: [], removed: [] }, date: "2026-01-01T00:00:00Z",
+      usage: { registryBaseUrl: "https://skilly.example.com", envVar: "SKILLY_USAGE_KEY" },
+    });
+    const show = (p: string) => runGit(["show", `main:${p}`], { gitDir: dir });
+    const tree = (await runGit(["ls-tree", "-r", "--name-only", "main"], { gitDir: dir })).trim().split("\n").sort();
+    for (const p of ["plugins/docs/.skilly/usage.mjs", "plugins/docs/.skilly/usage.json", "plugins/docs/hooks.json", "plugins/general/.skilly/usage.mjs", "plugins/general/.skilly/usage.json", "plugins/general/hooks.json"]) {
+      assert.ok(tree.includes(p), `${p} present`);
+    }
+    assert.equal(await show("plugins/docs/.skilly/usage.mjs"), await show("plugins/general/.skilly/usage.mjs"), "the reporter is byte-identical in every plugin");
+
+    const um = JSON.parse(await show("plugins/docs/.skilly/usage.json")) as { base: string; envVar: string; marketplace: string; plugin: string; skills: Record<string, { id: string; semver: string }> };
+    assert.equal(um.base, "https://skilly.example.com");
+    assert.equal(um.envVar, "SKILLY_USAGE_KEY");
+    assert.equal(um.marketplace, "skilly-public");
+    assert.equal(um.plugin, "docs");
+    assert.deepEqual(um.skills, { "t-a": { id: "11111111-1111-4111-8111-111111111111", semver: "1.2.3" } });
+
+    const hooks = JSON.parse(await show("plugins/docs/hooks.json")) as { hooks: { PostToolUse: { matcher: string }[]; UserPromptExpansion: unknown[] } };
+    assert.deepEqual(hooks.hooks.PostToolUse.map((h) => h.matcher), ["Bash", "Skill"], "member hook first, ours appended");
+    assert.equal(hooks.hooks.UserPromptExpansion.length, 1);
+    const general = JSON.parse(await show("plugins/general/hooks.json")) as { hooks: { PostToolUse: { matcher: string }[] } };
+    assert.deepEqual(general.hooks.PostToolUse.map((h) => h.matcher), ["Skill"], "a plugin with no member hooks gets a fresh file");
+    for (const p of ["docs", "general"]) {
+      const pj = JSON.parse(await show(`plugins/${p}/.claude-plugin/plugin.json`)) as { hooks?: string };
+      assert.equal(pj.hooks, "./hooks.json", `${p}: plugin.json references hooks.json`);
+    }
+
+    // Off: a rebuild without `usage` carries none of it (a member's own hooks.json stays).
+    await synthesizeMarketplace({
+      bareRepoPath: dir, manifest: { ...manifest, version: "h2" }, plugins, served, change: { added: [], updated: [], removed: [] }, date: "2026-01-02T00:00:00Z",
+    });
+    const tree2 = (await runGit(["ls-tree", "-r", "--name-only", "main"], { gitDir: dir })).trim().split("\n");
+    assert.ok(!tree2.some((p) => p.includes(".skilly/usage")), "no usage artefacts when off");
+    assert.ok(tree2.includes("plugins/docs/hooks.json") && !tree2.includes("plugins/general/hooks.json"));
+    const pjOff = JSON.parse(await show("plugins/general/.claude-plugin/plugin.json")) as { hooks?: string };
+    assert.equal("hooks" in pjOff, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the usage hook's inputs bump the plugin fingerprint and the content hash", () => {
+  const m = { skillDir: "a", skillId: "s1", semver: "1.0.0", contentSha256: "c1" };
+  const base = pluginFingerprint([m], []);
+  assert.equal(pluginFingerprint([m], [], ""), base, "no extra ⇒ unchanged (hashes from before this field exist stay valid)");
+  const on = pluginFingerprint([m], [], usageHookKey({ registryBaseUrl: "https://a", envVar: "SKILLY_USAGE_KEY" }));
+  assert.notEqual(on, base, "switch on bumps");
+  assert.notEqual(pluginFingerprint([m], [], usageHookKey({ registryBaseUrl: "https://b", envVar: "SKILLY_USAGE_KEY" })), on, "base URL change bumps");
+  assert.notEqual(pluginFingerprint([m], [], usageHookKey({ registryBaseUrl: "https://a", envVar: "SKILLY_DEV_USAGE_KEY" })), on, "variable name change bumps");
+  assert.equal(usageHookKey(null), "");
+  const row = { skill_id: "s1", slug: "a", title: "A", description: null, artifact_object_key: "k", content_sha256: "c1", semver: "1.0.0", category_slugs: [], ns_slug: "t" };
+  assert.notEqual(contentHash([row], usageHookKey({ registryBaseUrl: "https://a", envVar: "SKILLY_USAGE_KEY" })), contentHash([row]), "the marketplace rebuilds on toggle");
 });
 
 test("attribution cursor reads skill-level credits back across category-plugin commits", async () => {

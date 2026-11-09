@@ -51,6 +51,7 @@ Every decision below was explicitly confirmed.
 | Policy rules | **Policy-as-prompt** (§47): namespace admins (platform admins, org-wide) write rules in plain language; the §46 pre-review judges every proposal, direct publish and published latest version against them **in the same call**, citing the rule and server-verified evidence. A violated **enforced** rule — or one with no verdict (fail-closed) — trips the accept gate and needs the audited override (platform rules: platform admins only); members' direct publishes route to review; published violators are flagged, never yanked, and carry a status chip everyone sees. Rules start in Shadow |
 | Try before install | **Chat with the AI integration with a skill loaded** (§61), from the skill page's Install card: behind a platform switch (off by default) and only while the integration is *Operational*. The version's `SKILL.md`, scripts and references plus the user's typed messages go to the provider; no tools, no stored conversation, per-user caps |
 | Search gaps | **What people search for and don't find** (§62), with no identity attached: opt-in (off by default), recorded on an explicit search only, counted per day under a salt deleted after the day. A periodic sweep groups them into gaps; while the AI integration is operational it drafts a synonym or a skill request for each. Platform admins accept or dismiss every one on `/admin/search-gaps`; accepted requests are posted by *Platform*. |
+| Usage insights | **How often a skill is used, not only installed** (§68): every marketplace plugin carries a small reporting hook that tells skilly which skill, version and trigger Claude Code invoked — only for people who ticked *Share usage* and hold a usage key. Uses per skill, version, trigger and UTC day, people counted per day under a day-salted hash; the third metric of the owner-only `/usage` dashboard. Off by default; a lower bound (`npx skills add` and MCP never report) |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
 | Deployment | **docker compose** (6 core services + git-perms init + dev proxy); **Helm/K8s now shipped** (§16 #19) |
@@ -283,6 +284,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `user_visit_days` (migration 0108, detailed in §67.7)
 - `user_id` (FK → `users`, CASCADE), `day` (`date`, a UTC calendar day). **PK `(user_id, day)`**, plus an index on `(day)` for the prune. One row per user per UTC day with any authenticated activity, written best-effort by `touchLastSeen` (§4). **Kept for 28 days**: a leader-only worker sweep deletes older rows daily. It is the only per-user activity history skilly keeps, and it feeds only the hover card's *Visits* row (§67.2). Deleted on GDPR erasure (§4); not audited.
 
+### `usage_report_keys` / `skill_usage_salts` / `skill_usage_hits` / `skill_usage_daily` / `skill_usage_daily_detail` (migration 0109, detailed in §68.6)
+- **`usage_report_keys`** — one row per user who shares usage: `user_id` (PK, FK → `users`, CASCADE), `key_hash` (SHA-256 of the raw key, unique), `created_at`, `last_used_at`. No expiry; deleted by *Stop sharing* and by GDPR erasure (§4); never audited.
+- **`skill_usage_hits`** — today's raw uses, keyed `(day, skill_id, semver, trigger, reporter_hash, event_hash)` where `reporter_hash = HMAC(the day's salt from `skill_usage_salts`, user id)`; no timestamp, no user id. Folded by the housekeeping sweep into **`skill_usage_daily`** `(day, skill_id) → uses, people` and **`skill_usage_daily_detail`** `(day, skill_id, semver, trigger) → uses`, after which the day's hits and salt are deleted. Daily rows are kept forever and cascade with the skill.
+
 ### `skill_maintainers` is documented above (§19); `skill_ratings` above (§18).
 
 ### `pending_mirrors` (migration 0005)
@@ -498,6 +503,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Feedback survey (§36.12):** `user_feature_uses` is **deleted**, and the scrub resets `surveys_enabled = true` and clears `survey_last_shown_at` / `survey_offer` / `survey_self_shown_at`. **`survey_responses` are untouched**: they carry no user reference, so there is nothing to erase or de-identify.
 - **Search gaps (§62.3):** nothing to erase — no search-gap row holds a searcher's user id.
 - **Visits (§67.7):** `user_visit_days` is **deleted** and the scrub sets `first_seen = null`, so an erased tombstone never shows a *Visits* row, a *New user* row or the new-user hat (it also reads "No directory information", §28).
+- **Usage insights (§68.6):** the user's `usage_report_keys` row is **deleted** (their Claude Code hook is refused from then on); no usage row holds a user id, so there is nothing else to erase.
 - **Review assignments (§65.9):** the user's **open** proposal assignments are cleared in the erasure transaction (audited `proposal.unassigned`, `reason: "ineligible"`, the erasing admin as actor; the pool is alerted when the proposal waits on reviewers). Decided proposals keep the assignee, now rendered with the tombstone label.
 - **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false`, `idea_notifications = true` and `idea_votes_hidden = false`.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
@@ -1836,7 +1842,8 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `POST /api/presence/page {label}` — any authenticated user (401 if not); stamps `users.last_seen_page` (+ `last_seen`) via the throttled `touchLastSeen`, §4.
 
 **Usage analytics (§21)**
-- `GET /api/usage?days=<7|30|90|all>` — dashboard (entitled skills + windows + deltas + allowed aggregate + series). `GET /api/usage/:ns/:slug/breakdown?range=<7d|30d|90d|all>` — owner-only drill-down. *(Param is `range`, not `window`.)*
+- `GET /api/usage?days=<7|30|90|all>` — dashboard (entitled skills + windows + deltas + allowed aggregate + series). `GET /api/usage/:ns/:slug/breakdown?range=<7d|30d|90d|all>` — owner-only drill-down. *(Param is `range`, not `window`.)* Both gain the **uses** metric while `usage_insights_enabled` is on (§68.7): `usageInsightsEnabled`, per-row `uses` windows (`today`/`d7`/`d30`/`all` + deltas), `uses` in `series[]` / `daily[]`, `sort=uses`; the breakdown's `uses: { series, versions, triggers }`.
+- **Usage insights (§68):** `POST /api/usage/reports` — the **Claude Code hook's** endpoint: bearer **usage key** only (no session), body `{ skillId, semver, trigger, eventId }`; **401** indistinguishable for any bad key, **204** for every other outcome (recorded / duplicate / dropped / switch off), **429** past 120/min per key. `POST /api/me/usage-key` (mint; **409** `usage_key_exists`), `POST /api/me/usage-key/regenerate`, `DELETE /api/me/usage-key` (stop sharing); `POST /api/marketplaces/tokens` accepts `shareUsage` and returns `usageKey`; `GET /api/marketplaces` gains `usageSharing`; `usageInsightsEnabled` on `GET|PATCH /api/admin/settings`.
 
 **Audit & system log**
 - `GET /api/audit` (`q`, `from`, `to`, `action`, `namespaceId`, `limit`, `offset`; admin-only, §11). `GET /api/audit/verify` (hash-chain integrity), `POST /api/audit/trim` (platform-admin).
@@ -2267,6 +2274,7 @@ A simple, owner-facing dashboard of **view** and **install** tendencies per skil
 ### Data sources
 - **Installs** = the git **clone**, recorded in `access_log` (`source='git'`, `skill_id`, `created_at`, `actor_user_id` — null for tokenless org clones). Every clone is logged (raw activity), but the **adoption** metric is de-duplicated: **`skills.install_count` counts each `(user, skill)` at most once — a user's FIRST install only, forever, version-agnostic** (so the popularity number can't be inflated by re-cloning; §21 "unique installs"). A user's first **download** counts the same way and shares the same ledger (`skill_installs`), so download-then-install counts once. **A user's first `SKILL.md` read over MCP (§29) counts identically** — `record_mcp_read()` is gated by the same `skill_installs` ledger, writes `access_log` with `source='mcp_resource'`, and credits maintainers via `install_credits` under the rules below; so **clone / download / MCP read are three doors to one adoption**, counted once per `(user, skill)`, and standings cannot be farmed by switching channels. MCP resource reads are **never** listed as installations on `/installed` (§23) — those come only from used `install` tokens. Tokenless (null-`actor_user_id`, `is_system=false`) clones are activity-only — they never touch `install_count`. **System-installation clones** (§23; null actor + `is_system=true`) count in trends/`install_counters` like any clone, and each system installation increments `install_count` **once, at first clone** (`used_at` stamping — the per-token analogue of the per-user first-install rule); they never touch the per-user `skill_installs` ledger (no related-skills co-install signal) and **never write `install_credits`**. Time-series **trends** still come from the full `access_log` (every clone), and the monthly `install_counters` stays a per-clone activity total.
 - **Views** = an authenticated load of `GET /api/skills/:ns/:slug`, newly logged into append-only `usage_events` **fire-and-forget after the visibility check** (never blocks/breaks the page; never logs a view of an unseen skill, so the table can't itself leak). Raw rows, no write-time dedupe; `actor_user_id` retained for the drill-down and future unique-counts.
+- **Uses** (§68) = an invocation of the skill inside Claude Code, reported by the hook skilly ships in every marketplace plugin (§30), **only by people who share usage**. Counted per skill, version, trigger and **UTC day** in `skill_usage_daily` / `_detail`; people per day under a day-salted hash, never a user id — so uses have **no per-user drill-down** and their windows are whole days (*today* where views and installs read *24h*). A **lower bound**, labelled as such; present only while `usage_insights_enabled` is on (§68.7).
 
 ### Metrics & periods
 - Per skill, per metric: **24h / 7d / 30d / all-time** **raw** counts (no "unique" in v1 — tokenless org installs make unique-installers unreliable). Each rolling window carries a **trend delta vs the immediately-preceding equal window** (↑/↓ %; **"new"** when prior=0 & current>0; **"—"** when both 0). All-time has no delta.
@@ -5203,6 +5211,9 @@ in member order (`(namespace slug, skill slug)`):
 > installs both of will have its MCP server started, and its hooks registered, **twice** — once per
 > plugin. Claude Code offers no cross-plugin dedup and skilly cannot know which plugins a consumer
 > chose. Stated, not hidden; revisit if a duplicated hook ever proves harmful rather than noisy.
+> **§68 adds a hook of skilly's own:** while *Usage insights* is on, every plugin also carries
+> `.skilly/usage.mjs` + `.skilly/usage.json` and two `hooks.json` entries (appended after any
+> member-hoisted hooks). Its controls and consequences are stated in §68.3.
 
 #### Migration from per-skill plugins (breaking — v2.0.0)
 The previous layout was **one plugin per skill**, named by the skill slug. This change **replaces**
@@ -5313,7 +5324,9 @@ panel's default tab changes — the fallback is already specced and implemented.
   semver, bundle `content_sha256`, and the **deprecation inputs** — `deprecated_at`, successor
   `ns/slug`, note — because a deprecated member's embedded `skills/<slug>/SKILL.md` is written
   **through the same §45.4 hint rewrite** as its own repo's `main`) plus the sorted list of merged
-  component files per plugin.
+  component files per plugin, and — while `usage_insights_enabled` is on — the §68.3 usage-hook
+  inputs (the switch itself, the registry base URL and the key's variable name), so toggling the
+  switch rebuilds every marketplace.
   Unchanged ⇒ no commit. Changed ⇒ the repo is rebuilt and **one commit** is written to `main`
   whose message enumerates the added/updated/removed **skill** slugs — that message is the
   attribution ledger §30.7 reads and it **stays skill-level**: plugins are a delivery grouping,
@@ -5684,6 +5697,8 @@ as **real installs of the individual skills**, via a commit cursor:
   (the `related_last_run_at` precedent): the last sweep time of the public marketplace, NULL
   until the first sweep after enabling, reset to NULL on disable (§30.5, §30.6 Page 3). Not
   shown in Administration.
+- `usage_insights_enabled` — bool, default `false` (§68.8): ships the usage hook in every plugin
+  and turns on the `/usage` uses metric; its own Administration card, not the Marketplace one.
 
 **Data model** (§3):
 - `namespaces` gains `marketplace_enabled BOOLEAN NOT NULL DEFAULT false`, and — in the
@@ -5710,7 +5725,9 @@ as **real installs of the individual skills**, via a commit cursor:
   `git config … insteadOf` rewrite carrying the token), `plainCommand` and `plainShellCommand`
   (the credential-free slash / shell add commands the disclosures pair with the rewrite), and
   `expiresAt`. All text is composed by `plugin-marketplace.ts` builders — the response is the
-  only path by which the raw token reaches the browser.
+  only path by which the raw token reaches the browser. With `shareUsage: true` (§68.4) it also
+  mints the caller's **usage key** and returns `usageKey: { key, envVar, snippet }` — **409**
+  `usage_key_exists` when the caller already holds one.
 - `GET /api/marketplaces` — the caller's marketplace tokens (the `/marketplaces` page), plus
   `publicMarketplace { enabled, name }` so a **non-admin** consumer can add the public marketplace
   from that page — there is no admin surface they would otherwise reach.
@@ -15380,3 +15397,319 @@ active = 0                                  → rare      "In a blue moon"
 - **Worker:** the prune deletes rows before `today − 27` and keeps the 28-day window.
 - **e2e:** a seeded newcomer's bubble shows the hat; hovering it shows the *Visits* and *New user*
   rows; with that person's directory details hidden, neither row nor the hat shows.
+
+---
+
+## 68. Usage insights
+
+Maintainers see how often a skill is **used**, not only installed. Every plugin skilly synthesizes
+for a Claude Code marketplace (§30) carries a small **usage hook**; when Claude Code invokes one of
+the plugin's skills, the hook tells skilly which skill, which version and whether a person typed it
+or Claude chose it. It reports only for people who **chose to share usage** and hold a **usage key**.
+skilly counts uses per skill, version, trigger and UTC day, and counts *people* per day under a
+salted hash that is deleted with the day (the §62 model). **Uses** become the third metric of the
+§21 dashboard, for the skills' owners only. Nothing from the conversation ever leaves the machine.
+
+### 68.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Off by default** — platform switch `usage_insights_enabled`. | It ships executable hook configuration into every plugin and counts people's activity. Admins opt in deliberately. |
+| 2 | **Consent is the consumer's.** The hook sends nothing without a usage key, and a key exists only because the person ticked **Share usage** (unticked by default) or chose it on My marketplaces. | Consent belongs to the person whose activity is counted, not to the admin who enabled the feature. |
+| 3 | **Marketplace plugins only.** Skills installed with `npx skills add` (§9) or read over MCP (§29) never report. | A plugin is the only channel through which skilly ships configuration; the per-skill repos serve immutable tags. The number is a **lower bound** and every surface says so. |
+| 4 | **People are counted per day** under `HMAC(day salt, user id)`; the salt dies with the day. No per-person drill-down, no user id in any usage row. | Owners can tell "20 uses by 3 people" from "20 uses by 20 people" without skilly keeping a log of who works when. Nothing to erase. |
+| 5 | **One use = one invocation**, whether a person typed `/plugin:skill` or Claude invoked the skill. A skill loaded five times in one session counts five. | That is the plain reading of "how often it is used". |
+| 6 | **Each use carries the skill's version and its trigger** (`user` · `model`). | Whether Claude finds the skill on its own, and whether old versions linger, are the two things a maintainer can act on. |
+| 7 | **Delivery is best-effort: async, 5 s, drop on failure, nothing on disk.** | The hook must never slow or block a session, and no usage log may accumulate on the person's machine. |
+| 8 | **Owners only**, through the §21 ownership matrix, as a third metric beside views and installs. Never on the catalog, the skill page or any ranking. | Usage is a maintainer's signal, not a popularity contest; keeping it off every public surface removes the incentive to game it. |
+| 9 | **Platform-wide.** No per-namespace opt-out. | One switch, one hook, identical and inert without a key. |
+| 10 | **Daily counts are kept forever**; raw hits are folded after their day. | One small row per skill and day; all-time stays truthful. |
+| 11 | **One usage key per user**, read by the hook from one environment variable in `~/.claude/settings.json`. | One value covers every skilly plugin on the machine; no per-plugin prompt. |
+| 12 | **What leaves the machine:** skill id, semver, trigger, an opaque event id, and the key. Never the prompt, arguments, `cwd`, session or transcript path, or any file. | The hook builds its own payload; it does not forward Claude Code's hook input. |
+
+### 68.2 What Claude Code provides (pinned)
+The facts the design rests on, verified against the Claude Code documentation and recorded in
+`packages/shared/src/plugin-marketplace.ts` with the contract's "pinned at Claude Code v‹x›" note:
+- A **model-invoked** skill fires **`PostToolUse`** with `tool_name = "Skill"`, carrying
+  `tool_input` (the skill's name) and a **`tool_use_id`**. A skill a person **types** as
+  `/<plugin>:<skill>` **bypasses the Skill tool** and fires **`UserPromptExpansion`** instead, with
+  `expansion_type = "slash_command"`, `command_name`, `command_source` and the common `prompt_id`.
+  The two paths are alternatives; one invocation never hits both.
+- A plugin's hooks are registered in **every session where the plugin is enabled** and fire on
+  **every** matching event, not only for that plugin's skills — the hook must filter by its own
+  members.
+- A hook in **exec form** (`command` + `args`) is spawned **without a shell on every OS**; `node`
+  must then resolve on `PATH`. A missing executable yields a **non-blocking** hook error notice in
+  the transcript; the action proceeds. `async: true` runs the hook in the background.
+- `env` in `~/.claude/settings.json` applies to every session **and its subprocesses**; a hook reads
+  it as an ordinary environment variable.
+- Plugin **auto-update is off by default for third-party marketplaces** (on for Anthropic's); a
+  consumer turns it on under `/plugin` → Marketplaces, or runs `/plugin update`.
+- **Not documented:** the name of the `tool_input` field that carries the skill, and whether
+  `command_name` includes the plugin prefix. The hook therefore matches **tolerantly** (§68.3), and
+  the pin note records what was observed at implementation. Claude Code's own OpenTelemetry
+  `skill_activated` event exists but reaches an org's OTLP collector, never a third-party registry;
+  it is not a channel for skilly (deferred, §68.10).
+
+### 68.3 The hook — what ships in every plugin
+When `usage_insights_enabled` is on, the synthesis sweep (§30.5) adds three artefacts to **every
+plugin of every enabled marketplace**, public and namespace alike:
+- **`plugins/<slug>/.skilly/usage.mjs`** — the reporter: a fixed, dependency-free Node ≥ 18 script,
+  **byte-identical in every plugin**, whose single source lives in `@skilly/shared`
+  (`packages/shared/src/usage-hook.ts`, the `USAGE_HOOK_SOURCE` constant beside the manifest and
+  hooks.json builders — part of the pinned contract). Nothing else may compose it.
+- **`plugins/<slug>/.skilly/usage.json`** — the plugin's member manifest:
+  `{ base, envVar, marketplace, plugin, skills: { "<skill-dir>": { id, semver } } }` — `base` is the
+  registry base URL, `envVar` the key's variable name (§68.4), `skills` keyed by the consumer-visible
+  directory name (§30.3), each with the skill's **id** and the **semver** the plugin carries.
+- **Two entries merged into the plugin's `hooks.json`**, appended **after** any member-hoisted hooks
+  (array concatenation — never a §30.3 collision), and `"hooks": "./hooks.json"` in `plugin.json`
+  when the plugin had none:
+
+  ```json
+  { "hooks": {
+    "PostToolUse": [{ "matcher": "Skill", "hooks": [{ "type": "command", "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/.skilly/usage.mjs"], "async": true, "timeout": 10 }] }],
+    "UserPromptExpansion": [{ "hooks": [{ "type": "command", "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/.skilly/usage.mjs"], "async": true, "timeout": 10 }] }]
+  } }
+  ```
+  (Claude Code reads a plugin hooks file with its events under a top-level `hooks` key; when a
+  member bundle wrote its events at the top level instead, the two entries are appended in that
+  same shape so one file never carries both. A `<plugin>:` prefix on the invoked name must match
+  this plugin, so a plugin of the same category from another marketplace never claims the use.)
+
+**What the script does**, in order, and nothing else:
+1. Reads the key from the environment variable named in `usage.json`. **Empty or unset → exit 0 at
+   once.** Nothing is sent, read or written.
+2. Reads the hook input from stdin. `hook_event_name = "PostToolUse"` with `tool_name = "Skill"` →
+   trigger **`model`**, skill name from `tool_input` (the first of `skill`, `name`, `skill_name` that
+   is a string — tolerant, pinned); `hook_event_name = "UserPromptExpansion"` with
+   `expansion_type = "slash_command"` → trigger **`user`**, skill name from `command_name`. Anything
+   else → exit 0.
+3. Normalizes the name: strips a leading `<plugin>:` prefix when present, then looks it up in
+   `usage.json`. **Not a member of this plugin → exit 0.**
+4. Takes the event id: `tool_use_id` (`PostToolUse`) or `prompt_id` (`UserPromptExpansion`); a
+   random UUID when absent.
+5. `POST <base>/api/usage/reports` with `Authorization: Bearer <key>`,
+   `User-Agent: skilly-usage-hook/<contract version>`, body
+   `{ "skillId", "semver", "trigger", "eventId" }`, a **5-second** abort. **Every outcome → exit 0**:
+   no retry, no stdout, no stderr on an expected failure, nothing on disk.
+
+It never reads `transcript_path`, `cwd`, `prompt`, `command_args` or any file, and never executes
+anything from its input.
+
+**Consequences, stated:**
+- **Node is a consumer prerequisite** — it already is for `npx skills add` (§9). On a machine
+  without `node` on `PATH`, Claude Code shows a non-blocking hook error on each skill invocation;
+  the Share-usage panel (§68.4) says so.
+- **The hook runs for consumers who did not opt in** (one short `node` spawn per skill invocation
+  per installed skilly plugin, exiting at step 1). A marketplace is one repo for everyone; there is
+  no per-consumer variant. Accepted.
+- **A skill carried by two installed plugins** (two categories, §30.3) fires two hooks and sends two
+  reports with the **same `eventId`**; the server folds them to one (§68.5).
+- **Consumers receive the hook through a plugin update.** The three artefacts are part of the plugin
+  **fingerprint** (§30.3), so turning the switch **on or off bumps every plugin once** (`1.0.<n>`), a
+  registry base-URL change bumps every plugin, and a member's new version bumps as before. Because
+  third-party auto-update is off by default, a consumer sees the hook only after enabling auto-update
+  or running `/plugin update`; the Administration card and the Share-usage panel both say so.
+- **Hooks the consumer's organization disables** (`disableAllHooks`, `allowManagedHooksOnly`) never
+  run; those consumers are simply absent from the count.
+
+> **Security note (extends §30.3).** With this feature **skilly itself authors executable
+> configuration** that runs with the consumer's user permissions, outside Claude Code's sandbox —
+> no longer only passes it through from member bundles. The controls: the script is one fixed,
+> reviewed file in this repository with **no dependencies**, spawned in exec form (**no shell**), makes
+> **one outbound HTTPS request to the registry base URL** and nothing else, runs nothing from its
+> input, and is exercised directly by the unit tests (§68.11). It ships only while a platform admin
+> keeps the switch on.
+
+### 68.4 The usage key and consent
+- **`usage_report_keys`** (§68.6): **one row per user**. The raw key is a 32-byte random value,
+  shown **once**, stored **hashed** (SHA-256, like `tokens.hashed_token`), never logged, never in an
+  audit payload. It has **no expiry**: it yields no bytes and no access, only the right to be counted;
+  the person's consent stands until they withdraw it.
+- **The variable name is instance-specific:** `<PREFIX>_USAGE_KEY`, the `marketplace_name_prefix`
+  (§30.2) upper-cased with `-` → `_` — `SKILLY_USAGE_KEY` by default, `SKILLY_DEV_USAGE_KEY` on a
+  dev instance — so a machine that reports to two skilly instances holds two keys that never collide.
+  The name travels in `usage.json`; a prefix change bumps every plugin (§68.3).
+- **Minting — two surfaces:**
+  1. **The add-command panel** (§30.6, both the Marketplaces page and Namespace administration):
+     the **Generate** step gains a checkbox **"Share usage with skill maintainers"**, **unticked by
+     default**, with one line of copy: *Claude Code will tell skilly which skills you use, how
+     often, and whether you or Claude invoked them — never what you typed. Maintainers see counts
+     only.* The checkbox is shown only while `usage_insights_enabled` is on, and only to a caller who
+     **holds no key yet**; a holder sees *You already share usage* with a link to My marketplaces.
+     Ticking it makes the mint response (`POST /api/marketplaces/tokens`, §30.8) also carry the new
+     key, and the panel renders a **second block** under the add command, **Share usage**: the
+     snippet for `~/.claude/settings.json` (never the project's — settings files are committed) with
+     its own Copy button copying only the JSON fragment:
+     ```json
+     { "env": { "SKILLY_USAGE_KEY": "<key>" } }
+     ```
+     plus two hints: *needs `node` on your PATH*, and *enable auto-update for this marketplace (or
+     run `/plugin update`) so your plugins receive the reporting hook*.
+  2. **My marketplaces** (`/marketplaces`, §30.6 Page 2) gains a **Usage sharing** card above the
+     token rows (shown only while the switch is on): state **Not sharing** / **Sharing since
+     ‹date›**, *last report ‹relative time›* (or *no reports yet*), and the actions **Share usage**
+     (mints a key and shows the same block, once), **Regenerate key** (delete + mint; the old key
+     stops working immediately) and **Stop sharing** (deletes the row after a confirm — *Your
+     Claude Code plugins will stop reporting. Counts already recorded stay.*).
+- **Withdrawal is immediate:** a report with a deleted key is refused with the same
+  indistinguishable **401** as an unknown key; the hook still exits 0, so the consumer sees nothing.
+  The person removes the `env` entry at their leisure.
+- **Owner must be active.** An inactive (deprovisioned) or erased owner's key is refused; the row is
+  kept on deprovision and **deleted on GDPR erasure** (§4).
+- **Not audited** — a personal credential, like install and marketplace tokens (§11). `last_used_at`
+  is stamped at most once a minute per key.
+- **A key is independent of marketplace tokens.** Removing every marketplace does not delete it
+  (the person may add a marketplace again); only Stop sharing or erasure does. Reports are
+  accepted only for skills the owner may currently see (§68.5), so a lost namespace membership
+  closes the door on its own.
+
+### 68.5 Ingest — `POST /api/usage/reports`
+- **Auth: the bearer key only** — no session, no CSRF, a plain machine endpoint on the web process.
+  Unknown, deleted, inactive-owner or malformed key → **401**, indistinguishable. Once the key is
+  valid the answer is **204 for every outcome** — recorded, duplicate or dropped — so the endpoint is
+  no oracle for a skill's existence, visibility or versions. While the switch is **off** it answers
+  204 and discards (the §32.5 RUM precedent).
+- **Body** (JSON, ≤ 1 KB, **400** on shape errors): `skillId` (uuid), `semver` (≤ 64 chars),
+  `trigger` (`user` | `model`), `eventId` (1–128 chars).
+- **Validation → drop silently unless all hold:** the skill exists; the key's owner **may see it**
+  (`isSkillVisible`, invariant #3 — a report for a skill the person has lost access to is dropped);
+  `semver` names one of the skill's `skill_versions` (any status — bounds the cardinality a client
+  can create). Archived skills are recorded (the data is true; the dashboard already lists active
+  skills only).
+- **The hit:** one row in `skill_usage_hits` keyed by
+  `(day, skill_id, semver, trigger, reporter_hash, event_hash)` with `day` from the database clock
+  (`(now() AT TIME ZONE 'UTC')::date`), `reporter_hash = HMAC-SHA256(the day's salt, user id)`
+  (salt created on the day's first hit, `INSERT … ON CONFLICT DO NOTHING`, cacheable in-process per
+  day — exactly §62.2) and `event_hash = SHA-256(eventId)`; `INSERT … ON CONFLICT DO NOTHING`, a
+  conflict being a **duplicate** (the dual-plugin case, §68.3, or a client retry). **No timestamp,
+  no user id, no session id, no IP, no user agent** is stored.
+- **Limits:** **120 reports per minute per key** (**429**), per instance like the rest of skilly's
+  limiting (§16 #20); body cap above.
+- **Metrics:** `skilly_usage_reports_total{outcome="recorded|duplicate|dropped|invalid_key|rate_limited|disabled"}`.
+- **System log:** nothing — 401s and 429s here are machine noise (§25's rule stands).
+
+### 68.6 Data model (migration 0109)
+- **`usage_report_keys`**: `user_id uuid PRIMARY KEY` FK `users` `ON DELETE CASCADE`,
+  `key_hash bytea UNIQUE NOT NULL`, `created_at timestamptz NOT NULL`, `last_used_at timestamptz`.
+- **`skill_usage_salts`**: `day date PRIMARY KEY`, `salt bytea NOT NULL` — the §62.3 shape, a
+  separate table so each feature's fold deletes its own salt.
+- **`skill_usage_hits`** (today's raw rows): `day date`, `skill_id uuid` FK `skills`
+  `ON DELETE CASCADE`, `semver text`, `trigger text CHECK (trigger IN ('user','model'))`,
+  `reporter_hash bytea`, `event_hash bytea`; **PK over all six columns**.
+- **`skill_usage_daily`** (folded, per skill): `day date`, `skill_id uuid` FK CASCADE,
+  `uses int NOT NULL`, `people int NOT NULL` (distinct reporter hashes that day); **PK
+  `(day, skill_id)`**, index `(skill_id, day)`.
+- **`skill_usage_daily_detail`** (folded, per version and trigger): `day`, `skill_id` FK CASCADE,
+  `semver text`, `trigger text`, `uses int NOT NULL`; **PK `(day, skill_id, semver, trigger)`**.
+  People are **not** kept at this grain — a person who used two versions in a day would be counted
+  twice, so the per-skill row is the only truthful people count.
+- **Fold and retention** run in the worker's leader-only **housekeeping sweep** (beside the §62.3
+  fold), **whatever the switch says**: for every day before today (UTC), in one transaction, insert
+  the day's hits into `skill_usage_daily` (count, distinct `reporter_hash`) and
+  `skill_usage_daily_detail` (count per version and trigger), then delete that day's hits and its
+  salt. Daily rows are **kept forever**; a deleted skill cascades. A reporter hash and its salt
+  therefore last at most until the first housekeeping pass after their day.
+- **`platform_settings`:** `usage_insights_enabled` — absent means `false`.
+- **GDPR erasure (§4)** deletes the user's `usage_report_keys` row; no usage row holds a user id.
+  **Deprovision** deletes nothing.
+
+### 68.7 The dashboard (§21 extension)
+Uses are the **third metric** of `/usage`, beside views and installs, under the **same entitlement**
+(the §21 ownership matrix — a member or consumer never sees them). Everything below is present
+**only while `usage_insights_enabled` is on**: switched off, the column, series, sort and panel are
+absent rather than a dashboard of zeros; switched on with no data yet, zeros with the footnote.
+- **Windows are whole UTC days**, because hits carry no time of day: the strip reads **today ·
+  7d · 30d · all-time** — *today* (the current UTC day so far) where views and installs read *24h*,
+  7d = today plus the six days before, 30d likewise. Each rolling window carries the §21 trend
+  delta against the preceding equal window (today vs yesterday); all-time has none.
+- **Today's numbers are live**: every query unions today's `skill_usage_hits` (counted on the fly,
+  people = distinct `reporter_hash`) with the folded daily rows.
+- **Aggregate chart:** a third series, **uses per day**, on the platform / namespace aggregate.
+  Aggregates **sum uses, never people** — a person is distinct per skill per day, and there is no
+  cross-skill identity to count. **Sparklines** gain uses as a third series. The range picker and
+  bucketing are the shared ones (§21); in week and month buckets people are not shown.
+- **Sort toggle** gains **uses** (30d, desc).
+- **Row breakdown** gains a **Uses** panel bound to the breakdown range: the per-day chart with the
+  tooltip *N uses by M people* (people in day buckets only); a **by version** table (semver, uses,
+  share of the range's uses, newest first); and a **by trigger** split — *Typed by a person* /
+  *Chosen by Claude* with counts and percentages. No named people, ever.
+- **The footnote**, once per page under the metric strip and repeated in the Uses panel: *Reported
+  by Claude Code plugins installed from a skilly marketplace, by people who chose to share usage. A
+  lower bound: skills installed with `npx skills add` or used through MCP are not counted.*
+- **API:** `GET /api/usage` gains `usageInsightsEnabled`; each row gains `uses` with the same window
+  shape as `views` / `installs` (`today` in place of `h24`), the aggregate `series[]` and each row's
+  `daily[]` gain `uses`, and `sort=uses` is accepted. `GET /api/usage/:ns/:slug/breakdown` gains
+  `uses: { series: [{ date, uses, people }], versions: [{ semver, uses }], triggers: { user, model } }`
+  (`people` null in week/month buckets). The skill detail page's public chart (§21) is **unchanged**.
+
+### 68.8 Settings and surfaces
+- **Administration → Usage insights:** a card with the shared `Switch` (default **off**), header
+  summary *on* / *off*, and a note: *When on, every marketplace plugin carries a small reporting
+  hook; turning this on or off updates every plugin's version once. People report only if they chose
+  Share usage.* `GET|PATCH /api/admin/settings` gain `usageInsightsEnabled` (platform admin), audited
+  `settings.updated`.
+- **The add-command panel** (§30.6, both surfaces) and **My marketplaces** as in §68.4.
+- `GET /api/marketplaces` gains `usageSharing: { enabled, key: { createdAt, lastUsedAt } | null }`.
+- `POST /api/marketplaces/tokens` accepts `shareUsage: true` and then also returns
+  `usageKey: { key, envVar, snippet }` — only when the caller holds no key (**409** `usage_key_exists`
+  otherwise). `POST /api/me/usage-key` (mint, same response; 409 when one exists),
+  `POST /api/me/usage-key/regenerate`, `DELETE /api/me/usage-key`. All session-authenticated; the
+  raw key is in the mint response and nowhere else.
+
+### 68.9 Privacy and governance
+- **Stored:** uses per skill, version, trigger and UTC day; people per skill and day as a count.
+  **Not stored:** who used what (beyond the day's salted hash, deleted with the day), when within a
+  day, from where, or anything typed.
+- **Invariant #3:** a report is accepted only for a skill its sender may currently see; the dashboard
+  is entitlement-scoped exactly as views and installs; `usage.json` inside a namespace marketplace
+  names only that marketplace's own members (ids of bytes the consumer already holds) and the public
+  marketplace's names only org-visible skills.
+- **Invariant #4** is untouched — no bytes flow here. **Invariant #6:** the key is random, scoped to
+  one user and one purpose, hashed at rest, never logged; the `Authorization` header is never
+  logged or echoed.
+- **Works-council posture:** no per-person figure is ever shown, no timestamps finer than a day are
+  kept, the feature is off by default, each person opts in and can stop at any time, and
+  withdrawal takes effect at once.
+
+### 68.10 Accepted trade-offs and out of scope
+- The count is a **lower bound**: no `npx skills add` or MCP consumers, no consumers without a key,
+  without `node`, with hooks disabled by policy, or whose plugins have not updated yet.
+- One `node` spawn per skill invocation per installed skilly plugin, for sharers and non-sharers
+  alike.
+- No hourly data; the first strip column is *today*, not a rolling 24 hours.
+- Distinct people are exact only per day; a 7-day "people" figure does not exist.
+- A sharer can inflate the uses of a skill they maintain. Only owners see the number and it ranks
+  nothing, so the incentive is small; the rate limit bounds the damage.
+- UTC days, as in §62 and §67.
+- **Deferred:** the `http` hook type (it would forward Claude Code's whole hook input, `cwd` and
+  prompt included); ingesting Claude Code's OpenTelemetry `skill_activated` events from an org
+  collector; uses on the catalog, the skill page or any ranking; a per-namespace opt-out; system
+  (platform-owned) usage keys; a per-user drill-down; reporting from the per-skill git repos.
+
+### 68.11 Tests (ship with the change)
+- **Unit (`@skilly/shared`):** the `usage.json` and `hooks.json` builders; the env-var name from a
+  prefix (`skilly` → `SKILLY_USAGE_KEY`, `skilly-dev` → `SKILLY_DEV_USAGE_KEY`); hooks.json merge
+  appends after a member's own `PostToolUse` hook and keeps both. **The hook script itself**, run
+  under `node` with a fake stdin against a local HTTP server: no key → no request and exit 0;
+  `PostToolUse` + `Skill` for a member → one POST with the right body, bearer and user agent;
+  `UserPromptExpansion` with `plugin:skill` → trigger `user`; a non-member skill → no request; a
+  server that hangs → exit 0 within the abort; a connection refused → exit 0, nothing on stdout.
+- **Worker:** synthesis writes the three artefacts in every plugin when the switch is on and none
+  when off; the plugin fingerprint changes on toggle and on a prefix change; the sidecar and ledger
+  (§30.5/§30.7) are unaffected.
+- **Integration (web API + DB):** ingest — 401 for an unknown, deleted and inactive-owner key;
+  204 + recorded for a valid report; 204 + duplicate for the same `eventId` twice; 204 + dropped for
+  an invisible skill and an unknown semver; 204 + discarded while the switch is off; 429 past the
+  limit. Keys — mint via the marketplace mint with `shareUsage`, 409 when one exists, regenerate
+  invalidates the old key, delete refuses the next report, `/api/marketplaces` reports the state.
+  The fold — hits become daily and detail rows with the right people count, hits and salt are
+  deleted, today's rows stay. The dashboard — `uses` windows and deltas, `sort=uses`, the breakdown's
+  versions and triggers, a maintainer sees only their skills, a member gets 403, everything absent
+  while the switch is off. Erasure deletes the key row. The migration creates the tables and
+  constraints.
+- **e2e:** with the switch on, generating an add command with Share usage ticked shows the key
+  block; My marketplaces shows the Usage sharing card and Stop sharing removes it; `/usage` shows the
+  uses column and the row's Uses panel for a seeded skill.

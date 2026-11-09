@@ -16,6 +16,8 @@ export const M = {
   // §62.12 search gaps — the outcome of each recording attempt; never the query text.
   searchGapHits: metrics.counter("skilly_search_gap_hits_total", "Search-gap hit recordings, by surface and outcome (recorded|secret|tombstoned|failed)"),
   rateLimited: metrics.counter("skilly_rate_limited_total", "Requests rejected by the rate limiter"),
+  // §68.5 usage insights — the outcome of each report; never who or what.
+  usageReports: metrics.counter("skilly_usage_reports_total", "Usage-hook reports, by outcome (recorded|duplicate|dropped|invalid_key|rate_limited|disabled)"),
   cspReports: metrics.counter("skilly_csp_reports_total", "CSP violation reports received (§22)"),
   // §37.13 content risk — findings recorded at hosted upload.
   contentRiskFindings: metrics.counter("skilly_content_risk_findings_total", "Content-risk findings recorded at scan time, by rule and severity"),

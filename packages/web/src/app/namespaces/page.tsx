@@ -8,6 +8,7 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
 import { MarketplaceAddCommand, type MarketplaceMint } from "../../components/MarketplaceAddCommand";
+import { ShareUsageCheckbox, useUsageSharing } from "../../components/UsageShare";
 import { useLastWatched } from "../../lib/useLastWatched";
 import { PREF_NS_LAST_CARD } from "../../lib/prefs";
 
@@ -95,6 +96,9 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
   const [minted, setMinted] = useState<MarketplaceMint | null>(null);
   const [addExpiry, setAddExpiry] = useState<string | null>(null);
+  // §68.4 the Share usage tick — unticked by default; mints the caller's usage key alongside.
+  const [shareUsage, setShareUsage] = useState(false);
+  const usage = useUsageSharing();
 
   const patch = async (body: Record<string, unknown>, okText: string | null) => {
     setBusy(true);
@@ -149,11 +153,12 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
       const r = await fetch("/api/marketplaces/tokens", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "namespace", namespaceSlug: ns.slug, expiresAt: addExpiry }),
+        body: JSON.stringify({ scope: "namespace", namespaceSlug: ns.slug, expiresAt: addExpiry, shareUsage }),
       });
       const j = (await r.json().catch(() => ({}))) as MarketplaceMint & { error?: string };
-      if (!r.ok) throw new Error(j.error ?? "Failed to generate");
+      if (!r.ok) throw new Error(j.error === "usage_key_exists" ? "You already share usage — manage it in My marketplaces." : (j.error ?? "Failed to generate"));
       setMinted(j);
+      if (j.usageKey) usage.reload();
     } catch (e) {
       setMsg({ kind: "err", text: String((e as Error).message) });
     } finally {
@@ -234,6 +239,7 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
                 Generate add command
               </button>
             </div>
+            {!minted && <ShareUsageCheckbox state={usage.state} checked={shareUsage} onChange={setShareUsage} disabled={busy} />}
             {/* The shared three-route panel — the same tabs and remembered choice as the
                 Marketplaces directory (§30.6). */}
             {minted && <MarketplaceAddCommand minted={minted} />}

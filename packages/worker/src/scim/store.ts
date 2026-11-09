@@ -345,6 +345,8 @@ export async function eraseUserByExternalId(pool: Pool, externalId: string): Pro
     // Visit days (§67.7) are personal activity history; first_seen is scrubbed below. Mirrored in web
     // lib/eraseUser.ts — keep the two in sync.
     await client.query(`delete from user_visit_days where user_id = $1`, [userId]);
+    // Usage key (§68.6) — mirrors web lib/eraseUser.ts; no usage row holds a user id.
+    await client.query(`delete from usage_report_keys where user_id = $1`, [userId]);
     // Scrub + detach the row (tombstone). Display label retains the former email
     // ("<email> - Deleted") so deleted authors stay identifiable; mirrors web's lib/eraseUser.ts.
     const deletedLabel = row?.email && row.email.trim() ? `${row.email.trim()} - Deleted` : "Deleted User";

@@ -17,6 +17,7 @@ import {
   type MarketplaceAddRoute,
 } from "@skilly/shared/plugin-marketplace"; // client-safe subpath: the root export pulls in node-only modules
 import { CopyLine } from "./CopyLine";
+import { UsageKeyBlock, type MintedUsageKey } from "./UsageShare";
 import { PREF_MARKETPLACE_ADD_ROUTE, readPref, writePref } from "../lib/prefs";
 import { reportFeatureUse } from "../lib/surveyClient";
 
@@ -38,6 +39,8 @@ export interface MarketplaceMint {
   plainCommand: string;
   plainShellCommand: string;
   expiresAt: string | null;
+  /** §68.4 — present only when Share usage was ticked and the caller held no key. */
+  usageKey?: MintedUsageKey;
 }
 
 const DISCLOSURE_HINT =
@@ -110,6 +113,9 @@ export function MarketplaceAddCommand({ minted }: { minted: MarketplaceMint }) {
           hint="The entry carries no key on purpose — settings files get committed. Put it in ~/.claude/settings.json for yourself, or in the project's .claude/settings.json to share it with the team; the git config line supplies the key on this machine."
         />
       )}
+
+      {/* §68.4 — the second block: the usage key, once, when Share usage was ticked. */}
+      {minted.usageKey && <UsageKeyBlock usageKey={minted.usageKey} />}
     </div>
   );
 }

@@ -49,6 +49,7 @@ export const EXCLUSIVE: readonly string[] = [
   "search-gaps.spec.ts", // platform settings: the search-gap collection switch; posts an org-visible request
   "survey.spec.ts", // platform settings: survey + bug-report switches
   "upstream-releases.spec.ts", // seeds an upstream release on the seeded global/web-scraper (every platform admin sees it)
+  "usage-insights.spec.ts", // platform settings: the usage-insights switch; team-a namespace settings; the dev user's usage key
   "visits-new-user.spec.ts", // platform settings: the visits switch and visits_since (every hover card)
 ];
 
