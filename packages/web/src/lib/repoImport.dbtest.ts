@@ -50,6 +50,10 @@ function fixtureRepo(): string {
   skill("skills/rimp-archived", "name: rimp-archived\ndescription: d");
   skill("skills/rimp-depr", "name: rimp-depr\ndescription: d");
   skill("skills/noname", "description: no name here");
+  // §6 skill-folder rule: a dot-folder is a folder like any other; a folder with a space is not
+  // one skilly can mirror (its name is taken in the catalog, to show the folder reason wins).
+  skill(".github/plugins/rimp/skills/rimp-dot", "name: rimp-dot\ndescription: Lives in a dot-folder");
+  skill("odd folder/rimp-existing", "name: rimp-existing\ndescription: d");
   g(["add", "-A"], "2026-04-01T10:00:00Z");
   g(["commit", "-qm", "second"], "2026-04-01T10:00:00Z");
   return dir.replace(/\\/g, "/");
@@ -136,7 +140,21 @@ test("import a whole repository: scan, submit, notifications, audit, direct, fil
   const scan = await scanRepository(pool, access, { url: URL_, ref: "main" }, { git });
   assert.ok(scan.ok, JSON.stringify(scan));
   const rows = new Map(scan.result.skills.map((s) => [s.subdir, s]));
-  assert.equal(scan.result.total, 9);
+  assert.equal(scan.result.total, 11);
+  const dotRow = rows.get(".github/plugins/rimp/skills/rimp-dot")!;
+  assert.equal(dotRow.importable, true, "a skill in a dot-folder can be ticked");
+  assert.equal(dotRow.reason, undefined);
+  assert.equal(Date.parse(dotRow.lastChangedAt!), Date.parse("2026-04-01T10:00:00Z"));
+  const oddRow = rows.get("odd folder/rimp-existing")!;
+  assert.equal(oddRow.importable, false, "a folder the §6 rule refuses can't be ticked");
+  assert.equal(oddRow.reason, "unsupported_path", "the folder reason wins over 'exists'");
+  assert.equal(oddRow.match, undefined, "and it is not looked up for matches");
+  // The scan's Folder field takes a dot-folder too, and narrows to it.
+  const narrowed = await scanRepository(pool, access, { url: URL_, ref: "main", folder: ".github/plugins/" }, { git });
+  assert.ok(narrowed.ok, JSON.stringify(narrowed));
+  assert.deepEqual(narrowed.result.skills.map((s) => s.subdir), [".github/plugins/rimp/skills/rimp-dot"]);
+  const gitDir = await scanRepository(pool, access, { url: URL_, ref: "main", folder: ".git/hooks" }, { git });
+  assert.ok(!gitDir.ok && gitDir.status === 422, "a .git folder is refused");
   assert.ok(scan.result.commit && /^[0-9a-f]{40}$/.test(scan.result.commit));
   assert.equal(scan.result.historyComplete, true);
   assert.equal(rows.get("skills/rimp-docx")!.importable, true);
@@ -230,6 +248,26 @@ test("import a whole repository: scan, submit, notifications, audit, direct, fil
   }
   const noDirect = await submitImport(pool, access, { ...base, mode: "direct", items: [item("skills/rimp-hidden", "rimp-hidden")] }, { git });
   assert.ok(!noDirect.ok && noDirect.status === 403, "require_review namespace");
+
+  // ── Dot-folders and refused folders at submit (§6 skill-folder rule) ──────────────────────
+  // Its own import, so the counts above stay as they are. The dot-folder skill becomes a proposal
+  // pinning its folder; the refused folder fails on its own without stopping the other.
+  const dotSent = await submitImport(
+    pool,
+    access,
+    { ...base, items: [item(".github/plugins/rimp/skills/rimp-dot", "rimp-dot"), item("odd folder/rimp-existing", "rimp-odd")] },
+    { git },
+  );
+  assert.ok(dotSent.ok, JSON.stringify(dotSent));
+  const dots = Object.fromEntries(dotSent.result.results.map((r) => [r.slug, r]));
+  assert.equal(dots["rimp-dot"]!.outcome, "proposed", JSON.stringify(dots["rimp-dot"]));
+  assert.equal(dots["rimp-odd"]!.outcome, "failed");
+  assert.match(dots["rimp-odd"]!.error ?? "", /skill folder segments must start with a letter, digit or dot/);
+  const pinned = (await q<{ subdir: string }>(
+    `select payload->'pointer'->>'subdir' as subdir from proposal_revisions where proposal_id = $1 and revision_no = 1`,
+    [dots["rimp-dot"]!.proposalId],
+  )).rows[0]!;
+  assert.equal(pinned.subdir, ".github/plugins/rimp/skills/rimp-dot");
 
   // ── Direct mode ───────────────────────────────────────────────────────────────────────────
   const direct = await submitImport(

@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.56.1",
+    date: "2026-11-10",
+    summary:
+      "Fixed: skills that live in a dot-folder of a repository (.github/…, .claude/skills/…, .agents/skills/…) can now be drafted, proposed and imported — before, the folder was refused with “skill folder segments must start alphanumeric”. When importing a repository, a folder skilly still can’t use (a space or a character like + or @ in its path) is now shown as “Can’t import” in the list instead of failing later.",
+  },
+  {
     version: "2.56.0",
     date: "2026-11-09",
     summary:

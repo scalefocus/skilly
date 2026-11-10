@@ -102,6 +102,37 @@ test("validateSubdir accepts safe relative folders", () => {
   assert.equal(validateSubdir("a.b_c-1"), null);
 });
 
+test("validateSubdir accepts dot-folders: skills live under .claude/, .agents/ and .github/ (§6)", () => {
+  for (const p of [
+    ".claude/skills/review",
+    ".agents/skills/pdf",
+    ".github/plugins/azure-skills/skills/azure-app-onboard-prereq",
+    ".hidden",
+    "skills/.internal/tool",
+    ".gitignore-rules", // starts like .git but is another name
+    ".github",
+    "a/.gitkeep",
+    "..a", // a name, not a parent reference
+    "a...b",
+  ]) {
+    assert.equal(validateSubdir(p), null, `should accept ${p}`);
+  }
+});
+
+test("validateSubdir refuses a .git segment in any case, with or without trailing dots", () => {
+  for (const p of [".git", ".git/hooks", "a/.git", "a/.git/b", ".GIT", ".Git/x", ".git.", "x/.git..", ".gIt./y"]) {
+    assert.equal(validateSubdir(p), "skill folder must not be inside a .git directory", `should reject ${p}`);
+  }
+  // a long run of trailing dots is scanned once, not backtracked over
+  assert.ok(validateSubdir(".git" + ".".repeat(250)));
+});
+
+test("validateSubdir refuses a segment made only of dots, however long", () => {
+  for (const p of [".", "..", "...", "a/....", ".".repeat(200)]) {
+    assert.equal(validateSubdir(p), "skill folder must not contain '.' or '..' segments", `should reject ${p}`);
+  }
+});
+
 test("validateSubdir rejects traversal/absolute/unsafe paths", () => {
   for (const p of [
     "../secrets",
@@ -110,9 +141,17 @@ test("validateSubdir rejects traversal/absolute/unsafe paths", () => {
     "C:/Windows",
     "a\\b",            // backslash separator
     "a//b",            // empty segment
-    ".hidden",         // segment must start alphanumeric
-    "-flag",
+    "-flag",           // a segment never starts with a dash
+    "a/-flag",
     "a/.",
+    "a/..",
+    "./a",
+    "my skills/pdf",   // space
+    "skills/c++",
+    "skills/@scope",
+    "skills/(draft)",
+    "skills/café",
+    "a".repeat(257),
   ]) {
     assert.ok(validateSubdir(p), `should reject ${p}`);
   }
