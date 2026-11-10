@@ -8,6 +8,7 @@ import {
   importNotificationContent,
   importPrefill,
   importReasonText,
+  isImportableFolder,
   isImportableName,
   isInFolder,
   normalizeImportFolder,
@@ -16,6 +17,7 @@ import {
   parseNameOnlyLog,
   repoLabel,
   sameNameBlockers,
+  scanImportReason,
   tickAllImportable,
   titleize,
 } from "./repo-import.js";
@@ -99,6 +101,28 @@ test("importability: no name, no description, invalid name; the reason sentences
   assert.equal(importReasonText("no_name"), "Can't import: SKILL.md has no name");
   assert.equal(importReasonText("invalid_name", { name: "PDF" }), "Can't import: name ‹PDF› isn't a valid skill slug");
   assert.equal(importReasonText("exists", { match: { ns: "team", slug: "pdf" } }), "Already in skilly as team/pdf");
+});
+
+test("folder check: dot-folders import, a folder the §6 rule refuses is unsupported_path, checked before the frontmatter", () => {
+  const ok = { name: "pdf-tools", description: "d" };
+  // Every folder the scan can find and tick must pass the rule the draft, submit and mirror run.
+  for (const dir of [null, "skills/pdf", ".claude/skills/review", ".agents/skills/pdf", ".github/plugins/azure-skills/skills/azure-app-onboard-prereq"]) {
+    assert.equal(isImportableFolder(dir), true, `should import from ${dir}`);
+    assert.equal(scanImportReason(dir, ok), null);
+  }
+  for (const dir of ["my skills/pdf", "skills/c++", "skills/@scope/pdf", "skills/(draft)/pdf", "-skills/pdf"]) {
+    assert.equal(isImportableFolder(dir), false, `should refuse ${dir}`);
+    assert.equal(scanImportReason(dir, ok), "unsupported_path");
+  }
+  // The folder wins over every frontmatter reason; a good folder falls through to them.
+  assert.equal(scanImportReason("my skills/pdf", {}), "unsupported_path");
+  assert.equal(scanImportReason("my skills/pdf", { name: "PDF Tools", description: "d" }), "unsupported_path");
+  assert.equal(scanImportReason(".claude/skills/review", { description: "d" }), "no_name");
+  assert.equal(scanImportReason(null, { name: "pdf" }), "no_description");
+  assert.equal(importReasonText("unsupported_path"), "Can't import: folder path has unsupported characters");
+  // discovery and the folder check agree on dot-folders end to end
+  const { found } = discoverSkillPaths([".github/plugins/p/skills/s/SKILL.md", "odd folder/x/SKILL.md"]);
+  assert.deepEqual(found.map((f) => [f.subdir, isImportableFolder(f.subdir)]), [[".github/plugins/p/skills/s", true], ["odd folder/x", false]]);
 });
 
 test("tickAllImportable: path order, importable only, one per name, capped", () => {

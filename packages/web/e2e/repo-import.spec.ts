@@ -31,11 +31,12 @@ const row = (path: string, name: string | null, extra: Record<string, unknown> =
 });
 const SCAN = {
   commit: "a".repeat(40),
-  total: 5,
-  shown: 5,
+  total: 6,
+  shown: 6,
   historyCommits: 12,
   historyComplete: true,
   skills: [
+    row("odd folder/e2e-imp-odd/SKILL.md", "e2e-imp-odd", { importable: false, reason: "unsupported_path" }),
     row("skills/docx/SKILL.md", "e2e-imp-docx"),
     row("skills/noname/SKILL.md", null, { importable: false, reason: "no_name" }),
     row("skills/pdf/SKILL.md", "e2e-imp-pdf"),
@@ -132,6 +133,9 @@ test("pick, review every step, remove one, submit, fix and resubmit the failed o
   await scanAndTick(page, ["skills/docx/SKILL.md", "skills/pdf/SKILL.md", "skills/xlsx/SKILL.md"]);
   await expect(page.getByTestId("import-row-skills/noname/SKILL.md").getByRole("checkbox")).toBeDisabled();
   await expect(page.getByText("Can't import: SKILL.md has no name")).toBeVisible();
+  // A folder the §6 skill-folder rule refuses can't be ticked, and says why.
+  await expect(page.getByTestId("import-row-odd folder/e2e-imp-odd/SKILL.md").getByRole("checkbox")).toBeDisabled();
+  await expect(page.getByText("Can't import: folder path has unsupported characters")).toBeVisible();
 
   // AI is off: no Draft with AI option on the page and no Draft button in a step.
   await expect(page.getByTestId("import-draft-ai")).toHaveCount(0);

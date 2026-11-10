@@ -648,8 +648,16 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     is enforced against the mirrored `SKILL.md` so identity can't drift. The skill **must be
     self-contained within its subfolder** (files outside it are dropped); if no `SKILL.md`
     exists at that path at the pinned ref, the mirror **fails loudly** with a clear error.
-    The subfolder is validated as a safe relative path (no `..`, no leading `/`, bounded
-    charset). **The install command is unchanged** — it still targets skilly's gateway URL
+    The subfolder is validated as a safe relative path by **one shared rule**
+    (`validateSubdir`), applied wherever a skill folder is supplied or used: the propose form,
+    MCP, the repository import (§64), Draft with AI (§43), submit-time verification and the
+    mirror. The rule: at most 256 characters; `/`-separated, with no leading `/`, drive
+    letter, backslash or empty segment; each segment made of letters, digits, `.`, `_` and
+    `-`, **starting with a letter, a digit or a dot** and never with `-`. A dot-folder is
+    therefore a folder like any other: `.claude/skills/<name>`, `.agents/skills/<name>` and
+    `.github/plugins/<p>/skills/<s>` are accepted. A segment made only of dots (`.`, `..`, `...`)
+    is refused, and so is a **`.git` segment** (in any letter case, with or without trailing dots): the clone's
+    own git directory is never a skill folder. **The install command is unchanged** — it still targets skilly's gateway URL
     for that single skill; no `--skill`/`--all` flags appear (those are consumer-side flags for
     repos that contain multiple skills, which a skilly mirror never does). One proposal still
     produces **exactly one** skill. To bring in many skills from one repo, the **repository
@@ -14321,8 +14329,8 @@ Fields, top to bottom:
   (§8). **Ref**: default **`main`** (§8), with the same live ref pre-check (`GET /api/pointer/refs`)
   and quick-picks. A skills-hub URL is refused inline: *"skills-hub.ai has one skill per page.
   Propose it from the propose form."*
-- **Folder · optional**: limits the scan to one subtree (`plugins/`, `skills/document/`). It is
-  validated as a safe relative path (`validateSubdir`).
+- **Folder · optional**: limits the scan to one subtree (`plugins/`, `skills/document/`,
+  `.github/plugins/`). It is validated by the §6 skill-folder rule (`validateSubdir`).
 - **Scan** runs the scan (§64.3). Changing the repository, ref or folder after a scan needs a new
   scan. If the wizard already holds edits, a confirm comes first: *"Scanning again discards your
   edits to N skills."*
@@ -14353,6 +14361,11 @@ Fields, top to bottom:
   a new tab** (decision 15), as the propose form's slug-match link does (§8). It is marked **↗**,
   which screen readers announce as *"opens in a new tab"*. Only the link opens the skill. Clicking
   elsewhere on the row does nothing.
+- A row whose **folder fails the §6 skill-folder rule** (a space, or a character such as `+`, `@`
+  or `(` in a segment) can't be ticked either: *"Can't import: folder path has unsupported
+  characters"*. This reason is checked **first** and wins over the others, since nothing in the
+  `SKILL.md` can fix it. So every row that can be ticked can also be drafted, verified, submitted
+  and mirrored.
 - **Warning, still tickable:** a `SKILL.md` inside another found skill's folder reads *"Inside
   ‹outer path›. Importing ‹outer› also brings this folder's files."*
 - **Same name twice:** when two importable rows share a name, ticking one disables the other with
@@ -14376,7 +14389,13 @@ Fields, top to bottom:
 - **Discovery.** Every path in the tip's tree whose last segment is exactly `SKILL.md` and that
   passes the shared safe-path predicate (§6), under `folder` when given. The skill's folder is the
   path's parent; an empty parent is the repository root, with no subdir. Paths are sorted, and the
-  first **500** are returned with the `total`.
+  first **500** are returned with the `total`. Dot-folders (`.claude/`, `.agents/`, `.github/`) are
+  found like any other.
+- **Folder check.** Each found skill's folder is checked with the §6 skill-folder rule
+  (`validateSubdir`), the same check the draft, the submit and the mirror run later. A folder that
+  fails is still listed, with `importable: false` and `reason: unsupported_path`, and is not looked
+  up for matches. The reasons apply in this order: `unsupported_path`, then the frontmatter reasons
+  (`no_name`, `no_description`, `invalid_name`), then `exists`.
 - **Frontmatter.** Only the returned `SKILL.md` blobs are fetched (a sparse checkout of `SKILL.md`
   files, with symlinks checked out as plain files), each read up to 64 KB as a regular file, and
   parsed with the shared `parseFrontmatter`. Nothing else is read.
@@ -14392,8 +14411,8 @@ Fields, top to bottom:
   hidden-collision alert (§8) applies after submit.
 - **Response 200** `{ commit, total, shown, historyCommits, historyComplete, skills: [{ path,
   subdir, name, description, lastChangedAt, lastChangedBefore, importable, reason?, match?: { ns,
-  slug, sameSource }, nestedIn? }] }`, with `reason` one of `no_name`, `no_description`,
-  `invalid_name` or `exists`. A ref that doesn't exist, or a repository that can't be read, is
+  slug, sameSource }, nestedIn? }] }`, with `reason` one of `unsupported_path`, `no_name`,
+  `no_description`, `invalid_name` or `exists`. A ref that doesn't exist, or a repository that can't be read, is
   **422** with the verification's message. A repository with no `SKILL.md` at all is **200** with an
   empty list, and the page says *"No SKILL.md files found in this repository at ‹ref›."*
 

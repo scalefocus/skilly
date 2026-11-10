@@ -6,6 +6,7 @@
 import { isSafeRelativePath } from "./validate.js";
 import { categoryNameError } from "./category.js";
 import { isValidSemver } from "./semver.js";
+import { validateSubdir } from "./net.js";
 
 /** At most this many skills ticked per import (§64.1 decision 14) — equal to the daily AI draft cap. */
 export const IMPORT_MAX_SKILLS = 50;
@@ -147,19 +148,39 @@ export function lastChangedByFolder(commits: readonly LogCommit[], folders: read
 
 // ── Importability (§64.1 decisions 5–6) ───────────────────────────────────────────────────────
 
-export type ImportReason = "no_name" | "no_description" | "invalid_name" | "exists";
+export type ImportReason = "unsupported_path" | "no_name" | "no_description" | "invalid_name" | "exists";
 
 /** Why a found SKILL.md can't be imported from its frontmatter alone, or null when it can. */
-export function frontmatterImportReason(fm: Record<string, string>): Exclude<ImportReason, "exists"> | null {
+export function frontmatterImportReason(fm: Record<string, string>): "no_name" | "no_description" | "invalid_name" | null {
   if (!fm.name?.trim()) return "no_name";
   if (!fm.description?.trim()) return "no_description";
   if (!isImportableName(fm.name.trim())) return "invalid_name";
   return null;
 }
 
+/**
+ * True when a found skill's folder passes the §6 skill-folder rule — the check the draft, the
+ * submit and the mirror run later, so a row that can be ticked never fails on its path afterwards
+ * (§64.3 *Folder check*). The repository root (null) always passes.
+ */
+export function isImportableFolder(subdir: string | null): boolean {
+  return subdir === null || validateSubdir(subdir) === null;
+}
+
+/**
+ * Why a found skill can't be imported, before any catalog lookup, or null when it can: its folder
+ * first (nothing in the SKILL.md can fix that), then its frontmatter (§64.3 reason order).
+ */
+export function scanImportReason(subdir: string | null, fm: Record<string, string>): Exclude<ImportReason, "exists"> | null {
+  if (!isImportableFolder(subdir)) return "unsupported_path";
+  return frontmatterImportReason(fm);
+}
+
 /** The pick page's sentence for a row that can't be ticked (§64.2). */
 export function importReasonText(reason: ImportReason, opts: { name?: string | null; match?: { ns: string; slug: string } | null } = {}): string {
   switch (reason) {
+    case "unsupported_path":
+      return "Can't import: folder path has unsupported characters";
     case "no_name":
       return "Can't import: SKILL.md has no name";
     case "no_description":

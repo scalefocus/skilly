@@ -23,7 +23,6 @@ import {
   bundleContentCap,
   canDirectPublish,
   discoverSkillPaths,
-  frontmatterImportReason,
   isBlockedIp,
   isImportableName,
   isSkillsHubUrl,
@@ -37,6 +36,7 @@ import {
   parseNameOnlyLog,
   repoLabel,
   runScanners,
+  scanImportReason,
   skillVisibilityWhere,
   slugExistsMessage,
   validateGitRef,
@@ -286,7 +286,9 @@ export async function scanRepository(
     const nested = nestedSkillFolders(found.map((f) => f.subdir));
 
     const fms = found.map((f) => parseFrontmatter(mds.get(f.path) ?? ""));
-    const names = fms.map((fm) => fm.name?.trim()).filter((n): n is string => !!n && isImportableName(n));
+    // Folder first, then frontmatter (§64.3 reason order). Only a row with neither is looked up.
+    const reasons = found.map((f, i) => scanImportReason(f.subdir, fms[i]!));
+    const names = fms.map((fm, i) => (reasons[i] ? undefined : fm.name?.trim())).filter((n): n is string => !!n && isImportableName(n));
     const matches = await visibleMatches(db, access, [...new Set(names)]);
     const origin = normalizeOriginUrl(url);
 
@@ -304,7 +306,7 @@ export async function scanRepository(
         importable: true,
         frontmatter: { usageExamples: fm.usage_examples?.trim() || null, category: fm.category?.trim() || null, version: fm.version?.trim() || null },
       };
-      const reason = frontmatterImportReason(fm);
+      const reason = reasons[i];
       const match = name ? matches.get(name.toLowerCase()) : undefined;
       if (reason) {
         row.importable = false;

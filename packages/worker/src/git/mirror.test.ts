@@ -90,6 +90,19 @@ test("finds a skill nested under .claude/skills/<name> when the subdir is just t
   assert.match(md, /name: nested-skill/);
 });
 
+test("mirrors a skill pinned by its full dot-folder path (the repository import pins it that way)", async () => {
+  const { files } = await cloneAndPack(multiRepo, "v1.0.0", ".claude/skills/nested-skill");
+  assert.deepEqual(files.map((f) => f.path).sort(), ["SKILL.md", "helper.txt"]);
+  const md = new TextDecoder().decode(files.find((f) => f.path === "SKILL.md")!.bytes);
+  assert.match(md, /name: nested-skill/);
+});
+
+test("refuses the clone's own .git directory as a skill folder", async () => {
+  for (const sub of [".git", ".git/hooks", ".GIT/info", "frontend-design/.git."]) {
+    await assert.rejects(cloneAndPack(multiRepo, "v1.0.0", sub), /unsafe pointer subdir/, `should refuse ${sub}`);
+  }
+});
+
 test("tolerates the v-prefix convention mismatch (pins '1.0.0' when the tag is 'v1.0.0')", async () => {
   const { files } = await cloneAndPack(externalRepo, "1.0.0");
   assert.ok(files.some((f) => f.path === "SKILL.md"), "resolved the v-prefixed tag");

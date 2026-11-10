@@ -129,9 +129,13 @@ export function validateGitRef(ref: string): string | null {
  * Validate an optional pointer source SUBDIR — the folder *inside* the upstream repo where the
  * skill's `SKILL.md` lives (e.g. `frontend-design` in a multi-skill repo). It is appended to
  * the clone path before walking, so it MUST be a safe relative path: no absolute/drive paths,
- * no `..`, no backslashes, bounded charset. Returns an error string, or null if acceptable.
+ * no `..`, no backslashes, bounded charset. A segment may start with a dot — skills live under
+ * `.claude/skills/`, `.agents/skills/`, `.github/plugins/…` — but never with `-` (it could read as
+ * a flag), and a `.git` segment is refused: the clone's own git directory is never a skill folder.
+ * Returns an error string, or null if acceptable.
  * Empty/undefined is handled by the caller (= repo root) and must NOT be passed here.
- * SKILLY_SPEC.md §6.
+ * This is the ONE skill-folder rule: the propose form, MCP, the repository import, Draft with AI,
+ * submit-time verification and the mirror all call it. SKILLY_SPEC.md §6.
  */
 export function validateSubdir(raw: string): string | null {
   if (raw.length > 256) return "skill folder path is too long (max 256 chars)";
@@ -140,12 +144,33 @@ export function validateSubdir(raw: string): string | null {
   if (/^[A-Za-z]:/.test(raw)) return "skill folder must be a relative path (no drive letter)";
   for (const seg of raw.split("/")) {
     if (seg === "") return "skill folder must not contain empty path segments";
-    if (seg === "." || seg === "..") return "skill folder must not contain '.' or '..' segments";
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(seg)) {
-      return "skill folder segments must start alphanumeric and contain only letters, digits, and . _ -";
+    // "." and "..", and any longer run of dots: no real folder is named that, and some
+    // filesystems resolve one to the folder itself.
+    if (isOnlyDots(seg)) return "skill folder must not contain '.' or '..' segments";
+    if (!/^[A-Za-z0-9.][A-Za-z0-9._-]*$/.test(seg)) {
+      return "skill folder segments must start with a letter, digit or dot and contain only letters, digits, and . _ -";
     }
+    if (isGitDirSegment(seg)) return "skill folder must not be inside a .git directory";
   }
   return null;
+}
+
+/** The segment without its trailing dots. An index scan, not a regex, so a long run of dots in
+ *  user input can never make it backtrack. */
+function withoutTrailingDots(seg: string): string {
+  let end = seg.length;
+  while (end > 0 && seg[end - 1] === ".") end--;
+  return seg.slice(0, end);
+}
+
+function isOnlyDots(seg: string): boolean {
+  return withoutTrailingDots(seg) === "";
+}
+
+/** `.git` in any letter case, with or without trailing dots (a filesystem that drops trailing dots
+ *  resolves `.git.` to `.git`). */
+function isGitDirSegment(seg: string): boolean {
+  return withoutTrailingDots(seg).toLowerCase() === ".git";
 }
 
 /** The skilly slug derived from a pointer subdir = its last path segment ("web/frontend-design" -> "frontend-design"). */
