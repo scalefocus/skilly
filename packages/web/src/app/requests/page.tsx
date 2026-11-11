@@ -312,10 +312,10 @@ function RequestsInner() {
               : requester
                 ? "Requests they post will show up here."
               : mine
-                ? "Propose a skill → “I want a skill” to post one."
+                ? "Propose skills → “I want a skill” to post one."
                 : stateFilter !== "open"
                   ? "Nothing here yet — fulfilled requests appear once a linked proposal is accepted."
-                  : "Ask for the skill you wish existed — Propose a skill → “I want a skill”."
+                  : "Ask for the skill you wish existed — Propose skills → “I want a skill”."
           }
         />
       ) : view === "cards" ? (

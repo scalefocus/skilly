@@ -5,7 +5,16 @@
 // at rest, never logged, never in audit payloads, never returned to the browser, and only ever
 // sent to the stored base URL. SKILLY_SPEC.md §40.
 import { aiHostGuard, aiAllowPrivateBaseUrl } from "@skilly/shared/ai-egress";
-import { loadPrereviewSetting, prereviewCounts } from "@skilly/shared";
+import {
+  AI_DRAFT_DAILY_CAP_SETTING,
+  aiDraftLimitView,
+  effectiveAiDraftDailyCap,
+  loadPrereviewSetting,
+  parseAiDraftDailyCapOverride,
+  prereviewCounts,
+  validateAiDraftLimitInput,
+  type AiDraftLimitView,
+} from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
 import { getAiTryEnabled, getPlatformSettings } from "./settings";
@@ -130,6 +139,8 @@ export interface AiAdminStatus {
   displayName: string;
   /** §40.15 per-call timeouts and the draft run cap (independent of the provider config). */
   timeouts: AiTimeoutsView;
+  /** §40.17 the daily Draft-with-AI cap per user (independent of the provider config). */
+  draftLimit: AiDraftLimitView;
   /** §46.2 the AI pre-review switch and its queue (independent of the provider config). */
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
   /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
@@ -197,6 +208,7 @@ export async function getAiAdminStatus(): Promise<AiAdminStatus> {
     features: AI_FEATURES.map((f) => ({ key: f.key, label: f.label, egress: f.egress, spec: f.spec })),
     displayName: (await getPlatformSettings(pool)).aiDisplayName,
     timeouts: aiTimeoutsView(AI_FEATURES, await loadAiTimeouts()),
+    draftLimit: aiDraftLimitView(await loadAiDraftDailyCapOverride()),
     prereview: await prereviewAdminState(row?.enabled === true && decryptable),
     try: await tryAdminState(st.status === "operational"),
     privateNetwork: { enabled: row ? row.allowPrivateNetwork === true : await loadAiAllowPrivateNetwork(), operatorAllowed: aiAllowPrivateBaseUrl() },
@@ -255,6 +267,50 @@ export async function saveAiTimeouts(body: unknown, userId: string): Promise<AiT
     after: { aiTimeouts: v.value },
   });
   return afterView;
+}
+
+// ── Daily draft limit (§40.17) ───────────────────────────────────────────────────────────────
+
+/** The stored override as served (not a whole number ⇒ none; out of range ⇒ clamped). */
+export async function loadAiDraftDailyCapOverride(): Promise<number | null> {
+  const { rows } = await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [AI_DRAFT_DAILY_CAP_SETTING]);
+  return parseAiDraftDailyCapOverride(rows[0]?.value);
+}
+
+/** The daily Draft-with-AI cap in force — read uncached, so a change applies to the next draft. */
+export async function aiDraftDailyCap(): Promise<number> {
+  return effectiveAiDraftDailyCap(await loadAiDraftDailyCapOverride());
+}
+
+/**
+ * PUT /api/admin/ai/draft-limit: `{ dailyCap: number | null }` (null = the default). Independent of
+ * the provider config — no test, no token, no AI_TOKEN_ENC_KEY needed. Only an override is stored;
+ * restoring the default deletes the row. Saving the value already stored writes and audits nothing;
+ * otherwise audited as settings.updated.
+ */
+export async function saveAiDraftLimit(body: unknown, userId: string): Promise<AiDraftLimitView | AiApiError> {
+  const v = validateAiDraftLimitInput(body);
+  if (!v.ok) return { error: "invalid_draft_limit", detail: v.error, status: 422 };
+  const before = await loadAiDraftDailyCapOverride();
+  if (before === v.value) return aiDraftLimitView(before);
+  if (v.value === null) {
+    await pool.query(`delete from platform_settings where key = $1`, [AI_DRAFT_DAILY_CAP_SETTING]);
+  } else {
+    await pool.query(
+      `insert into platform_settings (key, value, updated_by, updated_at) values ($1, $2::jsonb, $3, now())
+       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+      [AI_DRAFT_DAILY_CAP_SETTING, JSON.stringify(v.value), userId],
+    );
+  }
+  await appendAudit(pool, {
+    actorUserId: userId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: AI_DRAFT_DAILY_CAP_SETTING,
+    before: { aiDraftDailyCap: before },
+    after: { aiDraftDailyCap: v.value },
+  });
+  return aiDraftLimitView(v.value);
 }
 
 // ── Private-network providers (§40.16) ───────────────────────────────────────────────────────

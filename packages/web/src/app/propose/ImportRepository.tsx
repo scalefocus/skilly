@@ -39,7 +39,10 @@ type RefsResult = { ok: true; branches: string[]; tags: string[] } | { ok: false
 type Draft = { description: string; usage: string; categories: string[] };
 /** One draft request in the queue: the skill's pointer source, and how its reply lands (§64.4). */
 type DraftRequest = { path: string; url: string; ref: string; subdir: string | null; slug: string; fill: "replace" | "keep" };
-type AiState = { available: boolean; remainingToday: number };
+/** `dailyCap` is the §40.17 daily cap in force (50 unless a platform admin changed it). */
+type AiState = { available: boolean; remainingToday: number; dailyCap: number };
+/** The §43.7 default cap — a placeholder until `GET /api/propose/ai-draft` answers (nothing AI renders before it does). */
+const DEFAULT_DAILY_CAP = 50;
 
 /** "(repo root)" for the root SKILL.md, else the folder. */
 const where = (s: { subdir: string | null }) => s.subdir ?? "(repo root)";
@@ -115,7 +118,7 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
   const [sharedNs, setSharedNs] = useState<string[]>([]);
   const [toolDefault, setToolDefault] = useState(GENERIC_AGENT);
   const [categoryOptions, setCategoryOptions] = useState<{ name: string; slug: string }[]>([]);
-  const [ai, setAi] = useState<AiState>({ available: false, remainingToday: 0 });
+  const [ai, setAi] = useState<AiState>({ available: false, remainingToday: 0, dailyCap: DEFAULT_DAILY_CAP });
   const [useAi, setUseAi] = useState(false);
   // §64.5: a 409 `ai_unavailable` mid-import, and the daily cap's time from a capped draft.
   const [aiGone, setAiGone] = useState(false);
@@ -153,7 +156,11 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
   function loadAi() {
     fetch("/api/propose/ai-draft")
       .then((r) => (r.ok ? r.json() : null))
-      .then((j) => j && setAi({ available: j.available === true, remainingToday: typeof j.remainingToday === "number" ? j.remainingToday : 0 }))
+      .then((j) => j && setAi({
+        available: j.available === true,
+        remainingToday: typeof j.remainingToday === "number" ? j.remainingToday : 0,
+        dailyCap: typeof j.dailyCap === "number" ? j.dailyCap : DEFAULT_DAILY_CAP,
+      }))
       .catch(() => {});
   }
 
@@ -278,7 +285,8 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
         } else if (e.kind === "failed") settleDraft(e.key, (s) => ({ ...s, draft: "failed", draftKey: null, draftMessage: e.message }));
         else if (e.kind === "capped") {
           settleDraft(e.key, (s) => ({ ...s, draft: "capped", draftKey: null }));
-          setAi((a) => ({ ...a, remainingToday: 0 }));
+          // The 429 names the cap in force — an admin may have changed it since this page loaded (§40.17).
+          setAi((a) => ({ ...a, remainingToday: 0, dailyCap: e.cap ?? a.dailyCap }));
           if (e.retryAt) setCapAt(e.retryAt);
         } else {
           settleDraft(e.key, (s) => ({ ...s, draft: "skipped", draftKey: null }));
@@ -520,7 +528,7 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
             </label>
             <p className="muted" style={{ fontSize: 12, margin: "6px 0 0 24px" }}>
               {ai.remainingToday <= 0
-                ? capMessage(aiName, capAt, fmt.dateTime)
+                ? capMessage(aiName, ai.dailyCap, capAt, fmt.dateTime)
                 : "Clicking Next sends each ticked skill's SKILL.md to the AI provider to draft its description, usage and categories."}
             </p>
           </div>
@@ -696,8 +704,8 @@ export function ImportRepository({ tabs, fill }: { tabs: ReactNode; fill: RepoFi
 }
 
 /** The §43.6 daily-cap line, with the time drafting opens again when the server gave one. */
-function capMessage(aiName: string, capAt: string | null, dateTime: (iso: string) => string): string {
-  return `Daily ${aiName} draft limit reached (50 in 24 hours)${capAt ? ` — you can draft again after ${dateTime(capAt)}.` : "."}`;
+function capMessage(aiName: string, dailyCap: number, capAt: string | null, dateTime: (iso: string) => string): string {
+  return `Daily ${aiName} draft limit reached (${dailyCap} in 24 hours)${capAt ? ` — you can draft again after ${dateTime(capAt)}.` : "."}`;
 }
 
 function WizardStepForm({
@@ -804,7 +812,7 @@ function WizardStepForm({
           {ai.available ? (
             <span className="muted ai-draft-help">
               {capped
-                ? capMessage(aiName, capAt, fmt.dateTime)
+                ? capMessage(aiName, ai.dailyCap, capAt, fmt.dateTime)
                 : `Drafts the description, usage and categories from the SKILL.md. ${ai.remainingToday} draft${ai.remainingToday === 1 ? "" : "s"} left today.`}
             </span>
           ) : aiGone ? (

@@ -49,6 +49,8 @@ interface AiState {
   displayName: string;
   /** §40.15 per-call timeouts and the draft run cap. */
   timeouts: AiTimeoutsView;
+  /** §40.17 the daily Draft-with-AI cap per user, with the admin range. */
+  draftLimit: { defaultCap: number; overrideCap: number | null; effectiveCap: number; min: number; max: number };
   /** §46.2 the AI pre-review switch and its queue. */
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
   /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
@@ -484,6 +486,7 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
       {data && <PrivateNetworkRow state={data.privateNetwork} onSaved={reload} />}
       {data && <PrereviewRow state={data.prereview} providerLabel={data.providerLabel} onSaved={reload} />}
       {data && <TryRow state={data.try} providerLabel={data.providerLabel} onSaved={reload} />}
+      {data && <DraftLimitRow saved={data.draftLimit} onSaved={reload} />}
       {data && <TimeoutsRow saved={data.timeouts} onSaved={reload} />}
       {data && <DisplayNameRow saved={data.displayName} onSaved={reload} />}
     </CollapsibleCard>
@@ -690,8 +693,85 @@ function DisplayNameRow({ saved, onSaved }: { saved: string; onSaved: () => void
   );
 }
 
+/**
+ * §40.17 the daily draft limit: how many times one person may use Draft with AI in any 24 hours, on
+ * the propose form and in the repository import together. Blank = the default (its placeholder).
+ * Its own Save, independent of the provider form — usable with no provider configured and without
+ * AI_TOKEN_ENC_KEY, kept on Remove integration.
+ */
+function DraftLimitRow({ saved, onSaved }: { saved: AiState["draftLimit"]; onSaved: () => void }) {
+  const stored = saved.overrideCap === null ? "" : String(saved.overrideCap);
+  const [value, setValue] = useState(stored);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+  useEffect(() => setValue(stored), [stored]);
+  const dirty = value.trim() !== stored;
+
+  const save = async () => {
+    setMsg(null);
+    const t = value.trim();
+    const range = `Enter a whole number from ${saved.min} to ${saved.max}, or leave it empty for the default.`;
+    if (t !== "" && !/^\d+$/.test(t)) return setMsg({ tone: "danger", text: range });
+    const dailyCap = t === "" ? null : Number(t);
+    if (dailyCap !== null && (dailyCap < saved.min || dailyCap > saved.max)) return setMsg({ tone: "danger", text: range });
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/ai/draft-limit", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ dailyCap }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail ?? j.error ?? `HTTP ${r.status}`);
+      setMsg({ tone: "ok", text: `Saved — each person can now draft ${j.effectiveCap} time${j.effectiveCap === 1 ? "" : "s"} in 24 hours.` });
+      onSaved();
+    } catch (e) {
+      setMsg({ tone: "danger", text: String((e as Error).message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }} data-testid="ai-draft-limit">
+      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Draft limit</h3>
+      <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
+        How many times one person may use Draft with AI in any 24 hours, on the propose form and in the repository import
+        together ({saved.min}–{saved.max}). Leave it empty for the default. A change applies to the next draft.
+      </p>
+      <label style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13 }}>Drafts per person per day</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            className="input"
+            style={{ width: 96 }}
+            type="number"
+            inputMode="numeric"
+            min={saved.min}
+            max={saved.max}
+            step={1}
+            value={value}
+            placeholder={String(saved.defaultCap)}
+            aria-label="Drafts per person per day"
+            disabled={busy}
+            onChange={(e) => setValue(e.target.value)}
+            data-testid="ai-draft-limit-input"
+          />
+          <span className="muted" style={{ fontSize: 12 }}>drafts · default {saved.defaultCap}</span>
+        </span>
+      </label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+        <button type="button" className="btn btn-sm" disabled={busy || !dirty} onClick={() => void save()} data-testid="ai-draft-limit-save">
+          {busy ? "saving…" : "Save limit"}
+        </button>
+      </div>
+      {msg && (
+        <p role="status" style={{ fontSize: 13, margin: "8px 0 0", color: msg.tone === "ok" ? "var(--ok, var(--muted))" : "var(--danger, crimson)" }} data-testid="ai-draft-limit-msg">
+          {msg.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** A stored override as the field shows it ("" = the default, shown as the placeholder). */
-const fieldOf = (ms: number | null, unitMs: number) => (ms === null ? "" : String(ms / unitMs));
+const fieldOf =(ms: number | null, unitMs: number) => (ms === null ? "" : String(ms / unitMs));
 
 /**
  * §40.15 the timeouts: a seconds field per registered feature and a minutes field for the draft run

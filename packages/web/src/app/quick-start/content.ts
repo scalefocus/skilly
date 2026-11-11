@@ -153,7 +153,7 @@ export const QUICK_START: QuickStartStep[] = [
     kind: "contribute",
     title: "Want to contribute a skill?",
     lead:
-      "Anyone can propose a skill. Use Propose a skill in the sidebar to upload a bundle or point at a git repo; a reviewer checks it (it's scanned automatically) and, once accepted, it's published to the catalog for everyone with access. The full lifecycle is in the User Manual.",
+      "Anyone can propose a skill. Use Propose skills in the sidebar to upload a bundle or point at a git repo; a reviewer checks it (it's scanned automatically) and, once accepted, it's published to the catalog for everyone with access. The full lifecycle is in the User Manual.",
     image: "/quickstart/propose.png",
     alt: "The propose-a-skill form",
   },

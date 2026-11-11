@@ -130,6 +130,7 @@ const CORE_API = [
   "/api/admin/ai/models",
   "/api/admin/ai/test",
   "/api/admin/ai/timeouts",
+  "/api/admin/ai/draft-limit",
   "/api/admin/email",
   "/api/admin/policy",
   "/api/policy/rules",

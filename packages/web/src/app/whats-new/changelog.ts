@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.57.0",
+    date: "2026-11-11",
+    summary:
+      "Platform admins can now set how many times a day one person may use Draft with AI: Administration → AI integration → Draft limit (1–1000, default 50, shared by the propose form and the repository import). A change applies to the next draft. Also, the sidebar item “Propose a skill” is now “Propose skills”; the page and its buttons are unchanged.",
+  },
+  {
     version: "2.56.1",
     date: "2026-11-10",
     summary:

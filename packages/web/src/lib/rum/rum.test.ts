@@ -8,6 +8,7 @@ import { fingerprintFor, normalizeMessage, parseRumBatch, RUM_MAX_BATCH, RUM_MAX
 import { p75, rumBucketFor, weightedMean } from "./math";
 import { bandFor, bandTone, formatMs } from "./bands";
 import { sortRouteRows } from "./sort";
+import { resolveStaticPageLabel } from "../pageLabel";
 
 const SID = "abcdefgh12345678";
 const FP = "a".repeat(64);
@@ -57,6 +58,9 @@ test("known-route predicates and labels", () => {
   assert.equal(labelForRoute(RUM_ROUTE_ALL), "All routes");
   assert.equal(labelForRoute(RUM_ROUTE_OTHER), "Other");
   assert.equal(labelForRoute("/admin/rum"), "Real user monitoring");
+  // §26 Naming: the destination reads "Propose skills", matching the sidebar item and the presence label.
+  assert.equal(labelForRoute("/propose"), "Propose skills");
+  assert.equal(labelForRoute("/propose"), resolveStaticPageLabel("/propose"));
 });
 
 // ---- validator ----------------------------------------------------------------------------------------
@@ -230,7 +234,7 @@ test("bandFor at the published thresholds", () => {
   const rows = [
     row(RUM_ROUTE_ALL, "All routes", 56, 80),
     row("/catalog", "Catalog", 62, 12),
-    row("/propose", "Propose a skill", 196, 4),
+    row("/propose", "Propose skills", 196, 4),
     row("/admin", "Administration", null, 4),
     row("/audit", "Audit log", null, 2),
     row("/", "Overview", 10, 14),
@@ -245,12 +249,12 @@ test("bandFor at the published thresholds", () => {
   });
 
   test("sortRouteRows: route rows order numerically (196 before 62 before 10), not as text", () => {
-    assert.deepEqual(order("inpP75", "desc"), ["All routes", "Propose a skill", "Catalog", "Skill", "Overview", "Administration", "Audit log"]);
-    assert.deepEqual(order("inpP75", "asc"), ["All routes", "Overview", "Catalog", "Skill", "Propose a skill", "Administration", "Audit log"]);
+    assert.deepEqual(order("inpP75", "desc"), ["All routes", "Propose skills", "Catalog", "Skill", "Overview", "Administration", "Audit log"]);
+    assert.deepEqual(order("inpP75", "asc"), ["All routes", "Overview", "Catalog", "Skill", "Propose skills", "Administration", "Audit log"]);
   });
 
   test("sortRouteRows: ties break by label A→Z and no-value rows sink to the bottom either way", () => {
-    assert.deepEqual(order("views", "desc"), ["All routes", "Overview", "Catalog", "Skill", "Administration", "Propose a skill", "Audit log"]);
+    assert.deepEqual(order("views", "desc"), ["All routes", "Overview", "Catalog", "Skill", "Administration", "Propose skills", "Audit log"]);
     const asc = order("inpP75", "asc");
     assert.deepEqual(asc.slice(-2), ["Administration", "Audit log"]);
   });
@@ -258,7 +262,7 @@ test("bandFor at the published thresholds", () => {
   test("sortRouteRows: works without an All routes row and does not mutate its input", () => {
     const input = rows.slice(1);
     const before = input.map((r) => r.label);
-    assert.deepEqual(sortRouteRows(input, "inpP75", "desc").map((r) => r.label)[0], "Propose a skill");
+    assert.deepEqual(sortRouteRows(input, "inpP75", "desc").map((r) => r.label)[0], "Propose skills");
     assert.deepEqual(input.map((r) => r.label), before);
   });
 }

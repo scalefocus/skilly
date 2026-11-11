@@ -367,7 +367,7 @@ there too.
 Then in the browser:
 - Sign in via Entra (or Dev sign-in) — you should land authenticated.
 - **`/admin`** is visible (you're a Platform Admin) and lists your synced groups.
-- **Catalog** loads; **Propose a skill** works; submitting creates a notification (bell).
+- **Catalog** loads; **Propose skills** works; submitting creates a notification (bell).
 
 ---
 
