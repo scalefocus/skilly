@@ -145,6 +145,9 @@ test("draftReplyFromResponse maps the §43.5 statuses", () => {
   assert.deepEqual(draftReplyFromResponse(200, { description: "x" }, to), { kind: "ok", draft: "x" });
   assert.deepEqual(draftReplyFromResponse(429, { scope: "minute" }, to), { kind: "minute" });
   assert.deepEqual(draftReplyFromResponse(429, { scope: "day", retryAt: "t" }, to), { kind: "day", retryAt: "t" });
+  // §40.17: the daily-cap 429 names the cap in force; a non-numeric cap is dropped.
+  assert.deepEqual(draftReplyFromResponse(429, { scope: "day", retryAt: "t", cap: 20 }, to), { kind: "day", retryAt: "t", cap: 20 });
+  assert.deepEqual(draftReplyFromResponse(429, { scope: "day", retryAt: "t", cap: "20" }, to), { kind: "day", retryAt: "t" });
   assert.deepEqual(draftReplyFromResponse(502, { message: "boom" }, to), { kind: "failed", message: "boom" });
   assert.deepEqual(draftReplyFromResponse(409, { error: "ai_unavailable" }, to), { kind: "unavailable" });
   assert.deepEqual(draftReplyFromResponse(422, null, to), { kind: "failed", message: "Couldn't draft this one." });

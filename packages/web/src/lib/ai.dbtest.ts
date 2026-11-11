@@ -10,7 +10,9 @@
 // GET never contains the token; the helper records ai_usage (one row per retried call), updates
 // last_call_*, and the 15-minute system_event throttle holds across concurrent failures; disable →
 // ai_disabled; key missing → ai_key_missing; remove hard-deletes + audits and keeps ai_usage;
-// the usage prune; GDPR erasure nulls ai_usage.user_id.
+// the usage prune; GDPR erasure nulls ai_usage.user_id; the §40.17 daily draft limit (validation,
+// saved without the key, audited, unchanged save is a no-op, clamped reads, kept on remove, null
+// restores the default).
 import { test } from "node:test";
 import { withAiIntegrationLock } from "./aiTestLock";
 import assert from "node:assert/strict";
@@ -85,6 +87,12 @@ test("AI integration: save/test/enable/helper/remove against a live DB", { skip:
       `select before, after from audit_log where action = $1 and created_at >= $2 order by created_at`,
       [action, since],
     )).rows;
+
+  // §40.17: the daily draft limit is a platform setting — start from the default, put any stored value back.
+  const DRAFT_CAP = "ai_draft_daily_cap";
+  const storedDraftCap = async () => (await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [DRAFT_CAP])).rows[0]?.value;
+  const savedDraftCap = await storedDraftCap();
+  const DEFAULT_LIMIT = { defaultCap: 50, overrideCap: null, effectiveCap: 50, min: 1, max: 1000 };
 
   try {
     const actor = await upsertUser("ai-dbtest-admin", "aiadmin@t", "AI Admin");
@@ -225,6 +233,44 @@ test("AI integration: save/test/enable/helper/remove against a live DB", { skip:
     const after = await pool.query<{ user_id: string | null }>(`select user_id from ai_usage where feature = $1 and model = 'm'`, [FEATURE]);
     assert.deepEqual(after.rows, [{ user_id: null }]);
 
+    // ── §40.17 the daily draft limit: its own save, independent of the provider config ────────
+    const capAudits = async () =>
+      (await pool.query<{ before: unknown; after: unknown }>(
+        `select before, after from audit_log where action = 'settings.updated' and target_id = $1 and created_at >= $2 order by created_at`,
+        [DRAFT_CAP, t0],
+      )).rows;
+    await pool.query(`delete from platform_settings where key = $1`, [DRAFT_CAP]);
+    assert.deepEqual((await ai.getAiAdminStatus()).draftLimit, DEFAULT_LIMIT);
+    assert.equal(await ai.aiDraftDailyCap(), 50);
+    // Invalid input → 422 invalid_draft_limit; nothing stored, nothing audited.
+    for (const bad of [{}, null, { dailyCap: 0 }, { dailyCap: 1001 }, { dailyCap: 12.5 }, { dailyCap: "20" }]) {
+      const r = await ai.saveAiDraftLimit(bad, actor);
+      assert.ok(ai.isAiApiError(r) && r.error === "invalid_draft_limit" && r.status === 422, JSON.stringify(bad));
+    }
+    // Restoring a default that is already in force is a no-op.
+    assert.deepEqual(await ai.saveAiDraftLimit({ dailyCap: null }, actor), DEFAULT_LIMIT);
+    assert.equal(await storedDraftCap(), undefined);
+    assert.equal((await capAudits()).length, 0);
+    // Saved without AI_TOKEN_ENC_KEY (not subject to ai_key_missing): stored as a JSON number, audited.
+    delete process.env.AI_TOKEN_ENC_KEY;
+    const capSet = await ai.saveAiDraftLimit({ dailyCap: 200 }, actor);
+    process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
+    assert.deepEqual(capSet, { defaultCap: 50, overrideCap: 200, effectiveCap: 200, min: 1, max: 1000 });
+    assert.equal(await storedDraftCap(), 200);
+    assert.equal(await ai.aiDraftDailyCap(), 200);
+    assert.deepEqual((await ai.getAiAdminStatus()).draftLimit, capSet);
+    // Saving the value already stored writes and audits nothing.
+    assert.deepEqual(await ai.saveAiDraftLimit({ dailyCap: 200 }, actor), capSet);
+    assert.deepEqual(await capAudits(), [{ before: { aiDraftDailyCap: null }, after: { aiDraftDailyCap: 200 } }]);
+    // A hand-edited row: out of range is clamped into 1–1000, a non-number falls back to the default.
+    await pool.query(`update platform_settings set value = '0'::jsonb where key = $1`, [DRAFT_CAP]);
+    assert.equal(await ai.aiDraftDailyCap(), 1);
+    await pool.query(`update platform_settings set value = '99999'::jsonb where key = $1`, [DRAFT_CAP]);
+    assert.equal(await ai.aiDraftDailyCap(), 1000);
+    await pool.query(`update platform_settings set value = '"lots"'::jsonb where key = $1`, [DRAFT_CAP]);
+    assert.equal(await ai.aiDraftDailyCap(), 50);
+    await pool.query(`update platform_settings set value = '200'::jsonb where key = $1`, [DRAFT_CAP]);
+
     // Remove → row gone, audited, usage kept; a second remove is a 404.
     const usageCount = (await pool.query(`select 1 from ai_usage where feature in ('test', $1)`, [FEATURE])).rowCount;
     assert.deepEqual(await ai.removeAiIntegration(actor), { ok: true });
@@ -236,6 +282,14 @@ test("AI integration: save/test/enable/helper/remove against a live DB", { skip:
     const again = await ai.removeAiIntegration(actor);
     assert.ok(ai.isAiApiError(again) && again.status === 404);
     assert.equal((await ai.getAiAdminStatus()).status, "not_configured");
+
+    // §40.17: the draft limit survives Remove integration; null restores the default and deletes the row.
+    assert.equal((await ai.getAiAdminStatus()).draftLimit.effectiveCap, 200);
+    assert.deepEqual(await ai.saveAiDraftLimit({ dailyCap: null }, actor), DEFAULT_LIMIT);
+    assert.equal(await storedDraftCap(), undefined);
+    const capTrail = await capAudits();
+    assert.equal(capTrail.length, 2);
+    assert.deepEqual(capTrail[1], { before: { aiDraftDailyCap: 200 }, after: { aiDraftDailyCap: null } });
 
     // Retention prune: > 365 days goes, recent stays.
     await pool.query(
@@ -251,6 +305,12 @@ test("AI integration: save/test/enable/helper/remove against a live DB", { skip:
     const grant = await pool.query<{ ok: boolean }>(`select has_sequence_privilege('skilly_app', 'ai_usage_id_seq', 'USAGE') as ok`);
     assert.equal(grant.rows[0]!.ok, true);
   } finally {
+    await pool.query(`delete from platform_settings where key = $1`, [DRAFT_CAP]).catch(() => {});
+    if (savedDraftCap !== undefined) {
+      await pool
+        .query(`insert into platform_settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value`, [DRAFT_CAP, JSON.stringify(savedDraftCap)])
+        .catch(() => {});
+    }
     await pool.query(`delete from ai_integration`).catch(() => {});
     await pool.query(`delete from ai_usage where feature in ('test', $1)`, [FEATURE]).catch(() => {});
     stub.server.close();

@@ -29,7 +29,7 @@ test.describe("access gating", () => {
     const sidebar = page.locator("aside.sidebar");
 
     // Core navigation is present for any signed-in user.
-    for (const label of ["Overview", "Catalog", "Propose a skill", "Review queue", "Leaderboard"]) {
+    for (const label of ["Overview", "Catalog", "Propose skills", "Review queue", "Leaderboard"]) {
       await expect(sidebar.getByRole("link", { name: label })).toBeVisible({ timeout: 20_000 });
     }
 

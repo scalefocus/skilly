@@ -294,7 +294,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§66 department-row switch** (`department_popular_enabled` — default `true`, §66.6), the **§67 visits keys** (`visits_enabled` — default `true`, the *Visits & new users* switch; `visits_since` — the UTC date visit-day collection began, written once by migration 0108; §67.6), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), **`ai_draft_daily_cap`** (admin override of the §43 daily *Draft with AI* cap per user, a whole number 1–1000; absent ⇒ 50, §40.17), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§66 department-row switch** (`department_popular_enabled` — default `true`, §66.6), the **§67 visits keys** (`visits_enabled` — default `true`, the *Visits & new users* switch; `visits_since` — the UTC date visit-day collection began, written once by migration 0108; §67.6), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -448,7 +448,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### Currently online (presence)
 - The **Monitoring** page (`/admin/rum`, §32.7 — the sidebar link labelled **"Monitoring"**) has a **"Currently online"** card, **platform-admins only**, listing the users active right now. It is the page's **first section**, above the telemetry settings card, and is a **collapsible card** using the same shared mechanism as the Administration cards (§5: collapsed by default, header = title + live user count + chevron, open state remembered per browser under the unchanged `skilly.admin.card.online-open` key). Everything below — the trend chart with its own range toggle, the DAU/WAU/MAU counters, the activity-window toggle, the search box and the infinite-scroll list — moves with it as **one unit**; nothing presence-related remains on the Administration page (no stub, no pointer — the changelog entry says where it went). The card keeps its **60s poll** even though the rest of the Monitoring page fetches on mount/range-change only, and it renders **regardless of the RUM empty state** (a deployment with no telemetry samples still shows who is online). Its chart range and window toggles stay **independent** of the page-level RUM range toggle (different preferences, different rollup rules). *History: this card lived on the Administration page until v2.7.0.*
 - **Presence is activity-window based, not session-based** (sessions are stateless JWTs with no server-side store, so there is nothing to enumerate). Every authenticated request resolves the user through the single `currentAccess()` choke point, which **stamps `users.last_seen = now()`** as a **fire-and-forget, best-effort** write: it never blocks or fails the request, and is **throttled in-process per user (~60s)** so the high call volume (page renders + the app's 60s background polls) doesn't translate into a write per request. A backgrounded tab stops refreshing (client polling pauses when hidden), which is the intended semantics. The same write also stamps **`users.first_seen`** once (`coalesce(first_seen, now())`) and, on a user's first stamp of a UTC day in that process, inserts that day into **`user_visit_days`** (§67.5) — the history behind the hover card's *Visits* row. Like `last_seen`, both are best-effort and never block or fail the request.
-- **Last-seen page.** Alongside `last_seen`, presence also tracks **which page the user was last on**, shown in the online list between the identity block and the "active … ago" pill (below). Captured **client-side**: the app shell watches the route (`usePathname`) and fires on every navigation (and on initial mount), resolving the current route to a short **human-readable label** — never a raw pathname or query string (invariant #6) — via a **static route→label map** for fixed pages (Overview, Catalog, Marketplaces, Propose a skill, Requests, Proposals, Leaderboard, Installed skills, Notifications, Profile, Usage, Audit, System log, Admin, Quick start, What's new), while the three dynamic-title pages **override** that default label once they've fetched their own data: `/skills/[ns]/[slug]` → `"Skill: <display name>"`, `/requests/[id]` → `"Request: <title>"`, `/proposals/[id]` → `"Proposal: <skill title>"`. The resolved label is POSTed to `POST /api/presence/page {label}` (auth required; a no-op — silent 401, no error surfaced — for a signed-out caller), which calls `touchLastSeen(userId, label)`, the **same choke point and same ~60s per-user throttle** `currentAccess()` uses: a beacon call inside another call's throttle window is dropped just like an extra plain stamp, so the shown page can lag the real navigation by up to the throttle window — an accepted trade-off, consistent with `last_seen`'s existing staleness. Plain `currentAccess()` stamps (no label) update `last_seen` only and never clear a previously-stamped `last_seen_page`. Rows with no page yet (pre-upgrade or never-beaconed) show **"—"** in that slot.
+- **Last-seen page.** Alongside `last_seen`, presence also tracks **which page the user was last on**, shown in the online list between the identity block and the "active … ago" pill (below). Captured **client-side**: the app shell watches the route (`usePathname`) and fires on every navigation (and on initial mount), resolving the current route to a short **human-readable label** — never a raw pathname or query string (invariant #6) — via a **static route→label map** for fixed pages (Overview, Catalog, Marketplaces, Propose skills, Requests, Proposals, Leaderboard, Installed skills, Notifications, Profile, Usage, Audit, System log, Admin, Quick start, What's new), while the three dynamic-title pages **override** that default label once they've fetched their own data: `/skills/[ns]/[slug]` → `"Skill: <display name>"`, `/requests/[id]` → `"Request: <title>"`, `/proposals/[id]` → `"Proposal: <skill title>"`. The resolved label is POSTed to `POST /api/presence/page {label}` (auth required; a no-op — silent 401, no error surfaced — for a signed-out caller), which calls `touchLastSeen(userId, label)`, the **same choke point and same ~60s per-user throttle** `currentAccess()` uses: a beacon call inside another call's throttle window is dropped just like an extra plain stamp, so the shown page can lag the real navigation by up to the throttle window — an accepted trade-off, consistent with `last_seen`'s existing staleness. Plain `currentAccess()` stamps (no label) update `last_seen` only and never clear a previously-stamped `last_seen_page`. Rows with no page yet (pre-upgrade or never-beaconed) show **"—"** in that slot.
 - **Online = `last_seen` within a selectable activity window.** A **window selector** — **5 min (default) / 1 h / 8 h / 24 h / 30 d** — sits **just above the search box**, right-aligned in a header row that mirrors the trend chart's range toggle (the "Users active within the last …; reach out to start a direct message" caption is that row's left-hand label), so the viewing admin decides how generous "online" is (5 min comfortably absorbs the 60s poll cadence; the long windows turn the card into "active today"/"active this month"). The choice is a **per-admin view preference, remembered in the browser** (`skilly.online-window`, same localStorage mechanism as the chart windows) — it is *not* a platform setting and never affects other admins. The server accepts the window as a `window=<minutes>` query param but **validates it against the fixed option set** (anything else falls back to 5) — never an arbitrary interval from the client. Changing the window re-queries the list and count; the **DAU/WAU/MAU counters and the trend chart are unaffected** (their windows are fixed by definition). Only `status = 'active'` users appear (SCIM-deprovisioned users never show). The viewing admin sees themselves.
 - The section reuses the **maintainer card** (avatar + name + email), with the **last-seen page** label inserted between the name/email block and the tag slot — same row, muted/secondary text, truncated with an ellipsis (full value on hover via `title`) so a long resolved label never pushes the pill or breaks the row — then the relative activity ("active … ago") in the tag slot and the **"Reach out"** DM action kept, with **Follow / Unfollow** to its right (§35.4); there is no remove control. It shows a **live count**, a **search box** (ILIKE over name/email, debounced), and loads **100 at a time with infinite scroll**, ordered most-recently-active first. It polls every **60s** (visibility-aware): the count always refreshes, and the list refreshes only when it's safe to (scrolled to top, no active search) so it never yanks the admin's view mid-scroll/search.
 - **DAU / WAU / MAU counters** sit directly above the online list, inside the same card. Three **rolling** trailing-window counts — `last_seen` within the last **24h / 7d / 30d** respectively — computed live off the **same `last_seen` signal** as presence above (deliberately not a narrower "real navigation only" signal, for consistency) and the same `status = 'active'` filter. They are a **live snapshot only, not a historical trend**: `last_seen` holds each user's most-recent activity, not a log, so there is no way to ask "what was DAU on a past date" — only "how many right now". They **piggyback on the same 60s poll** as the online list (one round trip, not a second endpoint) and always reflect the platform-wide total regardless of the list's search/pagination state.
@@ -997,7 +997,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Target visibility gate (invariant #3).** A new-version submission is accepted only when the actor **can see the target skill** through the shared visibility predicate (`isSkillVisible`: org-wide, a role in the owning namespace, a §42 grant to one of their namespaces, or platform admin). A target that exists but is not visible is answered exactly like a nonexistent one — **404 `target skill not found`** from `POST /api/proposals`; on `POST /api/publish` and the MCP `propose_*` tools (§29), where the slug *is* the target identity, an invisible existing skill is treated exactly as **absent** (the request takes the ordinary new-skill path and meets its usual authorization — a non-member's 403 on direct publish, the visibility-filtered slug check over MCP — never a distinct status) — so the response confirms nothing about the skill's existence. The rule closes a leak: without it an outsider could file a *Keep current files* proposal against a restricted skill whose slug they guessed, then read its snapshotted bundle through their own proposal's artifact/files/diff views. Enforced in **three layers**, each evaluated against the **actor's** access at the moment of the call: the route (404 before any payload work); `resolveReuseSource`, which refuses to snapshot an invisible target's artifact (so `revise`/`resubmit` and reviewer edits re-check at their own time — a submitter whose grant was revoked mid-review can no longer switch to *Keep current files*); and `verifySubmissionPayload`, which refuses a payload whose `targetSkillId` the actor cannot see. Both helpers take the actor's access and **fail closed without it**. The contribution policy (§4 *proposals open*) is evaluated **before** this gate and keeps its 403 (it names only the namespace, never a skill). A proposal filed while the target was visible stays readable to its submitter (own-proposal rule) even if their visibility later lapses — the snapshot was taken legitimately and the reviewers already hold the bytes; retroactive revocation is out of scope.
 - **AI-drafted files (§44).** The new-version propose form can also be opened **from the §44 draft dialog**, carrying an assembled hosted bundle (the latest stable version's files with the AI changes the user kept) as an **explicitly supplied source** (so *Keep current files* is off — the same in-place transition the duplicate redirect uses), the **"What changed"** note pre-filled with an **AI-written prose summary** of the kept changes (§44.7 — falling back to one line per kept change when the summary call fails; an ordinary value, not the *Updated metadata* default, so the clear-on-source rule never touches it; an AI-written note carries the hint *"Written by &lt;AI name&gt; — edit as needed."* under the field until the proposer first edits it) and an `aiDraftToken`. Everything else is the normal new-version mode; replacing the bundle before submitting drops the token (the proposal is then not marked). A submitted proposal carrying a valid token is marked **Drafted with &lt;AI name&gt;** on the proposal and review pages (§44.8).
 - **Skill icon (§33) — an optional, skill-level field on every propose/publish path.** The propose form carries an **Icon · optional** field (after Title): an **emoji picker** (the existing `EmojiPicker`) and an **image upload framed in the icon crop dialog** (§33.4 — it opens by itself for a non-square image; *Adjust crop* re-opens it), plus a **preview tile** showing the *effective* icon and its **source label** — *from SKILL.md `icon:`*, *from icon.png in the bundle*, *uploaded*, *emoji*, or *default — skilly*. The effective icon is resolved by the **§33 precedence** — bundle frontmatter `icon:` → root `icon.png` → the uploaded image → the emoji → the default — against the bundle the materialized version will serve (*Keep current files* ⇒ the reused artifact; a pointer ⇒ its mirror), so **a bundle-borne icon beats an uploaded one**; when the bundle carries an icon the upload/emoji controls stay enabled but the preview says the bundle icon will be used (they persist as fallbacks). **New-version mode** pre-fills the current icon and offers three states — **keep**, **replace**, **remove** (the app's segmented pill, §33.4); *remove* clears the uploaded image and the emoji only — a bundle-borne icon can only be removed by shipping a bundle without it. **An icon change is a real change** for the metadata-only no-op guard (below). A **reviewer edit may remove the icon (image and/or emoji) but never upload a replacement** (the reviewer's *remove* is part of the ordinary reviewer-edit revision — no separate audit action). Revision payloads and audit rows carry the icon as **hash + filename + emoji, never bytes**. On accept (or direct publish) the resolved icon is **synced to the skill** exactly like title/categories/tool-harness — regardless of channel; **global promotion copies** the icon columns to the global copy; archive/yank leave it untouched. The **MCP `propose` / `update_proposal` tools silently ignore icon fields** (UI-only in this change, the same posture as the retired `tags` field).
-- **Draft with AI (§43).** When the §40 AI integration is available, the propose form (hosted and pointer; new-skill and new-version mode, including *Keep current files*) offers a proposer-clicked **Draft with AI** button that reads the source's `SKILL.md` and drafts the **Description**, the **Usage** and **categories** (added to the proposer's picks, never replacing them). It replaces typed Description/Usage text only after a confirm, is rate-limited (10/min, 50 per rolling 24 h), and leaves no marker — the proposer submits the text as their own. The repository import's wizard offers the same button on every step (§64.4). Not offered on the proposal page, in reviewer edits, in request mode or over MCP.
+- **Draft with AI (§43).** When the §40 AI integration is available, the propose form (hosted and pointer; new-skill and new-version mode, including *Keep current files*) offers a proposer-clicked **Draft with AI** button that reads the source's `SKILL.md` and drafts the **Description**, the **Usage** and **categories** (added to the proposer's picks, never replacing them). It replaces typed Description/Usage text only after a confirm, is rate-limited (10/min, and a daily cap per rolling 24 h — 50 unless a platform admin changed it, §40.17), and leaves no marker — the proposer submits the text as their own. The repository import's wizard offers the same button on every step (§64.4). Not offered on the proposal page, in reviewer edits, in request mode or over MCP.
 - **The "What changed" note (per-version).** Every **new version** carries a short, proposer-authored **"What changed"** note — a plain-text summary of what this version changes — surfaced on the skill detail page (§10) and to reviewers. It is **distinct from `usage_examples`**: usage documents *how to use* the skill; this note is *what moved* since the last version. Rules:
   - **Required on new versions; hidden on first versions.** **Required** (non-empty) on every **new-version** publish — through review **and** the direct-publish path (`require_review = false` members, §8) — and **not shown or collected** for a skill's **first** version (a new-skill proposal) or a **global promotion** (which materializes an independent global skill's first version, §8). A first version has no predecessor to describe.
   - **Plain text, no Markdown.** Stored raw; rendered **HTML-escaped with newlines preserved** (pre-wrap) — **no Markdown parsing, no embedded HTML, no URL autolinking**. Capped at **4,000 characters** (client-counted, server-enforced).
@@ -1824,7 +1824,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
   - **Existing endpoints that gain fields:** `GET /api/proposals/:id` and `GET /api/skills/:ns/:slug` gain `policy`; the accept gate's 409 gains `policy.tripped`; a policy override without a reason → **422**, without authority → **403 `policy_override_forbidden`**; `POST /api/publish` may answer **202** with `routedReason: 'policy'`. Re-checks use the §46 re-run endpoints.
 - **AI pre-review (§46.11):** `POST /api/proposals/:id/ai-prereview/rerun`, `POST /api/proposals/:id/ai-prereview/dispositions` (reviewers); `GET /api/skills/:ns/:slug/ai-prereview?semver=` (owners), `POST .../ai-prereview/rerun` and `.../ai-prereview/dispositions` (override holders); `GET /api/proposals/:id` gains `aiPrereview`.
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
-- `GET /api/propose/ai-draft` → `{ available, remainingToday }` (§64.5); `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`), 502 `draft_failed`. Nothing persisted.
+- `GET /api/propose/ai-draft` → `{ available, remainingToday, dailyCap }` (§64.5, §40.17); `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`, `cap`), 502 `draft_failed`. Nothing persisted.
 - **Repository import (§64):** `POST /api/propose/import/scan` — list a git repo's `SKILL.md` folders at a ref with name, description, last-changed date and importability (§64.3); `POST /api/propose/import` — submit up to 50 skills as one import, one ordinary pointer proposal (or direct publish) each, outcome per skill (§64.6). `GET /api/proposals` gains `import=`; `GET /api/proposals/:id` gains `import` (§64.7).
 - `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon). The web form never sends the picked file itself — it uploads its own **256×256 PNG** crop (§33.3), so the 512 KB cap binds API callers only and is independent of the form's **10 MB** source limit.
 - `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6); an unparseable multipart body is a clear 400, not a 500 (§6). **Chunked variant** for bundles larger than the configured chunk size (§6): `POST /api/uploads/chunked` (start; sweeps ≥2h-old orphans, returns `{uploadId, chunkBytes}`), `PUT /api/uploads/chunked/:id/parts/:index` (raw octet-stream part), `POST /api/uploads/chunked/:id/complete` (assemble → identical validate/scan/store; same response shape as the single-shot upload), `DELETE /api/uploads/chunked/:id` (abort). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
@@ -4003,9 +4003,20 @@ propose the skill through the normal pipeline, and — on acceptance — the req
 the requester is notified, and the fulfiller earns leaderboard credit.
 
 ### Posting a request (the propose-page tabs)
-- The **Propose a skill** page has three tabs at the top: **"I have a skill"** (default — the
-  propose form), **"I have a repo"** (the repository import, §64.2) and **"I want a skill"**. A
-  request is posted from the last one, which `/propose?mode=want` opens directly.
+- The propose page (`/propose`; sidebar item **"Propose skills"** — see *Naming*, next) has three
+  tabs at the top: **"I have a skill"** (default — the propose form), **"I have a repo"** (the
+  repository import, §64.2) and **"I want a skill"**. A request is posted from the last one, which
+  `/propose?mode=want` opens directly.
+- **Naming — "Propose skills" for the destination, "Propose a skill" for the action.** The page
+  proposes one skill, imports a whole repository of them, or posts a request, so everything that
+  names the **menu item or the page as a place** reads **"Propose skills"**: the sidebar item, the
+  presence route→label map (§4), the RUM known-route table (§32.3), and prose that sends the
+  reader there (the Quick-start sentence *"Use Propose skills in the sidebar…"* and the Requested
+  skills empty-state hints *"Propose skills → “I want a skill”"*). Everything that names the **act
+  of proposing one skill** stays singular: the page heading **"Propose a skill."** (and its
+  per-mode variants *"Propose a new version."*, *"Request a skill."*, *"Import a repository."*),
+  the Overview page's **"Propose a skill"** button, and a request's **"Propose a skill →"** button
+  (below). Copy only: the URL stays `/propose`, and no route, API, permission or data changes.
 - In **"I want a skill"** mode the form reduces to: **Title**, **Categories**, **Description**,
   **Usage** and **Tool/harness** — namespace, visibility, slug, version and the bundle/pointer
   sources are hidden (a request has no namespace: it is **org-visible to every authenticated
@@ -4033,7 +4044,7 @@ the requester is notified, and the fulfiller earns leaderboard credit.
   request page, so there is no editable gap between the successful POST and the route transition.
 
 ### The Requested skills page
-- New nav item **"Requested skills"**, directly **below "Propose a skill"** — lists **open**
+- New nav item **"Requested skills"**, directly **below "Propose skills"** — lists **open**
   requests in the catalog's card/row visual language (cards ⇄ list toggle, same persisted view
   preference pattern): title, categories, tool chip, requester (name + avatar), and posted date.
   Because the request card reuses the catalog card's own class, it inherits §14 *Fixed-height
@@ -9567,6 +9578,9 @@ pattern), with the **status pill** as its header accessory.
   integration*.
 - **Try skills** (§61.8): a separate row below *Pre-review proposals* with the Try switch (off by
   default, saves on toggle); independent of the provider form and kept on *Remove integration*.
+- **Draft limit** (§40.17): a separate row below *Try skills* and above *Timeouts* — how many times
+  a day one person may use *Draft with AI* (§43), with its **own Save** (no test, no token
+  re-entry); it survives *Remove integration*.
 - **Timeouts** (§40.15): a separate row above *Display name* — one per-call timeout per registered
   feature plus the §44 draft run cap, with its **own Save** (no test, no token re-entry); it survives
   *Remove integration*.
@@ -9695,6 +9709,11 @@ pattern), with the **status pill** as its header accessory.
   invalid input; **not** subject to `ai_key_missing`. `GET /api/admin/ai` also returns
   `timeouts: { features: [{ key, label, defaultMs, overrideMs, effectiveMs }], draftRunCap:
   { defaultMs, overrideMs, effectiveMs } }` (`overrideMs` null when unset).
+- `PUT /api/admin/ai/draft-limit` `{ dailyCap: number | null }` → the `draftLimit` object below
+  (§40.17; `null` restores the default); **422 `invalid_draft_limit`** when `dailyCap` is missing,
+  not a whole number or outside 1–1000; **not** subject to `ai_key_missing`. `GET /api/admin/ai`
+  also returns `draftLimit: { defaultCap, overrideCap, effectiveCap, min, max }` (`overrideCap`
+  null when unset; `min` 1, `max` 1000).
 - `PUT /api/admin/ai/private-network` `{ enabled }` → `{ enabled, operatorAllowed, test }` (§40.16),
   where `test` is the re-test's result (the `POST /api/admin/ai/test` shape) or `null` when none
   ran; **422** when `enabled` is not a boolean; **not** subject to `ai_key_missing` (without the
@@ -9732,15 +9751,17 @@ pattern), with the **status pill** as its header accessory.
 ### 40.11 Audit (§11)
 `ai.config_updated` (`before`/`after`: provider, base URL, model; `after.token_rotated: bool` —
 **never the token or its last 4**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. The display
-name (§40.14), timeouts (§40.15) and the private-network switch (§40.16) are audited as
-`settings.updated` (before/after). Tests (including the §40.16 re-test),
+name (§40.14), timeouts (§40.15), the private-network switch (§40.16) and the daily draft limit
+(§40.17) are audited as `settings.updated` (before/after). Tests (including the §40.16 re-test),
 model-list calls and runtime calls are **not audited** (telemetry, in `ai_usage`).
 
 ### 40.12 Out of scope (deferred)
 - Any AI task (each is its own gated spec).
 - Streaming, tool use, images/files, embeddings.
 - Multiple simultaneous providers, per-feature model choice, fallback providers.
-- Usage caps / budgets, cost estimates in currency, per-user quotas.
+- Usage caps / budgets, cost estimates in currency, per-user quotas. (The one admin-adjustable
+  limit is the platform-wide daily *Draft with AI* cap, §40.17 — one number for everyone, not a
+  quota per person.)
 - Env-var configuration of the integration (it is UI-only).
 - Storing prompts or responses for debugging.
 
@@ -9947,6 +9968,64 @@ providers from the AI integration card. **Off by default.**
     reaches the stub once it is on.
   - **e2e:** the e2e stack sets `AI_ALLOW_PRIVATE_BASE_URL=1` (its stub listens on `127.0.0.1`), so
     the row shows the switch on and disabled, with the operator note.
+
+### 40.17 Daily draft limit
+*Draft with AI* (§43) is capped per person per rolling 24 hours. The cap was a fixed 50; a platform
+admin may now change it — up for a team that imports whole repositories, down to hold provider
+cost.
+
+- **What is adjustable.** One platform-wide number: the **daily *Draft with AI* cap per user**
+  (§43.7). **A whole number from 1 to 1000; default 50.** It is the same cap on the propose form
+  and in the repository import (§64.5), which share it, and it applies to **everyone alike,
+  platform admins included** — there is no per-user, per-role or per-namespace value.
+  - **Not adjustable:** the 10-per-minute draft limit (§43.7), the 24-hour rolling window, the *Try
+    a skill* cap (§61), the pre-review per-proposal cap (§46) and the repository import's limit of
+    50 ticked skills (§64.1 #14).
+  - **No "off" and no "unlimited".** Drafting is switched off with the integration's own enable
+    toggle (§40.4); 0 and values above 1000 are refused.
+- **Storage.** Platform setting **`ai_draft_daily_cap`** in `platform_settings` (no migration): the
+  override as a JSON number. Only an override is stored — restoring the default deletes the row. On
+  read, a stored value that is not a whole number falls back to the default and one outside 1–1000
+  is clamped into the range.
+- **Editing.** The *Draft limit* row of the AI integration card (§40.4), heading **"Draft limit"**:
+  one number field labelled **"Drafts per person per day"** (placeholder = the default, `50`; unit
+  *drafts*), the line *"How many times one person may use Draft with AI in any 24 hours, on the
+  propose form and in the repository import together (1–1000). Leave it empty for the default. A
+  change applies to the next draft."* (Administration pages say "AI", not the display name —
+  §40.14) and its **own Save**, **"Save limit"** — `PUT /api/admin/ai/draft-limit` (§40.9). An empty field sends `null`. Like the timeouts it is independent of the provider config:
+  no test, no token re-entry, works with no provider configured and without `AI_TOKEN_ENC_KEY`,
+  kept on *Remove integration*. Validation (→ **422 `invalid_draft_limit`**, shown beneath the
+  field): not a whole number, below 1 or above 1000. Saving the value already stored is a no-op
+  (no write, no audit); otherwise audited **`settings.updated`** (`key: 'ai_draft_daily_cap'`,
+  before/after).
+- **Taking effect.** The draft endpoint reads the setting on every request (no cache), so a change
+  applies to the **next draft** and to the next `GET /api/propose/ai-draft`:
+  - **Raised:** a person stopped by the old cap can draft again at once, as long as their calls in
+    the last 24 hours are below the new cap.
+  - **Lowered:** a person who already made that many calls in the last 24 hours is stopped on their
+    next draft. `retryAt` is when enough of those calls age out to fall below the **new** cap
+    (the §43.7 rule, unchanged). Drafts already made are kept; nothing is counted again or refunded.
+  - **Open pages** keep the number they loaded until they ask again. The 429 carries the cap in
+    force (`cap`, §43.7), so the message always names the right number; the repository import
+    re-reads `remainingToday` and `dailyCap` as §64.4 describes.
+- **The repository import's 50.** The import still accepts at most 50 ticked skills (§64.1 #14,
+  fixed). With a cap below the number ticked, drafting stops at the cap exactly as today (§64.5:
+  the remaining steps read *"Not drafted: daily AI draft limit reached…"*); with a higher cap a
+  person can draft more than one import's worth in a day.
+- **Tests.**
+  - **Unit** (`@skilly/shared`): effective-cap resolution (override → default; a stored
+    out-of-range value clamped; a non-integer or non-number ignored); input validation (bounds,
+    whole numbers, `null` clears); the §43.7 cap decision with a non-default cap (a lowered cap
+    blocks with `retryAt` computed against the new cap; a raised cap lets the same history
+    through).
+  - **Integration** (web API + DB): `PUT` is platform-admin-only (403 otherwise), works with no
+    config and no key, audits `settings.updated`, saving the same value is a no-op, `null` restores
+    the default and deletes the row, the setting survives `DELETE /api/admin/ai`, `GET
+    /api/admin/ai` returns default/override/effective; with an override of *N* the draft `POST`
+    answers the daily-cap **429** at *N* `ai_usage` rows with `cap: N`, and `GET
+    /api/propose/ai-draft` returns `dailyCap: N` and `remainingToday` counted from *N*.
+  - **e2e:** set the limit → Save → reload shows it; empty the field → Save → the placeholder `50`
+    shows again.
 
 ---
 
@@ -10275,7 +10354,7 @@ differently from text the proposer typed — the proposer submits it as their ow
 | 4 | **One call fills all three fields.** | One click, one provider call, one coherent draft. |
 | 5 | Description and Usage **fill empty fields silently, confirm before replacing**; categories are **only ever added** to the proposer's picks. | Never silently destroy typed text; never drop a category the proposer chose. |
 | 6 | **No AI marker** — not in the proposal payload, the revision history, the review page or audit. | The proposer adopts the draft as their own text. |
-| 7 | **Rate-limited: 10 per minute and 50 per rolling 24 hours per user**, with an explicit message when either is hit. | The first AI surface any authenticated user can trigger; §40 has no cost caps of its own. |
+| 7 | **Rate-limited: 10 per minute and a daily cap per rolling 24 hours per user** — 50 by default, adjustable by a platform admin (1–1000, §40.17) — with an explicit message when either is hit. | The first AI surface any authenticated user can trigger; §40 has no cost caps of its own. The right daily number depends on the organization's provider budget and on how much it imports, so it is a setting. |
 | 8 | **No retry, no persistence, no audit.** Each draft is one `ai_usage` row. | An interactive call must fail fast; a draft only becomes record when submitted (already audited). |
 
 **The repository import (§64.5)** is the one other surface that calls this endpoint, in two ways.
@@ -10345,8 +10424,9 @@ Undo and the no-marker rule (decision 6). Otherwise decision 2 stands.
 
 ### 43.5 Endpoint — `POST /api/propose/ai-draft`
 Any authenticated user (the implicit *propose* right, §4). `GET` on the same route returns
-`{ available: aiAvailable(), remainingToday }`, where `remainingToday` is the caller's drafts left
-in the rolling 24 hours (§64.5).
+`{ available: aiAvailable(), remainingToday, dailyCap }`, where `dailyCap` is the daily cap in
+force (§40.17) and `remainingToday` is the caller's drafts left under it in the rolling 24 hours
+(§64.5).
 
 - **Request** — one of three sources:
   - **Hosted:** multipart with the bundle `file` (and the form's `skillSlug`, unused for hosted).
@@ -10387,8 +10467,10 @@ in the rolling 24 hours (§64.5).
 All shown inline beneath the button; none block the rest of the form.
 - Provider failure: *"Couldn't draft right now — try again or write it yourself."*
 - Per-minute limit: *"Too many drafts in a row — wait a minute and try again."*
-- Daily cap: *"Daily AI draft limit reached (50 in 24 hours) — you can draft again after
-  {time}."* The time is the response's `retryAt` (when the oldest counted call ages out),
+- Daily cap: *"Daily AI draft limit reached ({cap} in 24 hours) — you can draft again after
+  {time}."* `{cap}` is the cap in force — the 429's `cap`, or `dailyCap` from the `GET` where the
+  page shows the message without a 429 (§64.2, §64.4); 50 unless a platform admin changed it (§40.17). The
+  time is the response's `retryAt` (when enough counted calls age out for one more draft),
   rendered in the viewer's timezone and date style via `useDateFmt()`.
 - `draft_no_skill_md`: *"No SKILL.md at the bundle root."* · `draft_bundle_unreadable`: *"Couldn't
   read this bundle."* · `draft_bundle_too_large`: *"Bundle too large to draft from."* · pointer
@@ -10399,12 +10481,14 @@ All shown inline beneath the button; none block the rest of the form.
 - **Per minute:** `enforceRateLimit("ai-draft", userId, 10/min)` — counts every request, like the
   other per-user web limits (per-instance, §16 #20). **429** `{ error: 'draft_rate_limited', scope:
   'minute' }`.
-- **Daily cap: 50 per user per rolling 24 hours**, a hard-coded constant (`AI_DRAFT_DAILY_CAP`) in
-  v1. Counted from `ai_usage` rows with `feature = 'skill_draft'` and `user_id` = the caller in the
-  last 24 hours — so only calls that **reached the provider** count (a bundle refused for size or a
-  missing `SKILL.md` never does), and **no migration** is needed. **429** `{ error:
-  'draft_rate_limited', scope: 'day', retryAt }`. Two concurrent calls at 49 may both pass — an
-  accepted overshoot of a few calls.
+- **Daily cap: 50 per user per rolling 24 hours by default** (`AI_DRAFT_DAILY_CAP`), which a
+  platform admin may change to any whole number from 1 to 1000 (§40.17); the endpoint reads the cap
+  in force on every request. Counted from `ai_usage` rows with `feature = 'skill_draft'` and
+  `user_id` = the caller in the last 24 hours — so only calls that **reached the provider** count (a
+  bundle refused for size or a missing `SKILL.md` never does), and **no migration** is needed.
+  **429** `{ error: 'draft_rate_limited', scope: 'day', cap, retryAt }`, where `cap` is the cap in
+  force and `retryAt` is when enough counted calls age out to fall below it. Two concurrent calls at
+  one below the cap may both pass — an accepted overshoot of a few calls.
 - **Recording:** the call goes through `aiComplete({ feature: 'skill_draft', userId, json: true,
   maxTokens: 4096, retry: false })`, so the §40.7 bookkeeping applies unchanged: one `ai_usage` row
   per call that reached the provider, `last_call_*` updated, runtime failures into the throttled
@@ -10463,7 +10547,8 @@ the button never spins for two minutes; the worker's §41 sweep keeps the defaul
 ### 43.11 Out of scope (deferred)
 - Drafting on the proposal page (`revise` / `resubmit`) and in reviewer edits.
 - Drafting the title, the tool/harness or the "What changed" note.
-- Per-field buttons; an admin setting for the daily cap; non-English output.
+- Per-field buttons; an admin setting for the per-minute limit (the daily cap has one, §40.17);
+  non-English output.
 - Sending any bundle file other than `SKILL.md`.
 
 ### 43.12 Tests (ship with the change)
@@ -10479,7 +10564,8 @@ the button never spins for two minutes; the worker's §41 sweep keeps the defaul
   `draft_bundle_unreadable`; an invalid-but-present `SKILL.md` still drafts; pointer path via a
   local git fixture; reuse path `404` for a skill the caller can't see (restricted, non-grantee) and
   `422` with no stable active version; per-minute `429`; daily cap `429` with `retryAt` at 50
-  `ai_usage` rows and refused (413/422) calls not counted; one `ai_usage` row with `feature =
+  `ai_usage` rows (and at the admin's cap when one is set, §40.17) and refused (413/422) calls not
+  counted; one `ai_usage` row with `feature =
   'skill_draft'` and the caller's `user_id`; provider failure → `502 draft_failed` without provider
   text; no `audit_log` row written.
 - **e2e** (stub provider enabled): attach a bundle → **Draft with AI** → Description, Usage and
@@ -14296,13 +14382,13 @@ record, for display and notification only.
 | 5 | **The slug is the upstream `name`, locked.** A `SKILL.md` with no `name` or `description`, or a `name` that isn't a valid slug, is listed but **not tickable**. | `validateBundle` requires both fields and `name == slug` (§6). Any other slug would fail at mirror time. |
 | 6 | **New skills only.** A found skill whose name matches an active skill the proposer can see (any namespace, deprecated included) is listed but **not tickable**, with a link to that skill. | A new-version step would target another namespace, need a *What changed* note and bring the delivery-type clash (§8). Updates go through the skill's page or §63. |
 | 7 | **A wizard with one step per ticked skill**, and **Previous**, **Next** and **Remove from proposal**. The proposer reviews every step, whether or not AI filled it. | "In one go" must not mean "unread". |
-| 8 | **AI drafting is opt-in, per import and per step.** Per import: a *Draft with AI* option, shown only when §43 drafting is available. When it is on, each ticked skill is drafted **in the background once the wizard opens**. Per step: a **Draft with ‹AI name›** button in every wizard step, shown whenever §43 drafting is available, drafts that one skill on demand: when the option was off, after a failed draft, or again after a draft. Both go through the §43 endpoint and **under the §43 limits** (10 per minute and 50 per rolling 24 hours, shared with the propose form). | Ticking the option and clicking Next, or clicking a step's button, is the deliberate act §43 decision 1 asks for. The button lets a proposer draft only the skills that need it, or redo one, without drafting the whole import. One shared cap keeps each person's provider spend bounded. |
+| 8 | **AI drafting is opt-in, per import and per step.** Per import: a *Draft with AI* option, shown only when §43 drafting is available. When it is on, each ticked skill is drafted **in the background once the wizard opens**. Per step: a **Draft with ‹AI name›** button in every wizard step, shown whenever §43 drafting is available, drafts that one skill on demand: when the option was off, after a failed draft, or again after a draft. Both go through the §43 endpoint and **under the §43 limits** (10 per minute and the daily cap — 50 per rolling 24 hours unless a platform admin changed it, §40.17 — shared with the propose form). | Ticking the option and clicking Next, or clicking a step's button, is the deliberate act §43 decision 1 asks for. The button lets a proposer draft only the skills that need it, or redo one, without drafting the whole import. One shared cap keeps each person's provider spend bounded. |
 | 9 | **Submit needs every remaining step opened and passing.** The first time through, steps open in order. | §43's safety argument rests on the proposer reading the draft before reviewers see it. |
 | 10 | **Each skill succeeds or fails on its own at submit.** One bulk endpoint verifies every folder with **one** clone and pins **one** commit. Failed skills stay in the wizard to fix or remove. | A slug taken a minute ago shouldn't block 29 other skills. An all-or-nothing transaction across N proposals and their side effects is costly. |
 | 11 | **Submit for review**, plus **Publish directly** where the proposer may publish without review: today's rules, with each skill routed to review on its own when §37.4 or §47 says so. The content-risk override is not offered in bulk. A skill that would need it goes to review. | `require_review = false` is the namespace admin's choice. Every safety gate still runs per skill. |
 | 12 | **One notification per import** to the reviewers and one to the submitter, instead of a `proposal.needs_review` and a `proposal.submitted` per skill. Later lifecycle notifications stay per proposal. | Thirty identical notifications bury everything else in an inbox. |
 | 13 | **No bulk accept or reject.** Reviewers decide each imported proposal on its own. The queue can be filtered to one import. | Each accept guard (revision pin, scan gate, policy override, AI pre-review, slug re-check) protects one deliberate decision. |
-| 14 | **At most 50 ticked skills per import. The scan lists at most 500.** Both are fixed constants. | 50 equals the daily AI draft cap, and it bounds the worker's pre-scans and AI pre-reviews from one submit. |
+| 14 | **At most 50 ticked skills per import. The scan lists at most 500.** Both are fixed constants. | 50 equals the default daily AI draft cap, and it bounds the worker's pre-scans and AI pre-reviews from one submit. It stays 50 when a platform admin changes the draft cap (§40.17). |
 | 15 | **An unfinished import lives only in the open browser tab**, with a leave-page warning. Nothing is stored before submit. **Every link in the import opens in a new tab** (§64.2, §64.6). | This matches the propose form and chunked uploads (§6). A saved draft would be a stale scan of a ref that may have moved. Since nothing is stored, a link that left the tab would lose the import. |
 | 16 | **A tab on the propose page, *I have a repo***, between *I have a skill* and *I want a skill* (§26), at `/propose?mode=repo`. The old `/propose/import` address redirects there. Switching tabs keeps each tab's work. A pasted `--all` command and the "no SKILL.md in the repository root" error switch to it. | One skill, many skills and a wish for one are three answers to the same page's question, and nothing typed is lost by changing the answer. The tab holds the import's own pick list and wizard, not the propose form, which is built around one skill. |
 
@@ -14510,9 +14596,11 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   (§43.6). Steps keep the text they hold.
 - **Removing** a skill drops its unsent draft, which isn't counted. Drafts already made count against
   the cap even if the browser tab is closed (no refund, §43.7).
-- `GET /api/propose/ai-draft` gains **`remainingToday`**: 50 minus the caller's `skill_draft` calls
-  in the last 24 hours, floored at 0, for the checkbox label and each step's helper line. The page
-  counts it down as drafts come back.
+- `GET /api/propose/ai-draft` gains **`remainingToday`**: the daily cap in force (50 by default,
+  §40.17) minus the caller's `skill_draft` calls in the last 24 hours, floored at 0, for the
+  checkbox label and each step's helper line. The page counts it down as drafts come back. The same
+  response carries **`dailyCap`**, the number the page puts in the §43.6 daily-cap message when it
+  shows that message without a 429 in hand (a disabled checkbox or button).
 
 ### 64.6 Submit: `POST /api/propose/import`
 - **Request** `{ url, ref, folder?, namespaceSlug, visibility, sharedNamespaceIds, mode: 'review' |

@@ -33,7 +33,8 @@ const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "rev
   // The consumer-facing marketplace directory (§30.6 Page 3) — nested under /catalog in the URL,
   // its own sidebar entry directly below Catalog. Same storefront glyph as "Added marketplaces".
   { href: "/catalog/marketplaces", label: "Marketplaces", icon: "M3 9h18l-1.5-4.5A1.5 1.5 0 0 0 18 3.5H6a1.5 1.5 0 0 0-1.5 1L3 9zM4.5 9v9A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5V9M9 13h6" },
-  { href: "/propose", label: "Propose a skill", icon: "M12 5v14M5 12h14" },
+  // "Propose skills" names the destination; the page heading and action buttons stay singular (§26 Naming).
+  { href: "/propose", label: "Propose skills", icon: "M12 5v14M5 12h14" },
   { href: "/requests", label: "Requested skills", icon: "M12 17h.01M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4", badge: "requests" },
   { href: "/proposals", label: "Review queue", icon: "M5 4h11l3 3v13H5zM9 12h6M9 16h6", badge: "review" },
   { href: "/leaderboard", label: "Leaderboard", icon: "M4 20h4v-7H4zM10 20h4V4h-4zM16 20h4v-10h-4z" },

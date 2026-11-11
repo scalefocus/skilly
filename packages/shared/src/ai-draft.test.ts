@@ -7,13 +7,19 @@ import {
   AI_DRAFT_BODY_MAX,
   AI_DRAFT_CATEGORIES_SENT_MAX,
   AI_DRAFT_DAILY_CAP,
+  AI_DRAFT_DAILY_CAP_MAX,
+  AI_DRAFT_DAILY_CAP_MIN,
   AI_DRAFT_DESCRIPTION_MAX,
   AI_DRAFT_USAGE_MAX,
   AI_DRAFT_WINDOW_MS,
+  aiDraftLimitView,
   buildDraftPrompt,
   draftDailyCapDecision,
+  effectiveAiDraftDailyCap,
+  parseAiDraftDailyCapOverride,
   processDraftCategories,
   sliceCodePointSafe,
+  validateAiDraftLimitInput,
   validateDraftOutput,
 } from "./ai-draft.js";
 import { isSecretLikeLine } from "./scan.js";
@@ -132,4 +138,72 @@ test("draftDailyCapDecision: rolling 24 h window, retryAt when the pivot call ag
   // Calls older than the window don't count.
   const aged = [...under, new Date(now.getTime() - AI_DRAFT_WINDOW_MS - 1)];
   assert.deepEqual(draftDailyCapDecision(aged, now), { ok: true });
+});
+
+// ---- the admin-adjustable daily cap (§40.17) -------------------------------------------------------------
+
+test("draftDailyCapDecision with an admin cap: a lowered cap blocks, a raised cap lets the same history through", () => {
+  const now = new Date("2026-11-11T12:00:00Z");
+  const minsAgo = (m: number) => new Date(now.getTime() - m * 60_000);
+  const ten = Array.from({ length: 10 }, (_, i) => minsAgo(i + 1)); // calls 1..10 minutes ago
+
+  // Lowered to 3 with 10 calls already made: blocked until the 3rd-newest call ages out — only then
+  // are fewer than 3 left in the window.
+  const lowered = draftDailyCapDecision(ten, now, 3);
+  assert.equal(lowered.ok, false);
+  if (!lowered.ok) assert.equal(lowered.retryAt.getTime(), minsAgo(3).getTime() + AI_DRAFT_WINDOW_MS);
+
+  // A full default window is let through the moment the cap is raised above it.
+  const full = Array.from({ length: AI_DRAFT_DAILY_CAP }, (_, i) => minsAgo(i + 1));
+  assert.equal(draftDailyCapDecision(full, now).ok, false);
+  assert.deepEqual(draftDailyCapDecision(full, now, AI_DRAFT_DAILY_CAP + 1), { ok: true });
+
+  // The smallest cap an admin can set still allows one draft.
+  assert.deepEqual(draftDailyCapDecision([], now, AI_DRAFT_DAILY_CAP_MIN), { ok: true });
+  assert.equal(draftDailyCapDecision([minsAgo(5)], now, AI_DRAFT_DAILY_CAP_MIN).ok, false);
+});
+
+test("parseAiDraftDailyCapOverride: a stored value is clamped into 1–1000, anything else is ignored", () => {
+  assert.equal(parseAiDraftDailyCapOverride(200), 200);
+  assert.equal(parseAiDraftDailyCapOverride(AI_DRAFT_DAILY_CAP_MIN), 1);
+  assert.equal(parseAiDraftDailyCapOverride(AI_DRAFT_DAILY_CAP_MAX), 1000);
+  // Out of range: clamped, so a hand-edited row can neither switch drafting off nor lift the cap.
+  assert.equal(parseAiDraftDailyCapOverride(0), 1);
+  assert.equal(parseAiDraftDailyCapOverride(-7), 1);
+  assert.equal(parseAiDraftDailyCapOverride(50_000), 1000);
+  // Not a whole number: the default applies.
+  for (const junk of [undefined, null, "200", 12.5, Number.NaN, Number.POSITIVE_INFINITY, true, {}, [200]]) {
+    assert.equal(parseAiDraftDailyCapOverride(junk), null, String(junk));
+  }
+});
+
+test("effectiveAiDraftDailyCap / aiDraftLimitView: override → default", () => {
+  assert.equal(effectiveAiDraftDailyCap(null), AI_DRAFT_DAILY_CAP);
+  assert.equal(effectiveAiDraftDailyCap(120), 120);
+  assert.deepEqual(aiDraftLimitView(null), { defaultCap: 50, overrideCap: null, effectiveCap: 50, min: 1, max: 1000 });
+  assert.deepEqual(aiDraftLimitView(120), { defaultCap: 50, overrideCap: 120, effectiveCap: 120, min: 1, max: 1000 });
+});
+
+test("validateAiDraftLimitInput: whole numbers 1–1000, null clears, everything else is refused", () => {
+  assert.deepEqual(validateAiDraftLimitInput({ dailyCap: 1 }), { ok: true, value: 1 });
+  assert.deepEqual(validateAiDraftLimitInput({ dailyCap: 1000 }), { ok: true, value: 1000 });
+  assert.deepEqual(validateAiDraftLimitInput({ dailyCap: 50 }), { ok: true, value: 50 });
+  assert.deepEqual(validateAiDraftLimitInput({ dailyCap: null }), { ok: true, value: null });
+
+  for (const bad of [{ dailyCap: 0 }, { dailyCap: 1001 }, { dailyCap: -1 }]) {
+    const v = validateAiDraftLimitInput(bad);
+    assert.equal(v.ok, false);
+    if (!v.ok) assert.match(v.error, /between 1 and 1000/);
+  }
+  for (const bad of [{ dailyCap: 12.5 }, { dailyCap: "50" }, { dailyCap: Number.NaN }, { dailyCap: true }]) {
+    const v = validateAiDraftLimitInput(bad);
+    assert.equal(v.ok, false);
+    if (!v.ok) assert.match(v.error, /whole number/);
+  }
+  // A missing key is not "restore the default" — that takes an explicit null.
+  for (const bad of [{}, null, undefined, [], "50", 50]) {
+    const v = validateAiDraftLimitInput(bad);
+    assert.equal(v.ok, false);
+    if (!v.ok) assert.match(v.error, /dailyCap is required/);
+  }
 });

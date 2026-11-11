@@ -62,7 +62,7 @@ async function stubSources(page: Page, opts: { ai?: boolean } = {}) {
   );
   await page.route("**/api/propose/ai-draft", (r) =>
     r.request().method() === "GET"
-      ? r.fulfill({ json: { available: !!opts.ai, remainingToday: 38 } })
+      ? r.fulfill({ json: { available: !!opts.ai, remainingToday: 38, dailyCap: 50 } })
       : r.fulfill({ json: { description: "Drafted description.", usage: "Ask it to read a PDF.", categories: [{ name: "documents", isNew: false }] } }),
   );
 }

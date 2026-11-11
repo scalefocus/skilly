@@ -5,6 +5,8 @@
 // "Set · ends …"); enabling flips the pill to Operational; Remove returns it to Not configured.
 // Also the §40.15 Timeouts row: set a per-call timeout → Save → it persists across a reload; a run cap
 // shorter than the draft call timeout is refused; Reset to defaults → Save → the placeholders return.
+// The §40.17 Draft limit row: set a daily cap → Save → it persists across a reload and the drafting
+// endpoint reports it; an out-of-range value is refused; emptying the field restores the default.
 // And the §40.16 Private-network providers row: locked on with the operator note while the dev server
 // has AI_ALLOW_PRIVATE_BASE_URL=1 (CI's), otherwise a toggle that saves.
 //
@@ -82,6 +84,7 @@ async function openCard(page: Page): Promise<string | null> {
 test.afterEach(async ({ page }) => {
   await page.request.delete("/api/admin/ai").catch(() => {});
   await page.request.put("/api/admin/ai/timeouts", { data: {} }).catch(() => {});
+  await page.request.put("/api/admin/ai/draft-limit", { data: { dailyCap: null } }).catch(() => {});
 });
 
 test("configure Open WebUI: models, test, rejected save, save, enable, remove", async ({ page }) => {
@@ -179,6 +182,53 @@ test("timeouts: save a per-call timeout, refuse a too-short run cap, reset to de
   await open();
   await expect(draft).toHaveValue("");
   await expect(draft).toHaveAttribute("placeholder", "360");
+});
+
+test("draft limit: save a daily cap, refuse an out-of-range value, restore the default", async ({ page }) => {
+  // The Draft limit row works without AI_TOKEN_ENC_KEY and with no provider configured (§40.17).
+  await devSignIn(page);
+  await page.request.put("/api/admin/ai/draft-limit", { data: { dailyCap: null } });
+  const open = async () => {
+    await gotoLoaded(page, "/admin", "/api/admin/ai");
+    if ((await header(page).getAttribute("aria-expanded")) !== "true") await header(page).click();
+    await expect(header(page)).toHaveAttribute("aria-expanded", "true");
+  };
+  await open();
+  const row = card(page).getByTestId("ai-draft-limit");
+  const input = row.getByTestId("ai-draft-limit-input");
+  const save = row.getByTestId("ai-draft-limit-save");
+  await expect(input).toHaveValue("");
+  await expect(input).toHaveAttribute("placeholder", "50");
+  await expect(save).toBeDisabled(); // nothing to save yet
+
+  await input.fill("120");
+  await clickAndAwait(page, () => save.click(), "/api/admin/ai/draft-limit", { method: "PUT" });
+  await expect(row.getByRole("status")).toContainText("120 times in 24 hours");
+
+  // A change applies to the next request: the drafting endpoint already reports the new cap.
+  const allowance = (await (await page.request.get("/api/propose/ai-draft")).json()) as { dailyCap: number };
+  expect(allowance.dailyCap).toBe(120);
+
+  await open();
+  await expect(input).toHaveValue("120");
+
+  // Out of range: the card refuses it before any request, and the API answers 422.
+  await input.fill("1001");
+  await save.click();
+  await expect(row.getByRole("status")).toContainText("whole number from 1 to 1000");
+  const refused = await page.request.put("/api/admin/ai/draft-limit", { data: { dailyCap: 1001 } });
+  expect(refused.status()).toBe(422);
+  expect(((await refused.json()) as { error: string }).error).toBe("invalid_draft_limit");
+
+  // Emptying the field restores the default and removes the override.
+  await input.fill("");
+  await clickAndAwait(page, () => save.click(), "/api/admin/ai/draft-limit", { method: "PUT" });
+  const st = (await (await page.request.get("/api/admin/ai")).json()) as { draftLimit: { overrideCap: number | null; effectiveCap: number } };
+  expect(st.draftLimit.overrideCap).toBeNull();
+  expect(st.draftLimit.effectiveCap).toBe(50);
+  await open();
+  await expect(input).toHaveValue("");
+  await expect(input).toHaveAttribute("placeholder", "50");
 });
 
 test("private-network providers: locked on while the operator allows every host, else saves on toggle", async ({ page }) => {

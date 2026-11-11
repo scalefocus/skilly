@@ -25,8 +25,13 @@ export const AI_DRAFT_MAX_CATEGORIES = 4;
 export const AI_DRAFT_MAX_NEW_CATEGORIES = 2;
 /** Limits (§43.7). */
 export const AI_DRAFT_PER_MINUTE = 10;
+/** The default daily cap; a platform admin may override it within the range below (§40.17). */
 export const AI_DRAFT_DAILY_CAP = 50;
 export const AI_DRAFT_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** The admin range for the daily cap and its platform_settings key (§40.17). */
+export const AI_DRAFT_DAILY_CAP_MIN = 1;
+export const AI_DRAFT_DAILY_CAP_MAX = 1000;
+export const AI_DRAFT_DAILY_CAP_SETTING = "ai_draft_daily_cap";
 
 /** Cut `s` to at most `max` UTF-16 units without splitting a surrogate pair. */
 export function sliceCodePointSafe(s: string, max: number): string {
@@ -170,4 +175,59 @@ export function draftDailyCapDecision(
   if (inWindow.length < cap) return { ok: true };
   const pivot = inWindow[inWindow.length - cap]!;
   return { ok: false, retryAt: new Date(pivot.getTime() + windowMs) };
+}
+
+// ── The admin-adjustable daily cap (§40.17) ──────────────────────────────────────────────────
+
+/** Default / override / effective and the admin range — what the Administration card shows. */
+export interface AiDraftLimitView {
+  defaultCap: number;
+  overrideCap: number | null;
+  effectiveCap: number;
+  min: number;
+  max: number;
+}
+
+/**
+ * The stored `ai_draft_daily_cap` setting as served: anything that is not a whole number is ignored
+ * (the default applies) and a value outside the admin range is clamped into it, so a hand-edited
+ * row can never switch drafting off or lift the cap.
+ */
+export function parseAiDraftDailyCapOverride(stored: unknown): number | null {
+  if (typeof stored !== "number" || !Number.isInteger(stored)) return null;
+  return Math.min(AI_DRAFT_DAILY_CAP_MAX, Math.max(AI_DRAFT_DAILY_CAP_MIN, stored));
+}
+
+/** The daily cap in force: the admin override, else the code default. */
+export function effectiveAiDraftDailyCap(override: number | null): number {
+  return override ?? AI_DRAFT_DAILY_CAP;
+}
+
+export function aiDraftLimitView(override: number | null): AiDraftLimitView {
+  return {
+    defaultCap: AI_DRAFT_DAILY_CAP,
+    overrideCap: override,
+    effectiveCap: effectiveAiDraftDailyCap(override),
+    min: AI_DRAFT_DAILY_CAP_MIN,
+    max: AI_DRAFT_DAILY_CAP_MAX,
+  };
+}
+
+export type AiDraftLimitValidation = { ok: true; value: number | null } | { ok: false; error: string };
+
+/**
+ * Validate a `PUT /api/admin/ai/draft-limit` body — `{ dailyCap: number | null }`. `null` restores
+ * the default; a number must be whole and inside the admin range.
+ */
+export function validateAiDraftLimitInput(raw: unknown): AiDraftLimitValidation {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw) || !("dailyCap" in raw)) {
+    return { ok: false, error: "dailyCap is required (a whole number, or null for the default)" };
+  }
+  const v = (raw as { dailyCap: unknown }).dailyCap;
+  if (v === null) return { ok: true, value: null };
+  if (typeof v !== "number" || !Number.isInteger(v)) return { ok: false, error: "the daily draft limit must be a whole number" };
+  if (v < AI_DRAFT_DAILY_CAP_MIN || v > AI_DRAFT_DAILY_CAP_MAX) {
+    return { ok: false, error: `the daily draft limit must be between ${AI_DRAFT_DAILY_CAP_MIN} and ${AI_DRAFT_DAILY_CAP_MAX}` };
+  }
+  return { ok: true, value: v };
 }

@@ -4,7 +4,6 @@
 // map the answer onto the category vocabulary. Nothing is persisted except the helper's own
 // ai_usage row; nothing is audited (§43.7). The route only parses the request and authenticates.
 import {
-  AI_DRAFT_DAILY_CAP,
   AI_DRAFT_FEATURE,
   AI_DRAFT_MAX_TOKENS,
   AI_DRAFT_PER_MINUTE,
@@ -20,7 +19,7 @@ import {
 } from "@skilly/shared";
 import { AiError } from "@skilly/shared/ai";
 import { pool } from "./db";
-import { aiAvailable, aiComplete } from "./ai";
+import { aiAvailable, aiComplete, aiDraftDailyCap } from "./ai";
 import { extractBundle } from "./bundle";
 import { findSkill, listAllCategories } from "./catalog";
 import { fetchPointerContentForCheck, type PointerFetchResult } from "./pointerFetch";
@@ -67,9 +66,14 @@ async function recentDraftCalls(userId: string, now: Date): Promise<Date[]> {
   return rows.map((r) => r.created_at);
 }
 
-/** §64.5: the caller's drafts left in the rolling 24 hours (the import page's checkbox label). */
-export async function draftsRemainingToday(userId: string, now: Date = new Date()): Promise<number> {
-  return Math.max(0, AI_DRAFT_DAILY_CAP - (await recentDraftCalls(userId, now)).length);
+/**
+ * §64.5 / §40.17: the daily cap in force and the caller's drafts left under it in the rolling 24
+ * hours (the import page's checkbox label and its daily-cap message). The cap is read per call, so
+ * an admin's change shows on the next request.
+ */
+export async function draftAllowance(userId: string, now: Date = new Date()): Promise<{ remainingToday: number; dailyCap: number }> {
+  const dailyCap = await aiDraftDailyCap();
+  return { remainingToday: Math.max(0, dailyCap - (await recentDraftCalls(userId, now)).length), dailyCap };
 }
 
 const skillMdOf = (entries: BundleEntry[]): string | null => {
@@ -143,11 +147,13 @@ export async function draftWithAi(access: EffectiveAccess & { userId: string }, 
     return outcome(429, { error: "draft_rate_limited", scope: "minute", message: "Too many drafts in a row — wait a minute and try again." }, "rate_limited");
   }
   const now = deps.now?.() ?? new Date();
-  const daily = draftDailyCapDecision(await recentDraftCalls(access.userId, now), now);
+  // §40.17: the cap in force, read on every request — an admin's change applies to the next draft.
+  const cap = await aiDraftDailyCap();
+  const daily = draftDailyCapDecision(await recentDraftCalls(access.userId, now), now, cap);
   if (!daily.ok) {
     return outcome(
       429,
-      { error: "draft_rate_limited", scope: "day", cap: AI_DRAFT_DAILY_CAP, retryAt: daily.retryAt.toISOString(), message: `Daily AI draft limit reached (${AI_DRAFT_DAILY_CAP} in 24 hours).` },
+      { error: "draft_rate_limited", scope: "day", cap, retryAt: daily.retryAt.toISOString(), message: `Daily AI draft limit reached (${cap} in 24 hours).` },
       "rate_limited",
     );
   }

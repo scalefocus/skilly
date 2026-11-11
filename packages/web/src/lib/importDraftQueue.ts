@@ -11,7 +11,7 @@
 export type DraftReply<T> =
   | { kind: "ok"; draft: T }
   | { kind: "minute" }
-  | { kind: "day"; retryAt?: string | null }
+  | { kind: "day"; retryAt?: string | null; /** The daily cap in force (§40.17), when the server sent it. */ cap?: number }
   | { kind: "unavailable" }
   | { kind: "failed"; message: string };
 
@@ -19,7 +19,7 @@ export type DraftEvent<T> =
   | { key: string; kind: "started" }
   | { key: string; kind: "ok"; draft: T }
   | { key: string; kind: "failed"; message: string }
-  | { key: string; kind: "capped"; retryAt?: string | null }
+  | { key: string; kind: "capped"; retryAt?: string | null; cap?: number }
   | { key: string; kind: "unavailable" };
 
 export interface DraftQueueOptions<T> {
@@ -171,7 +171,8 @@ export class DraftQueue<T> {
       this.stopped = "day";
       const left = [key, ...this.pending];
       this.pending = [];
-      for (const k of left) this.o.onEvent({ key: k, kind: "capped", retryAt: reply.retryAt ?? null });
+      const cap = reply.cap === undefined ? {} : { cap: reply.cap };
+      for (const k of left) this.o.onEvent({ key: k, kind: "capped", retryAt: reply.retryAt ?? null, ...cap });
       return;
     }
     this.pump();
@@ -181,7 +182,10 @@ export class DraftQueue<T> {
 /** Map a POST /api/propose/ai-draft response onto a queue reply (§43.5 status codes). */
 export function draftReplyFromResponse<T>(status: number, body: Record<string, unknown> | null, toDraft: (b: Record<string, unknown>) => T): DraftReply<T> {
   if (status === 200 && body) return { kind: "ok", draft: toDraft(body) };
-  if (status === 429 && body?.scope === "day") return { kind: "day", retryAt: typeof body.retryAt === "string" ? body.retryAt : null };
+  if (status === 429 && body?.scope === "day") {
+    // `cap` is the daily cap in force (§40.17) — an admin may have changed it since the page loaded.
+    return { kind: "day", retryAt: typeof body.retryAt === "string" ? body.retryAt : null, ...(typeof body.cap === "number" ? { cap: body.cap } : {}) };
+  }
   if (status === 429) return { kind: "minute" };
   if (status === 409 && body?.error === "ai_unavailable") return { kind: "unavailable" };
   return { kind: "failed", message: typeof body?.message === "string" ? body.message : "Couldn't draft this one." };

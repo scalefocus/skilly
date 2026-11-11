@@ -12,7 +12,8 @@
 // 422; the reuse path's 404 for a restricted skill the caller can't see, 422 without a stable
 // version, and 200 from the stored artifact; provider failure → 502 without provider text and no
 // retry; invalid JSON → 502; the per-minute 429; the rolling daily cap's 429 with retryAt, with
-// refused (413/422) calls not counted.
+// refused (413/422) calls not counted; the §40.17 admin cap (lowered → 429 naming the new cap,
+// raised → drafting again, removed → the default) and draftAllowance's remainingToday / dailyCap.
 import { test, after } from "node:test";
 import { withAiIntegrationLock } from "./aiTestLock";
 import assert from "node:assert/strict";
@@ -86,12 +87,18 @@ after(async () => {
 test("§43 Draft with AI: availability, sources, egress, failures and limits", { skip: !enabled }, () => withAiIntegrationLock(async () => {
   process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
   const { pool } = await import("./db");
-  const { draftWithAi } = await import("./aiDraft");
+  const { draftAllowance, draftWithAi } = await import("./aiDraft");
   const { getUploadChunkBytes } = await import("./settings");
   const { encryptAiToken, parseAiTokenKey } = await import("@skilly/shared/ai");
   const stub = await startStub();
 
   const savedAi = (await pool.query(`select * from ai_integration where id = 1`)).rows[0] ?? null;
+  // §40.17: the admin's daily cap is a platform setting — start from the default, put any stored value back.
+  const CAP_KEY = "ai_draft_daily_cap";
+  const savedCap = (await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [CAP_KEY])).rows[0]?.value;
+  await pool.query(`delete from platform_settings where key = $1`, [CAP_KEY]);
+  const setCap = (v: unknown) =>
+    pool.query(`insert into platform_settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value`, [CAP_KEY, JSON.stringify(v)]);
   const userIds: string[] = [];
   const skillIds: string[] = [];
   const nsIds: string[] = [];
@@ -248,8 +255,44 @@ test("§43 Draft with AI: availability, sources, egress, failures and limits", {
     // Calls older than 24 h don't count.
     await pool.query(`update ai_usage set created_at = created_at - interval '1 day' where user_id = $1 and feature = 'skill_draft'`, [uDay]);
     assert.equal((await draftWithAi(who(uDay), hosted({ "SKILL.md": SKILL_MD("x") }))).status, 200);
+
+    // ── §40.17 the admin's cap is read on every request ───────────────────────────────────
+    const uCap = await mkUser("ucap");
+    await pool.query(
+      `insert into ai_usage (created_at, feature, user_id, provider, model, latency_ms, ok)
+       select now() - (g || ' minutes')::interval, 'skill_draft', $1, 'anthropic', 'stub-model', 5, true from generate_series(1, 3) g`,
+      [uCap],
+    );
+    // Under the default the three calls leave 47 of 50.
+    assert.deepEqual(await draftAllowance(uCap), { remainingToday: 47, dailyCap: 50 });
+    // Lowered to 3: the next draft is refused and names the new cap; retryAt is when the oldest of
+    // the three ages out — it is computed against the new cap.
+    await setCap(3);
+    assert.deepEqual(await draftAllowance(uCap), { remainingToday: 0, dailyCap: 3 });
+    const hitsBeforeCap = stub.state.hits;
+    const lowered = await draftWithAi(who(uCap), hosted({ "SKILL.md": SKILL_MD("x") }));
+    assert.equal(lowered.status, 429);
+    assert.deepEqual([lowered.body.error, lowered.body.scope, lowered.body.cap], ["draft_rate_limited", "day", 3]);
+    assert.match(String(lowered.body.message), /\(3 in 24 hours\)/);
+    assert.equal(stub.state.hits, hitsBeforeCap, "a capped draft never reaches the provider");
+    const loweredRetryAt = new Date(String(lowered.body.retryAt)).getTime();
+    assert.ok(Math.abs(loweredRetryAt - (Date.now() - 3 * 60_000 + 24 * 3600_000)) < 120_000, "retryAt follows the new cap");
+    // Raised to 5: the same person drafts again at once, and that draft counts.
+    await setCap(5);
+    assert.equal((await draftWithAi(who(uCap), hosted({ "SKILL.md": SKILL_MD("x") }))).status, 200);
+    assert.deepEqual(await draftAllowance(uCap), { remainingToday: 1, dailyCap: 5 });
+    // A hand-edited row: out of range is clamped into 1–1000, a non-number falls back to the default.
+    await setCap(0);
+    assert.equal((await draftAllowance(uCap)).dailyCap, 1);
+    await setCap("lots");
+    assert.equal((await draftAllowance(uCap)).dailyCap, 50);
+    // The override removed, the default is back.
+    await pool.query(`delete from platform_settings where key = $1`, [CAP_KEY]);
+    assert.deepEqual(await draftAllowance(uCap), { remainingToday: 46, dailyCap: 50 });
   } finally {
     stub.server.close();
+    await pool.query(`delete from platform_settings where key = $1`, [CAP_KEY]).catch(() => {});
+    if (savedCap !== undefined) await setCap(savedCap).catch(() => {});
     await pool.query(`delete from ai_usage where user_id = any($1::uuid[])`, [userIds]);
     if (skillIds.length) {
       const c = await pool.connect();
