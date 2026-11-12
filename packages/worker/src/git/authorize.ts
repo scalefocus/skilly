@@ -14,6 +14,9 @@
 // thing being cloned. A skill token is bound to one skill; a marketplace token to one marketplace.
 // Namespace-scoped resources additionally require the token's user to still have namespace access
 // at clone time. Anonymous/tokenless clones are not allowed. SKILLY_SPEC.md §9, §23, §30.4.
+//
+// The one key NOT bound to a single repo is the §69 AGENT key: short-lived, user-scoped, it clones
+// any skill its owner can see — re-checked on EVERY request, for every skill (org-visible included).
 import {
   isSkillVisible,
   parseMarketplaceRepoKey,
@@ -59,7 +62,8 @@ export interface TokenPrincipal {
   /** null for SYSTEM installations (platform-owned, no user; SKILLY_SPEC.md §23). */
   userId: string | null;
   tokenId: string;
-  type: "install" | "marketplace";
+  /** `agent` (§69.5): a short-lived key minted by the agent sync API — user-scoped, not skill-scoped. */
+  type: "install" | "marketplace" | "agent";
   /** `install` only — the skill id this token is scoped to; presenting it against another skill is rejected. */
   scopedSkillId?: string;
   /** `marketplace` only — the marketplace this token is scoped to (§30.4). */
@@ -93,6 +97,8 @@ export type GitRefusalCode =
   | "install_token_invalid"
   | "install_token_scope_mismatch"
   | "install_token_not_visible"
+  /** §69.6: a valid agent key asked for a skill that is missing, archived or not visible to its owner. */
+  | "agent_key_not_visible"
   | "git_push_denied";
 
 export interface GitRefusal {
@@ -202,6 +208,8 @@ async function authorizeSkill(
   const inactive = ownerInactiveRefusal(principal);
   if (inactive) return inactive;
 
+  if (principal.type === "agent") return authorizeAgentSkill(parsed, principal, deps);
+
   const skill = await deps.findSkill(parsed.namespaceSlug, parsed.skillSlug);
   // A skill that does not exist, is archived, OR is not the one this token was minted for all
   // answer the same 404: a scope mismatch used to be a 403, which told any token holder that the
@@ -227,6 +235,32 @@ async function authorizeSkill(
       return { allow: false, status: 403, reason: "not authorized for this namespace", refusal };
     }
   }
+  return { allow: true, kind: "skill", skill, principal };
+}
+
+/**
+ * An AGENT key (§69.6) is not bound to a skill: it clones any skill that exists, is not archived and
+ * passes the shared visibility predicate for its owner's access, resolved on THIS request — so loss
+ * of access takes effect on the next git request, with no key change. Every failure is the same 404
+ * a missing skill gets: a key that can be pointed at any path must not learn that a restricted skill
+ * exists (a personal install token gets a 403 there, safe only because it already names its skill).
+ * The check runs for org-visible skills too; there is no system agent key.
+ */
+async function authorizeAgentSkill(parsed: ParsedGitRequest, principal: TokenPrincipal, deps: GitAuthDeps): Promise<GitDecision> {
+  // An agent key always has an owner (DB CHECK). A malformed row never authorizes anything.
+  if (!principal.userId || principal.isSystem) {
+    return { allow: false, status: 401, reason: INVALID_TOKEN, refusal: { code: "install_token_invalid", tokenId: principal.tokenId } };
+  }
+  const notFound: GitDecision = {
+    allow: false,
+    status: 404,
+    reason: "skill not found",
+    refusal: { code: "agent_key_not_visible", ownerUserId: principal.userId, tokenId: principal.tokenId },
+  };
+  const skill = await deps.findSkill(parsed.namespaceSlug, parsed.skillSlug);
+  if (!skill || skill.status === "archived") return notFound;
+  const access = await deps.resolveAccess(principal.userId);
+  if (!isSkillVisible(access, skill)) return notFound;
   return { allow: true, kind: "skill", skill, principal };
 }
 

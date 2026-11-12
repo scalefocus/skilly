@@ -70,6 +70,13 @@ spec:
               value: {{ .Values.config.bootstrapAdminGroup | quote }}
             - name: ONE_TIME_TOKEN_TTL_SECONDS
               value: {{ .Values.config.oneTimeTokenTtlSeconds | quote }}
+            # §69 agent sync API: off unless enabled; the audience defaults to ENTRA_CLIENT_ID.
+            - name: SKILLY_AGENT_API_ENABLED
+              value: {{ .Values.web.agentApi.enabled | default false | quote }}
+            - name: SKILLY_AGENT_API_AUDIENCE
+              value: {{ .Values.web.agentApi.audience | default "" | quote }}
+            - name: SKILLY_AGENT_KEY_TTL_HOURS
+              value: {{ .Values.web.agentApi.keyTtlHours | default "12" | quote }}
             {{- with .Values.web.trustProxy }}
             # §49.9: keys the OAuth DCR per-IP rate limit on the real client behind the ingress.
             - name: TRUST_PROXY

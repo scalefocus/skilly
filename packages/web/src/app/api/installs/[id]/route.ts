@@ -1,10 +1,11 @@
 // Uninstall (DELETE) or reactivate (PATCH) an install. Personal rows are owner-scoped; SYSTEM
 // rows (§23 "System installations") are managed by ANY platform admin instead, and both actions
 // on them are audited (install.system_uninstalled / install.system_reactivated).
+// DELETE also removes one of the caller's agent install records (§69.7); PATCH never matches one.
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
 import { resolveUserAccess } from "../../../../lib/access";
-import { uninstall, reactivate, uninstallSystem, reactivateSystem, getInstallMeta } from "../../../../lib/installs";
+import { uninstall, reactivate, uninstallSystem, reactivateSystem, getInstallMeta, removeAgentInstall } from "../../../../lib/installs";
 import { getInstallMaxTtlMonths, installExpiryCeiling } from "../../../../lib/settings";
 import { appendAudit } from "../../../../lib/audit";
 import { pool } from "../../../../lib/db";
@@ -42,7 +43,10 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
     return Response.json({ ok: true });
   }
 
-  const ok = await uninstall(access.userId, id);
+  // Not an install token: it may be one of the caller's AGENT install records (§69.7). Removing
+  // one deletes the record only — unaudited, like a personal uninstall. Anyone else's id, or an
+  // unknown one, is the same 404.
+  const ok = (await uninstall(access.userId, id)) || (await removeAgentInstall(access.userId, id));
   if (!ok) return Response.json({ error: "not found" }, { status: 404 });
   return Response.json({ ok: true });
 }

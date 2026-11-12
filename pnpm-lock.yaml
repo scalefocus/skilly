@@ -56,6 +56,9 @@ importers:
       adm-zip:
         specifier: ^0.6.1
         version: 0.6.1
+      jose:
+        specifier: ^6.2.17
+        version: 6.2.17
       next:
         specifier: ^16.4.4
         version: 16.4.4(@playwright/test@1.64.1)(@types/node@26.6.6)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1234,6 +1237,9 @@ packages:
 
   jose@4.15.9:
     resolution: {integrity: sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA==}
+
+  jose@6.2.17:
+    resolution: {integrity: sha512-wOuK9V1yujQFH5S0ZWmLcDZN7+IKh9bUCC2ZPCf2HDlol3WWHy+PPyNjEI75FXRLMp3vDKQcupP59xhVU95hcg==}
 
   linkifyjs@4.4.0:
     resolution: {integrity: sha512-InTexvtbai+2c+dEVGcc6O6P2DMVIiwD9a/i4zFroazOIYLOS6FSVmAJ7kFeumnCMx6/gQqNAkbUvgMubV4+MA==}
@@ -2801,6 +2807,8 @@ snapshots:
   is-promise@4.0.0: {}
 
   jose@4.15.9: {}
+
+  jose@6.2.17: {}
 
   linkifyjs@4.4.0: {}
 

@@ -24,6 +24,13 @@ web:
   # the OAuth dynamic-client-registration per-IP rate limit (§49.9) keys on the real client.
   # "" = don't trust X-Forwarded-For (every DCR caller shares the ingress controller's bucket).
   trustProxy: ""
+  # §69 agent sync API (docs/agent-sync-api.md). Off by default: the route answers 404.
+  agentApi:
+    enabled: false
+    # The `aud` an Entra access token must carry. "" = config.entraClientId.
+    audience: ""
+    # Agent key lifetime in hours, 1..24.
+    keyTtlHours: "12"
   autoscaling:
     enabled: true
     minReplicas: 2

@@ -1,6 +1,6 @@
 // Postgres-backed implementation of the git server's dependencies. SKILLY_SPEC.md §9.
 import type { Pool } from "pg";
-import { resolveAccess, hashToken, resolveLatest, isForwardUpdate, PUBLIC_SCOPE, sharedNamespaceIdsSql, namespaceMarketplaceSkillSql, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
+import { resolveAccess, hashToken, resolveLatest, isForwardUpdate, recordAgentClone, PUBLIC_SCOPE, sharedNamespaceIdsSql, namespaceMarketplaceSkillSql, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
 import type { GitServerDeps } from "./server.js";
 import type { MarketplaceRef, SkillRef, TokenPrincipal } from "./authorize.js";
 import { M } from "../metrics.js";
@@ -71,11 +71,12 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
       // no user (user_id null, is_system true). A personal token additionally requires its owning
       // user to be status='active' (the owner-status gate, SKILLY_SPEC.md §5/§23) — the users join
       // rides the same lookup, and an inactive owner is flagged rather than dropped so the refusal
-      // can be recorded to system_event upstream. SKILLY_SPEC.md §23.
+      // can be recorded to system_event upstream. SKILLY_SPEC.md §23. §69 AGENT keys ride the same
+      // lookup under the same expiry + owner-status conditions; they always expire (DB CHECK).
       const { rows } = await pool.query<{
         id: string;
         user_id: string | null;
-        type: "install" | "marketplace";
+        type: "install" | "marketplace" | "agent";
         skill_id: string | null;
         marketplace_scope: "public" | "namespace" | null;
         namespace_id: string | null;
@@ -91,7 +92,7 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
            left join users u on u.id = t.user_id
            left join namespaces n on n.id = t.namespace_id
           where t.hashed_token = $1
-            and t.type in ('install', 'marketplace')
+            and t.type in ('install', 'marketplace', 'agent')
             and (t.expires_at is null or t.expires_at > now())`,
         [hashToken(rawToken)],
       );
@@ -99,7 +100,12 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
       if (!r) return null;
 
       let principal: TokenPrincipal;
-      if (r.type === "marketplace") {
+      if (r.type === "agent") {
+        // User-scoped (§69.5): no skill, no marketplace. The DB CHECK guarantees an owner; a row
+        // without one is malformed and must never authorize a clone.
+        if (!r.user_id || r.is_system) return null;
+        principal = { userId: r.user_id, tokenId: r.id, type: "agent", isSystem: false };
+      } else if (r.type === "marketplace") {
         // The DB CHECK guarantees the scope shape, but a malformed row must never authorize a
         // clone — treat anything unexpected as an invalid token rather than guessing a scope.
         if (r.marketplace_scope === "public") {
@@ -286,6 +292,7 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
         install_token_invalid: "install token refused: invalid or expired",
         install_token_scope_mismatch: "install token refused: skill unknown or not the token's skill",
         install_token_not_visible: "install token refused: owner can no longer see the skill",
+        agent_key_not_visible: "agent key refused: skill unknown, archived or not visible to its owner",
         git_push_denied: "push refused: the registry is read-only",
       };
       const more = suppressed > 0 ? ` (+${suppressed} more in the last minute)` : "";
@@ -306,6 +313,12 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
           `${what[e.code] ?? e.code} (@${e.namespaceSlug}/${e.skillSlug})${more}`.slice(0, 300),
         ],
       );
+    },
+
+    async recordAgentClone(input): Promise<void> {
+      // §69.7: the agent install record + an access_log row with source 'aion'. Never
+      // record_git_access — no skill_installs, install_count, credits, counters or achievements.
+      await recordAgentClone(pool, input);
     },
 
     async logAccess(skillId, userId, isSystem, countInstall): Promise<void> {

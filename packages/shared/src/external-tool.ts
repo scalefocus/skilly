@@ -72,6 +72,16 @@ export function buildInstallSource(input: InstallUrlInput): string {
   return u.toString();
 }
 
+/**
+ * A skill's git repo URL with NO credentials and no ref: `https://<host>/<ns>/<skill>.git`.
+ * What the agent sync API returns as `gitUrl` (SKILLY_SPEC.md §69.4) — the client adds its agent
+ * key as basic auth and the version's tag (`versionTag`) as `--branch`. Same path shape as
+ * {@link buildInstallSource}, so the wire format still lives only in this file.
+ */
+export function buildRepoUrl(input: Pick<InstallUrlInput, "registryBaseUrl" | "namespaceSlug" | "skillSlug">): string {
+  return buildInstallSource({ registryBaseUrl: input.registryBaseUrl, namespaceSlug: input.namespaceSlug, skillSlug: input.skillSlug });
+}
+
 /** Full copy-paste command shown in the UI / generated for users. A recognized non-generic agent
  *  appends `--agent <slug>` at the END (§9); generic/unrecognized adds nothing. */
 export function buildInstallCommand(input: InstallUrlInput): string {

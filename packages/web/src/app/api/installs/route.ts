@@ -1,10 +1,11 @@
-// The signed-in user's installed skills (SKILLY_SPEC.md §23). Owner-scoped; lists USED installs.
+// The signed-in user's installed skills (SKILLY_SPEC.md §23). Owner-scoped; lists USED installs
+// plus the skills a desktop agent cloned for them (§69.7) — every row carries its `source`.
 // ?scope=system lists ALL system installations platform-wide — platform admins only (§23
 // "System installations").
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
-import { listInstalls, listSystemInstalls } from "../../../lib/installs";
+import { listMyInstalls, listSystemInstalls } from "../../../lib/installs";
 
 export const dynamic = "force-dynamic";
 
@@ -21,5 +22,5 @@ export async function GET(req: Request) {
   }
 
   if (!access.userId) return Response.json({ installs: [] });
-  return Response.json({ installs: await listInstalls(access.userId, access) });
+  return Response.json({ installs: await listMyInstalls(access.userId, access) });
 }

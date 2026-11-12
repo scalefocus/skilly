@@ -3,7 +3,8 @@
 // reactivate or uninstall, so it must survive in the table (SKILLY_SPEC.md §23). `marketplace`
 // tokens (§30.4) are exempt for exactly the same reason — an expired marketplace is listed-but-
 // refused on /marketplaces and reactivating it revives the SAME URL, which is impossible if the
-// row is gone. With one_time/pat retired this is effectively a safety net for residual legacy rows.
+// row is gone. §69 `agent` keys are NOT exempt: they are short-lived, never reactivated, and an
+// expired one is simply deleted here (the cap deletes the oldest of a user's live ones at mint).
 import type { Pool } from "pg";
 
 export async function sweepExpiredTokens(pool: Pool): Promise<number> {
