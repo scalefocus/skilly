@@ -576,6 +576,21 @@ export function catalogOrderBy(sort: CatalogSort | null | undefined, relevance: 
   return `${relevance}${DEPRECATED_LAST_SQL}, s.install_count desc, ${BAYES_RATING_SQL} desc, s.quality_score desc nulls last, (s.official_at is not null) desc, s.title asc, n.slug asc, s.slug asc`;
 }
 
+/** The catalog listing is capped (§15): `GET /api/skills` returns at most this many rows by default… */
+export const CATALOG_LIST_DEFAULT_LIMIT = 60;
+/** …and never more than this, whatever `?limit=` asks for. The response carries no total. */
+export const CATALOG_LIST_MAX_LIMIT = 100;
+/**
+ * The `?limit=` listing parameter (§15): a plain integer 1–100. Anything else — absent, empty,
+ * signed, fractional, out of range, non-numeric — is ignored (`undefined`, so the default applies);
+ * like the other listing parameters it never errors the query.
+ */
+export function parseListLimit(raw: string | null | undefined): number | undefined {
+  if (raw == null || !/^\d{1,3}$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return n >= 1 && n <= CATALOG_LIST_MAX_LIMIT ? n : undefined;
+}
+
 /** The `?minQuality=` facet values (§41.7) — stars thresholds, compared against qualityStars(quality_score). */
 export const MIN_QUALITY_VALUES = [3, 4, 4.5] as const;
 export type MinQuality = (typeof MIN_QUALITY_VALUES)[number];

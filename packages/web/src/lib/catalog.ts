@@ -1,6 +1,6 @@
 // Catalog read helpers (web). SKILLY_SPEC.md §6, §7, §10.
 import { pool } from "./db";
-import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, sharedNamespaceIdsSql, seesViaGrantOnly, resolveSkillSearch, catalogOrderBy, collectionEligibleSql, type EffectiveAccess, type MatchMode } from "@skilly/shared";
+import { resolveLatest, resolveDownloadExt, skillVisibilityWhere, sharedNamespaceIdsSql, seesViaGrantOnly, resolveSkillSearch, catalogOrderBy, collectionEligibleSql, CATALOG_LIST_DEFAULT_LIMIT, CATALOG_LIST_MAX_LIMIT, type EffectiveAccess, type MatchMode } from "@skilly/shared";
 import { minQualityScore, qualityStars, type MinQuality, type QualityMode } from "@skilly/shared";
 import { deprecationLite, successorJsonSql, type DeprecationLite, type SuccessorJson } from "@skilly/shared";
 
@@ -11,6 +11,7 @@ export function qualitySummary(score: number | null | undefined, mode: QualityMo
 }
 import { M } from "./metrics";
 import { createTtlCache } from "./ttlCache";
+import { skillCountsFromTypes, type VisibleSkillCounts } from "./skillCounts";
 import { hypeCardStats, topHypedSkillIds, type HypeCardStat } from "./hype";
 import { upstreamCardUpdates } from "./upstreamReleases";
 import type { GrantView } from "./grants";
@@ -362,7 +363,9 @@ export async function searchCatalog(
   // probe sees exactly the rows this listing can show. The same call backs the header dropdown and
   // the worker's MCP search_skills, so the three surfaces match and rank identically.
   const engine = await resolveSkillSearch(pool, opts.q, where, params);
-  params.push(Math.min(100, opts.limit ?? 60));
+  // The listing is capped and carries no total (§15) — never count its rows for display; the
+  // Overview tiles read visibleSkillCounts below instead (§10).
+  params.push(Math.min(CATALOG_LIST_MAX_LIMIT, opts.limit ?? CATALOG_LIST_DEFAULT_LIMIT));
   const limitIdx = params.length;
 
   // Relevance (the default sort): match-quality tier → popularity → the Bayesian-smoothed rating
@@ -693,6 +696,15 @@ const facetsCache = createTtlCache<Facets>(FACETS_TTL_MS);
 export async function listFacets(access: EffectiveAccess): Promise<Facets> {
   const key = access.isPlatformAdmin ? "admin" : [...access.namespaceRoles.keys()].sort().join(",");
   return facetsCache.get(key, () => computeFacets(access));
+}
+
+/**
+ * The Overview's "Skills visible to you / Hosted / External" tiles (§10) — TRUE totals, read from
+ * the same cached, visibility-filtered facet computation as the catalog's Source chips, so the two
+ * pages can never disagree. Never derive these from a listing's row count: searchCatalog is capped.
+ */
+export async function visibleSkillCounts(access: EffectiveAccess): Promise<VisibleSkillCounts> {
+  return skillCountsFromTypes((await listFacets(access)).types);
 }
 
 async function computeFacets(access: EffectiveAccess): Promise<Facets> {

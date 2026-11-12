@@ -109,6 +109,7 @@ export const PARALLEL: readonly string[] = [
   "last-watched-card.spec.ts",
   "new-version-metadata.spec.ts",
   "notifications.spec.ts",
+  "overview.spec.ts", // read-only: compares the home page with the responses it received
   "quick-start.spec.ts",
   "repo-import.spec.ts", // write-free: the scan, submit and AI draft endpoints are route stubs
   "skill-detail.spec.ts",
