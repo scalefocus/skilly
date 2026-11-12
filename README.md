@@ -88,6 +88,11 @@ one repo, each version = an immutable tag. The `<token>` is a skill-scoped, reus
 **install token** minted per user (revoked by uninstall; SKILLY_SPEC.md §23), embedded as
 git basic-auth in the URL.
 
+**Desktop agents (AION).** An agent that signs its user in with Entra can sync all of that
+user's skills with one call — `POST /api/agent/v1/sync` with an Entra access token — and clone
+them with the short-lived key it returns. Off by default; see
+[docs/agent-sync-api.md](docs/agent-sync-api.md) for the contract and the Entra setup.
+
 > **Running your own registry instead?** Everything below — prerequisites, testing, local
 > dev, and deployment — is for **operators self-hosting skilly**. Jump straight to
 > [Deployment](#deployment-self-hosted-production).
@@ -319,6 +324,10 @@ Grep `process.env.` under `packages/*/src` for the full list and defaults.
   only the service mailbox user, and add redirect URI `https://<host>/api/admin/email/callback`.
   Put its id/secret into `ENTRA_EMAIL_CLIENT_ID`/`ENTRA_EMAIL_CLIENT_SECRET`, set
   `EMAIL_TOKEN_ENC_KEY`, then connect the mailbox from the Administration page.
+- **Agent sync API (optional)** — for desktop agents such as AION: expose the delegated scope
+  `Skills.Sync` on the OIDC app registration, switch it to v2 access tokens, authorize the agent's
+  client ID, and set `SKILLY_AGENT_API_ENABLED=true`. Step by step in
+  [docs/agent-sync-api.md](docs/agent-sync-api.md#ops-checklist-entra-admin).
 
 ### 3. Bring it up
 ```bash

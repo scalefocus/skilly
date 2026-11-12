@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildInstallSource,
   buildInstallCommand,
+  buildRepoUrl,
   versionTag,
   parseInstallCommand,
   normalizeSubdir,
@@ -33,6 +34,15 @@ test("public skill (no token) omits credentials", () => {
     semver: "3.1.4",
   });
   assert.equal(url, "https://skilly.example.com/global/lint.git#v3.1.4");
+});
+
+test("repo URL (§69.4 gitUrl) carries no credentials and no ref", () => {
+  const url = buildRepoUrl({ registryBaseUrl: "https://skilly.example.com/", namespaceSlug: "global", skillSlug: "case-study-creator" });
+  assert.equal(url, "https://skilly.example.com/global/case-study-creator.git");
+  assert.ok(!url.includes("@") && !url.includes("#"));
+  // The same repo an install source names — only the credential and the tag differ.
+  const install = buildInstallSource({ registryBaseUrl: "https://skilly.example.com", namespaceSlug: "global", skillSlug: "case-study-creator", semver: "1.0.1", token: "k" });
+  assert.equal(install, `https://x-access-token:k@skilly.example.com/global/case-study-creator.git#${versionTag("1.0.1")}`);
 });
 
 test("a recognized non-generic agent appends --agent at the end", () => {

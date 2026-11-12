@@ -5,4 +5,4 @@
 //   patch — fixes, styling, copy, small tweaks
 //   minor — new features / behaviors / endpoints / migrations
 //   major — breaking changes (install contract, API shapes, config)
-export const APP_VERSION = "2.57.1";
+export const APP_VERSION = "2.58.0";

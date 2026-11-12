@@ -7,6 +7,7 @@ import Credentials from "next-auth/providers/credentials";
 import { pool } from "./db";
 import { fetchEntraDirectoryProfile, saveDirectoryProfile } from "./directory";
 import { resolveDevSignInOid } from "./devAuth";
+import { syncSignInIdentity } from "./signInIdentity";
 
 // DEV-ONLY: a credentials provider that signs in a seeded user without a password. Gated by
 // SKILLY_DEV_AUTH=1 so it is NEVER present in production builds/runtime. Used for local visual/dev
@@ -69,44 +70,11 @@ export const authOptions: NextAuthOptions = {
       // Only overwrites display_name when it is blank or was wrongly set to the raw OID.
       if (profile && token.oid) {
         const p = profile as { name?: string; email?: string; preferred_username?: string };
-        const name = p.name ?? "";
-        const email = p.email ?? p.preferred_username ?? "";
-        // Self-heal a mis-keyed identity BEFORE the profile sync below (which matches on
-        // entra_object_id = oid). skilly keys users on entra_object_id = the OIDC `oid` (the Entra
-        // directory objectId GUID), but SCIM provisioning sets entra_object_id from the SCIM
-        // `externalId` — whose Entra DEFAULT attribute mapping is `mailNickname`, NOT the objectId.
-        // A row provisioned that way is keyed on the wrong id and can NEVER be found at login. When
-        // no row owns this oid yet, relink the row found by the authenticated user's email/UPN to
-        // this oid. Idempotent (skipped once a row owns the oid), erased users excluded, at most one
-        // row relinked. Within a single Entra tenant emails/UPNs are unique, so the match identifies
-        // exactly one person. AWAITED (unlike the cosmetic syncs) because access resolution keys on
-        // the oid right after sign-in. SKILLY_SPEC.md §5.
-        const emails = [...new Set([p.email, p.preferred_username].filter((s): s is string => !!s).map((s) => s.toLowerCase()))];
-        if (emails.length) {
-          try {
-            await pool.query(
-              `UPDATE users SET entra_object_id = $1, updated_at = now()
-                 WHERE id = (SELECT id FROM users
-                              WHERE lower(email) = ANY($2::text[]) AND entra_object_id <> $1
-                                AND erased_at IS NULL
-                              ORDER BY created_at ASC LIMIT 1)
-                   AND NOT EXISTS (SELECT 1 FROM users WHERE entra_object_id = $1)`,
-              [token.oid, emails],
-            );
-          } catch { /* non-fatal: correctly-keyed rows already match by oid */ }
-        }
-        if (name) {
-          void pool
-            .query(
-              `UPDATE users
-               SET display_name = $1,
-                   email = CASE WHEN (email IS NULL OR email = '') THEN $2 ELSE email END
-               WHERE entra_object_id = $3
-                 AND (display_name IS NULL OR display_name = '' OR display_name = $3)`,
-              [name, email, token.oid],
-            )
-            .catch(() => {});
-        }
+        // The identity step (self-heal relink of a mis-keyed row, then the blank-name backfill) is
+        // ONE function shared with the agent sync API (§69.3), so both resolve a person the same
+        // way. The relink is awaited inside it — access resolution keys on the oid right after
+        // sign-in — and the cosmetic backfill is fire-and-forget. SKILLY_SPEC.md §5.
+        await syncSignInIdentity({ oid: token.oid as string, name: p.name, email: p.email, preferredUsername: p.preferred_username });
       }
       // Sign-in only (user is present): persist the Entra profile photo the provider
       // fetched via Graph (small data URI) so maintainer bubbles can show it for OTHER

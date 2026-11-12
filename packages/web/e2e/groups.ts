@@ -66,6 +66,7 @@ export const GROUPS: Readonly<Record<string, { shares: string; specs: readonly s
   installs: {
     shares: "the seeded skills' install counts and the install leaderboard",
     specs: [
+      "agent-installed.spec.ts", // the signed-in user's own web-scraper rows (§69.7), like already-installed
       "already-installed.spec.ts",
       "install-command.spec.ts",
       "installed-freshness.spec.ts",

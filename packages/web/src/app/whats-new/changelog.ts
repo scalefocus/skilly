@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.58.0",
+    date: "2026-11-12",
+    summary:
+      "AION can now keep your skills in sync automatically: it signs in with your Microsoft account and installs, updates and removes every skill you can see in the catalog, with no install command to copy. Skills AION installed show under Installed skills with the client “AION”. Administrators switch this on per registry (see docs/agent-sync-api.md); it is off by default.",
+  },
+  {
     version: "2.57.1",
     date: "2026-11-12",
     summary:

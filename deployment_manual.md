@@ -221,6 +221,9 @@ admin. `SKILLY_DEV_AUTH` is **dev-only** and must never be enabled in production
 | `POINTER_REFRESH_INTERVAL_MS` | worker | no | Pointer re-scan/drift cadence (default 24h) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | worker | no | Email notification delivery (in-app always works) |
 | `NOTIFY_WEBHOOK_URL` | worker | no | Outbound webhook (Teams/Slack) for notifications |
+| `SKILLY_AGENT_API_ENABLED` | web | no | `true` turns on the agent sync API (§69, [docs/agent-sync-api.md](docs/agent-sync-api.md)); default off (the route answers 404) |
+| `SKILLY_AGENT_API_AUDIENCE` | web | no | The `aud` an agent's Entra access token must carry; default `ENTRA_CLIENT_ID` |
+| `SKILLY_AGENT_KEY_TTL_HOURS` | web | no | Agent key lifetime in hours, 1–24 (default 12) |
 | `SKILLY_DEV_AUTH` / `SKILLY_DEV_OID` | web | no | **Dev only** — enable the password-less "Dev sign-in" provider |
 
 > **Secrets** are injected via env / mounted only — never commit `deploy/.env` or `.env.local`.
@@ -384,6 +387,11 @@ clones a git repo. From a skill's page, **Generate install command**:
 
 The git smart server (worker) validates the token, enforces visibility, and logs the fetch
 (never the credentials).
+
+**Desktop agents (AION).** With the agent sync API enabled, an agent exchanges its user's Entra
+access token for the list of skills that user may see and a short-lived key that clones any of
+them. It needs a delegated `Skills.Sync` scope on the app registration (§7) — follow the ops
+checklist in [docs/agent-sync-api.md](docs/agent-sync-api.md#ops-checklist-entra-admin).
 
 ---
 

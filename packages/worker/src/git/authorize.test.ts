@@ -23,6 +23,7 @@ function deps(over: Partial<GitAuthDeps> = {}): GitAuthDeps {
     async findSkill(_ns, slug) {
       if (slug === "org-skill") return orgSkill;
       if (slug === "ns-skill") return nsSkill;
+      if (slug === "archived-skill") return { ...orgSkill, id: "s9", status: "archived" };
       return null;
     },
     async validateToken(raw) {
@@ -39,6 +40,11 @@ function deps(over: Partial<GitAuthDeps> = {}): GitAuthDeps {
       if (raw === "mkt-public") return { userId: "u2", tokenId: "m1", type: "marketplace", scopedMarketplace: { kind: "public" }, scopedNamespaceId: null, lastServedCommit: null, isSystem: false } as TokenPrincipal;
       if (raw === "mkt-ns") return { userId: "u1", tokenId: "m2", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-a" }, scopedNamespaceId: NS_A, lastServedCommit: "abc", isSystem: false } as TokenPrincipal;
       if (raw === "mkt-ns-outsider") return { userId: "u2", tokenId: "m3", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-a" }, scopedNamespaceId: NS_A, lastServedCommit: null, isSystem: false } as TokenPrincipal;
+      // §69 agent keys — user-scoped: u1 is a member of NS_A, u2 of nothing.
+      if (raw === "agent-member") return { userId: "u1", tokenId: "a1", type: "agent", isSystem: false } as TokenPrincipal;
+      if (raw === "agent-outsider") return { userId: "u2", tokenId: "a2", type: "agent", isSystem: false } as TokenPrincipal;
+      if (raw === "agent-inactive") return { userId: "u-gone", tokenId: "a3", type: "agent", isSystem: false, ownerInactive: true } as TokenPrincipal;
+      if (raw === "agent-ownerless") return { userId: null, tokenId: "a4", type: "agent", isSystem: false } as TokenPrincipal;
       if (raw === "mkt-other-ns") return { userId: "u1", tokenId: "m4", type: "marketplace", scopedMarketplace: { kind: "namespace", namespaceSlug: "team-b" }, scopedNamespaceId: "nsid-b", lastServedCommit: null, isSystem: false } as TokenPrincipal;
       return null;
     },
@@ -308,4 +314,69 @@ test("namespace skill shared with another namespace: grantee member allowed, ref
     resolveAccess: granteeAccess,
   }));
   assert.deepEqual(revoked, { allow: false, status: 403, reason: "not authorized for this namespace", refusal: { code: "install_token_not_visible", ownerUserId: "u2", tokenId: "t3" } });
+});
+
+// ── §69 agent keys ─────────────────────────────────────────────────────────────────────────────
+const skillReq = (slug: string, isServiceRpc = false) =>
+  ({ namespaceSlug: "team-a", skillSlug: slug, marketplace: null, operation: "upload-pack" as const, isServiceRpc });
+
+test("agent key: clones ANY visible skill — org-visible, and a restricted one of the owner's namespace", async () => {
+  const org = await authorizeGitRequest(skillReq("org-skill"), "agent-member", deps());
+  assert.equal(org.allow && org.kind === "skill" && org.skill.id, "s1");
+  const ns = await authorizeGitRequest(skillReq("ns-skill", true), "agent-member", deps());
+  assert.equal(ns.allow && ns.kind === "skill" && ns.skill.id, "s2");
+  // An outsider's key still clones org-visible skills.
+  assert.equal((await authorizeGitRequest(skillReq("org-skill"), "agent-outsider", deps())).allow, true);
+});
+
+test("agent key: restricted outside membership, archived and missing are ALL the same 404", async () => {
+  const notFound = (tokenId: string, ownerUserId: string) =>
+    ({ allow: false, status: 404, reason: "skill not found", refusal: { code: "agent_key_not_visible", ownerUserId, tokenId } });
+  assert.deepEqual(await authorizeGitRequest(skillReq("ns-skill"), "agent-outsider", deps()), notFound("a2", "u2"));
+  assert.deepEqual(await authorizeGitRequest(skillReq("archived-skill"), "agent-member", deps()), notFound("a1", "u1"));
+  assert.deepEqual(await authorizeGitRequest(skillReq("no-such-skill"), "agent-member", deps()), notFound("a1", "u1"));
+});
+
+test("agent key: a skill shared with the owner's namespace (§42) is visible; revoking the grant hides it on the next request", async () => {
+  const NS_B = "nsid-b";
+  const granteeAccess = async () => resolveAccess(new Set(["g-b"]), [{ id: "m9", groupId: "g-b", namespaceId: NS_B, role: "namespace_member" }]);
+  const shared = await authorizeGitRequest(skillReq("ns-skill"), "agent-outsider", deps({
+    async findSkill() { return { ...nsSkill, sharedNamespaceIds: [NS_B] }; },
+    resolveAccess: granteeAccess,
+  }));
+  assert.equal(shared.allow, true);
+  const revoked = await authorizeGitRequest(skillReq("ns-skill"), "agent-outsider", deps({
+    async findSkill() { return { ...nsSkill, sharedNamespaceIds: [] }; },
+    resolveAccess: granteeAccess,
+  }));
+  assert.equal(revoked.allow === false && revoked.status, 404);
+});
+
+test("agent key: visibility is re-resolved on EVERY request, org-visible skills included", async () => {
+  let resolved = 0;
+  const counting = deps({ async resolveAccess(userId) { resolved++; return resolveAccess(userId === "u1" ? new Set(["g-a"]) : new Set(), mappings); } });
+  await authorizeGitRequest(skillReq("org-skill"), "agent-member", counting);
+  await authorizeGitRequest(skillReq("org-skill", true), "agent-member", counting);
+  await authorizeGitRequest(skillReq("ns-skill"), "agent-member", counting);
+  assert.equal(resolved, 3);
+});
+
+test("agent key: an inactive owner gets the generic 401; an ownerless row never authorizes", async () => {
+  assert.deepEqual(await authorizeGitRequest(skillReq("org-skill"), "agent-inactive", deps()), {
+    allow: false, status: 401, reason: "invalid or expired token", refusal: { code: "install_token_owner_inactive", ownerUserId: "u-gone", tokenId: "a3" },
+  });
+  const ownerless = await authorizeGitRequest(skillReq("org-skill"), "agent-ownerless", deps());
+  assert.equal(ownerless.allow === false && ownerless.status, 401);
+});
+
+test("agent key: refused at a marketplace (403) and on push (403)", async () => {
+  assert.deepEqual(await authorizeGitRequest(mktPath("_public")!, "agent-member", deps()), { allow: false, status: 403, reason: "token is scoped to a different marketplace" });
+  const push = await authorizeGitRequest({ ...skillReq("org-skill", true), operation: "receive-pack" }, "agent-member", deps());
+  assert.equal(push.allow === false && push.status, 403);
+});
+
+test("agent key: an install token is still bound to its own skill (unchanged)", async () => {
+  // The agent branch must not widen install tokens: good-org (scoped to s1) still can't open s2.
+  const d = await authorizeGitRequest(skillReq("ns-skill"), "good-org", deps());
+  assert.equal(d.allow === false && d.status, 404);
 });

@@ -6,7 +6,7 @@
 import { pool } from "./db";
 import { tryAward } from "./achievements";
 import { installTokenKey, sealInstallToken } from "@skilly/shared/install-crypto";
-import { generateToken, hashToken, deriveFreshness, deprecationLite, successorJsonSql, type DeprecationLite, type EffectiveAccess, type Freshness, type SuccessorJson } from "@skilly/shared";
+import { generateToken, hashToken, deriveFreshness, deprecationLite, skillVisibilityWhere, successorJsonSql, type AgentInstallSource, type DeprecationLite, type EffectiveAccess, type Freshness, type SuccessorJson } from "@skilly/shared";
 import { M } from "./metrics";
 import type { ExistingInstall } from "./installMint";
 
@@ -107,8 +107,14 @@ export async function listClaimedInstallsForSkill(userId: string, skillId: strin
   return rows.map((r) => ({ id: r.id, pinnedSemver: r.pinned_semver, installedAt: r.used_at, expiresAt: r.expires_at, inactive: r.inactive }));
 }
 
+/** What a row on the Installed page is: an install token, or a record of a skill a desktop agent
+ *  cloned with an agent key (§69.7) — a record, not a credential. */
+export type InstallSource = "install" | AgentInstallSource;
+
 export interface InstallView {
   id: string;
+  /** `install` = an install token (§23); `aion` = an agent install record (§69.7). */
+  source: InstallSource;
   namespaceSlug: string;
   skillSlug: string;
   title: string;
@@ -169,6 +175,7 @@ function toInstallView(r: InstallRow, access: EffectiveAccess, keyConfigured: bo
   const { freshness, latestSemver } = deriveFreshness({ lastServedSemver: r.last_served_semver, activeSemvers: r.active_semvers });
   return {
     id: r.id,
+    source: "install",
     namespaceSlug: r.ns_slug,
     skillSlug: r.skill_slug,
     title: r.title,
@@ -199,6 +206,87 @@ export async function listInstalls(userId: string, access: EffectiveAccess): Pro
   );
   const keyConfigured = installTokenKey() !== null;
   return rows.map((r) => toInstallView(r, access, keyConfigured));
+}
+
+/**
+ * The user's AGENT install records (§69.7): skills a desktop agent cloned with an agent key. Shaped
+ * like an install row so the Installed page lists them together, but they are records, not tokens —
+ * never pinned, never expiring, never revealable. Filtered by the shared visibility predicate AT
+ * READ TIME (invariant #3): a skill the user can no longer see leaves the list at once; its row is
+ * pruned by the next sync.
+ */
+export async function listAgentInstalls(userId: string, access: EffectiveAccess): Promise<InstallView[]> {
+  const params: unknown[] = [userId];
+  const vis = skillVisibilityWhere(access, params);
+  const { rows } = await pool.query<{
+    id: string; source: AgentInstallSource; first_cloned_at: string; last_cloned_at: string;
+    last_served_semver: string | null; client_user_agent: string | null; client_ip: string | null;
+    ns_slug: string; skill_slug: string; title: string; skill_status: "active" | "archived";
+    icon_sha256: string | null; icon_emoji: string | null;
+    deprecated_at: string | null; deprecation_note: string | null; successor: SuccessorJson | null;
+    active_semvers: string[];
+  }>(
+    `select a.id, a.source, a.first_cloned_at, a.last_cloned_at, a.last_served_semver,
+            a.client_user_agent, a.client_ip,
+            n.slug as ns_slug, s.slug as skill_slug, s.title, s.status as skill_status,
+            s.icon_sha256, s.icon_emoji,
+            s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor,
+            v.active_semvers
+       from agent_installs a
+       join skills s on s.id = a.skill_id
+       join namespaces n on n.id = s.namespace_id
+       left join lateral (
+         select coalesce(array_agg(sv.semver), '{}') as active_semvers
+           from skill_versions sv where sv.skill_id = s.id and sv.status = 'active'
+       ) v on true
+      where a.user_id = $1${vis ? ` and ${vis}` : ""}
+      order by lower(s.title) asc, a.first_cloned_at desc`,
+    params,
+  );
+  return rows.map((r) => {
+    const { freshness, latestSemver } = deriveFreshness({ lastServedSemver: r.last_served_semver, activeSemvers: r.active_semvers });
+    return {
+      id: r.id,
+      source: r.source,
+      namespaceSlug: r.ns_slug,
+      skillSlug: r.skill_slug,
+      title: r.title,
+      pinnedSemver: null,
+      installedAt: r.first_cloned_at,
+      expiresAt: null,
+      inactive: false,
+      clientUserAgent: r.client_user_agent,
+      clientIp: r.client_ip,
+      skillArchived: r.skill_status === "archived",
+      skillDeprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
+      icon: r.icon_sha256 || r.icon_emoji ? { url: r.icon_sha256 ? `/skill-icons/${r.icon_sha256}.png` : null, emoji: r.icon_emoji } : null,
+      lastServedSemver: r.last_served_semver,
+      lastClonedAt: r.last_cloned_at,
+      latestSemver,
+      freshness,
+      revealable: false,
+    };
+  });
+}
+
+/**
+ * Remove one agent install record (§69.7) — owner-scoped. Deletes the RECORD only: the agent's
+ * local copy is untouched and the entry returns the next time the agent fetches the skill.
+ */
+export async function removeAgentInstall(userId: string, id: string): Promise<boolean> {
+  const { rowCount } = await pool.query(`delete from agent_installs where id = $1 and user_id = $2`, [id, userId]);
+  return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Everything the Installed page's Mine scope lists: the user's install tokens plus their agent
+ * install records, in the order either list alone would have (title A–Z, newest first).
+ */
+export async function listMyInstalls(userId: string, access: EffectiveAccess): Promise<InstallView[]> {
+  const [tokens, agent] = await Promise.all([listInstalls(userId, access), listAgentInstalls(userId, access)]);
+  return [...tokens, ...agent].sort(
+    (a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()) || Date.parse(b.installedAt) - Date.parse(a.installedAt),
+  );
 }
 
 export interface SystemInstallView extends InstallView {

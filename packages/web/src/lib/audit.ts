@@ -13,13 +13,16 @@ export interface AuditEntry {
   before?: unknown;
   after?: unknown;
   requestId?: string | null;
+  /** Where the action came from. Default `web` (a browser session); `api` = a machine endpoint
+   *  authenticated by something other than the session — the agent sync API (§69.8). */
+  source?: "web" | "api";
 }
 
 export async function appendAudit(db: Pool | PoolClient, e: AuditEntry): Promise<void> {
   await db.query(
     `insert into audit_log
        (actor_user_id, action, target_type, target_id, namespace_id, before, after, source, request_id)
-     values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,'web',$8)`,
+     values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$9::audit_source,$8)`,
     [
       e.actorUserId,
       e.action,
@@ -29,6 +32,7 @@ export async function appendAudit(db: Pool | PoolClient, e: AuditEntry): Promise
       e.before == null ? null : JSON.stringify(e.before),
       e.after == null ? null : JSON.stringify(e.after),
       e.requestId ?? null,
+      e.source ?? "web",
     ],
   );
 }

@@ -74,6 +74,13 @@ export interface GitServerDeps extends GitAuthDeps {
    */
   logAccess(skillId: string, userId: string | null, isSystem: boolean, countInstall: boolean): Promise<void>;
   /**
+   * Record a clone or fetch served to a §69 AGENT key — INSTEAD OF markInstallUsed /
+   * stampInstallServed / logAccess: upsert the (user, skill, source) agent install record and write
+   * an access-log row with the agent's source. Display and forensics only — no install count, ledger,
+   * credit or achievement moves (§69.7).
+   */
+  recordAgentClone(input: { userId: string; skillId: string; userAgent: string | null; clientIp: string | null }): Promise<void>;
+  /**
    * Record a refused git request (SKILLY_SPEC.md §23/§25/§49.8): a system_event row — source='worker',
    * the refusal's status and error_code — whose actor is the TOKEN OWNER when the token row
    * matched (the requester is an anonymous machine). Implementations throttle per
@@ -157,8 +164,15 @@ export function gitServer(deps: GitServerDeps, opts: GitServerOptions = {}): Rou
       }
 
       // Per-installation bucket (§22), keyed by the token ROW id — never the credential. A
-      // throttled request stops here: no http-backend, no access log, no freshness stamp.
-      if (decision.principal && opts.tokenLimiter && !opts.tokenLimiter.enforce(decision.principal.tokenId, res)) return;
+      // throttled request stops here: no http-backend, no access log, no freshness stamp. An AGENT
+      // key clones every skill its owner has, so its bucket is (key, skill) — one bucket for the key
+      // alone would throttle a first sync (§69.6).
+      if (decision.principal && opts.tokenLimiter) {
+        const bucket = decision.kind === "skill" && decision.principal.type === "agent"
+          ? `${decision.principal.tokenId}:${decision.skill.id}`
+          : decision.principal.tokenId;
+        if (!opts.tokenLimiter.enforce(bucket, res)) return;
+      }
 
       // "Provisioned" requires ≥1 ref, not just a HEAD file — an empty repo (init'd but never
       // synthesized, e.g. a crash mid-sweep) would otherwise serve a successful but empty clone,
@@ -189,6 +203,16 @@ export function gitServer(deps: GitServerDeps, opts: GitServerOptions = {}): Rou
 
       if (decision.kind === "skill") {
         const principal: TokenPrincipal | null = decision.principal;
+        // §69.7: an agent clone is recorded, not counted — none of the install-token trio below.
+        if (principal?.type === "agent" && principal.userId) {
+          await deps.recordAgentClone({
+            userId: principal.userId,
+            skillId: decision.skill.id,
+            userAgent: req.header("user-agent") ?? null,
+            clientIp: clientIp(req),
+          });
+          return;
+        }
         // markInstallUsed runs BEFORE logAccess because a system installation bumps install_count
         // exactly once — on its first clone — and only markInstallUsed knows whether this was it.
         const firstUse = principal

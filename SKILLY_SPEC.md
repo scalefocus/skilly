@@ -52,6 +52,7 @@ Every decision below was explicitly confirmed.
 | Try before install | **Chat with the AI integration with a skill loaded** (§61), from the skill page's Install card: behind a platform switch (off by default) and only while the integration is *Operational*. The version's `SKILL.md`, scripts and references plus the user's typed messages go to the provider; no tools, no stored conversation, per-user caps |
 | Search gaps | **What people search for and don't find** (§62), with no identity attached: opt-in (off by default), recorded on an explicit search only, counted per day under a salt deleted after the day. A periodic sweep groups them into gaps; while the AI integration is operational it drafts a synonym or a skill request for each. Platform admins accept or dismiss every one on `/admin/search-gaps`; accepted requests are posted by *Platform*. |
 | Usage insights | **How often a skill is used, not only installed** (§68): every marketplace plugin carries a small reporting hook that tells skilly which skill, version and trigger Claude Code invoked — only for people who ticked *Share usage* and hold a usage key. Uses per skill, version, trigger and UTC day, people counted per day under a day-salted hash; the third metric of the owner-only `/usage` dashboard. Off by default; a lower bound (`npx skills add` and MCP never report) |
+| Agent sync API | **A desktop agent keeps a user's skills in step without manual keys** (§69; first client: AION). `POST /api/agent/v1/sync` takes an **Entra access token** (scope `Skills.Sync`) and returns every skill the user may see plus one **short-lived agent key** (12 h default, 24 h max) that the git gateway accepts for cloning any of them, visibility re-checked on every request. The token only authenticates: roles still come from SCIM, and the API never creates a user. Agent installs are **listed on the Installed page (client AION) but not counted** as adoption. Off by default (env) |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
 | Deployment | **docker compose** (6 core services + git-perms init + dev proxy); **Helm/K8s now shipped** (§16 #19) |
@@ -223,12 +224,16 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **Append-only is grant-enforced AND trigger-enforced.** Migration 0002 revoked UPDATE/DELETE from the app role; migration 0024 re-granted them for the admin trim and let `audit_guard()` yield to a session-settable GUC — which left any SQL executed under the app connection able to delete audit rows and re-baseline the chain (October 2026 OWASP review, V12). Migration **0096** closes that: UPDATE/DELETE are **revoked from `skilly_app` again**, the trim runs inside a `SECURITY DEFINER` function `trim_audit_log(actor, older_than)` owned by the migration role, and `audit_guard()` yields **only inside that function** (§49.6). So the literal "DB role lacks UPDATE/DELETE" is true again, and the single delete path is one the app cannot forge.
 
 ### `access_log` (separate, high-volume; restricted-skill fetches)
-- `id`, `actor_user_id`, `skill_version_id`, `skill_id` (nullable FK, `ON DELETE SET NULL` — links a fetch to its skill even when the exact version isn't resolved; powers install analytics, §21), `source`, `created_at`, `is_system` (BOOLEAN default false — the clone presented a **system installation** token, §23; distinguishes system clones from legacy anonymous/tokenless rows, both of which have `actor_user_id = NULL`).
+- `id`, `actor_user_id`, `skill_version_id`, `skill_id` (nullable FK, `ON DELETE SET NULL` — links a fetch to its skill even when the exact version isn't resolved; powers install analytics, §21), `source`, `created_at`, `is_system` (BOOLEAN default false — the clone presented a **system installation** token, §23; distinguishes system clones from legacy anonymous/tokenless rows, both of which have `actor_user_id = NULL`). A clone made with a §69 **agent key** is recorded with `source = 'aion'` instead of `'git'`, which keeps it out of every §21 metric (they read `source = 'git'`).
 
 ### `tokens`
-- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), **`last_served_semver`** (TEXT, nullable — the semver the gateway last served this install, migration **0083**, §23 *Installed-version freshness*; a plain string, deliberately **not** an FK to `skill_versions` so a later version delete leaves the row readable), **`last_cloned_at`** (TIMESTAMPTZ, nullable — when that serving happened; both NULL on `marketplace` tokens), **`token_enc`** (TEXT, nullable — the raw `install` token AES-256-GCM-encrypted under `INSTALL_TOKEN_ENC_KEY`, migration **0095**, §23 *Show install URL*; never logged, never in audit payloads, never read by the gateway; NULL for pre-0095 rows, rows minted without the key, and all `marketplace` tokens), `created_at`.
+- `id`, `user_id` (**NULL for system installations**, §23), `type` (`install` | **`marketplace`** (§30) | **`agent`** (§69); `pat`/`one_time` are dormant legacy enum values — their **rows were purged** by migration 0029, but the enum labels can't be dropped so they persist), `hashed_token`, `skill_id` (FK → `skills`, `ON DELETE CASCADE`), `pinned_semver` (`null` = latest), `scope`, `label` (optional human label, legacy PAT field still present), `expires_at` (`null` = never), `used_at` (first install / `null` = generated-unused), `client_user_agent` (captured at first use), `is_system` (BOOLEAN default false — a **system installation**, §23; a CHECK enforces `is_system = (user_id IS NULL)` for `install` rows), `created_by_user_id` (nullable FK → `users`, `ON DELETE SET NULL` — the platform admin who minted a system install, provenance only), **`last_served_semver`** (TEXT, nullable — the semver the gateway last served this install, migration **0083**, §23 *Installed-version freshness*; a plain string, deliberately **not** an FK to `skill_versions` so a later version delete leaves the row readable), **`last_cloned_at`** (TIMESTAMPTZ, nullable — when that serving happened; both NULL on `marketplace` tokens), **`token_enc`** (TEXT, nullable — the raw `install` token AES-256-GCM-encrypted under `INSTALL_TOKEN_ENC_KEY`, migration **0095**, §23 *Show install URL*; never logged, never in audit payloads, never read by the gateway; NULL for pre-0095 rows, rows minted without the key, and all `marketplace` tokens), `created_at`.
 - **`install` tokens are the durable "installation" handle** (§9, §23): long-lived, **reusable**, skill-scoped, owner-revocable (**system** installations are platform-admin-revocable instead, §23). They are **NOT** deleted on use or expiry — an expired install is *inactive* (reactivatable), an uninstall is a hard delete. Random + scoped; see the invariant-#6 carve-out in §23. **The §29 MCP/OAuth credentials are a separate regime in separate tables** (`oauth_*` below) — header-borne, short-lived and rotating; they never share a row or an enum with `tokens`.
 - **`marketplace` tokens** (§30.4) are the same handle for a **plugin marketplace** rather than a skill: `skill_id` is NULL and the scope is carried by **`marketplace_scope`** (`public` | `namespace`) + **`namespace_id`** (FK → `namespaces`, `ON DELETE CASCADE`; set **iff** scope = `namespace`). `skill_id` is therefore **nullable**, and a CHECK enforces the discriminant: `install` ⇒ `skill_id` NOT NULL ∧ `marketplace_scope` NULL; `marketplace` ⇒ `skill_id` NULL ∧ `marketplace_scope` NOT NULL ∧ (`namespace_id` NOT NULL ⇔ scope = `namespace`). **`last_served_commit`** (TEXT, nullable) is the per-token attribution cursor of §30.7. Same TTL, reuse, reactivate and hard-delete-on-remove semantics as `install`; **`is_system` is never set** — system marketplaces are deferred (§30.4).
+- **`agent` keys** (§69.5, migration 0110) are minted by the agent sync API, one per sync. `skill_id`, `marketplace_scope` and `namespace_id` are NULL, `user_id` and `expires_at` are NOT NULL, `is_system` is false (the CHECK gains this case), and `token_enc` is always NULL. The key is **user-scoped**: the gateway serves any skill its owner can see at the moment of the request. It lives at most 24 hours, a user keeps at most 5 unexpired ones, and expired rows **are** deleted by the token reaper (unlike `install` and `marketplace`). It is not an installation and is never listed in the UI.
+
+### `agent_installs` (migration 0110, detailed in §69.7)
+- One row per **(user, skill, source)** for a skill a desktop agent cloned with an agent key: `id`, `user_id` (FK → `users`, CASCADE), `skill_id` (FK → `skills`, CASCADE), `source` (`aion`), `first_cloned_at`, `last_cloned_at`, `last_served_semver`, `client_user_agent`, `client_ip`. Written by the git gateway, pruned by each sync, listed on the owner's Installed page. **Display only**: it feeds no install count, ledger, leaderboard, achievement or notification.
 
 ### `skill_icons` (migration 0076, §33)
 - `sha256` (PK — the digest of the **normalized** PNG bytes), `bytes` (BYTEA — always a 256×256 PNG, metadata-stripped; typically well under 100 KB), `created_by` (nullable FK → `users`, `ON DELETE SET NULL`, provenance), `created_at`.
@@ -504,6 +509,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 - **Search gaps (§62.3):** nothing to erase — no search-gap row holds a searcher's user id.
 - **Visits (§67.7):** `user_visit_days` is **deleted** and the scrub sets `first_seen = null`, so an erased tombstone never shows a *Visits* row, a *New user* row or the new-user hat (it also reads "No directory information", §28).
 - **Usage insights (§68.6):** the user's `usage_report_keys` row is **deleted** (their Claude Code hook is refused from then on); no usage row holds a user id, so there is nothing else to erase.
+- **Agent sync (§69):** the user's **agent keys** go with their other `tokens` rows, and their `agent_installs` rows are **deleted**. `agent_key.minted` audit rows stay (invariant #5).
 - **Review assignments (§65.9):** the user's **open** proposal assignments are cleared in the erasure transaction (audited `proposal.unassigned`, `reason: "ineligible"`, the erasing admin as actor; the pool is alerted when the proposal waits on reviewers). Decided proposals keep the assignee, now rendered with the tombstone label.
 - **Feature ideas (§60.9):** the user's `pending`, `rejected`, `closed` and `withdrawn` ideas and **all of their votes** are **deleted**; their **published** ideas stay, with no *Suggested by* line; the scrub resets `idea_attribution_hidden = false`, `idea_notifications = true` and `idea_votes_hidden = false`.
 - **`audit_log` is untouched** (immutable, invariant #5) — it retains the actor reference and any name in `before/after`. A new `user.erased` audit row records who erased whom + the transfer summary. (CLAUDE.md's "audit retains actor PII" assumption stands; full audit-PII erasure is explicitly out of scope.)
@@ -519,6 +525,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 ### SSO
 - **OIDC only** via Auth.js + Entra provider. Authentication only. No SAML.
 - The §12 **email service-account connect** flow reuses this same app registration (authorization-code + `Mail.Send`/`offline_access`) but is **not** a sign-in: it creates no skilly session and grants no roles (invariant #1).
+- The §69 **agent sync API** accepts an Entra **access token** issued for this same app registration (delegated scope `Skills.Sync`) on one route, `POST /api/agent/v1/sync`. It is authentication only: it creates no skilly session and no user, and roles still resolve from SCIM (invariant #1). The user is matched on the token's `oid` through the **same identity function** as the sign-in below (*Identity key*), self-heal included.
 - **Sign-out clears all auth cookies.** Beyond Auth.js's `signOut()` (which drops the session
   token), the sign-out flow calls `POST /api/auth/clear-cookies`, a server route that expires every
   remaining auth cookie (the httpOnly CSRF token and any abandoned transient OAuth cookies — they
@@ -619,7 +626,9 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   through `upsertUser`, which writes `status` but never touches tokens), **Graph reconciliation**
   (maps `accountEnabled → status` on upsert), and any other drift. The PATCH path keeps
   hard-deleting tokens (defense in depth); the gate is what guarantees an inactive user's minted
-  URLs stop serving even when deletion didn't happen.
+  URLs stop serving even when deletion didn't happen. §69 **agent keys** are `tokens` rows with an
+  owner, so both the deletion and the gate cover them, and an inactive user's sync is refused with
+  `user_disabled`.
 - **Permanent removal — `DELETE /Users/:id`:** runs the **full GDPR erasure** (the same as the admin "Delete User Info" flow, §4) **without a maintainer transfer** — scrub + detach the row (`entra_object_id → null`, so a later re-provision yields a fresh account), delete the user's personal data (group memberships, ratings, **hypes (§50)**, watches, follows in both directions (§35.9), notifications, tokens, explicit maintainerships), and de-identify messages/proposals/reviews to "`<email> - Deleted`". **Idempotent** (no-op if already erased) and still returns **204**. Records a `user.erased` audit row with a **null actor** and **`source = 'scim'`**. The worker's `eraseUserByExternalId` mirrors web's `lib/eraseUser.ts` (kept in sync).
 - **Authored skills remain** (owned by the namespace, not the individual).
 - **Audit log preserves identity** (provenance survives personnel changes; immutable per invariant #5 — deliberately exempt from erasure, §4).
@@ -1085,6 +1094,10 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 > verbatim, so **credentials embedded in the URL flow to git as HTTP basic auth**. The
 > `.well-known` path is unauthenticated and therefore unusable for restricted skills.
 
+> **§69 adds a second way to obtain a git credential, not a second wire format.** A desktop agent
+> exchanges an Entra access token for a short-lived **agent key** and then clones the same repos,
+> the same tags, with the same `x-access-token:<key>@` basic auth. skilly still ships no CLI.
+
 - **No skilly CLI.** Consumption uses **`npx skills add <source>`**.
 - **skilly serves each skill as a git repository over an authenticated HTTP git smart
   server** (decision locked). One skill = one repo; **each version = an immutable git
@@ -1270,7 +1283,8 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15), except the opt-in, identity-free search-gap log (§62), which the audit log never copies.
   - Governance/identity (namespace create/delete, role-mapping changes, SCIM sync results, **SCIM/reconcile provisioning events** (`user.provisioned`, `user.deactivated`, `user.reactivated`, `group.provisioned`, `group.deleted`, `group.membership_added`, `group.membership_removed` — source `scim`, system actor; §49.7), **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
-- **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
+  - **Agent sync (§69.8):** `agent_key.minted` for every agent key the sync API mints (actor = the user, `source = 'api'`; expiry, client IP, user agent, how many older keys the cap removed; **never the key**). High-volume by design: about ten rows per agent user per working day.
+- **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. Clones made with a §69 agent key land here with `source = 'aion'`. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
   - **Skill quality (§41.10):** `skill.quality_reassess_requested` (actor; skill, version) and `job.quality_rescore_requested` (actor; row count). The sweep's own writes, AI calls and notifications are telemetry, **not audited**.
   - **Policy rules (§47.12):** `policy.rule_created`, `policy.rule_updated` (text before/after + revision numbers), `policy.rule_state_changed`, `policy.rule_deleted`, `proposal.policy_override`, `skill.policy_flagged` (system actor) and `skill.policy_flag_dismissed`; `proposal.routed_to_review` gains `reason: 'policy'`. Re-checks are `ai_prereview.rerun_requested`.
@@ -1544,6 +1558,7 @@ current or future type can ever leak JSON to a user.
 - Postgres URL; object-store endpoint+creds; OIDC (tenant, client id/secret); SCIM bearer token; SMTP; registry base URL; scan config; retention policy; `SKILLY_BOOTSTRAP_ADMIN_GROUP`; **`EMAIL_TOKEN_ENC_KEY`** (32-byte base64 — encrypts the §12 email service-account tokens; shared by web + worker; required only for the Graph email transport). *(The **install-token max TTL** is no longer an env var — it's the global-admin `install_max_ttl_months` platform setting, §23. The legacy `ONE_TIME_TOKEN_TTL_SECONDS` still ships in `.env.example`/compose but is vestigial — install tokens don't use it.)*
 - **`AI_TOKEN_ENC_KEY`** (32-byte base64) — encrypts the §40 AI-integration provider token; shared by **web + worker** (both may call the AI helper); required only to configure or use the AI integration — without it the Administration card is disabled with a config hint. Shipped in `.env.example`, `docker-compose.yml` (web + worker) and the Helm values/secret. The integration itself (provider, URL, token, model, on/off) is **UI-only** — no env override.
 - **`INSTALL_TOKEN_ENC_KEY`** (32-byte base64) — encrypts the recoverable copy of each §23 install token (`tokens.token_enc`) behind **Show install URL**; shared by **web + worker** (the web install endpoint and the worker's MCP `install_skill` both mint and seal; only the web app reveals; the gateway validates by hash and never decrypts). **Optional:** without it installs mint exactly as before with no stored copy, and *Show install URL* never appears for them. Rotating or replacing the key makes previously stored copies unrecoverable (reveal → 409, generate a new one) — no re-encryption tooling in v1. Shipped in `.env.example`, `docker-compose.yml` (web + worker) and the Helm values/secret.
+- **§69 agent sync API — three web env vars, no new secret:** `SKILLY_AGENT_API_ENABLED` (`true` turns the endpoint on; unset = off, the route answers 404), `SKILLY_AGENT_API_AUDIENCE` (the `aud` an Entra access token must carry; defaults to the OIDC client id) and `SKILLY_AGENT_KEY_TTL_HOURS` (1–24, default 12). The tenant is the existing OIDC tenant setting. Agent keys are stored as hashes only, so there is nothing to encrypt. Shipped in `.env.example`, `docker-compose.yml` (web) and the Helm values. The Entra app registration needs the delegated scope `Skills.Sync`, v2 access tokens and the agent as an authorized client (§69.12).
 - **Entra app prerequisites for the §12 Graph email transport** (documented deployment step): the existing skilly app registration needs delegated **`Mail.Send`** + **`offline_access`** admin-consented and the extra redirect URI **`/api/admin/email/callback`** registered. Env-SMTP remains the consent-free fallback.
 - **`CSP_MODE`** (`enforce` default | `report-only` | `off`) selects the Content-Security-Policy posture the web middleware emits (§22 *Content-Security-Policy*): ships **enforcing**; `report-only` is a no-block shakedown; `off` reverts to the legacy `unsafe-inline` policy. Production-only — development always uses the lenient dev policy.
 - **§29 MCP server — no new secret.** OAuth codes/access/refresh tokens are **opaque random values stored as sha256 hashes** (like `tokens.hashed_token`), so there is nothing to encrypt and no signing key to manage; the AS/protected-resource metadata is derived from the existing **registry base URL**, and client-IP attribution reuses **`TRUST_PROXY`** (§23). All tuning is platform settings, not env (`mcp_enabled`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`).
@@ -1853,6 +1868,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Usage analytics (§21)**
 - `GET /api/usage?days=<7|30|90|all>` — dashboard (entitled skills + windows + deltas + allowed aggregate + series). `GET /api/usage/:ns/:slug/breakdown?range=<7d|30d|90d|all>` — owner-only drill-down. *(Param is `range`, not `window`.)* Both gain the **uses** metric while `usage_insights_enabled` is on (§68.7): `usageInsightsEnabled`, per-row `uses` windows (`today`/`d7`/`d30`/`all` + deltas), `uses` in `series[]` / `daily[]`, `sort=uses`; the breakdown's `uses: { series, versions, triggers }`.
+- **Agent sync (§69):** `POST /api/agent/v1/sync` — a **desktop agent's** endpoint: bearer **Entra access token** only (scope `Skills.Sync`; no session, cookies ignored), no body; **200** `{ user, key, keyExpiresAt, gitBaseUrl, skills[] }` with every skill the user may see (`namespace`, `slug`, `title`, `description`, `version`, `ref`, `gitUrl`, `updatedAt`, `deprecation`) and a freshly minted agent key; **401** `invalid_token`, **403** `insufficient_scope` / `user_not_provisioned` / `user_disabled`, **404** while the API is off, **429** past 30/hour per user. Errors are `{ error, message }`. `GET /api/installs` rows gain **`source`** (`install` | `aion`), and `DELETE /api/installs/:id` also removes an agent install record (§69.7).
 - **Usage insights (§68):** `POST /api/usage/reports` — the **Claude Code hook's** endpoint: bearer **usage key** only (no session), body `{ skillId, semver, trigger, eventId }`; **401** indistinguishable for any bad key, **204** for every other outcome (recorded / duplicate / dropped / switch off), **429** past 120/min per key. `POST /api/me/usage-key` (mint; **409** `usage_key_exists`), `POST /api/me/usage-key/regenerate`, `DELETE /api/me/usage-key` (stop sharing); `POST /api/marketplaces/tokens` accepts `shareUsage` and returns `usageKey`; `GET /api/marketplaces` gains `usageSharing`; `usageInsightsEnabled` on `GET|PATCH /api/admin/settings`.
 
 **Audit & system log**
@@ -2487,7 +2503,9 @@ responsibilities. Hardening that pins or clarifies invariants here:
       clones). It is checked **after** a request is authorized, keyed by the token's **row id**
       (`principal.tokenId`) — **never** the raw token or any credential, so no secret is held in
       limiter memory (invariant #6). Every token regime counts (user `install`, system
-      installations, marketplace tokens, legacy `one_time`/`pat`). An authorized request with no
+      installations, marketplace tokens, legacy `one_time`/`pat`). A §69 **agent key** is the one
+      exception to the key: its bucket is **(key row id, skill id)**, same limits, because one
+      agent key clones every skill its owner has and a single bucket would throttle a first sync. An authorized request with no
       token principal is subject only to the per-IP guard. A request that fails authorization
       (401/403/404) never touches a token bucket. When the bucket is exhausted the request gets
       `429` **before** `git http-backend` runs and before any access logging or freshness stamp
@@ -2700,6 +2718,11 @@ clone) turns it into a recorded installation the user can see, expire, reactivat
 > rule, same reactivate, same hard-delete-on-remove. It is scoped to a *marketplace*
 > (public, or one namespace) instead of a skill, and it is **not** eligible for the system
 > carve-out below. Everything in §23 describes `install` tokens unless stated otherwise.
+>
+> **Not an installation:** §69 adds an **`agent`** token type, the short-lived key a desktop agent
+> gets from the sync API. It is user-scoped rather than skill-scoped, is never listed here, and has
+> no generate, reactivate or uninstall. What the Installed page lists for an agent is an
+> **`agent_installs` record** (§69.7), which is not a token.
 
 ### Install token model
 - **Type `install`** on `tokens` (the `pat`/`one_time` enum values are retired; PATs and the
@@ -2851,6 +2874,13 @@ browser only** (MCP still never hands a credential back, §29).
   row exists, **and — for personal tokens (`user_id` set) — the owning user is `status = 'active'`**
   (one query; the users join rides the token lookup). **No one-time-use grace** — reuse is
   intentional. Per-clone analytics (`access_log`, `install_count`, `install_counters`) are unchanged.
+- **Agent keys (§69.6).** `validateToken` also accepts `type='agent'` under the same expiry and
+  owner-status conditions. An agent key is not bound to a skill: the gateway serves any skill that
+  exists, is not archived and passes the shared visibility predicate for the owner **on that
+  request**, and answers the same **404 "skill not found"** otherwise (never a 403, which would
+  reveal a restricted skill's existence to a key that can be pointed anywhere). A served clone
+  writes an `agent_installs` record and an `access_log` row with `source='aion'` **instead of** the
+  first-use stamp, the freshness stamp and `record_git_access`: no counter moves.
 - **Shared namespaces (§42) widen the personal-token clone check, nothing else.** The clone-time
   visibility re-check for a personal install token runs the same shared predicate as the catalog, so a
   member of a grantee namespace clones a shared restricted skill with their own token. **Revoking the
@@ -3011,6 +3041,12 @@ works for both protocol versions).
   per-install actions stay on each child. `GET /api/installs`, `DELETE /api/installs/[id]`,
   `PATCH /api/installs/[id] {expiresAt}`, `GET /api/installs/[id]/command` — owner-checked for personal rows; on **system** rows
   the check is **platform admin** instead (any admin, not just the minter).
+- **Agent rows (§69.7).** The Mine scope also lists the user's **agent install records**: skills a
+  desktop agent cloned with an agent key. `GET /api/installs` marks every row with **`source`**
+  (`install` | `aion`). An agent row shows **AION** as its client, *latest* with the usual
+  freshness line, and no expiry. Its only action is **Remove**, which deletes the record without
+  touching the agent's local copy; it has no *Show install URL*, *Activate* or *Install latest*. It
+  groups, sorts and filters like any row, and never appears in the System installs view.
 - **System installs view (platform admins only):** a **"Mine / System installs" toggle filter**
   at the top of the page, **default Mine** (the personal view above, unchanged; non-admins never
   see the toggle). The **System installs** view lists all **used** system installations
@@ -3452,6 +3488,14 @@ admin, and are **fully revoked** when their owner goes inactive or is erased. Th
 an ordinary personal install token governed entirely by this section — it is listed on `/installed`, it
 **survives the MCP server being switched off**, and **uninstall is the only way to revoke it**; the
 `system` flag is refused over MCP (platform-admin only, and administration is outside the MCP surface).
+
+**§69 agent keys are a fourth regime, traded the other way.** Their scope is **wider** than an
+install token's: every skill the owner can see, not one skill. Everything else is **tighter**: a
+life of 12 hours by default and never more than 24, at most 5 unexpired keys per user, no stored
+copy (hash only, shown once), deletion on expiry, a visibility check on **every** git request for
+**every** skill (org-visible included), and a mandatory audit row per mint. They are minted only in
+exchange for a valid Entra access token, never from the UI, and are accepted by the git gateway
+alone. The blast radius of a leaked agent key is "what one user can read, for at most a day".
 
 **System installations relax the carve-out further** (two more terms): no owning user ("one
 user" in the blast radius becomes "the platform" — managed collectively by platform admins,
@@ -15822,3 +15866,372 @@ absent rather than a dashboard of zeros; switched on with no data yet, zeros wit
 - **e2e:** with the switch on, generating an add command with Share usage ticked shows the key
   block; My marketplaces shows the Usage sharing card and Stop sharing removes it; `/usage` shows the
   uses column and the row's Uses panel for a seeded skill.
+
+---
+
+## 69. Agent sync API
+
+A desktop agent that signs its user in with Microsoft Entra ID can keep that user's skills in step
+with skilly without the user handling a key. The first client is **AION**, Scalefocus's desktop
+assistant. The agent calls one endpoint with an **Entra access token** and gets back every skill the
+user may see plus **one short-lived agent key**. The existing git gateway (§9) accepts that key for
+cloning any of those skills. The agent installs, updates and removes local copies from the list.
+
+**Skills only.** The MCP server (§29) and the plugin marketplaces (§30) are not changed and nothing
+here depends on them. Install tokens, marketplace tokens, the web sign-in and the catalog's
+visibility rules behave exactly as before.
+
+### 69.1 Decisions
+| # | Decision | Why |
+|---|---|---|
+| 1 | **A machine endpoint on web, `POST /api/agent/v1/sync`, authenticated by an Entra access token only.** A session cookie is never accepted on it. | The agent already holds the user's Entra sign-in; a second credential would mean manual key handling, which is what this removes. |
+| 2 | **Off by default**, switched on by env (`SKILLY_AGENT_API_ENABLED=true`). | A new credential-minting surface should not appear on an upgrade. It also needs an Entra change (§69.12) before any token can pass. |
+| 3 | **The token authenticates; it never authorizes.** Roles and namespace membership come from the SCIM-synced tables, exactly as for a web session (invariant #1). No `groups` or `roles` claim is read. | The same person must see the same skills in the agent and in the browser, and Entra's group-claim overage must not matter. |
+| 4 | **The API never creates a user.** A valid token for someone with no skilly account gets `403 user_not_provisioned`. | Accounts come only from SCIM (§5). The web sign-in does not create one either: such a person can browse but cannot install. |
+| 5 | **One agent key per sync: a new `agent` token type**, scoped to *every skill its owner can currently see*, read-only, 12 hours by default and never more than 24. | One key for N skills keeps the client simple. The short life and the per-request visibility check keep the wider scope bounded. |
+| 6 | **Agent installs are shown, not counted.** A skill the agent cloned is listed on the user's Installed page with client **AION**. It adds nothing to install counts, leaderboard credits, *Popular in your department*, related skills, achievements or deprecation notices. | The agent installs every entitled skill for every user. Counting that as adoption would make every one of those numbers the same for every skill. |
+| 7 | **Each sync prunes.** The user's agent install records for skills no longer in the response are deleted. | The agent removes those skills locally and skilly gets no other signal. |
+| 8 | **`ref` is the version's immutable tag** (`v<semver>`), never `main`. | A shallow `git clone --branch <ref>` of a tag is reproducible, and `ref` changes exactly when there is something new to fetch. |
+
+### 69.2 Request and token validation
+`POST /api/agent/v1/sync` with `Authorization: Bearer <Entra access token>`. No body is read. Only
+`POST` is implemented. The response always carries `Cache-Control: no-store`. The token, the minted
+key and the `Authorization` header are never logged.
+
+Checks run in this order, and the first failure answers:
+
+1. **Enabled?** If the API is not enabled (§69.10), **404** `not_found`.
+2. **Bearer token.** A missing header, a scheme other than `Bearer`, or a token that fails any check
+   below is **401** `invalid_token`. Cookies are ignored, so a request with a valid session cookie
+   and no bearer token is a 401.
+   - **Signature:** RS256 only (`none`, HMAC and every other algorithm are refused), verified
+     against the tenant's signing keys at
+     `https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys`. Keys are cached in memory
+     and refreshed once they are a day old, so a key Entra retired stops being accepted. A token
+     whose `kid` is not cached triggers a refetch, **at most once per minute** (after a failed
+     fetch the next try may come 5 seconds later); a `kid` still unknown after that is a 401. With
+     keys cached, a failed refresh keeps validating against them.
+   - **`iss`** equals `https://login.microsoftonline.com/{tenant}/v2.0` (v2 tokens only).
+   - **`tid`** equals the tenant.
+   - **`aud`** equals the configured audience (§69.10).
+   - **`exp` / `nbf`** with 60 seconds of clock skew.
+   - **`oid`** is present and is a GUID.
+   - `{tenant}` is **`ENTRA_TENANT_ID`**, the setting the web sign-in already reads. There is no
+     second tenant setting.
+3. **Scope.** `scp` (space-separated) must contain `Skills.Sync`, else **403**
+   `insufficient_scope`. An app-only token has no `scp` and is refused here: the API serves
+   delegated (user) tokens only.
+4. **Rate limit** (§69.8), keyed on the token's `oid`.
+5. **User** (§69.3).
+
+Verification uses a maintained JOSE library; no signature or claim check is hand-written. If the
+signing keys cannot be fetched and none are cached, the answer is **500** `internal_error` (the
+failure is skilly's, not the caller's).
+
+### 69.3 User resolution
+- **The identity key is the token's `oid`**, matched against `users.entra_object_id`: the key the
+  web sign-in uses (§5 *Identity key*).
+- **One shared function.** The sign-in identity step that today lives inline in the Auth.js `jwt`
+  callback moves into one function that both the callback and this endpoint call: the **self-heal
+  relink** of a row provisioned under a wrong `externalId` (matched by the token's `email` /
+  `preferred_username`, erased users excluded, at most one row, idempotent) and the **backfill of a
+  blank display name**. The web sign-in's behavior does not change. The avatar and directory-profile
+  refreshes stay with the web sign-in: they need a Graph token this endpoint never holds.
+- **No account → 403 `user_not_provisioned`.** No row is created. The person must be inside the
+  Enterprise App's SCIM provisioning scope (§69.12).
+- **Inactive account (`status` ≠ `active`) → 403 `user_disabled`.**
+- **Erased accounts** are detached from their `oid` and their email is scrubbed (§4), so an erased
+  person resolves as `user_not_provisioned`. A later SCIM re-provision gives them a fresh account.
+- **Access** is resolved by the same function a web session uses (`resolveUserAccess(oid)`: SCIM
+  group memberships × `role_mappings`, plus the bootstrap admin group). A platform admin therefore
+  syncs every skill, as they see every skill in the catalog.
+- **A sync is not a visit.** It does not stamp `last_seen`, `first_seen` or a visit day (§4, §67)
+  and does not appear under *Currently online*.
+
+### 69.4 Response
+`200`, `Content-Type: application/json`:
+
+```json
+{
+  "user": { "id": "<skilly user id>", "email": "<email>" },
+  "key": "<agent key>",
+  "keyExpiresAt": "2026-11-13T08:00:00.000Z",
+  "gitBaseUrl": "https://skilly.example.com",
+  "skills": [
+    {
+      "namespace": "global",
+      "slug": "case-study-creator",
+      "title": "Case Study Creator",
+      "description": "…",
+      "version": "1.0.1",
+      "ref": "v1.0.1",
+      "gitUrl": "https://skilly.example.com/global/case-study-creator.git",
+      "updatedAt": "2026-10-01T10:00:00.000Z",
+      "deprecation": null
+    }
+  ]
+}
+```
+
+- **`gitBaseUrl`** is the registry base URL (§13). **`gitUrl`** is `<gitBaseUrl>/<namespace>/<slug>.git`
+  and **never contains credentials**; the key appears only in the top-level `key` field. Both, and
+  `ref`, are built by the pinned adapter (`packages/shared/src/external-tool.ts`: `versionTag` and a
+  new credential-free repo-URL builder), so the wire format still lives in one file.
+- **Which skills.** Every skill that passes all of:
+  - the shared visibility predicate (`skillVisibilityWhere`, invariant #7) for the resolved access:
+    org-visible skills, restricted skills of the user's namespaces, and restricted skills shared
+    with them (§42);
+  - `status = 'active'` (archived skills are left out);
+  - at least one **stable** version that is `status = 'active'` and `git_published`. That one rule
+    leaves out a skill with only yanked or **quarantined** versions (§49.2), a skill with only
+    prerelease versions, a hosted version the publish sweep has not tagged yet, and a **pointer**
+    skill whose mirror is missing or failed. A pointer skill with a mirrored, active stable version
+    is included like a hosted one.
+- **`version`** is the highest stable semver among those versions, resolved by the shared
+  `resolveLatest`: the version `main` points at, so what an unpinned install would get. **`ref`** is
+  its tag, `v<version>`. `git clone --depth 1 --branch <ref> <gitUrl>` with the key works, and an
+  integration test proves it against the real gateway (§69.13).
+- **`updatedAt`** is when that version was published (UTC ISO).
+- **`deprecation`** is the §45.8 light object the Installed page already uses (`skillDeprecation`):
+  `{ note, successor: { namespaceSlug, skillSlug, title } | null }`, the successor named only when
+  the user can see it; `null` when the skill is not deprecated. Deprecated skills **are** included.
+  The response field is the client's only signal: the deprecation hint commit lives on `main`, and
+  tags stay byte-identical (§45).
+- **Order:** `namespace`, then `slug`, ascending by code unit. **No pagination**: every skill is
+  returned.
+- **`(namespace, slug)` identifies a skill; `slug` alone does not.** Two namespaces may each have a
+  skill with the same slug, and both can be in one response.
+
+After the skill list is built, the request **prunes** (§69.7), **mints the key** (§69.5) and writes
+the audit entry (§69.8). Mint, cap and audit entry share one transaction, so a key is never handed
+out without its audit row. A pruning failure is logged and does not fail the sync.
+
+### 69.5 The agent key
+- **Storage:** a `tokens` row with `type = 'agent'` (§3). The raw key comes from the generator
+  install tokens use and is stored **only as its hash** (`hashed_token`). There is no encrypted copy
+  (`token_enc` stays NULL): the key is returned once, in the sync response, and cannot be shown
+  again. `client_user_agent` and `client_ip` record the sync request that minted it.
+- **Owner:** always a user (`user_id` NOT NULL, `is_system = false`). There are no system agent keys.
+- **Scope:** read-only git clone and fetch of **any skill the owner can see at the moment of the
+  request** (§69.6). It is not bound to a skill, a version or a namespace.
+- **Not an API credential.** No HTTP API route accepts it: not the session routes, not this
+  endpoint, not `/api/usage/reports`, not MCP. Only the git gateway reads `tokens`.
+- **Lifetime:** `SKILLY_AGENT_KEY_TTL_HOURS`, default 12, at most 24 (§69.10). `expires_at` is
+  always set.
+- **Cap:** a user keeps at most **5 unexpired agent keys**. The mint inserts the new key, then
+  deletes that user's oldest unexpired agent keys beyond five. A deleted key is refused from then on.
+- **Revocation:** by expiry; by the cap; and with the account: SCIM deprovisioning and GDPR erasure
+  already delete every `tokens` row of the user (§5, §4), and the gateway's owner-status gate (§23)
+  refuses a key whose owner is not active even if the row survived. Expired rows are deleted by the
+  existing token reaper, which exempts only `install` and `marketplace`.
+- **No list, no revoke button.** Agent keys do not appear on the Installed page or anywhere else in
+  the UI.
+
+### 69.6 Gateway
+Only skill repos change; marketplace repos and push handling are untouched.
+
+- **`validateToken`** also accepts `type = 'agent'`, under the same conditions as a personal install
+  token: the row exists, `expires_at` is in the future, and the owner is `status = 'active'`. An
+  expired, deleted or unknown agent key gets the same **401 "invalid or expired token"** as any
+  other bad token, and so does a key whose owner went inactive.
+- **Skill check for an agent key.** The skill must exist, must not be archived, and must pass the
+  shared `isSkillVisible` for the owner's access, **resolved on that request**. The check runs for
+  every skill, org-visible ones included. Any failure is the same **404 "skill not found"** that a
+  missing skill gets. (A personal install token that lost access gets a 403 today, which is safe
+  only because that token already names its skill. An agent key can be pointed at any path, so a
+  403 would reveal that a restricted skill exists.) Loss of access therefore takes effect on the
+  next git request, with no key change.
+- **A marketplace repo** refuses an agent key exactly as it refuses an install token (403).
+  **Push** stays denied for every token.
+- **Rate bucket.** The per-installation bucket (§22) is keyed on **(key row id, skill id)** for an
+  agent key, with the same limits. One key clones every skill the user has, so a bucket per key
+  alone would throttle a first sync.
+- **Refusals** are recorded to the system log as today (§49.8, throttled per client and reason). One
+  new code, `agent_key_not_visible`, covers a valid agent key asking for a skill that is missing,
+  archived or not visible; its actor snapshot is the key's owner.
+- **On a served advertisement** (the once-per-clone `info/refs`, as for install tokens) the gateway
+  writes the agent install record (§69.7). It does **not** call `markInstallUsed`,
+  `stampInstallServed` or `record_git_access`.
+
+### 69.7 Agent install records and the Installed page
+- **`agent_installs`** (§69.11): one row per **(user, skill, source)**. `source` is `aion`: every
+  agent key marks its clones `aion` (a later agent would add a value).
+- **Written by the gateway** on every served clone or fetch with an agent key: an upsert that sets
+  `first_cloned_at`, `client_user_agent` and `client_ip` on the first clone only, and on every clone
+  refreshes `last_cloned_at` and `last_served_semver` (the skill's latest stable at that moment, the
+  same resolution as an unpinned install token). Repeated clones never create a second row. The
+  same call inserts an **`access_log`** row with `source = 'aion'`, the forensic record of who
+  fetched what.
+- **Not counted (decision 6).** Nothing else is written. No `skill_installs` row, so no *installed*
+  mark on catalog cards, no *Popular in your department* contribution and no related-skills signal.
+  No `skills.install_count` bump, no `install_credits` (leaderboard), no monthly
+  `install_counters`. No achievement and no Habits event. The §21 usage dashboard reads `access_log`
+  rows with `source = 'git'`, so agent clones are outside it. The owner is not an "installer" for
+  the `skill.deprecated` fan-out (§45), which reads install tokens.
+- **Pruned by sync:** each successful sync deletes the caller's `agent_installs` rows (source `aion`)
+  whose skill is not in that response.
+- **`GET /api/installs`** (personal scope) returns the user's install tokens as before plus their
+  agent install records. Every row gains **`source`**: `"install"` for a token, `"aion"` for an
+  agent record. An agent row carries `id`, the skill fields, icon, `skillArchived`,
+  `skillDeprecation`, `installedAt` (= `first_cloned_at`), `lastClonedAt`, `lastServedSemver`,
+  `latestSemver`, `freshness`, `clientUserAgent`, `clientIp`, and fixed `pinnedSemver: null`,
+  `expiresAt: null`, `inactive: false`, `revealable: false`. Agent rows are **filtered by the
+  shared visibility predicate at read time**, so a skill the user can no longer see disappears from
+  the list at once and its row is pruned at the next sync. `?scope=system` is unchanged and never
+  includes agent rows. MCP `list_installed_skills` (§29) is unchanged and does not list them.
+- **Installed page.** An agent row shows **AION** as its client (where a token row shows the label
+  derived from `User-Agent`; the raw `User-Agent` stays in the tooltip), *latest* in the version
+  column with the usual freshness line and badges, and no expiry. Its only action is **Remove**
+  (`DELETE /api/installs/:id`, owner-only, unaudited like a personal uninstall), which deletes the
+  record and nothing else. The confirmation says so: *"This removes the entry from this list. It
+  does not uninstall the skill from AION, and the entry returns the next time AION fetches the
+  skill."* There is no *Show install URL* and no *Activate*; `PATCH /api/installs/:id` and
+  `GET /api/installs/:id/command` answer 404 for an agent row. Agent rows group into the skill's
+  card with any token installs of the same skill, and the *Behind latest* chip, the live filter and
+  the sort apply to them like any row. The §45.5 *Install latest* action is offered only when the
+  skill has at least one token install. Agent records never trigger the already-installed prompt
+  (§23).
+- **Lifecycle:** rows go with the skill (FK cascade) and with GDPR erasure (§4). They survive a
+  reversible SCIM disable; nothing can be cloned meanwhile, and the next sync after re-enabling
+  prunes them.
+
+### 69.8 Audit, limits, metrics
+- **Audit:** every mint writes **`agent_key.minted`**: actor = the user, `target_type = 'agent_key'`,
+  `target_id` = the key's row id, `source = 'api'`, payload `{ expiresAt, clientIp, userAgent,
+  revokedKeys }` (how many older keys the cap removed). **Never the key.** Nothing else in this
+  feature is audited: clones land in `access_log`, and Remove is unaudited.
+- **Rate limit:** **30 requests per user per hour** on the existing web limiter (`lib/ratelimit.ts`),
+  keyed on the token's `oid`, checked after the token and scope pass and before any database work.
+  Over the limit: **429** `rate_limited` with `Retry-After`. Requests that go on to fail with a 403
+  count too. Per web instance, like every limit on that utility (§14).
+- **Client IP** is the trusted-proxy client address the DCR limit already uses (`TRUST_PROXY`,
+  §49.9); `null` when it cannot be resolved.
+- **System log (§25):** 401, 403 and 429 on this route are machine traffic and are not recorded.
+  A 500 is recorded with its detail; the response carries only `internal_error`.
+- **Metrics:** a web counter `skilly_agent_sync_total{outcome}` (`ok`, `invalid_token`,
+  `insufficient_scope`, `user_not_provisioned`, `user_disabled`, `rate_limited`, `error`), and
+  `type="agent"` on the existing tokens-minted counter.
+
+### 69.9 Errors
+Every error is JSON `{ "error": "<code>", "message": "<human text>" }`. A 401 also carries
+`WWW-Authenticate: Bearer error="invalid_token"`.
+
+| Status | `error` | When |
+|---|---|---|
+| 401 | `invalid_token` | missing, malformed, badly signed or expired token; wrong issuer, tenant or audience; no `oid` |
+| 403 | `insufficient_scope` | `scp` lacks `Skills.Sync` (this includes app-only tokens) |
+| 403 | `user_not_provisioned` | no skilly account for this `oid` |
+| 403 | `user_disabled` | the account is not active |
+| 404 | `not_found` | the API is not enabled |
+| 429 | `rate_limited` | over 30 requests per hour for this user |
+| 500 | `internal_error` | anything else; details are logged server-side and never returned |
+
+`membership_unresolved`, which the original AION contract reserved for a missing `groups` claim, is
+**never returned**: membership does not come from the token (decision 3).
+
+### 69.10 Configuration
+Three env vars on **web** (the worker needs none), shipped in `deploy/.env.example`, the compose
+file and the Helm values the way the existing ones are:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SKILLY_AGENT_API_ENABLED` | unset = off | `true` turns the endpoint on. Anything else: the route answers 404. |
+| `SKILLY_AGENT_API_AUDIENCE` | `ENTRA_CLIENT_ID` | The `aud` a token must carry: the application (client) ID of skilly's Entra app registration. |
+| `SKILLY_AGENT_KEY_TTL_HOURS` | `12` | Agent key lifetime in whole hours, 1 to 24. A value above 24 is treated as 24; anything else invalid takes the default. Either case logs one `warn` line naming the variable, the first time the endpoint is called. |
+
+The endpoint is enabled only when the flag is `true` **and** `ENTRA_TENANT_ID` is a tenant GUID
+(not `common` or `organizations`) **and** an audience resolves. With the flag on and one of the
+others missing, the route answers 404 and one `error` line says which setting is missing, the first
+time the endpoint is called. (Not at startup: `instrumentation.ts` is not part of the standalone
+image, so the web process has no startup hook that runs in production.)
+
+### 69.11 Data model (migration 0110)
+- **`token_type`** gains `agent`. The `tokens_scope_discriminant` CHECK gains its case: `agent` ⇒
+  `skill_id`, `marketplace_scope` and `namespace_id` all NULL, `user_id` NOT NULL,
+  `is_system = false`, `expires_at` NOT NULL. A partial index on `(user_id, created_at)` where
+  `type = 'agent'` serves the cap.
+- **`agent_installs`**: `id` (UUID PK), `user_id` (FK → `users`, CASCADE), `skill_id` (FK →
+  `skills`, CASCADE), `source` (TEXT, CHECK in (`aion`)), `first_cloned_at`, `last_cloned_at`
+  (TIMESTAMPTZ NOT NULL), `last_served_semver` (TEXT, nullable; a plain string like
+  `tokens.last_served_semver`), `client_user_agent`, `client_ip` (TEXT, nullable).
+  **UNIQUE (`user_id`, `skill_id`, `source`)**; index on `user_id`.
+- **`access_log.source`** (free text) gains the value `aion`.
+- No change to `audit_source`: `api` already exists.
+- GDPR erasure (web `lib/eraseUser.ts` and the worker's SCIM mirror) deletes the user's
+  `agent_installs` rows; their `tokens` rows, agent keys included, are already deleted.
+
+### 69.12 Entra app registration (operator checklist)
+On **skilly's existing app registration**:
+1. **Expose an API:** keep the Application ID URI if one is set, else `api://<skilly-client-id>`.
+   Add the delegated scope **`Skills.Sync`** ("Sync your skilly skills to AION") and grant admin
+   consent.
+2. **Manifest:** `requestedAccessTokenVersion: 2` (older manifests: `accessTokenAcceptedVersion: 2`).
+   This sets the version of access tokens issued **for skilly as a resource**. The web sign-in and
+   the email service account ask for Graph tokens and are unaffected.
+3. **Authorized client applications:** add the agent's client ID (AION Desktop) for `Skills.Sync`.
+4. **SCIM scope:** everyone who uses the agent must be in the Enterprise App's provisioning scope,
+   or their sync is refused with `user_not_provisioned`.
+5. **No `groups` claim is needed** on the access token.
+
+The agent requests the scope `<Application ID URI>/Skills.Sync`; a v2 token then carries skilly's
+client ID as `aud`.
+
+Documented in `docs/agent-sync-api.md` (purpose, endpoint, request and response example, error
+table, env vars, this checklist), linked from `README.md` and `deployment_manual.md`.
+
+### 69.13 Tests (ship with the change)
+- **Unit, token validation** (a locally generated RSA key and a mocked JWKS; no call to Microsoft):
+  a good token passes; bad signature, `alg: none`, HS256, wrong `iss`, wrong `tid`, wrong `aud`,
+  expired, `nbf` beyond the skew and a missing `oid` are each `invalid_token`; `exp` and `nbf` inside
+  the 60 s skew pass; a missing `scp` or one without `Skills.Sync` is `insufficient_scope`; an
+  unknown `kid` refetches the keys once and not again within a minute. TTL parsing: default, 1, 24,
+  25 → 24, 0 and `abc` → 12.
+- **Unit, gateway authorization** (`authorize.test.ts`): an agent key clones an org-visible skill, a
+  restricted skill of the owner's namespace and one shared with it (§42); a restricted skill outside
+  the owner's membership, an archived skill and a missing skill are the same 404; a marketplace repo
+  is 403; push is 403; an inactive owner and an expired key are the generic 401. Install and
+  marketplace token cases are unchanged.
+- **Integration (web API + DB):** sync returns the right set for a user with only org-visible
+  access, a namespace member, and a non-member; archived, quarantined, prerelease-only and
+  unpublished skills are absent; a deprecated skill is present with `deprecation`; a pointer skill
+  is present with a mirror and absent without; the order; no credentials in any `gitUrl`. A session
+  cookie without a bearer token is 401; disabled is 404; an unknown `oid` is
+  `user_not_provisioned` and no user row appears; an inactive user is `user_disabled`; the 31st
+  request in an hour is 429 with `Retry-After`. The mint stores only a hash with the configured
+  expiry and writes one `agent_key.minted` row without the key; the 6th key deletes the oldest. A
+  sync prunes agent records for skills that left the set. The agent key is refused by a session
+  route, by this endpoint and by `/api/usage/reports`. `/api/installs` lists agent rows with
+  `source: "aion"`, hides one whose skill is no longer visible, and keeps token rows unchanged;
+  `DELETE` removes an agent row, `PATCH` and `/command` answer 404 for it. Erasure deletes agent
+  keys and agent records. The self-heal relink behaves the same from the web callback and from the
+  endpoint. The migration creates the enum value, the CHECK case and the table.
+- **Integration (worker, real git):** with a key and a `ref` from a sync, `git clone --depth 1
+  --branch <ref>` of the skill's `gitUrl` succeeds through the gateway; repeated clones leave one
+  `agent_installs` row and one `access_log` row per clone with `source = 'aion'`; `skill_installs`,
+  `skills.install_count`, `install_credits` and `install_counters` do not move; the rate bucket is
+  per (key, skill).
+- **e2e:** the Installed page shows a seeded agent record with client AION, the freshness line and
+  only the Remove action; Remove deletes it.
+
+### 69.14 Accepted trade-offs and out of scope
+- **Audit volume.** A running agent syncs at start and hourly, so each user adds roughly ten
+  `agent_key.minted` rows per working day. The audit page's action filter separates them; the trim
+  (§49.6) applies as to any row.
+- **The cap shortens a key's real life.** With hourly syncs a key is usually removed after five
+  later syncs, before its TTL. That is harmless: the agent uses the key from its latest sync. A
+  person with more than five agents syncing at once can have a key removed mid-clone; the next
+  cycle recovers.
+- **The key ends up in `.git/config`** of each cloned skill when the client passes it in the clone
+  URL. That is why it is short-lived. Clients should prefer not to persist it.
+- **The served version is inferred.** The git protocol does not tell the gateway which ref was
+  fetched (§23), so `last_served_semver` is the latest stable at clone time. A version published
+  between a sync and its clone shows as current one cycle early.
+- **Uninstalls are inferred** from the next sync (decision 7). A person who stops using the agent
+  keeps their records until they Remove them.
+- **First rollout behind one NAT.** A first sync costs two to three git requests per skill, and the
+  per-IP git guard is 600 per minute (§22). A whole office starting at once can draw 429s; the
+  agent's next cycle continues, and operators can raise `GIT_IP_RATE_MAX`.
+- **The catalog's *installed* mark** stays off for skills only the agent installed (decision 6).
+- **Out of scope:** the agent's own code; system (platform-owned) agent keys; a UI to list or revoke
+  agent keys; pinning a version per user; opting a skill out of the agent; any change to MCP or the
+  marketplaces.

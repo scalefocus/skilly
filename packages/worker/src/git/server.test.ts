@@ -36,6 +36,8 @@ const refusals: GitRefusalEvent[] = [];
 /** Freshness stamps (§23): one per clone advertisement, for every tokened skill clone. */
 const stamped: { tokenId: string; skillId: string }[] = [];
 const credits: MarketplaceCredit[] = [];
+/** §69.7 agent clones, as the gateway reports them (the real dep upserts agent_installs). */
+const agentClones: { userId: string; skillId: string; userAgent: string | null; clientIp: string | null }[] = [];
 /** Simulated `tokens.last_served_commit` per marketplace token — the §30.7 attribution cursor.
  *  creditMarketplaceFetch advances it exactly as the real transaction does, so a repeat clone
  *  genuinely exercises the "already at head, credit nothing" branch. */
@@ -56,6 +58,9 @@ const deps: GitServerDeps = {
     // System installation: platform-owned, no user; clones the restricted skill without ns access (§23).
     if (raw === "system-secret") return { userId: null, tokenId: "t-sys", type: "install", scopedSkillId: "s-secret", isSystem: true };
     // Owner-status gate (§5/§23): valid row, but the owning user is inactive.
+    // §69 agent keys: user-scoped. u1 is in team-a; u2 is in nothing.
+    if (raw === "agent-u1") return { userId: "u1", tokenId: "a-u1", type: "agent", isSystem: false };
+    if (raw === "agent-u2") return { userId: "u2", tokenId: "a-u2", type: "agent", isSystem: false };
     if (raw === "inactive-pdf") return { userId: "u-gone", tokenId: "t-gone", type: "install", scopedSkillId: "s-pdf", isSystem: false, ownerInactive: true };
     // Marketplace tokens (§30.4) — scoped to a marketplace, never to a skill.
     if (raw === "mkt-pub") return { userId: "u1", tokenId: "m-pub", type: "marketplace", scopedMarketplace: { kind: "public" }, scopedNamespaceId: null, lastServedCommit: cursors.get("m-pub") ?? null, isSystem: false };
@@ -97,6 +102,9 @@ const deps: GitServerDeps = {
   },
   async recordGitRefusal(e) {
     refusals.push(e);
+  },
+  async recordAgentClone(input) {
+    agentClones.push(input);
   },
 };
 
@@ -412,6 +420,73 @@ test("per-installation bucket (§22): a real clone spends it; once spent → 429
 
     // Another installation has its own bucket — a system token clones the restricted skill fine.
     await exec("git", ["clone", `http://x-access-token:system-secret@127.0.0.1:${lport}/team-a/secret.git`, join(workDir, "c-bucket-sys")], { env: cloneEnv });
+  } finally {
+    await new Promise<void>((resolve) => limited.close(() => resolve()));
+  }
+});
+
+// ── §69 agent keys ─────────────────────────────────────────────────────────────────────────────
+
+test("agent key: clones every visible skill with --branch <ref> (the sync API's ref) and is recorded, never counted", async () => {
+  used.length = 0; logged.length = 0; stamped.length = 0; agentClones.length = 0;
+  // `ref` from the sync response is the version's tag (§69.4) — a shallow single-tag clone works.
+  const d1 = join(workDir, "c-agent-pdf");
+  await exec("git", ["clone", "--depth", "1", "--branch", "v2.0.0", `http://x-access-token:agent-u1@127.0.0.1:${port}/team-a/pdf.git`, d1], { env: cloneEnv });
+  assert.match((await exec("git", ["-C", d1, "show", "HEAD:SKILL.md"])).stdout, /pdf v2/);
+  const d2 = join(workDir, "c-agent-secret");
+  await exec("git", ["clone", "--depth", "1", "--branch", "v1.0.0", `http://x-access-token:agent-u1@127.0.0.1:${port}/team-a/secret.git`, d2], { env: cloneEnv });
+  assert.match((await exec("git", ["-C", d2, "show", "HEAD:SKILL.md"])).stdout, /top secret/);
+
+  // One record per clone (on the advertisement), with the client's UA and IP …
+  assert.deepEqual(agentClones.map((c) => [c.userId, c.skillId]), [["u1", "s-pdf"], ["u1", "s-secret"]]);
+  assert.match(agentClones[0]!.userAgent ?? "", /^git\//);
+  assert.match(agentClones[0]!.clientIp ?? "", /^(127\.0\.0\.1|::1)$/);
+  // … and none of the install-token path: no first-use stamp, no freshness stamp, no counted access.
+  assert.deepEqual(used, []);
+  assert.deepEqual(stamped, []);
+  assert.deepEqual(logged, []);
+
+  // A fetch into an existing clone (the agent's update path) is recorded again.
+  await exec("git", ["-C", d1, "fetch", "--depth", "1", "origin", "tag", "v1.0.0"], { env: cloneEnv });
+  assert.equal(agentClones.length, 3);
+});
+
+test("agent key: a restricted skill outside membership is the same 404 as a missing one; nothing recorded", async () => {
+  agentClones.length = 0; refusals.length = 0;
+  const basic = (raw: string) => ({ authorization: "Basic " + Buffer.from(`x-access-token:${raw}`).toString("base64") });
+  const secret = await fetch(`${base()}/team-a/secret.git/info/refs?service=git-upload-pack`, { headers: basic("agent-u2") });
+  const missing = await fetch(`${base()}/team-a/nope.git/info/refs?service=git-upload-pack`, { headers: basic("agent-u2") });
+  assert.equal(secret.status, 404);
+  assert.equal(missing.status, 404);
+  assert.equal(await secret.text(), await missing.text(), "no existence oracle");
+  await assert.rejects(exec("git", ["clone", ...noCred, `http://x-access-token:agent-u2@127.0.0.1:${port}/team-a/secret.git`, join(workDir, "c-agent-out")], { env: cloneEnv }));
+  assert.deepEqual(agentClones, []);
+  assert.ok(refusals.some((r) => r.code === "agent_key_not_visible" && r.ownerUserId === "u2" && r.tokenId === "a-u2"));
+  // The org-visible skill still clones for the same key.
+  await exec("git", ["clone", `http://x-access-token:agent-u2@127.0.0.1:${port}/team-a/pdf.git`, join(workDir, "c-agent-out-pdf")], { env: cloneEnv });
+});
+
+test("agent key: the per-installation bucket is per (key, skill) — draining one skill leaves the others open", async () => {
+  const limiter = new GitTokenLimiter({ max: 6, windowMs: 900_000 });
+  const app = express();
+  app.use(gitServer(deps, { tokenLimiter: limiter }));
+  const limited: Server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  const lport = (limited.address() as AddressInfo).port;
+  const basic = { authorization: "Basic " + Buffer.from("x-access-token:agent-u1").toString("base64") };
+  const refs = (slug: string) => `http://127.0.0.1:${lport}/team-a/${slug}.git/info/refs?service=git-upload-pack`;
+  try {
+    let status = 0;
+    for (let i = 0; i < 10 && status !== 429; i++) {
+      const r = await fetch(refs("pdf"), { headers: basic });
+      await r.arrayBuffer();
+      status = r.status;
+    }
+    assert.equal(status, 429, "the (key, pdf) bucket drains");
+    const other = await fetch(refs("secret"), { headers: basic });
+    await other.arrayBuffer();
+    assert.equal(other.status, 200, "the same key still fetches another skill");
   } finally {
     await new Promise<void>((resolve) => limited.close(() => resolve()));
   }

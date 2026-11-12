@@ -15,6 +15,9 @@ import type { Freshness } from "@skilly/shared/freshness";
 
 interface Install {
   id: string;
+  /** `install` = an install token; `aion` = a skill the AION agent keeps in sync (§69.7) — a record,
+   *  not a credential. Absent on system rows. */
+  source?: "install" | "aion";
   namespaceSlug: string;
   skillSlug: string;
   title: string;
@@ -44,7 +47,9 @@ interface Install {
 type Scope = "mine" | "system";
 
 /** Best-effort friendly client label from the git User-Agent (OS is usually absent). */
-function clientLabel(ua: string | null): string {
+function clientLabel(ua: string | null, source?: Install["source"]): string {
+  // An agent install record names its agent (§69.7); the raw User-Agent stays in the tooltip.
+  if (source === "aion") return "AION";
   if (!ua) return "unknown client";
   const m = /git\/([\d.]+)/i.exec(ua);
   return m ? `git ${m[1]}` : ua.length > 40 ? `${ua.slice(0, 40)}…` : ua;
@@ -258,6 +263,7 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
   };
 
   const uninstall = async (i: Install) => {
+    if (i.source === "aion") return removeAgentRecord(i);
     const what = scope === "system" ? `the SYSTEM install of ${i.namespaceSlug}/${i.skillSlug}? Anything using it (CI, org tools) will lose access` : `${i.namespaceSlug}/${i.skillSlug}? The install URL will stop working`;
     if (!window.confirm(`Uninstall ${what}.`)) return;
     setBusyId(i.id); setMsg(null);
@@ -265,6 +271,18 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
       const r = await fetch(`/api/installs/${i.id}`, { method: "DELETE" });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "Failed to uninstall");
       setMsg({ kind: "ok", text: "Uninstalled." });
+      reload();
+    } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusyId(null); }
+  };
+
+  // §69.7: an AION row is a record of what the agent cloned. Removing it deletes the record only.
+  const removeAgentRecord = async (i: Install) => {
+    if (!window.confirm(`Remove ${i.namespaceSlug}/${i.skillSlug}? This removes the entry from this list. It does not uninstall the skill from AION, and the entry returns the next time AION fetches the skill.`)) return;
+    setBusyId(i.id); setMsg(null);
+    try {
+      const r = await fetch(`/api/installs/${i.id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? "Failed to remove");
+      setMsg({ kind: "ok", text: "Removed from the list." });
       reload();
     } catch (e) { setMsg({ kind: "err", text: String((e as Error).message) }); } finally { setBusyId(null); }
   };
@@ -287,7 +305,7 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
   // §45.5 Install latest — a SKILL-level action: on a plain row it sits with the row's actions, on a
   // card it sits on the header (`i` is then the card's newest install, standing in for the skill).
   const successorButton = (i: Install) =>
-    scope === "mine" && i.skillDeprecation?.successor ? (
+    scope === "mine" && i.source !== "aion" && i.skillDeprecation?.successor ? (
       // Mints the SUCCESSOR at latest (Mine scope only); never uninstalls this skill's installs.
       <button
         className="btn btn-sm btn-primary"
@@ -375,10 +393,10 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
             {i.freshness === "withdrawn" && <Pill tone="danger">Withdrawn</Pill>}
             {row && skillPills(i)}
             {i.inactive ? <Pill tone="danger">inactive</Pill> : <Pill tone="ok">active</Pill>}
-            <span className="muted mono" style={{ fontSize: 11 }} title={i.clientUserAgent ?? ""}>{clientLabel(i.clientUserAgent)}</span>
+            <span className="muted mono" style={{ fontSize: 11 }} title={i.clientUserAgent ?? ""} data-testid="install-client">{clientLabel(i.clientUserAgent, i.source)}</span>
             {i.clientIp && <span className="muted mono" style={{ fontSize: 11 }} title="IP this skill was installed from">from {i.clientIp}</span>}
             <span className="muted mono" style={{ fontSize: 11 }}>installed {fmt.date(i.installedAt)}</span>
-            <span className="muted mono" style={{ fontSize: 11 }}>{i.expiresAt ? `expires ${fmt.date(i.expiresAt)}` : "never expires"}</span>
+            <span className="muted mono" style={{ fontSize: 11 }}>{i.source === "aion" ? "kept in sync by AION" : i.expiresAt ? `expires ${fmt.date(i.expiresAt)}` : "never expires"}</span>
             {scope === "system" && <span className="muted mono" style={{ fontSize: 11 }} title="Platform admin who generated this system install">minted by {i.mintedBy ?? "unknown"}</span>}
           </div>
           {/* Freshness line (§23 "Installed-version freshness"): what this install is running vs latest. */}
@@ -409,9 +427,16 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
               activate
             </button>
           )}
-          <button className="btn btn-sm" disabled={busyId === i.id} onClick={() => uninstall(i)} title="Delete this install and revoke its URL">
-            uninstall
-          </button>
+          {i.source === "aion" ? (
+            // §69.7: the only action on an agent record — it removes the entry, not AION's copy.
+            <button className="btn btn-sm" disabled={busyId === i.id} onClick={() => uninstall(i)} title="Remove this entry from the list (AION keeps its copy)" data-testid="remove-agent-install">
+              remove
+            </button>
+          ) : (
+            <button className="btn btn-sm" disabled={busyId === i.id} onClick={() => uninstall(i)} title="Delete this install and revoke its URL">
+              uninstall
+            </button>
+          )}
         </div>
         {revealFor === i.id && revealed?.rowId === i.id && (
           <div
@@ -443,6 +468,8 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
   // toggles the card, then — when open — one child row per install, newest first.
   const renderCard = (e: Extract<InstallEntry<Install>, { kind: "card" }>) => {
     const head = e.installs[0]!; // newest install — stands in for the skill (title, icon, markers)
+    // §45.5 Install latest is offered only when the skill has a token install (§69.7) — the newest one.
+    const actor = e.installs.find((x) => x.source !== "aion") ?? head;
     const open = isOpen(e.ref);
     const worst = worstFreshness(e.installs);
     const counts = activeCounts(e.installs);
@@ -486,8 +513,8 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
             </div>
             {successorLine(head)}
           </div>
-          <div className="version-actions" onClick={(ev) => ev.stopPropagation()}>{successorButton(head)}</div>
-          {successorPanel(head)}
+          <div className="version-actions" onClick={(ev) => ev.stopPropagation()}>{successorButton(actor)}</div>
+          {successorPanel(actor)}
         </div>
         {open && (
           <div id={bodyId} className="installed-card-body">
@@ -508,7 +535,7 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
           <p className="page-sub">
             {scope === "system"
               ? "Platform-owned installs for CI pipelines and org tools — not tied to any user. Any platform admin can uninstall or reactivate them; changes are audited."
-              : "Skills you’ve installed. Each carries a unique key — uninstall to revoke its URL, or reactivate an expired one."}
+              : `Skills you’ve installed. Each carries a unique key — uninstall to revoke its URL, or reactivate an expired one.${installs.some((i) => i.source === "aion") ? " Skills that AION keeps in sync for you are listed too." : ""}`}
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>

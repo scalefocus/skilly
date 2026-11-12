@@ -117,7 +117,7 @@ export async function eraseUser(actorUserId: string, targetUserId: string, trans
     // survive the person leaving. oauth_tokens cascade with the grant.
     // `user_achievements` (§31) is personal data like watches and ratings; a re-provisioned account
     // starts with an empty shelf. `skill_hypes` (§50) too — the hyped skills' scores drop with them.
-    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_hypes", "skill_watches", "notifications", "tokens", "oauth_grants", "user_achievements"]) {
+    for (const tbl of ["skill_maintainers", "install_credits", "group_memberships", "skill_ratings", "skill_hypes", "skill_watches", "notifications", "tokens", "agent_installs", "oauth_grants", "user_achievements"]) {
       await client.query(`delete from ${tbl} where user_id = $1`, [targetUserId]);
     }
     // Review assignments (§65.9): the user's OPEN assignments are cleared now, audited as
