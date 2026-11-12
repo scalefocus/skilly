@@ -5,6 +5,10 @@ import { useSession } from "next-auth/react";
 import { useApi, useEnterKey, ScrollToTop, formatCount } from "../components/ui";
 import { SkillCard, type CatalogEntry } from "../components/SkillCard";
 import { DEPARTMENT_POPULAR_WINDOW_DAYS } from "@skilly/shared/department-popular";
+import type { VisibleSkillCounts } from "../lib/skillCounts";
+
+/** "Recently published" shows this many cards (§10) — and asks the listing for exactly that many. */
+const RECENT_COUNT = 6;
 
 export default function Overview() {
   const { status } = useSession();
@@ -13,9 +17,12 @@ export default function Overview() {
   // Press Enter anywhere on the overview to jump into the catalog.
   useEnterKey(() => router.push("/catalog"));
   // Skip the calls entirely when signed out — these APIs 401 for anonymous visitors.
-  const { data } = useApi<{ skills: CatalogEntry[] }>(authed ? "/api/skills" : null);
-  // O(1) pre-aggregated read (install_counters, summed across all months) — safe to fetch per page view.
-  const { data: stats } = useApi<{ totalInstalls: number }>(authed ? "/api/stats" : null);
+  // "Recently published" (§10): the first RECENT_COUNT rows of the catalog's Latest sort. This
+  // listing is capped and carries no total — it feeds the grid only, never a count.
+  const { data } = useApi<{ skills: CatalogEntry[] }>(authed ? `/api/skills?sort=latest&limit=${RECENT_COUNT}` : null);
+  // The stat row (§10): the viewer's TRUE visible-skill totals (the catalog's Source-chip numbers)
+  // plus the pre-aggregated install total — cheap, cached reads, safe to fetch per page view.
+  const { data: stats } = useApi<{ totalInstalls: number; skills?: VisibleSkillCounts }>(authed ? "/api/stats" : null);
   // Featured skills (§7): platform-admin-pinned spotlight, visibility-filtered server-side. Empty
   // (or none visible to this viewer) ⇒ the section is omitted entirely.
   const { data: featured } = useApi<{ skills: CatalogEntry[] }>(authed ? "/api/skills/featured" : null);
@@ -32,9 +39,9 @@ export default function Overview() {
   );
   const department = deptData?.department ?? null;
   const deptSkills = deptData?.skills ?? [];
-  const skills = data?.skills ?? [];
-  const hosted = skills.filter((s) => s.type === "hosted").length;
-  const pointer = skills.filter((s) => s.type === "pointer").length;
+  const recent = (data?.skills ?? []).slice(0, RECENT_COUNT);
+  // `0` until the read resolves, like Total installs.
+  const counts = stats?.skills ?? { total: 0, hosted: 0, pointer: 0 };
 
   return (
     <div>
@@ -59,9 +66,9 @@ export default function Overview() {
 
       {authed && (
         <section className="stat-row reveal" style={{ animationDelay: "80ms", marginBottom: 44 }}>
-          <div className="stat"><div className="stat-num">{formatCount(skills.length)}</div><div className="stat-label">Skills visible to you</div></div>
-          <div className="stat"><div className="stat-num">{formatCount(hosted)}</div><div className="stat-label">Hosted</div></div>
-          <div className="stat"><div className="stat-num">{formatCount(pointer)}</div><div className="stat-label">External</div></div>
+          <div className="stat"><div className="stat-num" data-testid="stat-skills-total">{formatCount(counts.total)}</div><div className="stat-label">Skills visible to you</div></div>
+          <div className="stat"><div className="stat-num" data-testid="stat-skills-hosted">{formatCount(counts.hosted)}</div><div className="stat-label">Hosted</div></div>
+          <div className="stat"><div className="stat-num" data-testid="stat-skills-pointer">{formatCount(counts.pointer)}</div><div className="stat-label">External</div></div>
           <div className="stat"><div className="stat-num">{formatCount(stats?.totalInstalls ?? 0)}</div><div className="stat-label">Total installs</div></div>
         </section>
       )}
@@ -140,16 +147,16 @@ export default function Overview() {
       </section>
 
       {authed && (
-        <section className="reveal" style={{ animationDelay: "160ms" }}>
+        <section className="reveal" style={{ animationDelay: "160ms" }} data-testid="recently-published-section">
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 18 }}>
             <h2 style={{ fontFamily: "var(--font-display)", fontSize: 24 }}>Recently published</h2>
             <Link href="/catalog" className="btn-ghost mono" style={{ fontSize: 12 }}>view all →</Link>
           </div>
-          {skills.length === 0 ? (
+          {recent.length === 0 ? (
             <div className="card card-pad muted">Nothing here yet — once skills are published they’ll surface in your catalog.</div>
           ) : (
             <div className="card-grid">
-              {skills.slice(0, 6).map((s, i) => (
+              {recent.map((s, i) => (
                 <SkillCard key={`${s.namespaceSlug}/${s.skillSlug}`} s={s} index={i} />
               ))}
             </div>

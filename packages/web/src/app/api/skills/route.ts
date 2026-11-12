@@ -1,6 +1,6 @@
 // Visibility-filtered catalog search. SKILLY_SPEC.md §10 (auth-required, strictly filtered).
 import { getServerSession } from "next-auth";
-import { parseMinQuality } from "@skilly/shared";
+import { parseMinQuality, parseListLimit } from "@skilly/shared";
 import { authOptions } from "../../../lib/auth";
 import { resolveUserAccess } from "../../../lib/access";
 import { searchCatalog } from "../../../lib/catalog";
@@ -64,6 +64,9 @@ export async function GET(req: Request) {
     sort: url.searchParams.get("sort") === "top_rated" ? "top_rated" : url.searchParams.get("sort") === "latest" ? "latest" : url.searchParams.get("sort") === "quality" ? "quality" : undefined,
     // §41.7 minimum-quality facet: 3 | 4 | 4.5 stars; anything else is 422.
     minQuality,
+    // §15 the listing cap: `?limit=` 1–100 (default 60); a malformed value is ignored, never an
+    // error. The response carries no total, so callers must not count its rows for display.
+    limit: parseListLimit(url.searchParams.get("limit")),
     // `?archived=1` flips to showing ONLY archived skills, owner-scoped in the query (a
     // non-owner gets none). The UI only shows the toggle to managers.
     archivedOnly,

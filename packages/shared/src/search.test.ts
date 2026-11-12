@@ -18,6 +18,9 @@ import {
   searchLanguageLabel,
   SEARCH_BODY_MAX_BYTES,
   SEARCH_MAX_TERMS,
+  parseListLimit,
+  CATALOG_LIST_DEFAULT_LIMIT,
+  CATALOG_LIST_MAX_LIMIT,
   type ParsedSearch,
   type SearchNormalization,
 } from "./search.js";
@@ -330,6 +333,19 @@ test("catalogOrderBy: one total order for every surface, relevance keys first, d
   assert.match(catalogOrderBy("top_rated", "IGNORED"), new RegExp(`^${dep}, \\(\\(s\\.rating_sum`));
   assert.match(catalogOrderBy("latest", "IGNORED"), new RegExp(`^${dep}, coalesce\\(max\\(sv\\.created_at\\)`));
   assert.match(catalogOrderBy("quality", "IGNORED"), new RegExp(`^${dep}, s\\.quality_score desc nulls last`));
+});
+
+test("parseListLimit: a plain integer 1–100, anything else falls back to the default (§15)", () => {
+  assert.equal(CATALOG_LIST_DEFAULT_LIMIT, 60);
+  assert.equal(CATALOG_LIST_MAX_LIMIT, 100);
+  assert.equal(parseListLimit("1"), 1);
+  assert.equal(parseListLimit("6"), 6);
+  assert.equal(parseListLimit("060"), 60);
+  assert.equal(parseListLimit("100"), 100);
+  // Ignored, never an error: the listing then returns its default 60 rows.
+  for (const raw of [null, undefined, "", "0", "101", "999", "1000", "-6", "+6", "6.5", "1e2", " 6", "6 ", "six", "0x10"]) {
+    assert.equal(parseListLimit(raw), undefined, `expected ${JSON.stringify(raw)} to be ignored`);
+  }
 });
 
 // ── SKILL.md text (§34.3) ──────────────────────────────────────────────────────────────────────

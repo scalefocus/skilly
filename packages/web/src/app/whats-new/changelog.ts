@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.57.1",
+    date: "2026-11-12",
+    summary:
+      "Fixed: the Overview’s “Skills visible to you”, “Hosted” and “External” tiles stopped at 60 once you could see more than 60 skills. They now show your real totals — the same numbers as the Source chips in the catalog. “Recently published” now lists the six skills with the newest versions; it used to show the most-installed ones.",
+  },
+  {
     version: "2.57.0",
     date: "2026-11-11",
     summary:
