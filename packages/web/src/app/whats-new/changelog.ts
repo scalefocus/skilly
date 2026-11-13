@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.59.4",
+    date: "2026-11-13",
+    summary:
+      "Your avatar in the sidebar now always shows the same level ring as your avatar on the page you are on. Before, it kept the level from when you opened skilly, so after earning badges the two rings could disagree. It now also moves up the moment a badge toast appears.",
+  },
+  {
     version: "2.59.3",
     date: "2026-11-13",
     summary:
