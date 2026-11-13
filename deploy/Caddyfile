@@ -46,7 +46,7 @@
 	# this wrong breaks the consent screen, not the token exchange, so it fails late — keep the two
 	# lists in sync with the Helm ingress.
 	# /mcp is matched as the path /mcp and /mcp/*, NEVER the glob /mcp*: that would also swallow the
-	# web page /mcp-server (the user's MCP setup page), which is how it was unreachable until v2.59.4.
+	# web page /mcp-server (the user's MCP setup page), which is how it was unreachable until v2.59.5.
 	# packages/web/src/lib/proxyRouting.test.ts fails if any web page route lands on the worker.
 	@mcp path /mcp /mcp/*
 	handle @mcp {

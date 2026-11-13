@@ -7,7 +7,10 @@
 // so the spec triggers an idempotent event (the Quick start stamp) and asserts the badge is held
 // afterwards rather than that it was earned "just now".
 import { ACHIEVEMENT_TOTAL } from "@skilly/shared/achievements";
+import type { Page } from "@playwright/test";
+import { API_TTL_MS } from "../src/components/apiCache";
 import { authedTest as test, expect } from "./fixtures";
+import { gotoReady } from "./helpers/ready";
 
 test.describe.configure({ mode: "serial" });
 
@@ -153,6 +156,66 @@ test("levels: the ring never appears on a bubble whose owner has no badges", asy
   for (const [userId, n] of Object.entries(map.levels)) {
     expect(n, `user ${userId} is in the level map at level ${n}`).not.toBe(0);
   }
+});
+
+// Regression (two rings of one person, two different arcs): the sidebar's account bubble is mounted
+// once for the whole visit, so it kept the level it fetched on first load while each page's own
+// bubble fetched the current one. /api/levels is mocked so the level can move mid-visit without
+// earning — and permanently spending — a real one-time badge.
+async function mockLevels(page: Page, userId: string, start: number): Promise<(level: number) => void> {
+  let level = start;
+  await page.route("**/api/levels", (route) => route.fulfill({ json: { levels: { [userId]: level }, heroes: [] } }));
+  return (next) => {
+    level = next;
+  };
+}
+const ringLabel = (level: number) => `Level ${level} of ${ACHIEVEMENT_TOTAL}`;
+
+test("levels: the sidebar's account bubble shows the same ring as the page's own bubble after navigating", async ({ page }) => {
+  const me = await (await page.request.get("/api/me")).json();
+  const setLevel = await mockLevels(page, me.userId, 3);
+  const sidebar = page.locator(".user-trigger");
+
+  await gotoReady(page, "/catalog");
+  await expect(sidebar.getByRole("img", { name: ringLabel(3) })).toBeVisible({ timeout: 20_000 });
+
+  // Badges are earned. Let the client cache's TTL lapse so the next page's bubble really refetches —
+  // otherwise both bubbles would read the cached 3 and this test would prove nothing.
+  setLevel(10);
+  await page.waitForTimeout(API_TTL_MS + 500);
+
+  // Client-side navigation through the account menu: the shell, and its bubble, stay mounted.
+  await sidebar.click();
+  await page.getByRole("menuitem", { name: "Profile" }).click();
+  await expect(page).toHaveURL(/\/profile$/, { timeout: 20_000 });
+  await expect(page.locator("main").getByRole("img", { name: ringLabel(10) }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(sidebar.getByRole("img", { name: ringLabel(10) })).toBeVisible();
+  await expect(sidebar.getByRole("img", { name: ringLabel(3) })).toHaveCount(0);
+});
+
+test("levels: a badge toast moves the sidebar ring at once, with no navigation", async ({ page }) => {
+  const me = await (await page.request.get("/api/me")).json();
+  const setLevel = await mockLevels(page, me.userId, 3);
+  let items: unknown[] = [];
+  // Only the shell's poller reads the bare URL; the inbox's filtered reads are left alone.
+  await page.route(/\/api\/notifications$/, (route) => route.fulfill({ json: { unread: items.length, items } }));
+  const sidebar = page.locator(".user-trigger");
+
+  await gotoReady(page, "/catalog");
+  await expect(sidebar.getByRole("img", { name: ringLabel(3) })).toBeVisible({ timeout: 20_000 });
+
+  setLevel(4);
+  items = [{
+    id: `e2e-ring-${Date.now()}`,
+    type: "achievement.earned",
+    readAt: null,
+    createdAt: new Date().toISOString(),
+    payload: { key: "onboarded", name: "Read the Manual", level: 4, hero: false },
+  }];
+  // The shell polls every 60s and again whenever the tab regains focus — take the focus path.
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(page.getByTestId("badge-toast")).toBeVisible({ timeout: 20_000 });
+  await expect(sidebar.getByRole("img", { name: ringLabel(4) })).toBeVisible();
 });
 
 test("notifications inbox: badge rows (when any exist) link to the profile card", async ({ page }) => {

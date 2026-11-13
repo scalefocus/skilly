@@ -11,7 +11,7 @@ import { whatsNewAction } from "@skilly/shared/whats-new";
 import { ThemeToggle } from "./ThemeToggle";
 import { MessagesMenu } from "./MessagesMenu";
 import { UserBubble } from "./UserBubble";
-import { cachedGet, invalidateApi, usePopoverPresence, Pill } from "./ui";
+import { cachedGet, invalidateApi, refreshApi, usePopoverPresence, Pill } from "./ui";
 import { PageLabelOverrideProvider } from "./PageLabelOverride";
 import { SkillIcon } from "./SkillIcon";
 import { RumCollector, markRumNavIntent } from "./RumCollector";
@@ -578,6 +578,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             // no level.reached type. Older rows (pre-levels) simply carry no level line.
             const lvl = fresh.payload?.hero === true ? "Hero" : typeof fresh.payload?.level === "number" ? `Level ${fresh.payload.level}` : null;
             setBadgeToast({ id: fresh.id, name: def?.name ?? fresh.payload?.name ?? "a badge", glyph: def?.glyph ?? "🏆", level: lvl });
+            // The badge moved the level, so every ring on screen moves with the toast — the sidebar's
+            // own bubble included, which no page navigation would otherwise refetch (§31.10).
+            void refreshApi("/api/levels");
           }
         })
         .catch(() => {});

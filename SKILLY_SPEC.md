@@ -6338,6 +6338,13 @@ page full of bubbles issues a single request:
   stops being true the documented upgrade is the leaderboard's own: raise the floor above level 1.
 - `UserBubble` looks its `userId` up in this map exactly as it already does for badges. A bubble
   rendered **without** a `userId` shows no ring and issues no request, unchanged.
+- **One map per screen, kept in step.** Every bubble on screen reads the same copy of the map, and
+  any later fetch of it — by a bubble that mounts on the next page, or by a refresh — reaches every
+  bubble already showing. The sidebar's account bubble is mounted once for the whole visit, so it is
+  the case this rule exists for: it must never show an older ring than the page's own bubble of the
+  same person. The badge toast (§31.4) refetches the map, so the rings move with the toast.
+  `/api/leaders` (§21) and `/api/newcomers` (§67.3) are read the same way, so a bubble's leader
+  badges and hat stay in step too.
 
 **Where the level does not appear.** Leaderboard rows carry the ring only because they render
 `UserBubble` — there is **no level column, no level sort and no level tiebreak** on the board.
@@ -6453,6 +6460,11 @@ including on a backfilled award; migration 0072 backfills `hero_at = max(earned_
 full-house user and leaves everyone else null; `GET /api/levels` omits hidden, inactive and erased
 users, includes the caller's own hidden entry, omits level-0 users, and returns an empty map while
 the toggle is off; the card payload's `achievementHero`; the erasure sweep clears `hero_at`.
+Unit (the client cache, `components/apiCache.test.ts`): a bubble mounted before a later fetch of
+the map receives it; the toast's refresh bypasses a still-fresh cache and reaches every bubble; a
+failed fetch leaves every bubble on the level it had; `UserBubble` reads all three maps through the
+kept-in-step hook. E2e: after a client-side navigation the sidebar's bubble and the page's own bubble
+carry the same ring label, and a badge toast moves the sidebar ring with no navigation.
 
 ### 31.11 Encore — first new-version proposal (`first_version_proposal`)
 

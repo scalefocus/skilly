@@ -15,10 +15,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "2.59.4",
+    version: "2.59.5",
     date: "2026-11-13",
     summary:
       "The MCP server page opens again: it moved to /mcp-server, because /mcp is the server endpoint itself and only ever showed an error in the browser. Opening the server URL in a browser now takes you to the page. Your MCP clients keep the same URL and need no changes.",
+  },
+  {
+    version: "2.59.4",
+    date: "2026-11-13",
+    summary:
+      "Your avatar in the sidebar now always shows the same level ring as your avatar on the page you are on. Before, it kept the level from when you opened skilly, so after earning badges the two rings could disagree. It now also moves up the moment a badge toast appears.",
   },
   {
     version: "2.59.3",
