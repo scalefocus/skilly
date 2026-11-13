@@ -8,6 +8,7 @@ import { useDateFmt } from "../../components/DateFormat";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { UsageSharingCard, type UsageSharingState } from "../../components/UsageShare";
 import { filterMarketplaces } from "../../lib/marketplaceFilter";
+import { MARKETPLACE_LEADERBOARD_NOTE } from "../../components/MarketplaceAddCommand";
 
 /** One added Claude plugin marketplace (SKILLY_SPEC.md §30.6). */
 interface Marketplace {
@@ -95,6 +96,9 @@ function MarketplacesInner() {
           Claude Code plugin marketplaces you’ve added. Each carries a unique key — remove one to revoke its URL, or
           reactivate an expired one to revive the same URL without re-adding it. To add another, browse{" "}
           <Link href="/catalog/marketplaces">Marketplaces</Link>.
+        </p>
+        <p className="muted" data-testid="mk-leaderboard-note" style={{ fontSize: 13, marginTop: 8, maxWidth: "60ch" }}>
+          {MARKETPLACE_LEADERBOARD_NOTE}
         </p>
       </div>
 

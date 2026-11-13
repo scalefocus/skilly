@@ -476,6 +476,10 @@ export interface UsageBreakdown {
   anonymousInstalls: number;
   /** Clones via SYSTEM installations (§23) — no actor; shown as a separate bucket. */
   systemInstalls: number;
+  /** §21 "Plugin deliveries are not adoption": the people who hold the skill (its skill_installs
+   *  rows — what install_count counts) and how many of them hold it only through a plugin
+   *  marketplace delivery (no adopted_at). All-time, not windowed. */
+  holders: { total: number; pluginOnly: number };
   /** Views+installs over the SAME range as the lists, so the chart above them matches the filter. */
   series: SkillSeries;
   /** §68.7 — present only while Usage insights is on. */
@@ -491,7 +495,7 @@ export async function getBreakdown(skillId: string, createdAtIso: string, range:
   const interval = range === "all" ? null : RANGE_INTERVAL[range];
   const within = (col: string) => (interval ? `and ${col} >= now() - interval '${interval}'` : "");
 
-  const [viewers, installers, anon, system, series] = await Promise.all([
+  const [viewers, installers, anon, system, holders, series] = await Promise.all([
     pool.query<{ display_name: string; email: string; n: number }>(
       `select u.display_name, u.email, count(*)::int as n
          from usage_events e join users u on u.id = e.actor_user_id
@@ -518,6 +522,12 @@ export async function getBreakdown(skillId: string, createdAtIso: string, range:
         where skill_id = $1 and source = 'git' and is_system ${within("created_at")}`,
       [skillId],
     ),
+    // Holders, all-time: everyone with a ledger row, and those who never installed it deliberately.
+    pool.query<{ total: number; plugin_only: number }>(
+      `select count(*)::int as total, count(*) filter (where adopted_at is null)::int as plugin_only
+         from skill_installs where skill_id = $1`,
+      [skillId],
+    ),
     getSkillSeries(skillId, createdAtIso, range),
   ]);
 
@@ -527,6 +537,7 @@ export async function getBreakdown(skillId: string, createdAtIso: string, range:
     installers: installers.rows.map((r) => ({ displayName: r.display_name, email: r.email, count: r.n })),
     anonymousInstalls: anon.rows[0]?.n ?? 0,
     systemInstalls: system.rows[0]?.n ?? 0,
+    holders: { total: holders.rows[0]?.total ?? 0, pluginOnly: holders.rows[0]?.plugin_only ?? 0 },
     series,
     ...(uses ? { uses } : {}),
   };

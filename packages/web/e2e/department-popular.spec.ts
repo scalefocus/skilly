@@ -59,8 +59,8 @@ test("popular in your department: the home row and its colleague count → switc
     const target = skill!;
     for (const c of colleagues) {
       await pool.query(
-        `insert into skill_installs (skill_id, user_id, first_at) values ($1, $2, now())
-         on conflict (skill_id, user_id) do update set first_at = now()`,
+        `insert into skill_installs (skill_id, user_id, first_at, adopted_at) values ($1, $2, now(), now())
+         on conflict (skill_id, user_id) do update set first_at = now(), adopted_at = now()`,
         [target.id, c],
       );
     }

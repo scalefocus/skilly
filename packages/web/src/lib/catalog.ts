@@ -532,7 +532,7 @@ export async function relatedSkills(access: EffectiveAccess, skillId: string, vi
             (s.official_at is not null) as official, s.icon_sha256, s.icon_emoji, s.quality_score, s.quality_mode, s.created_at as created_at,
             coalesce(max(sv.created_at), s.created_at) as updated_at,
             s.watcher_count::text as watcher_count,
-            exists (select 1 from skill_installs si where si.skill_id = s.id and si.user_id = $${viewerIdx}) as installed,
+            exists (select 1 from skill_installs si where si.skill_id = s.id and si.user_id = $${viewerIdx} and si.adopted_at is not null) as installed,
             coalesce((select array_agg(c.name order by c.name)
                         from skill_categories sc join categories c on c.id = sc.category_id
                        where sc.skill_id = s.id), '{}') as categories,

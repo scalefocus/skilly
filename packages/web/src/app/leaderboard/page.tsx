@@ -48,7 +48,7 @@ function LeaderboardTabs() {
       <div className="page-head reveal">
         <div className="eyebrow">Community</div>
         <h1 className="page-title">Leaderboard.</h1>
-        {!showHyped && <p className="page-sub">Ranked by skills installed: the skills each person has installed themselves. Installs received counts other people’s first installs of the skills someone maintains.</p>}
+        {!showHyped && <p className="page-sub">Ranked by skills installed: the skills each person has installed themselves. Installs received counts other people’s first installs of the skills someone maintains. Skills that arrive through a plugin marketplace are not counted.</p>}
       </div>
       {hypeOn && (
         <div className="sort-toggle" role="tablist" aria-label="Leaderboard" style={{ marginBottom: 16 }}>

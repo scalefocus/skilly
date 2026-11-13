@@ -21,6 +21,11 @@ import { UsageKeyBlock, type MintedUsageKey } from "./UsageShare";
 import { PREF_MARKETPLACE_ADD_ROUTE, readPref, writePref } from "../lib/prefs";
 import { reportFeatureUse } from "../lib/surveyClient";
 
+/** §21 "Plugin deliveries are not adoption": said wherever a marketplace's add command is shown,
+ *  and on the Added marketplaces page, so nobody expects their leaderboard numbers to move. */
+export const MARKETPLACE_LEADERBOARD_NOTE =
+  "Adding a marketplace delivers every skill in it. Those deliveries do not count on the leaderboard; install a skill on its own to count it.";
+
 /** §36.3 copying a marketplace add command is the `marketplaces` feature's first use. */
 const reportMarketplaceUse = () => reportFeatureUse("marketplaces");
 
@@ -113,6 +118,11 @@ export function MarketplaceAddCommand({ minted }: { minted: MarketplaceMint }) {
           hint="The entry carries no key on purpose — settings files get committed. Put it in ~/.claude/settings.json for yourself, or in the project's .claude/settings.json to share it with the team; the git config line supplies the key on this machine."
         />
       )}
+
+      {/* §21 — plugin deliveries are reach, not adoption: say so next to the command. */}
+      <p className="muted" data-testid="mk-leaderboard-note" style={{ fontSize: 12.5, marginTop: 10 }}>
+        {MARKETPLACE_LEADERBOARD_NOTE}
+      </p>
 
       {/* §68.4 — the second block: the usage key, once, when Share usage was ticked. */}
       {minted.usageKey && <UsageKeyBlock usageKey={minted.usageKey} />}

@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useApi, useEnterKey, EmptyState, Pill, ScrollToTop, formatCount } from "../../components/ui";
 import { agentLabel } from "@skilly/shared/agents";
 import { readPref, writePref, PREF_PLATFORM_RANGE, PREF_SKILL_RANGE } from "../../lib/prefs";
+import { holdersLine } from "./holders";
 
 // recharts is heavy (d3) and only needed once charts render — code-split it out of the route's
 // initial bundle. ssr:false since charts measure the DOM; a skeleton holds the chart's height.
@@ -53,11 +54,12 @@ interface Breakdown {
   installers: { displayName: string; email: string; count: number }[];
   anonymousInstalls: number;
   systemInstalls: number;
+  /** §21 "Plugin deliveries are not adoption": people holding the skill, and those by plugin only. */
+  holders: { total: number; pluginOnly: number };
   series: { bucket: "hour" | "day" | "week" | "month"; points: { date: string; views: number; installs: number }[] };
   uses?: UsesBreakdown;
 }
 const RANGE_LABEL: Record<SkillRange, string> = { "7d": "last 7 days", "30d": "last 30 days", "90d": "last 90 days", all: "all time" };
-
 // Trend delta vs the prior equal window: ↑/↓ %, "new" when prior=0 & cur>0, "—" when both 0.
 function Delta({ cur, prev }: { cur: number; prev: number }) {
   if (cur === 0 && prev === 0) return <span style={{ color: "var(--faint)", fontSize: 11 }}>—</span>;
@@ -359,6 +361,14 @@ function SkillRow({ s, seriesDays, skillRange, onPickRange }: { s: SkillUsage; s
           ) : !bd ? (
             <div className="muted" style={{ fontSize: 13 }}>No breakdown available.</div>
           ) : (
+            <>
+            {/* §21 "Plugin deliveries are not adoption": why the install count can be far above the
+                maintainers' installs received. All-time, unlike the range-bound lists below. */}
+            {bd.holders.total > 0 && (
+              <div className="muted mono" data-testid="usage-holders" style={{ fontSize: 12, marginBottom: 12 }}>
+                {holdersLine(bd.holders)}
+              </div>
+            )}
             <div style={{ display: "flex", gap: 40, flexWrap: "wrap" }}>
               <PeopleList
                 title="Top installers"
@@ -371,6 +381,7 @@ function SkillRow({ s, seriesDays, skillRange, onPickRange }: { s: SkillUsage; s
               <PeopleList title="Top viewers" people={bd.viewers} extra={null} />
               {bd.uses && <UsesPanel u={bd.uses} rangeLabel={RANGE_LABEL[skillRange]} />}
             </div>
+            </>
           )}
         </div>
       )}

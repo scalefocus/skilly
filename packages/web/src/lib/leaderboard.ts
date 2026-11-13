@@ -10,7 +10,9 @@
 // credit rows from EVERY source — filtering on access_log.source would lose them for good. Implicit
 // namespace-admin maintainership earns nothing. One install with N maintainers yields +1 for each
 // (equal credit), so the board's summed installs exceed the unique-install count — this is
-// "installs credited to you", not a global total.
+// "installs credited to you", not a global total. A PLUGIN MARKETPLACE delivery is not one of the
+// three doors and writes no credit (§21 "Plugin deliveries are not adoption"); a later deliberate
+// install of a delivered skill writes the credit then.
 //
 // Both displayed metrics derive from install_credits (always mutually consistent): installs =
 // unique installs credited to you in the window; skillCount = distinct skills among them.
@@ -38,11 +40,12 @@
 // manufacturing standing). All-time = the current count; 30d = such collections created in the
 // trailing 30 days. A count only — the board never names a collection or a skill.
 //
-// skillsInstalled (§21 "Skills installed") is the one CONSUMER metric: the person's own rows in the
-// adoption ledger skill_installs — one per skill, the first time they adopt it by clone, download
-// or MCP read. Skills they maintain count (no self-exclusion), uninstalling never lowers it, and
-// agent-key clones and system installations never write the ledger, so they are not in it.
-// All-time = every row; 30d = rows whose first_at is in the trailing 30 days. It is displayed apart
+// skillsInstalled (§21 "Skills installed") is the one CONSUMER metric: the person's own ADOPTED rows
+// in the ledger skill_installs — one per skill, the first time they install it deliberately by
+// clone, download or MCP read. A row a plugin marketplace delivered (adopted_at null) does not
+// count until they install that skill deliberately. Skills they maintain count (no self-exclusion),
+// uninstalling never lowers it, and agent-key clones and system installations never write the
+// ledger. All-time = every adopted row; 30d = rows adopted in the trailing 30 days. It is displayed apart
 // from `installs` (shown as "installs received"), which it never feeds, and has no leader badge.
 //
 // The board exposes only per-person AGGREGATES (display name, total installs, skill count) —
@@ -76,7 +79,7 @@ export interface LeaderboardEntry {
   followers: number;
   /** Skill collections holding at least 3 eligible skills (§38.8). */
   collections: number;
-  /** Skills this user has installed themselves: their skill_installs rows, one per skill (§21). */
+  /** Skills this user has installed themselves: their adopted skill_installs rows, one per skill (§21). */
   skillsInstalled: number;
   /** §35.4 — viewer-independent, so the per-(window,sort) cache stays shared. */
   followable: boolean;
@@ -120,7 +123,8 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
   const sinceRequested = window === "30d" ? "and created_at >= now() - interval '30 days'" : "";
   const sinceFollowed = window === "30d" ? "and uf.created_at >= now() - interval '30 days'" : "";
   const sinceCollected = window === "30d" ? "and c.created_at >= now() - interval '30 days'" : "";
-  const sinceInstalled = window === "30d" ? "where si.first_at >= now() - interval '30 days'" : "";
+  // §21 "Plugin deliveries are not adoption": adopted rows only, dated by adopted_at.
+  const sinceInstalled = window === "30d" ? "and si.adopted_at >= now() - interval '30 days'" : "";
   // A user appears with ANY kind of standing, so a pure request-fulfiller, a maintainer whose only
   // credit is a watched skill, or someone who has only installed skills still ranks when sorting
   // by that metric. Ties break by the other
@@ -142,8 +146,8 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
     // the self-watch exclusion is per-maintainer, so a co-maintainer's own watch still counts
     // toward the OTHER maintainer's total. skills_requested = the user's own skill_requests rows in
     // any persisting state, by created_at (§26) — no self-credit rule, nothing to exclude.
-    // skills_installed = the user's own skill_installs rows, by first_at (§21) — one per skill
-    // they adopted, their own skills included.
+    // skills_installed = the user's own ADOPTED skill_installs rows, by adopted_at (§21) — one per
+    // skill they installed deliberately, their own skills included; plugin deliveries excluded.
     `with credits as (
        select ic.user_id, count(*) as installs, count(distinct al.skill_id) as skill_count
          from install_credits ic
@@ -179,7 +183,7 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
      ), installed as (
        select si.user_id, count(*) as skills_installed
          from skill_installs si
-        ${sinceInstalled}
+        where si.adopted_at is not null ${sinceInstalled}
         group by si.user_id
      )
      select u.id as user_id, u.display_name, u.email, u.avatar,

@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { EffectiveAccess } from "@skilly/shared";
 import { pool } from "./db";
-import { departmentPopular, resetDepartmentPopularCache } from "./departmentPopular";
+import { departmentAdoptions, departmentPopular, resetDepartmentPopularCache } from "./departmentPopular";
 import { setDepartmentPopularEnabled } from "./settings";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
@@ -80,10 +80,18 @@ test("popular in your department: window, floor, matching, who counts, filters, 
     );
     return id;
   };
+  // A deliberate adoption: held and adopted at the same moment (§21 "Plugin deliveries are not adoption").
   const adopt = (skillId: string, userId: string, daysAgo: number) =>
     q(
-      `insert into skill_installs (skill_id, user_id, first_at) values ($1, $2, $3)
-       on conflict (skill_id, user_id) do update set first_at = excluded.first_at`,
+      `insert into skill_installs (skill_id, user_id, first_at, adopted_at) values ($1, $2, $3, $3)
+       on conflict (skill_id, user_id) do update set first_at = excluded.first_at, adopted_at = excluded.adopted_at`,
+      [skillId, userId, at(daysAgo)],
+    );
+  // A plugin marketplace delivery: held, never adopted.
+  const deliver = (skillId: string, userId: string, daysAgo: number) =>
+    q(
+      `insert into skill_installs (skill_id, user_id, first_at, adopted_at) values ($1, $2, $3, null)
+       on conflict (skill_id, user_id) do update set first_at = excluded.first_at, adopted_at = null`,
       [skillId, userId, at(daysAgo)],
     );
 
@@ -123,6 +131,14 @@ test("popular in your department: window, floor, matching, who counts, filters, 
   const system = await mkSkill("deptpop-system"); // one colleague + a system installation clone
   await adopt(system, c1, 1);
   await q(`select record_git_access($1, null, true, true)`, [system]);
+  // §21 "Plugin deliveries are not adoption": three colleagues who only got it by plugin count for nothing.
+  const plugin = await mkSkill("deptpop-plugin");
+  for (const u of [c1, c2, c3]) await deliver(plugin, u, 2);
+  // The viewer holds this one only by plugin, so it is NOT left out of their row (decision 6). Old
+  // enough adoptions that it ranks past the cap until the end of the test brings it forward.
+  const viewerPlugin = await mkSkill("deptpop-viewer-plugin");
+  await deliver(viewerPlugin, viewer, 1);
+  for (const [u, d] of [[c1, 45], [c2, 46]] as const) await adopt(viewerPlugin, u, d);
 
   const member = (userId: string | null): EffectiveAccess & { userId: string | null } =>
     ({ isPlatformAdmin: false, namespaceRoles: new Map([[ns, "namespace_member"]]), userId });
@@ -143,9 +159,15 @@ test("popular in your department: window, floor, matching, who counts, filters, 
     assert.equal(r1Card.namespaceSlug, "deptpop-ns", "a full catalog card");
     assert.equal(typeof r1Card.installCount, "number");
     for (const absent of ["deptpop-r7", "deptpop-single", "deptpop-stale", "deptpop-otherdept", "deptpop-notcounted", "deptpop-mine",
-      "deptpop-restricted", "deptpop-archived", "deptpop-deprecated", "deptpop-unpublished", "deptpop-system"]) {
+      "deptpop-restricted", "deptpop-archived", "deptpop-deprecated", "deptpop-unpublished", "deptpop-system", "deptpop-plugin"]) {
       assert.ok(!slugs(res).includes(absent), `${absent} is not on the row`);
     }
+    // §21: plugin deliveries are not adoptions — "deptpop-plugin" has no adopters at all.
+    const adoptionsNow = await departmentAdoptions("DeptPop Eng", now);
+    assert.equal(adoptionsNow.find((a) => a.skillId === plugin), undefined, "three plugin deliveries are not adoptions");
+    // The viewer's own delivery is not a colleague adoption either: two adopters, not three.
+    const vp = adoptionsNow.find((a) => a.skillId === viewerPlugin);
+    assert.equal(vp?.colleagues, 2, "the viewer's delivery is not counted as an adoption");
     assert.ok(!/deptpop-c\d|deptpop-hidden/.test(JSON.stringify(res)), "no colleague is ever named");
 
     // — Matching: a viewer whose department differs only in case and spaces is in the same
@@ -186,6 +208,14 @@ test("popular in your department: window, floor, matching, who counts, filters, 
     assert.ok(slugs(fresh).includes("deptpop-single"), "after the TTL a new adoption shows");
     await adopt(r1, viewer, 0); // the viewer adopts R1: dropped at once, no cache reset needed
     assert.ok(!slugs(await departmentPopular(member(viewer), now)).includes("deptpop-r1"), "the viewer's own adoption is live");
+
+    // — §21 decision 6, viewer side: a skill the viewer holds only by plugin can still be suggested —
+    for (const u of [c3, c4]) await adopt(viewerPlugin, u, 1); // now 4 colleagues, the latest yesterday
+    resetDepartmentPopularCache();
+    assert.equal((await departmentPopular(member(viewer), now)).skills[0]?.skillSlug, "deptpop-viewer-plugin",
+      "held by plugin only ⇒ still on the viewer's row");
+    await adopt(viewerPlugin, viewer, 0); // a deliberate install adopts it …
+    assert.ok(!slugs(await departmentPopular(member(viewer), now)).includes("deptpop-viewer-plugin"), "… and only then is it left out");
 
     // — The switch (audited); off ⇒ nothing, regardless of the cache —
     await setDepartmentPopularEnabled(false, admin);

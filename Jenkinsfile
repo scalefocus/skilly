@@ -224,6 +224,10 @@ pipeline {
               # §63 upstream release alerts — the sweep with a stubbed upstream, scoped to its own fixtures.
               SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
                 node --test "packages/worker/dist/integration/upstreamReleaseSweep.test.js"
+              # §21 plugin deliveries — the marketplace credit path and the related-skills rebuild.
+              # Alone and before the web DB tests: the rebuild rewrites the whole related_skills table.
+              SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
+                node --test "packages/worker/dist/integration/pluginDeliveries.test.js"
               SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
                 pnpm --filter @skilly/web test:db
             '''

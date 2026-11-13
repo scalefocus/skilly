@@ -56,12 +56,14 @@ export function resetDepartmentPopularCache(): void {
  * the department `rawDepartment` belongs to. An adopter is active, not erased, has not hidden their
  * directory details (the §66.1 #11 opt-out), is in the same department today (trimmed,
  * case-insensitive — both sides normalized by the same SQL, which the migration 0107 index serves),
- * and first adopted the skill (skill_installs, §21) within the window. System installations have no
- * user and so never count. NOT visibility-filtered — callers must apply step 2.
+ * and first adopted the skill (skill_installs.adopted_at, §21) within the window. A skill a plugin
+ * marketplace delivered is not an adoption until the person installs it deliberately (§21 "Plugin
+ * deliveries are not adoption"). System installations have no user and so never count. NOT
+ * visibility-filtered — callers must apply step 2.
  */
 export async function departmentAdoptions(rawDepartment: string, now: Date = new Date()): Promise<DepartmentAdoption[]> {
   const { rows } = await pool.query<{ skill_id: string; colleagues: number; last_at: Date }>(
-    `select si.skill_id, count(*)::int as colleagues, max(si.first_at) as last_at
+    `select si.skill_id, count(*)::int as colleagues, max(si.adopted_at) as last_at
        from users u
        join skill_installs si on si.user_id = u.id
       where u.department is not null
@@ -69,7 +71,7 @@ export async function departmentAdoptions(rawDepartment: string, now: Date = new
         and u.status = 'active'
         and u.erased_at is null
         and not u.directory_hidden
-        and si.first_at >= $2::timestamptz - make_interval(days => $3)
+        and si.adopted_at >= $2::timestamptz - make_interval(days => $3)
       group by si.skill_id
      having count(*) >= $4`,
     [rawDepartment, now, DEPARTMENT_POPULAR_WINDOW_DAYS, DEPARTMENT_POPULAR_MIN_COLLEAGUES],
@@ -101,7 +103,8 @@ async function rankForViewer(
     "s.status = 'active'",
     "s.deprecated_at is null",
     "exists (select 1 from skill_versions sv where sv.skill_id = s.id and sv.status = 'active' and sv.git_published)",
-    "not exists (select 1 from skill_installs mine where mine.skill_id = s.id and mine.user_id = $4)",
+    // Adopted only: a skill the viewer holds only by plugin delivery can still be suggested (§21).
+    "not exists (select 1 from skill_installs mine where mine.skill_id = s.id and mine.user_id = $4 and mine.adopted_at is not null)",
   ];
   {
     // Invariant #3 via the ONE shared predicate — never inline it.

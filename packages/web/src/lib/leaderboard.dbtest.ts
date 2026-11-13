@@ -285,12 +285,14 @@ test("leaderboard: 'skills installed' counts a person's own first adoptions, own
     await recordAgentClone(pool, { userId: solo, skillId: skills[4]!, userAgent: "git/2.45.0", clientIp: "10.9.9.9" });
     assert.deepEqual(await installed(), [[keen, 6], [solo, 4]], "system and agent-key clones are outside the ledger");
 
-    // 30d keys on first_at: two of keen's adoptions and all of solo's are older than the window.
+    // 30d keys on the adoption date (adopted_at, §21 "Plugin deliveries are not adoption"): two of
+    // keen's adoptions and all of solo's are older than the window.
     await pool.query(
-      `update skill_installs set first_at = now() - interval '40 days' where user_id = $1 and skill_id = any($2::uuid[])`,
+      `update skill_installs set first_at = now() - interval '40 days', adopted_at = now() - interval '40 days'
+        where user_id = $1 and skill_id = any($2::uuid[])`,
       [keen, skills.slice(0, 2)],
     );
-    await pool.query(`update skill_installs set first_at = now() - interval '40 days' where user_id = $1`, [solo]);
+    await pool.query(`update skill_installs set first_at = now() - interval '40 days', adopted_at = now() - interval '40 days' where user_id = $1`, [solo]);
     assert.deepEqual(await installed("30d"), [[keen, 4]], "nothing in the window → not on the 30d board");
     assert.deepEqual(await installed(), [[keen, 6], [solo, 4]], "all-time is unaffected by age");
 

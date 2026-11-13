@@ -19,6 +19,8 @@ test.describe("leaderboard (§21)", () => {
 
     await expect(page.getByRole("heading", { name: "Leaderboard." })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Ranked by skills installed: the skills each person has installed themselves.")).toBeVisible();
+    // §21 "Plugin deliveries are not adoption".
+    await expect(page.getByText("Skills that arrive through a plugin marketplace are not counted.")).toBeVisible();
 
     // The ranking controls are always present regardless of data. "Installed" leads the toggle and
     // is selected by default; "Installs received" follows it; the old bare "Installs" label is gone.
