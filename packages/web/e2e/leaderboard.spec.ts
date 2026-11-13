@@ -2,7 +2,9 @@
 // skills receive, capped at the fixed top-100 display limit. We assert the page renders, its
 // "Rank by" controls are present under their current names ("Installs received", and the "Installed"
 // sort for a person's own installs), the Installed sort fetches its own board and captions the big
-// number "installed", and the display never exceeds the top-100 cap. Read-only.
+// number "installed", and the display never exceeds the top-100 cap. The §21 "Row layout" checks:
+// the "installs" caption, no Collections button, equal row heights, a name column of one width on
+// every row, and at most 4 badges under an avatar. Read-only.
 import { test, expect, devSignIn } from "./fixtures";
 import { clickAndAwait, gotoLoaded } from "./helpers/ready";
 
@@ -32,8 +34,28 @@ test.describe("leaderboard (§21)", () => {
     await expect(
       page.locator(".lb-row").first().or(page.getByText(/No contributors yet/i)),
     ).toBeVisible();
-    if ((await page.locator(".lb-row").count()) > 0) {
-      await expect(page.locator(".lb-row").first()).toContainText(/installs received/i);
+    const rows = page.locator(".lb-people .lb-row");
+    if ((await rows.count()) > 0) {
+      // §21 "Row layout": the caption is the short word, the button keeps "Installs received".
+      await expect(rows.first().locator(".lb-num > div").last()).toHaveText("installs");
+      // Four actions at most: the Collections button is gone from every row.
+      await expect(rows.getByRole("link", { name: "Collections", exact: true })).toHaveCount(0);
+      // Every row is the same height, and the name column is the same width on every row.
+      const boxes = await rows.evaluateAll((els) =>
+        els.slice(0, 20).map((el) => ({
+          height: el.getBoundingClientRect().height,
+          name: el.querySelector(".lb-who")!.getBoundingClientRect().width,
+        })),
+      );
+      for (const b of boxes) {
+        expect(Math.abs(b.height - boxes[0]!.height)).toBeLessThanOrEqual(1);
+        expect(Math.abs(b.name - boxes[0]!.name)).toBeLessThanOrEqual(1);
+      }
+      // The default 1280 px viewport leaves the name column well over 250 px on the 980 px board.
+      expect(boxes[0]!.name).toBeGreaterThan(250);
+      // A capped badge line never wraps: at most 4 badges and a +N marker under any avatar.
+      const perRow = await rows.evaluateAll((els) => els.map((el) => el.querySelectorAll('.lb-av [aria-label$="all time"], .lb-av [aria-label$="last 30 days"]').length));
+      for (const n of perRow) expect(n).toBeLessThanOrEqual(4);
     }
 
     // The fixed top-100 display cap is never exceeded.
@@ -54,8 +76,8 @@ test.describe("leaderboard (§21)", () => {
       page.locator(".lb-row").first().or(page.getByText(/No contributors yet/i)),
     ).toBeVisible();
     if (body.entries.length > 0) {
-      await expect(page.locator(".lb-row").first()).toContainText(/installed/i);
-      expect(await page.locator(".lb-row").count()).toBeLessThanOrEqual(100);
+      await expect(rows.first().locator(".lb-num > div").last()).toHaveText("installed");
+      expect(await rows.count()).toBeLessThanOrEqual(100);
     }
   });
 });

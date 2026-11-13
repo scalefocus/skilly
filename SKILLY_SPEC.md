@@ -2038,7 +2038,8 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
       the profile, the catalog's `?collection=` / `?collectionsBy=` views with a banner, and a
       Collections group in the header dropdown. No bulk install.
     - **Extensions:** `follow.collection_created`, the *Mixtape* badge, a *collections* leaderboard
-      stat + *Curated* sort + 🗂 *Curator* leader badge + a Collections row action, and the MCP
+      stat + *Curated* sort + 🗂 *Curator* leader badge + a Collections row action (later removed,
+      §21 *Row layout*), and the MCP
       `get_collections` tool (25 tools).
 
     *(Spec'd 2026-10-05; not yet built.)*
@@ -2342,10 +2343,18 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 - **Erasure removes credit — unless transferred.** GDPR erasure (§4, both the admin and SCIM paths) **deletes the erased user's `install_credits`** — credits-only: the shared `access_log` row, `skills.install_count`, and co-maintainers' credit are untouched (the install still happened and still counts for everyone else). **Exception:** the admin erasure path with a "Replace maintainer to" target **reassigns** the credits to that target instead of deleting them (§4 — would-be self-credits and duplicates excepted; those are deleted as usual), so the standing survives on the board under the successor. Either way, a deleted user holds zero credits and never appears. A reversible **deprovision** (leaver → `status='inactive'`) does **not** delete credits — the board's `status='active'` filter hides them, and re-enabling restores their standing.
 - **Privacy (invariant #3).** The board exposes only per-person aggregates (display name, avatar, total installs, skill count) — **never skill identities, slugs, or namespaces** — so it cannot enumerate or identify restricted skills, and is identical for every viewer. Users may opt out via `leaderboard_hidden` (§13).
 - **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other metrics descending in their fixed order, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
-- **Row actions.** Each row offers five actions, on every row and under every sort: **Skills**, **Requests**, **Collections** (§38.8: the catalog's `?collectionsBy=` view), **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow).
+- **Row actions.** Each row offers four actions, on every row and under every sort: **Skills**, **Requests**, **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow). A fifth, **Collections** (§38.8), was removed to give names room (see *Row layout*); the catalog's `?collectionsBy=` view it opened still works, but nothing in the app links to it.
   - **Skills** links to the catalog scoped to the skills that person **maintains** — `/catalog?maintainer=<userId>&by=<name>` for another person (the catalog shows a dismissible "Skills maintained by &lt;name&gt;" banner), or `/catalog?mine=1` for **your own** row (reuses the "My Skills" filter). This does **not** break invariant #3: the catalog independently visibility-filters to what the *viewer* may see (`searchSkills`), so it only ever lists skills the viewer could already browse — the leaderboard itself still reveals no skill identities. On arrival the maintainer view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) and shows everything by that maintainer the viewer can see.
   - **Requests** links to the Requested-skills page scoped to the requests that person **posted** — `/requests?requester=<userId>&by=<name>` for another person (the page shows a dismissible "Requested by &lt;name&gt;" banner, §26), or `/requests?mine=1` for **your own** row (reuses the "Mine" toggle). Requests have no namespace and are org-visible, so there is no visibility concern; the link is shown even when the person's requested count is 0 (consistent with **Skills**, which shows at 0 adopted).
   - **Reach out** opens a 1:1 direct chat (`POST /api/messages/direct` → `skilly:open-conversation`), the same mechanism as the skill-detail maintainer list and the admin online-users list. It is **hidden on the viewer's own row** (you can't message yourself).
+- **Row layout.** Names were cut off (*"Vladimir Kame…"*) and rows grew to different heights as the stat line and the badges wrapped. The board is laid out so every name shows and every row is the same height.
+  - **Width.** The `/leaderboard` page is up to **980 px** wide (was 760), the width of the usage dashboard and the admin logs. Both tabs share the page, so the *Hyped skills* tab widens too.
+  - **Columns.** Every row is one line of columns: rank · avatar · name and stat line · the sorted number · actions. The number and action columns have fixed widths and the actions are right-aligned, so the **name column is the same width on every row** and takes all the remaining space. A name longer than the column ends in an ellipsis, with the full name on hover.
+  - **Equal height.** Every row is the same height, whatever it holds. The name and the stat line are one line each. The avatar slot always reserves room for a level ring (§31.10) and one line of leader badges, whether or not the person has them. The actions sit on one line.
+  - **Stat line.** One line (*"58 skills adopted · 3 requests fulfilled · …"*). When it does not fit, it ends in an ellipsis and the full line shows on hover.
+  - **Leader badges.** On leaderboard rows only, the first **4** badges show under the avatar, followed by a **`+N`** marker for the rest, whose `aria-label` reads *"N more leader badges"*. The directory hover card (§28) still lists every badge. Everywhere else every badge still renders (see *Leader badges*).
+  - **Caption.** The caption under the row's big number is one short word: `installs` under the default sort (the sort button keeps the name *Installs received*, which tells it apart from *Installed* beside it), then `adopted`, `fulfilled`, `watched`, `requested`, `followers`, `collections` and `installed`.
+  - **Narrow screens.** At the existing mobile breakpoint the actions move to their own line on **every** row, so rows stay equal there too.
 
 - **Hyped skills tab (§50).** Since §50 the `/leaderboard` page has two tabs: **People** (this board, unchanged) and **Hyped skills** — a board of *skills*, not people, ranked by the §50.4 hype score over a fixed trailing 7-day window and capped by the same `LEADERBOARD_LIMIT`. It names skills, which this board never does, and may do so only because every hype-eligible skill is `org`-visible by construction (§50.1 decision 2).
 
@@ -2379,9 +2388,9 @@ installed": people installed a skill and expected their own row to move.
   maintain moves only your own *skills installed*.
 - **Rename: *Installs* becomes *Installs received*.** The existing `installs` stat keeps its
   definition, its API field and its `sort=installs` key. Only its display name changes: the sort
-  button reads **Installs received** (still the default sort), and the caption under the row's big
-  number reads `installs received`. The installs leader badge spells the metric out (see *Leader
-  badges*).
+  button reads **Installs received** (still the default sort). The caption under the row's big
+  number stays the short `installs` (*Row layout*: it was `installs received` for one release and
+  squeezed the names). The installs leader badge spells the metric out (see *Leader badges*).
 - **Sort and row.**
   - An eighth sort, ***Installed*** (`sort=installed`), appended to the toggle after *Curated*.
     Under it the row's big number is the person's skills installed, captioned `installed`.
@@ -2399,8 +2408,8 @@ installed": people installed a skill and expected their own row to move.
   would distort the adoption signal the catalog, *Popular in your department* (§66) and *Skills
   you might like* (§10) are built on. `GET /api/leaders` is unchanged: its `metric` union stays
   at seven, and a user still holds at most 14 badges.
-- **Row actions are unchanged** (five). The board names no skills, so there is no link to the
-  skills a person installed. A person's own list is their `/installed` page.
+- **No new row action.** The board names no skills, so there is no link to the skills a person
+  installed. A person's own list is their `/installed` page.
 - **Copy.**
   - Leaderboard subtitle (People tab): *"Top contributors by installs received: other people’s
     first installs of the skills they maintain. Your own installs count under Skills installed."*
@@ -2447,7 +2456,8 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   different glyphs). The **all-time**
   variant is the identical icon with a small crown overlaid on top; the **30-day** variant has no
   crown. **Every badge a user currently holds renders** (no cap, wrapping if needed) — most users
-  have zero; a dominant contributor may show several.
+  have zero; a dominant contributor may show several. The one exception is a leaderboard row,
+  which shows the first 4 and a `+N` marker so every row keeps the same height (§21 *Row layout*).
 - **Placement:** directly **below** the avatar bubble, never beside it — the bubble+badges stack is
   one visual unit. The §31.10 **level ring** takes the avatar's *outline*, not this slot,
   so the two systems never compete for space: ring around, badges below, both on the same
@@ -9360,7 +9370,8 @@ There is no collection page. A collection is the **catalog filtered to it**.
   - **No eligible members:** the banner shows as usual, and the grid's empty state reads *"This
     collection has no skills yet."*
 - **`/catalog?collectionsBy=<userId>&by=<name>`** shows the **union** of every skill in that
-  person's non-empty collections (the leaderboard row action, §38.8).
+  person's non-empty collections. The leaderboard row action that opened it (§38.8) was removed
+  (§21 *Row layout*), so it is reachable by URL only.
   - **The banner** reads *"Skills in collections by ‹name›"* and carries **one chip per non-empty
     collection** (name and count). Clicking a chip navigates to `?collection=<id>`.
   - Arrival, sorting, dismissal and the empty state work as for `?collection=`.
@@ -9406,7 +9417,7 @@ There is no collection page. A collection is the **catalog filtered to it**.
 - **Order:** newest first.
 - **Empty state:** *"No collections yet. Use **Add to collection** on any skill page."*
 - **Owner-only.** The profile page is the user's own. Other people reach someone's collections
-  through links, the header dropdown and the leaderboard row action (§38.8).
+  through links and the header dropdown (the leaderboard row action was removed, §21 *Row layout*).
 
 ### 38.8 Extensions to other features
 - **Notification `follow.collection_created` (§35.6).** The sixth `follow.*` type, with the same
@@ -9449,7 +9460,8 @@ There is no collection page. A collection is the **catalog filtered to it**.
     collections, all time"* and *"Curator — most new collections, last 30 days"*. `GET /api/leaders`
     gains `curated`. Up to **14** badges per user.
   - **A fifth row action, Collections,** placed after Requests: `/catalog?collectionsBy=<userId>&by=<name>`
-    (§38.5), on every row including your own, shown even at 0.
+    (§38.5), on every row including your own, shown even at 0. **Since removed** to give names
+    room (§21 *Row layout*). The view it opened still works, but nothing in the app links to it.
   - The board still exposes **no skill identity**: the stat is a count, and the row action lands on
     the visibility-filtered catalog.
 

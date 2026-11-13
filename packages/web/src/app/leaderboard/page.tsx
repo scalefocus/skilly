@@ -7,6 +7,8 @@ import { useApi, EmptyState, ScrollToTop, formatCount } from "../../components/u
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
 import { FollowButton } from "../../components/FollowButton";
+import { leaderBadgeSize } from "../../components/leaderBadges";
+import { ringGeometry } from "../../components/levelRing";
 import { reportFeatureUse } from "../../lib/surveyClient";
 
 interface Entry {
@@ -30,10 +32,11 @@ interface Entry {
 
 // The ranking metrics, in toggle order (§21/§26/§35.7/§38.8): the button label, the caption under
 // the row's big number, and the number itself. `installs` counts OTHER people's first installs of
-// the skills someone maintains, hence "Installs received"; `installed` is the person's own installs.
+// the skills someone maintains, hence the button "Installs received"; `installed` is the person's
+// own installs. Captions stay one short word so the name column keeps its width (§21 "Row layout").
 type Sort = "installs" | "skills" | "requests" | "watched" | "requested" | "followed" | "curated" | "installed";
 const SORTS: { key: Sort; label: string; caption: string; value: (e: Entry) => number }[] = [
-  { key: "installs", label: "Installs received", caption: "installs received", value: (e) => e.installs },
+  { key: "installs", label: "Installs received", caption: "installs", value: (e) => e.installs },
   { key: "skills", label: "Skills adopted", caption: "adopted", value: (e) => e.skillCount },
   { key: "requests", label: "Requests fulfilled", caption: "fulfilled", value: (e) => e.requestsFulfilled },
   { key: "watched", label: "Watched", caption: "watched", value: (e) => e.skillsWatched },
@@ -42,6 +45,28 @@ const SORTS: { key: Sort; label: string; caption: string; value: (e: Entry) => n
   { key: "curated", label: "Curated", caption: "collections", value: (e) => e.collections },
   { key: "installed", label: "Installed", caption: "installed", value: (e) => e.skillsInstalled },
 ];
+
+// §21 "Row layout": every row is the same height. The avatar slot is fixed: room for a level ring
+// (§31.10) and ONE line of leader badges, at most LB_MAX_BADGES plus a `+N` marker, whether or not
+// the person has either. Badge crowns, the Hero crown and the newcomer hat overflow it by design.
+const LB_AVATAR = 34;
+const LB_MAX_BADGES = 4;
+const LB_BADGE = leaderBadgeSize(LB_AVATAR);
+const LB_SLOT_HEIGHT = ringGeometry(LB_AVATAR).outer + 2 + LB_BADGE;
+const LB_SLOT_WIDTH = Math.max(ringGeometry(LB_AVATAR).outer, LB_MAX_BADGES * (LB_BADGE + 2) + 26);
+
+/** The stat line under a name, as one string so it can also be the hover text when it is cut. */
+function statLine(e: Entry): string {
+  const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+  const parts = [`${n(e.skillCount, "skill")} adopted`];
+  if (e.requestsFulfilled > 0) parts.push(`${n(e.requestsFulfilled, "request")} fulfilled`);
+  if (e.skillsWatched > 0) parts.push(`${n(e.skillsWatched, "skill")} watched`);
+  if (e.skillsRequested > 0) parts.push(`${n(e.skillsRequested, "skill")} requested`);
+  if (e.followers > 0) parts.push(n(e.followers, "follower"));
+  if (e.collections > 0) parts.push(n(e.collections, "collection"));
+  if (e.skillsInstalled > 0) parts.push(`${n(e.skillsInstalled, "skill")} installed`);
+  return parts.join(" · ");
+}
 
 // §50.6 two tabs: People (the contributor board, unchanged) and Hyped skills. `?tab=hyped` opens
 // the second (the home page's "see the board" link). The Hyped tab is hidden while hype is off.
@@ -53,7 +78,8 @@ function LeaderboardTabs() {
   const hypeOn = me?.hypeEnabled !== false;
   const showHyped = hypeOn && tab === "hyped";
   return (
-    <div style={{ maxWidth: 760 }}>
+    // 980 px, the width of the usage dashboard and the admin logs (§21 "Row layout"); both tabs share it.
+    <div style={{ maxWidth: 980 }}>
       <ScrollToTop />
       <div className="page-head reveal">
         <div className="eyebrow">Community</div>
@@ -120,7 +146,7 @@ function Leaderboard() {
       ) : entries.length === 0 ? (
         <EmptyState title="No contributors yet" hint="Once proposals are accepted and skills get installed, they’ll rank here." />
       ) : (
-        <div className="rows reveal">
+        <div className="rows reveal lb-people">
           {entries.map((e, i) => {
             const isSelf = !!me?.userId && me.userId === e.userId;
             // Your own row → the catalog's "My Skills" filter; anyone else → the maintained-by view
@@ -129,27 +155,22 @@ function Leaderboard() {
             // Your own row → the requests page's "Mine" toggle; anyone else → the requested-by view
             // (banner shows their name). Requests have no namespace, so nothing to visibility-filter (§21/§26).
             const requestsHref = isSelf ? "/requests?mine=1" : `/requests?requester=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
-            // §38.8 every skill across that person's non-empty collections, own row included.
-            const collectionsHref = `/catalog?collectionsBy=${e.userId}&by=${encodeURIComponent(e.displayName)}`;
+            const stats = statLine(e);
+            // §21 "Row layout": rank · avatar · name and stat line · number · actions. The number and
+            // action columns are fixed width, so the name column is the same on every row.
             return (
-            <div className="row lb-row" key={e.userId} style={{ alignItems: "center", gap: 12 }}>
-              <span className="mono" style={{ fontSize: 14, fontWeight: 600, color: i < 3 ? "var(--accent-2)" : "var(--faint)", minWidth: 28, textAlign: "right" }}>
+            <div className="row lb-row" key={e.userId}>
+              <span className="mono lb-rank" style={{ color: i < 3 ? "var(--accent-2)" : "var(--faint)" }}>
                 {i + 1}
               </span>
-              <UserBubble name={e.displayName} avatar={e.avatar} userId={e.userId} size={34} />
-              <div className="grow" style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.displayName}</div>
-                <div className="muted mono" style={{ fontSize: 11.5 }}>
-                  {e.skillCount} skill{e.skillCount === 1 ? "" : "s"} adopted
-                  {e.requestsFulfilled > 0 && <> · {e.requestsFulfilled} request{e.requestsFulfilled === 1 ? "" : "s"} fulfilled</>}
-                  {e.skillsWatched > 0 && <> · {e.skillsWatched} skill{e.skillsWatched === 1 ? "" : "s"} watched</>}
-                  {e.skillsRequested > 0 && <> · {e.skillsRequested} skill{e.skillsRequested === 1 ? "" : "s"} requested</>}
-                  {e.followers > 0 && <> · {e.followers} follower{e.followers === 1 ? "" : "s"}</>}
-                  {e.collections > 0 && <> · {e.collections} collection{e.collections === 1 ? "" : "s"}</>}
-                  {e.skillsInstalled > 0 && <> · {e.skillsInstalled} skill{e.skillsInstalled === 1 ? "" : "s"} installed</>}
-                </div>
+              <div className="lb-av" style={{ width: LB_SLOT_WIDTH, height: LB_SLOT_HEIGHT }}>
+                <UserBubble name={e.displayName} avatar={e.avatar} userId={e.userId} size={LB_AVATAR} maxBadges={LB_MAX_BADGES} />
               </div>
-              <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div className="lb-who">
+                <div className="lb-line lb-name" title={e.displayName}>{e.displayName}</div>
+                <div className="lb-line lb-stats muted mono" title={stats}>{stats}</div>
+              </div>
+              <div className="lb-num">
                 <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 600 }}>
                   {formatCount(active.value(e))}
                 </div>
@@ -157,10 +178,9 @@ function Leaderboard() {
                   {active.caption}
                 </div>
               </div>
-              <div className="lb-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+              <div className="lb-actions">
                 <Link href={skillsHref} className="btn btn-sm" title={isSelf ? "Your maintained skills" : `Skills maintained by ${e.displayName}`}>Skills</Link>
                 <Link href={requestsHref} className="btn btn-sm" title={isSelf ? "Your skill requests" : `Skills requested by ${e.displayName}`}>Requests</Link>
-                <Link href={collectionsHref} className="btn btn-sm" title={isSelf ? "Skills in your collections" : `Skills in collections by ${e.displayName}`}>Collections</Link>
                 {!isSelf && (
                   <button type="button" className="btn btn-sm" disabled={reaching === e.userId} onClick={() => reachOut(e.userId)} title={`Message ${e.displayName}`}>
                     {reaching === e.userId ? "…" : "Reach out"}
