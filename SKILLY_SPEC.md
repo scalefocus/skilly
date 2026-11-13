@@ -2351,9 +2351,9 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
   - **Width.** The `/leaderboard` page is up to **980 px** wide (was 760), the width of the usage dashboard and the admin logs. Both tabs share the page, so the *Hyped skills* tab widens too.
   - **Columns.** Every row is one line of columns: rank · avatar · name and stat line · the sorted number · actions. The number and action columns have fixed widths and the actions are right-aligned, so the **name column is the same width on every row** and takes all the remaining space. A name longer than the column ends in an ellipsis, with the full name on hover.
   - **Equal height.** Every row is the same height, whatever it holds. The name and the stat line are one line each. The avatar slot always reserves room for a level ring (§31.10) and one line of leader badges, whether or not the person has them. The actions sit on one line.
-  - **Stat line.** One line (*"58 skills adopted · 3 requests fulfilled · …"*). When it does not fit, it ends in an ellipsis and the full line shows on hover.
+  - **Stat line.** One line (*"70 skills installed · 58 skills adopted · 3 requests fulfilled · …"*), led by the board's headline number so that is never the part cut off (order: *Skills installed*, below). When it does not fit, it ends in an ellipsis and the full line shows on hover.
   - **Leader badges.** On leaderboard rows only, the first **4** badges show under the avatar, followed by a **`+N`** marker for the rest, whose `aria-label` reads *"N more leader badges"*. The directory hover card (§28) still lists every badge. Everywhere else every badge still renders (see *Leader badges*).
-  - **Caption.** The caption under the row's big number is one short word: `installs` under the default sort (the sort button keeps the name *Installs received*, which tells it apart from *Installed* beside it), then `adopted`, `fulfilled`, `watched`, `requested`, `followers`, `collections` and `installed`.
+  - **Caption.** The caption under the row's big number is one short word, in toggle order: `installed`, `installs` (its sort button keeps the name *Installs received*, which tells it apart from *Installed* beside it), `adopted`, `fulfilled`, `watched`, `requested`, `followers` and `collections`.
   - **Narrow screens.** At the existing mobile breakpoint the actions move to their own line on **every** row, so rows stay equal there too.
 
 - **Hyped skills tab (§50).** Since §50 the `/leaderboard` page has two tabs: **People** (this board, unchanged) and **Hyped skills** — a board of *skills*, not people, ranked by the §50.4 hype score over a fixed trailing 7-day window and capped by the same `LEADERBOARD_LIMIT`. It names skills, which this board never does, and may do so only because every hype-eligible skill is `org`-visible by construction (§50.1 decision 2).
@@ -2388,13 +2388,22 @@ installed": people installed a skill and expected their own row to move.
   maintain moves only your own *skills installed*.
 - **Rename: *Installs* becomes *Installs received*.** The existing `installs` stat keeps its
   definition, its API field and its `sort=installs` key. Only its display name changes: the sort
-  button reads **Installs received** (still the default sort). The caption under the row's big
+  button reads **Installs received** (the default sort until *Installed* took its place, see *Sort
+  and row*). The caption under the row's big
   number stays the short `installs` (*Row layout*: it was `installs received` for one release and
   squeezed the names). The installs leader badge spells the metric out (see *Leader badges*).
 - **Sort and row.**
-  - An eighth sort, ***Installed*** (`sort=installed`), appended to the toggle after *Curated*.
-    Under it the row's big number is the person's skills installed, captioned `installed`.
-  - The stat line gains `N skill(s) installed` after "collections", only when greater than 0.
+  - An eighth sort, ***Installed*** (`sort=installed`). Under it the row's big number is the
+    person's skills installed, captioned `installed`.
+  - **Installed is the first button and the page's default sort.** The toggle reads *Installed /
+    Installs received / Skills adopted / Requests fulfilled / Watched / Requested / Followed /
+    Curated*, and `/leaderboard` opens ranked by skills installed. (It first shipped as the last
+    button, with *Installs received* as the default.) A row then showed *"0 installs"* beside
+    *"70 skills installed"* and read as a contradiction; opening on the number people expect
+    removes that first impression. This is the page's choice only: the API's fallback for a
+    missing or unknown `sort` stays `installs`.
+  - The stat line **starts** with `N skill(s) installed`, shown only when greater than 0, then
+    `N skill(s) adopted` (always shown) and the other stats in their existing order.
   - **Tie-break chain** for the Installed sort: skills installed desc, then the other seven
     metrics desc in their existing order, then name asc. The seven existing sorts append **skills
     installed desc** as their last numeric tie-breaker, before name.
@@ -2411,8 +2420,9 @@ installed": people installed a skill and expected their own row to move.
 - **No new row action.** The board names no skills, so there is no link to the skills a person
   installed. A person's own list is their `/installed` page.
 - **Copy.**
-  - Leaderboard subtitle (People tab): *"Top contributors by installs received: other people’s
-    first installs of the skills they maintain. Your own installs count under Skills installed."*
+  - Leaderboard subtitle (People tab): *"Ranked by skills installed: the skills each person has
+    installed themselves. Installs received counts other people’s first installs of the skills
+    someone maintains."*
   - Profile, under *Hide me from the leaderboard*: *"The leaderboard ranks people by the installs
     their skills receive, and shows how many skills each person has installed. You can hide
     yourself from it."*
@@ -2424,7 +2434,8 @@ installed": people installed a skill and expected their own row to move.
   actually installed, and this feature changes nothing about what erasure does to `skill_installs`.
 - **Data and API.**
   - `GET /api/leaderboard` accepts `sort=installed`, and every entry gains `skillsInstalled`
-    (integer). An unknown `sort` still falls back to `installs`.
+    (integer). A missing or unknown `sort` still falls back to `installs`, whatever the page
+    opens on.
   - The board query gains one CTE over `skill_installs` grouped by `user_id` (windowed on
     `first_at`), left-joined like the other six and added to the "has any standing" predicate. It
     is covered by the same 60 s per-(window, sort) cache. **No migration and no new index**: the
@@ -4399,8 +4410,8 @@ skill that **already** satisfies it.
   the row and the credit with it. Supported by an index on `skill_requests (requester_user_id, created_at)`
   (migration 0071). Rendered in the row's stat line as `N skill(s) requested`, after "skills watched",
   and — like the other stats — only when > 0.
-- A **sort toggle** above the board: **Installs** (default; relabelled **Installs received** by
-  §21 *Skills installed*) / **Skills adopted** / **Requests
+- A **sort toggle** above the board: **Installs** (then the default; since relabelled **Installs
+  received** and preceded by the new default **Installed**, §21 *Skills installed*) / **Skills adopted** / **Requests
   fulfilled** / **Watched** / **Requested** — re-ranks rows by the chosen stat (ties broken by the other
   stats, then name; for the **Requested** sort the chain is requested desc, installs desc, skills adopted
   desc, requests fulfilled desc, skills watched desc, name asc; the four existing sorts append requested
@@ -7941,7 +7952,7 @@ way a `follow.*` row reaches email; per-update recipients still get them in-app 
     (§4): follows are deleted, not reassigned.
 - **A sixth sort: *Followed*.** It is appended to the toggle: *Installs / Skills adopted / Requests
   fulfilled / Watched / Requested / Followed*. (*Installs* is now labelled *Installs received*, and
-  an eighth sort, *Installed*, follows *Curated*: §21 *Skills installed*.)
+  an eighth sort, *Installed*, leads the toggle as the default: §21 *Skills installed*.)
   - **Tie-break chain** for the Followed sort: followers desc, installs desc, skills adopted desc,
     requests fulfilled desc, skills watched desc, skills requested desc, name asc.
   - The five existing sorts append **followers desc** as their last numeric tie-breaker, before name.

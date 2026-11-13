@@ -18,7 +18,8 @@ import { test, expect, devSignIn, signedInDisplayName, type Page } from "./fixtu
 import { NAV_TIMEOUT, clickAndAwait, gotoLoaded, gotoReady, probe } from "./helpers/ready";
 
 const escapeRx = (s: string) => new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-const LEADERBOARD_INITIAL = "/api/leaderboard?window=all&sort=installs";
+// The page opens on the Installed sort (§21 "Sort and row").
+const LEADERBOARD_INITIAL = "/api/leaderboard?window=all&sort=installed";
 const LEADERBOARD_REQUESTED = "/api/leaderboard?window=all&sort=requested";
 // Own row = the one whose Requests action points at Mine.
 const ownRow = (page: Page) => page.locator(".lb-row").filter({ has: page.locator('a[href="/requests?mine=1"]') });

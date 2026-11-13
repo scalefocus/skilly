@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.59.2",
+    date: "2026-11-13",
+    summary:
+      "Leaderboard: the board now opens on Installed, the skills each person has installed themselves, and that is the first sort button. Installs received, which counts other people's installs of the skills you maintain, is the second. Each row's line of stats now starts with skills installed.",
+  },
+  {
     version: "2.59.1",
     date: "2026-11-13",
     summary:
