@@ -5,6 +5,10 @@
 // metric+window when they're tied for the TOP value of that metric in that window (ties all get
 // the badge — a tie is a tie); a metric with nobody above zero has no leader at all.
 //
+// The board's eighth sort, "installed" (a person's own installs, §21 "Skills installed"), is
+// deliberately NOT in METRICS: a badge for installing the most would reward installing everything,
+// and every first install also moves the skill's install count and its maintainers' credit.
+//
 // Reuses the already-cached per-(window,sort) leaderboard query — each metric's top rows are a
 // query the board already runs and caches, so this adds no new SQL. Since every sort order lists
 // its primary metric in strictly non-increasing order, the tied-for-first rows are exactly the

@@ -24,9 +24,13 @@ export function badgeIcon(b: LeaderBadgeInfo): string {
   return BADGE_META[b.metric].icon;
 }
 
-/** "Installs leader — all time" / "… — last 30 days". The badge's aria-label, and the line the
- *  hover card prints. */
+/** "Request leader — all time" / "… — last 30 days". The badge's aria-label, and the line the
+ *  hover card prints. The installs badge spells its metric out ("most installs received"): on its
+ *  own, "Installs" was read as "skills I installed" (§21 "Skills installed"). */
 export function badgeLabel(b: LeaderBadgeInfo): string {
+  if (b.metric === "installs") {
+    return `Installs leader — most installs received, ${b.window === "all" ? "all time" : "last 30 days"}`;
+  }
   if (b.metric === "followed") {
     return b.window === "all" ? "Influencer-in-Chief — most followed, all time" : "Trendsetter — most new followers, last 30 days";
   }

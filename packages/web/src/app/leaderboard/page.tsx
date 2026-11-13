@@ -23,8 +23,25 @@ interface Entry {
   followers: number;
   /** Collections holding at least 3 eligible skills (§38.8). */
   collections: number;
+  /** Skills this person installed themselves, one per skill (§21 "Skills installed"). */
+  skillsInstalled: number;
   followable: boolean;
 }
+
+// The ranking metrics, in toggle order (§21/§26/§35.7/§38.8): the button label, the caption under
+// the row's big number, and the number itself. `installs` counts OTHER people's first installs of
+// the skills someone maintains, hence "Installs received"; `installed` is the person's own installs.
+type Sort = "installs" | "skills" | "requests" | "watched" | "requested" | "followed" | "curated" | "installed";
+const SORTS: { key: Sort; label: string; caption: string; value: (e: Entry) => number }[] = [
+  { key: "installs", label: "Installs received", caption: "installs received", value: (e) => e.installs },
+  { key: "skills", label: "Skills adopted", caption: "adopted", value: (e) => e.skillCount },
+  { key: "requests", label: "Requests fulfilled", caption: "fulfilled", value: (e) => e.requestsFulfilled },
+  { key: "watched", label: "Watched", caption: "watched", value: (e) => e.skillsWatched },
+  { key: "requested", label: "Requested", caption: "requested", value: (e) => e.skillsRequested },
+  { key: "followed", label: "Followed", caption: "followers", value: (e) => e.followers },
+  { key: "curated", label: "Curated", caption: "collections", value: (e) => e.collections },
+  { key: "installed", label: "Installed", caption: "installed", value: (e) => e.skillsInstalled },
+];
 
 // §50.6 two tabs: People (the contributor board, unchanged) and Hyped skills. `?tab=hyped` opens
 // the second (the home page's "see the board" link). The Hyped tab is hidden while hype is off.
@@ -41,7 +58,7 @@ function LeaderboardTabs() {
       <div className="page-head reveal">
         <div className="eyebrow">Community</div>
         <h1 className="page-title">Leaderboard.</h1>
-        {!showHyped && <p className="page-sub">Top contributors by installs of the skills they maintain. An install credits the skill’s maintainers, not the person installing.</p>}
+        {!showHyped && <p className="page-sub">Top contributors by installs received: other people’s first installs of the skills they maintain. Your own installs count under Skills installed.</p>}
       </div>
       {hypeOn && (
         <div className="sort-toggle" role="tablist" aria-label="Leaderboard" style={{ marginBottom: 16 }}>
@@ -58,8 +75,9 @@ function Leaderboard() {
   // §36.3 opening the leaderboard is the `leaderboard` feature's first use.
   useEffect(() => { reportFeatureUse("leaderboard"); }, []);
   const [window, setWindow] = useState<"all" | "30d">("all");
-  // Ranking metric (§26/§35.7/§38.8): installs credited (default) / skills adopted / skill requests fulfilled / skills watched / skills requested / followers / collections.
-  const [sort, setSort] = useState<"installs" | "skills" | "requests" | "watched" | "requested" | "followed" | "curated">("installs");
+  // Ranking metric (SORTS above): installs received is the default.
+  const [sort, setSort] = useState<Sort>("installs");
+  const active = SORTS.find((s) => s.key === sort) ?? SORTS[0]!;
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
   // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills and "Requests" to Mine).
   const { data: me } = useApi<{ userId: string | null }>("/api/me");
@@ -85,13 +103,9 @@ function Leaderboard() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
         <div className="sort-toggle" role="group" aria-label="Rank by">
-          <button type="button" className={`sort-opt${sort === "installs" ? " sort-on" : ""}`} onClick={() => setSort("installs")}>Installs</button>
-          <button type="button" className={`sort-opt${sort === "skills" ? " sort-on" : ""}`} onClick={() => setSort("skills")}>Skills adopted</button>
-          <button type="button" className={`sort-opt${sort === "requests" ? " sort-on" : ""}`} onClick={() => setSort("requests")}>Requests fulfilled</button>
-          <button type="button" className={`sort-opt${sort === "watched" ? " sort-on" : ""}`} onClick={() => setSort("watched")}>Watched</button>
-          <button type="button" className={`sort-opt${sort === "requested" ? " sort-on" : ""}`} onClick={() => setSort("requested")}>Requested</button>
-          <button type="button" className={`sort-opt${sort === "followed" ? " sort-on" : ""}`} onClick={() => setSort("followed")}>Followed</button>
-          <button type="button" className={`sort-opt${sort === "curated" ? " sort-on" : ""}`} onClick={() => setSort("curated")}>Curated</button>
+          {SORTS.map((s) => (
+            <button key={s.key} type="button" className={`sort-opt${sort === s.key ? " sort-on" : ""}`} onClick={() => setSort(s.key)}>{s.label}</button>
+          ))}
         </div>
         <div className="sort-toggle" role="group" aria-label="Leaderboard window">
           <button type="button" className={`sort-opt${window === "all" ? " sort-on" : ""}`} onClick={() => setWindow("all")}>All time</button>
@@ -132,14 +146,15 @@ function Leaderboard() {
                   {e.skillsRequested > 0 && <> · {e.skillsRequested} skill{e.skillsRequested === 1 ? "" : "s"} requested</>}
                   {e.followers > 0 && <> · {e.followers} follower{e.followers === 1 ? "" : "s"}</>}
                   {e.collections > 0 && <> · {e.collections} collection{e.collections === 1 ? "" : "s"}</>}
+                  {e.skillsInstalled > 0 && <> · {e.skillsInstalled} skill{e.skillsInstalled === 1 ? "" : "s"} installed</>}
                 </div>
               </div>
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 600 }}>
-                  {formatCount(sort === "requests" ? e.requestsFulfilled : sort === "skills" ? e.skillCount : sort === "watched" ? e.skillsWatched : sort === "requested" ? e.skillsRequested : sort === "followed" ? e.followers : sort === "curated" ? e.collections : e.installs)}
+                  {formatCount(active.value(e))}
                 </div>
                 <div className="muted mono" style={{ fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                  {sort === "requests" ? "fulfilled" : sort === "skills" ? "adopted" : sort === "watched" ? "watched" : sort === "requested" ? "requested" : sort === "followed" ? "followers" : sort === "curated" ? "collections" : "installs"}
+                  {active.caption}
                 </div>
               </div>
               <div className="lb-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>

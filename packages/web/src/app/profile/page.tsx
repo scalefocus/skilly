@@ -128,7 +128,7 @@ function LeaderboardPref() {
     <section className="reveal" style={{ marginBottom: 30 }}>
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginBottom: 4 }}>Leaderboard</h2>
       <p className="page-sub" style={{ marginBottom: 16 }}>
-        The contributor leaderboard ranks people by installs of the skills they maintain. You can hide yourself from it.
+        The leaderboard ranks people by the installs their skills receive, and shows how many skills each person has installed. You can hide yourself from it.
       </p>
       <div className="sort-toggle" role="group" aria-label="Leaderboard visibility">
         {opts.map((o) => {
