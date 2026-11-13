@@ -3,7 +3,9 @@
 // button, selected by default, and captions the big number "installed". "Installs received" is
 // second; choosing it fetches its own board and captions the number "installs". The §21 "Row
 // layout" checks run on the default view: no Collections button, equal row heights, a name column
-// of one width on every row, and at most 4 badges under an avatar. Read-only.
+// of one width on every row, and at most 4 badges under an avatar. Two more tests load the page in
+// a 390 px and a 1024 px window, where the board is under 760 px wide, and check the three-band
+// rows of §21 "Narrow screens". Read-only.
 import { test, expect, devSignIn } from "./fixtures";
 import { clickAndAwait, gotoLoaded } from "./helpers/ready";
 
@@ -46,6 +48,8 @@ test.describe("leaderboard (§21)", () => {
     ).toBeVisible();
     const rows = page.locator(".lb-people .lb-row");
     if ((await rows.count()) > 0) {
+      // The default 1280 px viewport leaves the board wide enough for the desktop columns.
+      await expect(page.locator(".lb-people")).not.toHaveClass(/lb-compact/);
       // The default view captions the big number "installed".
       await expect(rows.first().locator(".lb-num > div").last()).toHaveText("installed");
       // Four actions at most: the Collections button is gone from every row.
@@ -85,4 +89,61 @@ test.describe("leaderboard (§21)", () => {
       expect(await rows.count()).toBeLessThanOrEqual(100);
     }
   });
+
+  // §21 "Narrow screens": whenever the BOARD is narrower than 760 px — a phone, or a 1024 px window
+  // whose sidebar leaves the board 682 px — a row is three bands (rank · avatar · name · number /
+  // the stat line on two reserved rows / the actions on one line) and every row is the same height.
+  for (const viewport of [{ width: 390, height: 844 }, { width: 1024, height: 768 }]) {
+    test(`a narrow board (${viewport.width} px window) uses three-band rows of equal height`, async ({ page }) => {
+      await devSignIn(page);
+      await page.setViewportSize(viewport);
+      await gotoLoaded(page, "/leaderboard", LEADERBOARD_INITIAL);
+      await expect(
+        page.locator(".lb-row").first().or(page.getByText(/No contributors yet/i)),
+      ).toBeVisible();
+      const board = page.locator(".lb-people");
+      if ((await board.count()) === 0) return; // empty state: nothing to lay out
+
+      await expect(board).toHaveClass(/lb-compact/);
+      const m = await board.evaluate((el) => {
+        const rows = [...el.querySelectorAll(".lb-row")].slice(0, 20);
+        const box = (x: Element | null) => x!.getBoundingClientRect();
+        const buttons = rows.flatMap((r) => [...r.querySelectorAll(".lb-actions .btn")]);
+        return {
+          board: box(el).width,
+          rowHeights: rows.map((r) => box(r).height),
+          statsHeights: rows.map((r) => box(r.querySelector(".lb-stats")).height),
+          nameWidths: rows.map((r) => box(r.querySelector(".lb-name")).width),
+          // Band order, top to bottom: the name, then the stat line, then the actions.
+          bandsInOrder: rows.every((r) => box(r.querySelector(".lb-name")).bottom <= box(r.querySelector(".lb-stats")).top + 1
+            && box(r.querySelector(".lb-stats")).bottom <= box(r.querySelector(".lb-actions")).top + 1),
+          statsFullWidth: rows.every((r) => box(r.querySelector(".lb-stats")).width > box(r).width * 0.85),
+          buttonHeights: buttons.map((b) => box(b).height),
+          clippedLabels: buttons.filter((b) => b.scrollWidth > b.clientWidth).length,
+          buttonWhiteSpace: [...new Set(buttons.map((b) => getComputedStyle(b).whiteSpace))],
+          buttonFonts: [...new Set(buttons.map((b) => getComputedStyle(b).fontSize))],
+          badgesPerRow: rows.map((r) => r.querySelectorAll('.lb-av [aria-label$="all time"], .lb-av [aria-label$="last 30 days"]').length),
+          pageScrollsSideways: document.documentElement.scrollWidth > window.innerWidth,
+        };
+      });
+      expect(m.board).toBeLessThan(760);
+      for (const h of m.rowHeights) expect(Math.abs(h - m.rowHeights[0]!)).toBeLessThanOrEqual(1);
+      // Two rows reserved for the stats on every row, whatever the line's length.
+      for (const h of m.statsHeights) expect(Math.abs(h - m.statsHeights[0]!)).toBeLessThanOrEqual(1);
+      expect(m.statsHeights[0]!).toBeGreaterThan(28);
+      expect(m.bandsInOrder).toBe(true);
+      expect(m.statsFullWidth).toBe(true);
+      // The name column is one width on every row, and has room for a name (it was ~70 px on a phone).
+      for (const w of m.nameWidths) expect(Math.abs(w - m.nameWidths[0]!)).toBeLessThanOrEqual(1);
+      expect(m.nameWidths[0]!).toBeGreaterThan(130);
+      // Every button label is on one row, in one shared smaller font, and none is clipped.
+      for (const h of m.buttonHeights) expect(Math.abs(h - m.buttonHeights[0]!)).toBeLessThanOrEqual(1);
+      expect(m.buttonWhiteSpace).toEqual(["nowrap"]);
+      expect(m.buttonFonts).toEqual(["12px"]);
+      expect(m.clippedLabels).toBe(0);
+      // A narrow board shows at most 2 leader badges before the +N marker.
+      for (const n of m.badgesPerRow) expect(n).toBeLessThanOrEqual(2);
+      expect(m.pageScrollsSideways).toBe(false);
+    });
+  }
 });

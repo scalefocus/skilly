@@ -1366,8 +1366,36 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
 .lb-people .lb-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-people .lb-name { font-weight: 600; font-size: 14.5px; }
 .lb-people .lb-stats { font-size: 11.5px; }
-.lb-people .lb-num { flex-shrink: 0; min-width: 88px; text-align: right; }
+.lb-people .lb-num { flex-shrink: 0; min-width: 72px; text-align: right; }
 .lb-people .lb-actions { display: flex; gap: 8px; flex-shrink: 0; min-width: 340px; justify-content: flex-end; }
+/* A NARROW board (§21 "Narrow screens"): the page marks the board .lb-compact when the board's own
+   width is under 760 px — a phone, a tablet, or a window the sidebar has squeezed — so this is not
+   a media query. Three bands, every row still the same height:
+     1. rank · avatar · name · number — the rank and number shrink to their content and the avatar
+        slot is narrower (2 badges, sized by the page), so the name takes the width;
+     2. the stat line across the full row, exactly two rows reserved (clamped with an ellipsis);
+     3. the actions on one line, sharing the width, each label on one row in a smaller font.
+   .lb-who dissolves (display: contents) so the name and the stat line land in different bands. */
+.lb-people.lb-compact .lb-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "rank av name num" "stats stats stats stats" "actions actions actions actions";
+  column-gap: 8px; row-gap: 8px; align-items: center; padding: 14px;
+}
+.lb-people.lb-compact .lb-rank { grid-area: rank; min-width: 18px; }
+.lb-people.lb-compact .lb-av { grid-area: av; }
+.lb-people.lb-compact .lb-who { display: contents; }
+.lb-people.lb-compact .lb-name { grid-area: name; }
+.lb-people.lb-compact .lb-stats {
+  grid-area: stats; white-space: normal; line-height: 1.45; height: 2.9em;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
+.lb-people.lb-compact .lb-num { grid-area: num; min-width: 0; }
+.lb-people.lb-compact .lb-actions { grid-area: actions; min-width: 0; justify-content: stretch; }
+.lb-people.lb-compact .lb-actions .btn {
+  flex: 1 1 0; min-width: 0; justify-content: center; white-space: nowrap;
+  font-size: 12px; padding: 6px 4px;
+}
 
 @media (max-width: 560px) {
   .maintainer-item {
@@ -1381,11 +1409,9 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
   .maintainer-item.has-page { grid-template-columns: auto 1fr auto; grid-template-areas: "av name del" "av page del" "av meta del"; }
   .maintainer-item .m-page { max-width: none; }
   /* Leaderboard rows: on narrow screens the per-row actions (Skills / Reach out) drop onto their
-     own full-width line below the rank · avatar · name · number row, on EVERY row, so the rows stay
-     the same height (§21 "Row layout"). */
+     own full-width line below the row, instead of crowding it (Hyped tab, marketplaces page). */
   .lb-row { flex-wrap: wrap; }
   .lb-actions { flex-basis: 100%; justify-content: flex-end; }
-  .lb-people .lb-actions { min-width: 0; }
   /* Quick start closing card: stack the Got it / What's new / Installed skills buttons, each on
      its own full-width line, instead of wrapping two-up. */
   .qs-cta { flex-direction: column; align-items: stretch; }
