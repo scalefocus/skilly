@@ -1,6 +1,34 @@
 // The People board's vocabulary (SKILLY_SPEC.md §21): the row shape, the ranking metrics in toggle
-// order, the default sort and the stat line. Pure, so the order and the wording are unit-tested
-// without rendering the page.
+// order, the default sort, the stat line and the avatar slot. Pure, so the order, the wording and
+// the sizes are unit-tested without rendering the page.
+import { leaderBadgeSize } from "../../components/leaderBadges";
+import { ringGeometry } from "../../components/levelRing";
+
+/** The avatar bubble's size on a leaderboard row. */
+export const LB_AVATAR = 34;
+/** Leader badges shown under a row's avatar before the `+N` marker (§21 "Row layout"): 4, or 2 on
+ *  a narrow board so the name gets the width. */
+export const LB_MAX_BADGES = 4;
+export const LB_MAX_BADGES_COMPACT = 2;
+/** §21 "Narrow screens": a board narrower than this (its OWN width, not the window's) lays each
+ *  row out in three bands. The desktop columns need about this much to leave the name room. */
+export const LB_COMPACT_BELOW = 760;
+
+/** Whether a board `width` px wide uses the three-band rows. */
+export function isCompactBoard(width: number): boolean {
+  return width < LB_COMPACT_BELOW;
+}
+
+/**
+ * The fixed avatar slot of a row (§21 "Row layout": every row is the same height): room for a
+ * level ring (§31.10) and ONE line of `maxBadges` leader badges plus a `+N` marker, whether or not
+ * the person has either. Badge crowns, the Hero crown and the newcomer hat overflow it by design.
+ */
+export function avatarSlot(maxBadges: number): { width: number; height: number } {
+  const badge = leaderBadgeSize(LB_AVATAR);
+  const ring = ringGeometry(LB_AVATAR).outer;
+  return { width: Math.max(ring, maxBadges * (badge + 2) + 26), height: ring + 2 + badge };
+}
 
 export interface Entry {
   userId: string;

@@ -2350,11 +2350,14 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 - **Row layout.** Names were cut off (*"Vladimir Kame…"*) and rows grew to different heights as the stat line and the badges wrapped. The board is laid out so every name shows and every row is the same height.
   - **Width.** The `/leaderboard` page is up to **980 px** wide (was 760), the width of the usage dashboard and the admin logs. Both tabs share the page, so the *Hyped skills* tab widens too.
   - **Columns.** Every row is one line of columns: rank · avatar · name and stat line · the sorted number · actions. The number and action columns have fixed widths and the actions are right-aligned, so the **name column is the same width on every row** and takes all the remaining space. A name longer than the column ends in an ellipsis, with the full name on hover.
-  - **Equal height.** Every row is the same height, whatever it holds. The name and the stat line are one line each. The avatar slot always reserves room for a level ring (§31.10) and one line of leader badges, whether or not the person has them. The actions sit on one line.
+  - **Equal height.** Every row is the same height, whatever it holds. The name and the stat line are one line each (on a narrow board the stat line is two rows, see *Narrow screens*). The avatar slot always reserves room for a level ring (§31.10) and one line of leader badges, whether or not the person has them. The actions sit on one line.
   - **Stat line.** One line (*"70 skills installed · 58 skills adopted · 3 requests fulfilled · …"*), led by the board's headline number so that is never the part cut off (order: *Skills installed*, below). When it does not fit, it ends in an ellipsis and the full line shows on hover.
   - **Leader badges.** On leaderboard rows only, the first **4** badges show under the avatar, followed by a **`+N`** marker for the rest, whose `aria-label` reads *"N more leader badges"*. The directory hover card (§28) still lists every badge. Everywhere else every badge still renders (see *Leader badges*).
   - **Caption.** The caption under the row's big number is one short word, in toggle order: `installed`, `installs` (its sort button keeps the name *Installs received*, which tells it apart from *Installed* beside it), `adopted`, `fulfilled`, `watched`, `requested`, `followers` and `collections`.
-  - **Narrow screens.** At the existing mobile breakpoint the actions move to their own line on **every** row, so rows stay equal there too.
+  - **Narrow screens.** Whenever the **board itself is narrower than 760 px**, a row is three bands, and every row is still the same height. The trigger is the board's own measured width, not the window's: it covers phones, tablets and a window up to about 1090 px wide with the sidebar open, where the board is narrow although the window is not. The first narrow layout kept the desktop columns down to 560 px, which left the name about 70 px on a phone (*"Vladimir…"*) and 46 px in a 1024 px window, cut the stats after two words and wrapped *Reach out* onto two rows.
+    - **Band 1: rank · avatar · name · number.** The name takes the width: the rank and the number shrink to their content, and the avatar slot narrows to the bubble with a short badge line, the first **2** leader badges and the `+N` marker (4 on a wider board). The name is one line, with an ellipsis and the full name on hover if it still does not fit.
+    - **Band 2: the stat line, across the full width of the row.** Every row reserves exactly **two rows** of text for it. The line wraps onto the second row; a longer one ends in an ellipsis at the end of the second row, with the full line on hover; a short one leaves the second row empty.
+    - **Band 3: the actions, on one line.** The buttons share the row's width equally. Every label stays on **one row** (it never wraps), and all of them use the **same smaller font** so that *Reach out* fits.
 
 - **Hyped skills tab (§50).** Since §50 the `/leaderboard` page has two tabs: **People** (this board, unchanged) and **Hyped skills** — a board of *skills*, not people, ranked by the §50.4 hype score over a fixed trailing 7-day window and capped by the same `LEADERBOARD_LIMIT`. It names skills, which this board never does, and may do so only because every hype-eligible skill is `org`-visible by construction (§50.1 decision 2).
 
@@ -2468,7 +2471,8 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   variant is the identical icon with a small crown overlaid on top; the **30-day** variant has no
   crown. **Every badge a user currently holds renders** (no cap, wrapping if needed) — most users
   have zero; a dominant contributor may show several. The one exception is a leaderboard row,
-  which shows the first 4 and a `+N` marker so every row keeps the same height (§21 *Row layout*).
+  which shows the first 4 (2 on a narrow board) and a `+N` marker so every row keeps the same height
+  (§21 *Row layout*).
 - **Placement:** directly **below** the avatar bubble, never beside it — the bubble+badges stack is
   one visual unit. The §31.10 **level ring** takes the avatar's *outline*, not this slot,
   so the two systems never compete for space: ring around, badges below, both on the same

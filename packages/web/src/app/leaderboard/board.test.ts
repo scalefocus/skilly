@@ -3,7 +3,7 @@
 // the stat line starts with skills installed so the headline number is never the part cut off.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_SORT, SORTS, statLine, type Entry } from "./board";
+import { DEFAULT_SORT, LB_COMPACT_BELOW, LB_MAX_BADGES, LB_MAX_BADGES_COMPACT, SORTS, avatarSlot, isCompactBoard, statLine, type Entry } from "./board";
 
 function entry(over: Partial<Entry> = {}): Entry {
   return {
@@ -34,6 +34,26 @@ test("captions are one short word each, and each sort reads its own number", () 
   );
   const e = entry({ skillsInstalled: 1, installs: 2, skillCount: 3, requestsFulfilled: 4, skillsWatched: 5, skillsRequested: 6, followers: 7, collections: 8 });
   assert.deepEqual(SORTS.map((s) => s.value(e)), [1, 2, 3, 4, 5, 6, 7, 8]);
+});
+
+test("isCompactBoard (§21 'Narrow screens'): a board under 760 px of its own width uses the three-band rows", () => {
+  assert.equal(LB_COMPACT_BELOW, 760);
+  assert.equal(isCompactBoard(339), true, "a 375 px phone");
+  assert.equal(isCompactBoard(682), true, "a 1024 px window with the sidebar open");
+  assert.equal(isCompactBoard(759), true);
+  assert.equal(isCompactBoard(760), false);
+  assert.equal(isCompactBoard(980), false, "the full-width board");
+});
+
+test("avatarSlot: one height for every row; a narrow board's 2-badge slot is narrower than the 4-badge one", () => {
+  assert.equal(LB_MAX_BADGES, 4);
+  assert.equal(LB_MAX_BADGES_COMPACT, 2);
+  const wide = avatarSlot(LB_MAX_BADGES);
+  const narrow = avatarSlot(LB_MAX_BADGES_COMPACT);
+  assert.deepEqual(wide, { width: 90, height: 58 });
+  assert.deepEqual(narrow, { width: 58, height: 58 });
+  // Never narrower than the ringed bubble, even with no badge room at all.
+  assert.equal(avatarSlot(0).width, 42);
 });
 
 test("statLine: skills installed leads; skills adopted always shows; zero stats are left out", () => {

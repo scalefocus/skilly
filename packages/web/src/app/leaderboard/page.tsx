@@ -1,5 +1,5 @@
 "use client";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HypedBoard } from "./HypedBoard";
@@ -7,19 +7,30 @@ import { useApi, EmptyState, ScrollToTop, formatCount } from "../../components/u
 import { RequireAuth } from "../../components/RequireAuth";
 import { UserBubble } from "../../components/UserBubble";
 import { FollowButton } from "../../components/FollowButton";
-import { leaderBadgeSize } from "../../components/leaderBadges";
-import { ringGeometry } from "../../components/levelRing";
 import { reportFeatureUse } from "../../lib/surveyClient";
-import { DEFAULT_SORT, SORTS, statLine, type Entry, type Sort } from "./board";
+import { DEFAULT_SORT, LB_AVATAR, LB_MAX_BADGES, LB_MAX_BADGES_COMPACT, SORTS, avatarSlot, isCompactBoard, statLine, type Entry, type Sort } from "./board";
 
-// §21 "Row layout": every row is the same height. The avatar slot is fixed: room for a level ring
-// (§31.10) and ONE line of leader badges, at most LB_MAX_BADGES plus a `+N` marker, whether or not
-// the person has either. Badge crowns, the Hero crown and the newcomer hat overflow it by design.
-const LB_AVATAR = 34;
-const LB_MAX_BADGES = 4;
-const LB_BADGE = leaderBadgeSize(LB_AVATAR);
-const LB_SLOT_HEIGHT = ringGeometry(LB_AVATAR).outer + 2 + LB_BADGE;
-const LB_SLOT_WIDTH = Math.max(ringGeometry(LB_AVATAR).outer, LB_MAX_BADGES * (LB_BADGE + 2) + 26);
+/**
+ * §21 "Narrow screens": whether the board is too narrow for the desktop columns. Measured on the
+ * board element itself, so it holds on a phone, on a tablet, and in a window the sidebar has
+ * squeezed. Returns a ref for the board and the answer. The first measurement runs in the ref
+ * callback (commit phase), so the board never paints in the wrong layout; its width comes from
+ * the page, not from its rows, so switching layout cannot change the measurement.
+ */
+function useCompactBoard(): [(el: HTMLDivElement | null) => void, boolean] {
+  const [compact, setCompact] = useState(false);
+  const observer = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) return;
+    const sync = () => setCompact(isCompactBoard(el.getBoundingClientRect().width));
+    sync();
+    observer.current = new ResizeObserver(sync);
+    observer.current.observe(el);
+  }, []);
+  return [ref, compact];
+}
 
 // §50.6 two tabs: People (the contributor board, unchanged) and Hyped skills. `?tab=hyped` opens
 // the second (the home page's "see the board" link). The Hyped tab is hidden while hype is off.
@@ -57,6 +68,10 @@ function Leaderboard() {
   // Ranking metric (./board): Installed, a person’s own installs, is the default.
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
   const active = SORTS.find((s) => s.key === sort) ?? SORTS[0]!;
+  // §21 "Narrow screens": a narrow board shows 2 leader badges, so the name gets the width.
+  const [boardRef, compact] = useCompactBoard();
+  const maxBadges = compact ? LB_MAX_BADGES_COMPACT : LB_MAX_BADGES;
+  const slot = avatarSlot(maxBadges);
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
   // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills and "Requests" to Mine).
   const { data: me } = useApi<{ userId: string | null }>("/api/me");
@@ -99,7 +114,7 @@ function Leaderboard() {
       ) : entries.length === 0 ? (
         <EmptyState title="No contributors yet" hint="Once proposals are accepted and skills get installed, they’ll rank here." />
       ) : (
-        <div className="rows reveal lb-people">
+        <div ref={boardRef} className={`rows reveal lb-people${compact ? " lb-compact" : ""}`}>
           {entries.map((e, i) => {
             const isSelf = !!me?.userId && me.userId === e.userId;
             // Your own row → the catalog's "My Skills" filter; anyone else → the maintained-by view
@@ -116,8 +131,8 @@ function Leaderboard() {
               <span className="mono lb-rank" style={{ color: i < 3 ? "var(--accent-2)" : "var(--faint)" }}>
                 {i + 1}
               </span>
-              <div className="lb-av" style={{ width: LB_SLOT_WIDTH, height: LB_SLOT_HEIGHT }}>
-                <UserBubble name={e.displayName} avatar={e.avatar} userId={e.userId} size={LB_AVATAR} maxBadges={LB_MAX_BADGES} />
+              <div className="lb-av" style={{ width: slot.width, height: slot.height }}>
+                <UserBubble name={e.displayName} avatar={e.avatar} userId={e.userId} size={LB_AVATAR} maxBadges={maxBadges} />
               </div>
               <div className="lb-who">
                 <div className="lb-line lb-name" title={e.displayName}>{e.displayName}</div>

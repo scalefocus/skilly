@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.59.3",
+    date: "2026-11-13",
+    summary:
+      "Leaderboard on phones, tablets and narrow windows: each row now gives the name its own line with room to show, the stats two rows below it, and the buttons one row of single-line labels. Rows stay the same height.",
+  },
+  {
     version: "2.59.2",
     date: "2026-11-13",
     summary:
