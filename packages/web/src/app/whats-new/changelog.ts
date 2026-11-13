@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.60.1",
+    date: "2026-11-13",
+    summary:
+      "The browser tab and link previews now title the app \"skilly - agent skills registry\", with a plain hyphen instead of an em dash.",
+  },
+  {
     version: "2.60.0",
     date: "2026-11-13",
     summary:

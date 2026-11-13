@@ -8,7 +8,9 @@
 import type { Metadata } from "next";
 
 export const SITE_NAME = "skilly";
-export const SITE_TITLE = "skilly — agent skills registry";
+// A plain hyphen, never an em dash (SKILLY_SPEC.md §14): this is the browser tab title, og:title,
+// twitter:title and the share card's alt text.
+export const SITE_TITLE = "skilly - agent skills registry";
 export const SITE_TAGLINE = "Agent skills registry";
 export const SITE_DESCRIPTION =
   "Self-hosted registry for governing SKILL.md agent skills, anchored in Microsoft Entra ID.";

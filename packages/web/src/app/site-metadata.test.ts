@@ -27,6 +27,11 @@ test("buildMetadata: undefined metadataBase when no base URL is set (graceful de
   assert.equal(buildMetadata("").metadataBase, undefined);
 });
 
+test("SITE_TITLE: \"skilly - agent skills registry\", with a plain hyphen and no em dash (§14)", () => {
+  assert.equal(SITE_TITLE, "skilly - agent skills registry");
+  assert.ok(!SITE_TITLE.includes("\u2014"), "the title must not contain an em dash");
+});
+
 test("buildMetadata: emits Open Graph + a summary_large_image Twitter card", () => {
   const m = buildMetadata("https://skilly.example.com");
   assert.equal(m.title, SITE_TITLE);
