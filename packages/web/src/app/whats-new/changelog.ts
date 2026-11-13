@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.59.0",
+    date: "2026-11-13",
+    summary:
+      "Leaderboard: a new Skills installed number counts the skills you have installed yourself, one per skill, with its own Installed sort. The figure that used to read Installs is now called Installs received, because it counts other people's installs of the skills you maintain, never your own.",
+  },
+  {
     version: "2.58.1",
     date: "2026-11-13",
     summary:

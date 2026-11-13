@@ -3,9 +3,11 @@
 // cast ::text, and since Postgres binds bare ORDER BY names to output aliases first, the board
 // sorted lexicographically — "9" ranked above "12". Seeds two users whose credit counts (9 vs 12)
 // diverge under text ordering and asserts numeric descending order on the primary sort and on the
-// tie-breaker path. A second test covers the "skills requested" stat (§26).
+// tie-breaker path. A second test covers the "skills requested" stat (§26), a third the three
+// adoption doors behind installs received, and a fourth the installer's own "skills installed".
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { recordAgentClone } from "@skilly/shared";
 import { getLeaderboard, LEADERBOARD_LIMIT } from "./leaderboard";
 import { pool } from "./db";
 
@@ -192,5 +194,120 @@ test("leaderboard: a first adoption credits the maintainer through every door �
     // install_credits cascade with access_log; skill_installs/skill_maintainers go with the skill.
     await pool.query(`delete from access_log where skill_id = $1`, [skill]);
     await pool.query(`delete from skills where id = $1`, [skill]);
+  }
+});
+
+// §21 "Skills installed": the one number about what a person installs THEMSELVES — their rows in
+// the skill_installs ledger. Drives the real recorders (and the agent-key recorder, which must not
+// count). Every assertion reads only this test's own users: the other DB test files run in parallel
+// against this database, and the board is capped at the top 100, so the two installers get counts
+// (6 and 4) well above what any other file's fixtures reach.
+test("leaderboard: 'skills installed' counts a person's own first adoptions, own skills included (§21)", { skip: !enabled }, async () => {
+  const ns = (await pool.query<{ id: string }>(
+    `insert into namespaces (slug, display_name, require_review) values ('lb-ns','lb-ns',true)
+     on conflict (slug) do update set display_name = excluded.display_name returning id`,
+  )).rows[0]!.id;
+  const mkUser = async (oid: string) => (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ($1,$2,$3)
+     on conflict (entra_object_id) do update set email = excluded.email, leaderboard_hidden = false returning id`,
+    [oid, `${oid}@org`, oid],
+  )).rows[0]!.id;
+  const maint = await mkUser("lbsi-maint");
+  // The 4-install user sorts alphabetically FIRST, so a degenerate name-asc order can't pass.
+  const solo = await mkUser("lbsi-a-solo");
+  const keen = await mkUser("lbsi-b-keen");
+
+  const skills: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    skills.push((await pool.query<{ id: string }>(
+      `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility)
+       values ($1, $2, $2, 'd', 'claude', 'hosted', 'org')
+       on conflict (namespace_id, slug) do update set title = excluded.title returning id`, [ns, `lbsi-s${i}`],
+    )).rows[0]!.id);
+  }
+  const own = skills[5]!; // maintained by keen alone
+  const clean = async () => {
+    await pool.query(`delete from access_log where skill_id = any($1::uuid[])`, [skills]);
+    await pool.query(`delete from skill_installs where skill_id = any($1::uuid[])`, [skills]);
+    await pool.query(`delete from agent_installs where skill_id = any($1::uuid[])`, [skills]);
+    await pool.query(`delete from skill_maintainers where skill_id = any($1::uuid[])`, [skills]);
+  };
+  const clone = (skill: string, user: string | null, system = false) =>
+    pool.query(`select record_git_access($1, $2, $3, $3)`, [skill, user, system]);
+  // The two installers' rows on the Installed board, in board order, as [userId, skillsInstalled].
+  const installed = async (window: "all" | "30d" = "all") =>
+    (await getLeaderboard(window, "installed", { bypassCache: true }))
+      .filter((e) => e.userId === keen || e.userId === solo)
+      .map((e) => [e.userId, e.skillsInstalled]);
+
+  try {
+    await clean();
+    await pool.query(
+      `insert into skill_maintainers (skill_id, user_id) select unnest($1::uuid[]), $2`, [skills.slice(0, 5), maint],
+    );
+    await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1, $2)`, [own, keen]);
+
+    // keen: six skills through all three doors, one of them their own.
+    await clone(skills[0]!, keen);
+    await pool.query(`select record_skill_download($1, $2)`, [skills[1], keen]);
+    await pool.query(`select record_mcp_read($1, $2)`, [skills[2], keen]);
+    await clone(skills[3]!, keen);
+    await clone(skills[4]!, keen);
+    await clone(own, keen);
+    // solo: four clones.
+    for (const s of skills.slice(0, 4)) await clone(s, solo);
+
+    assert.deepEqual(await installed(), [[keen, 6], [solo, 4]], "one per skill, every door, own skill included; ranked desc");
+
+    // A person whose only standing is having installed skills is on the board, with 0 elsewhere.
+    const soloRow = (await getLeaderboard("all", "installed", { bypassCache: true })).find((e) => e.userId === solo)!;
+    assert.equal(typeof soloRow.skillsInstalled, "number");
+    assert.deepEqual(
+      [soloRow.installs, soloRow.skillCount, soloRow.requestsFulfilled, soloRow.skillsWatched, soloRow.skillsRequested, soloRow.followers, soloRow.collections],
+      [0, 0, 0, 0, 0, 0, 0],
+    );
+
+    // Independent of installs received: the same first installs credited the maintainer of s0–s4
+    // (5 by keen + 4 by solo), while keen's install of their own skill credited nobody.
+    const received = await getLeaderboard("all", "installs", { bypassCache: true });
+    const maintRow = received.find((e) => e.userId === maint)!;
+    assert.deepEqual([maintRow.installs, maintRow.skillCount, maintRow.skillsInstalled], [9, 5, 0]);
+    assert.equal((await getLeaderboard("all", "installed", { bypassCache: true })).find((e) => e.userId === keen)!.installs, 0, "no self-credit, unchanged");
+
+    // Repeat clones and a second door on an adopted skill change nothing.
+    await clone(skills[0]!, keen);
+    await pool.query(`select record_skill_download($1, $2)`, [skills[0], keen]);
+    await pool.query(`select record_mcp_read($1, $2)`, [skills[3], solo]);
+    assert.deepEqual(await installed(), [[keen, 6], [solo, 4]], "re-installing never re-counts");
+
+    // Not counted: a system installation (no user) and an agent-key clone (no ledger row).
+    await clone(skills[1]!, null, true);
+    await recordAgentClone(pool, { userId: solo, skillId: skills[4]!, userAgent: "git/2.45.0", clientIp: "10.9.9.9" });
+    assert.deepEqual(await installed(), [[keen, 6], [solo, 4]], "system and agent-key clones are outside the ledger");
+
+    // 30d keys on first_at: two of keen's adoptions and all of solo's are older than the window.
+    await pool.query(
+      `update skill_installs set first_at = now() - interval '40 days' where user_id = $1 and skill_id = any($2::uuid[])`,
+      [keen, skills.slice(0, 2)],
+    );
+    await pool.query(`update skill_installs set first_at = now() - interval '40 days' where user_id = $1`, [solo]);
+    assert.deepEqual(await installed("30d"), [[keen, 4]], "nothing in the window → not on the 30d board");
+    assert.deepEqual(await installed(), [[keen, 6], [solo, 4]], "all-time is unaffected by age");
+
+    // The leaderboard opt-out hides the whole row, this number included.
+    await pool.query(`update users set leaderboard_hidden = true where id = $1`, [solo]);
+    assert.deepEqual(await installed(), [[keen, 6]]);
+    await pool.query(`update users set leaderboard_hidden = false where id = $1`, [solo]);
+
+    // A hard-deleted skill takes its ledger rows with it (cascade), so the count drops.
+    await pool.query(`delete from access_log where skill_id = $1`, [own]);
+    await pool.query(`delete from skills where id = $1`, [own]);
+    assert.deepEqual(await installed(), [[keen, 5], [solo, 4]]);
+  } finally {
+    await pool.query(`update users set leaderboard_hidden = false where id = $1`, [solo]);
+    // install_credits cascade with access_log; skill_installs, agent_installs and skill_maintainers
+    // go with the skills.
+    await pool.query(`delete from access_log where skill_id = any($1::uuid[])`, [skills]);
+    await pool.query(`delete from skills where id = any($1::uuid[])`, [skills]);
   }
 });

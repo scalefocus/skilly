@@ -2333,15 +2333,15 @@ A simple, owner-facing dashboard of **view** and **install** tendencies per skil
 
 ### Contributor leaderboard
 
-A separate `/leaderboard` surface (distinct from the usage dashboard's counts-only platform aggregate above) that recognizes the people who **maintain** widely-installed skills. Served by `GET /api/leaderboard`, computed in `lib/leaderboard.ts`.
+A separate `/leaderboard` surface (distinct from the usage dashboard's counts-only platform aggregate above) that recognizes the people who **maintain** widely-installed skills, and also shows how many skills each person has **installed themselves** (*Skills installed*, below: a separate number that is never mixed into the maintainer credit). Served by `GET /api/leaderboard`, computed in `lib/leaderboard.ts`.
 
 - **Attribution = current explicit maintainers, point-in-time, once per adopter.** A user's **first** install of a skill (a git clone or first download) is credited to **each explicit maintainer (`skill_maintainers`) of the skill at that moment, EXCEPT the installer themselves** — so re-installing never re-credits, and a maintainer earns **no self-credit** for installing a skill they maintain (a solo maintainer installing their own skill earns nothing). Namespace admins' *implicit* maintainership earns **nothing** (they must add themselves to the explicit list). One first-install with three (other) maintainers produces **+1 for each of the three** (equal credit, not split). A skill with no eligible explicit maintainers at that moment credits **no one** (forfeited, never reassigned). **System-installation clones credit no one, ever** (§23) — no user means no `skill_installs` first-install gate and no `install_credits` row, so a CI job cloning on a schedule can never manufacture leaderboard standing.
 - **Snapshot model (`install_credits`).** Attribution is frozen at first-install time into `install_credits (access_log_id, user_id)` — written **inside `record_git_access()` / `record_skill_download()`** only on the user's first install (gated by the shared `skill_installs` ledger). Because credit is captured when the adoption happens, **changing a skill's maintainers never moves existing credit**: removal stops only *future* credit; additions earn only *future* first-installs. This is the mechanism behind "new installs follow the current maintainers; old installs stay put."
 - **Backfill.** Installs that predate `install_credits` are seeded **once** (in the creating migration) to the skill's **original proposer(s)** — the prior attribution model — excluding already-erased users (`erased_at IS NULL`). This keeps the board continuous across the cutover and faithful to point-in-time (the proposer was, by default, the sole maintainer then). After the backfill the old proposer-based query is retired.
-- **Metrics.** Both displayed numbers derive from `install_credits` (so they are always mutually consistent): `installs` = count of the user's credit rows in the window; `skillCount` = distinct skills among them — displayed as **"skills adopted"**, deliberately not "skills proposed": a skill this user proposed/maintains with zero credited installs in the window (too new, or only ever self-installed) contributes zero, even though they proposed or maintain it. That's intentional — the metric stays adoption-weighted for the anti-gaming reasons above — but the label must say what the number actually measures, so it never reads as "skills submitted/published by this user." Windows are **all-time** and **30d** (by the install's `access_log.created_at`). Because each install fans out to every maintainer, the board's summed installs **exceed** the real clone count — the number is "installs credited to you", not a global clone total.
+- **Metrics.** Both displayed numbers derive from `install_credits` (so they are always mutually consistent): `installs` = count of the user's credit rows in the window, displayed as **"installs received"** (it was labelled plain *Installs* until the *Skills installed* change below, and was read as "skills I installed"); `skillCount` = distinct skills among them — displayed as **"skills adopted"**, deliberately not "skills proposed": a skill this user proposed/maintains with zero credited installs in the window (too new, or only ever self-installed) contributes zero, even though they proposed or maintain it. That's intentional — the metric stays adoption-weighted for the anti-gaming reasons above — but the label must say what the number actually measures, so it never reads as "skills submitted/published by this user." Windows are **all-time** and **30d** (by the install's `access_log.created_at`). Because each install fans out to every maintainer, the board's summed installs **exceed** the real clone count — the number is "installs credited to you", not a global clone total.
 - **Erasure removes credit — unless transferred.** GDPR erasure (§4, both the admin and SCIM paths) **deletes the erased user's `install_credits`** — credits-only: the shared `access_log` row, `skills.install_count`, and co-maintainers' credit are untouched (the install still happened and still counts for everyone else). **Exception:** the admin erasure path with a "Replace maintainer to" target **reassigns** the credits to that target instead of deleting them (§4 — would-be self-credits and duplicates excepted; those are deleted as usual), so the standing survives on the board under the successor. Either way, a deleted user holds zero credits and never appears. A reversible **deprovision** (leaver → `status='inactive'`) does **not** delete credits — the board's `status='active'` filter hides them, and re-enabling restores their standing.
 - **Privacy (invariant #3).** The board exposes only per-person aggregates (display name, avatar, total installs, skill count) — **never skill identities, slugs, or namespaces** — so it cannot enumerate or identify restricted skills, and is identical for every viewer. Users may opt out via `leaderboard_hidden` (§13).
-- **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other four metrics descending, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
+- **Display cap (top 100).** The board shows at most the **top 100** eligible contributors for the selected metric+window. 100 is a **fixed platform constant** (`LEADERBOARD_LIMIT`), **not** a caller-supplied value — neither `GET /api/leaderboard` nor the page can request more (or fewer). The cutoff is deterministic: `ORDER BY` ranks by the selected metric descending, then the other metrics descending in their fixed order, then `display_name` ascending, so exactly which ≤100 rows appear is stable across requests (a tie straddling rank 100 is broken by that same deterministic order). Contributors ranked 101+ simply don't appear; the board publishes no total-contributor count, so nothing signals that truncation happened (consistent with the aggregate-only privacy stance above). **Leader badges** (§21 extension) are unaffected — a badge marks whoever is tied for the single highest value of a metric, always the leading rows of the list and far inside the top 100, and the badge computation reads the same already-cached per-(window,sort) results.
 - **Row actions.** Each row offers five actions, on every row and under every sort: **Skills**, **Requests**, **Collections** (§38.8: the catalog's `?collectionsBy=` view), **Reach out**, and **Follow** (§35.4: right of Reach out; hidden on your own row and for people who aren't followable; label flips Follow ↔ Unfollow).
   - **Skills** links to the catalog scoped to the skills that person **maintains** — `/catalog?maintainer=<userId>&by=<name>` for another person (the catalog shows a dismissible "Skills maintained by &lt;name&gt;" banner), or `/catalog?mine=1` for **your own** row (reuses the "My Skills" filter). This does **not** break invariant #3: the catalog independently visibility-filters to what the *viewer* may see (`searchSkills`), so it only ever lists skills the viewer could already browse — the leaderboard itself still reveals no skill identities. On arrival the maintainer view **ignores the viewer's other saved filters** (category/tool/type/My-Skills) and shows everything by that maintainer the viewer can see.
   - **Requests** links to the Requested-skills page scoped to the requests that person **posted** — `/requests?requester=<userId>&by=<name>` for another person (the page shows a dismissible "Requested by &lt;name&gt;" banner, §26), or `/requests?mine=1` for **your own** row (reuses the "Mine" toggle). Requests have no namespace and are org-visible, so there is no visibility concern; the link is shown even when the person's requested count is 0 (consistent with **Skills**, which shows at 0 adopted).
@@ -2349,12 +2349,86 @@ A separate `/leaderboard` surface (distinct from the usage dashboard's counts-on
 
 - **Hyped skills tab (§50).** Since §50 the `/leaderboard` page has two tabs: **People** (this board, unchanged) and **Hyped skills** — a board of *skills*, not people, ranked by the §50.4 hype score over a fixed trailing 7-day window and capped by the same `LEADERBOARD_LIMIT`. It names skills, which this board never does, and may do so only because every hype-eligible skill is `org`-visible by construction (§50.1 decision 2).
 
+### Skills installed (the installer's own number)
+
+The board's eighth stat, and the only one about what a person **consumes** rather than what they
+maintain or contribute. It exists because the plain label *Installs* was read as "skills I
+installed": people installed a skill and expected their own row to move.
+
+- **What it counts.** The user's rows in the adoption ledger `skill_installs`: **one per skill, the
+  first time they adopt it** through any of the three doors (§29): a git clone with a personal
+  install token or a personal marketplace key (§30.7), a first zip download, or a first MCP
+  `SKILL.md` read. API field `skillsInstalled`.
+  - **Uninstalling, reinstalling, an expired token and repeat clones never change it.** The ledger
+    is written once per (user, skill) and is not deleted on uninstall. The number means "skills
+    this person has installed", not "installations active right now" (that list is the owner's own
+    `/installed` page, §23).
+  - **Skills the user maintains count.** There is no self-exclusion, unlike *installs received*:
+    the number moves on every first install, whoever maintains the skill. Like *skills requested*
+    (§26) it is generated entirely by the person themselves, so no threshold gates it. It is
+    bounded at one per skill.
+  - **Archived skills, and skills the user can no longer see, still count**: the ledger row
+    persists, and the board shows a count, never an identity. A **hard-deleted** skill's rows
+    cascade away, so the count drops with it.
+  - **Not counted:** system installations (no user, §23); agent-key clones (§69.7 writes no
+    ledger row); an install token that is minted and never cloned; viewing a skill.
+- **Windows.** All-time = every row. 30d = rows whose `first_at` is in the trailing 30 days.
+- **Independent of installs received.** One first install can move two numbers on two different
+  rows: the installer's *skills installed* (+1) and, for each explicit maintainer other than the
+  installer, *installs received* (+1, by the unchanged rules above). Installing a skill you alone
+  maintain moves only your own *skills installed*.
+- **Rename: *Installs* becomes *Installs received*.** The existing `installs` stat keeps its
+  definition, its API field and its `sort=installs` key. Only its display name changes: the sort
+  button reads **Installs received** (still the default sort), and the caption under the row's big
+  number reads `installs received`. The installs leader badge spells the metric out (see *Leader
+  badges*).
+- **Sort and row.**
+  - An eighth sort, ***Installed*** (`sort=installed`), appended to the toggle after *Curated*.
+    Under it the row's big number is the person's skills installed, captioned `installed`.
+  - The stat line gains `N skill(s) installed` after "collections", only when greater than 0.
+  - **Tie-break chain** for the Installed sort: skills installed desc, then the other seven
+    metrics desc in their existing order, then name asc. The seven existing sorts append **skills
+    installed desc** as their last numeric tie-breaker, before name.
+- **Who appears.** A user whose only standing is having installed skills appears on the board with
+  0 in the other columns, the rule followers (§35.7) and requests (§26) already follow. The top-100
+  cap and the deterministic cutoff are unchanged. Under the other seven sorts such a person ranks
+  after everyone who has any other standing, so they show only while fewer than 100 people do.
+- **No leader badge.** *Installed* is the one sort without a leader badge, in either window. A
+  badge for installing the most would reward installing everything, and every first install also
+  raises that skill's `install_count` and its maintainers' *installs received*, so the incentive
+  would distort the adoption signal the catalog, *Popular in your department* (§66) and *Skills
+  you might like* (§10) are built on. `GET /api/leaders` is unchanged: its `metric` union stays
+  at seven, and a user still holds at most 14 badges.
+- **Row actions are unchanged** (five). The board names no skills, so there is no link to the
+  skills a person installed. A person's own list is their `/installed` page.
+- **Copy.**
+  - Leaderboard subtitle (People tab): *"Top contributors by installs received: other people’s
+    first installs of the skills they maintain. Your own installs count under Skills installed."*
+  - Profile, under *Hide me from the leaderboard*: *"The leaderboard ranks people by the installs
+    their skills receive, and shows how many skills each person has installed. You can hide
+    yourself from it."*
+- **Privacy, opt-out, erasure.** The number is a per-person consumption figure that every signed-in
+  user can see. It stays inside the board's aggregate-only rule (a count, never which skills), and
+  `leaderboard_hidden` removes the person's whole row, this number included. There is no separate
+  switch. Inactive and erased users are absent through the `status = 'active'` filter. The number
+  is **never transferred** to a *Replace maintainer to* target (§4), because it records who
+  actually installed, and this feature changes nothing about what erasure does to `skill_installs`.
+- **Data and API.**
+  - `GET /api/leaderboard` accepts `sort=installed`, and every entry gains `skillsInstalled`
+    (integer). An unknown `sort` still falls back to `installs`.
+  - The board query gains one CTE over `skill_installs` grouped by `user_id` (windowed on
+    `first_at`), left-joined like the other six and added to the "has any standing" predicate. It
+    is covered by the same 60 s per-(window, sort) cache. **No migration and no new index**: the
+    ledger and `idx_skill_installs_user` already exist, and history counts from the first row.
+  - No MCP tool, no notification, no achievement and no audit entry.
+
 ### Leader badges
 
 A small marker under a user's avatar bubble — **everywhere one appears** — showing they currently
 top a leaderboard metric. Purely derived from the leaderboard's own data; no new user action.
 
-- **Seven metrics, matching the leaderboard's own sort options** — Installs leader, Adoption
+- **Seven metrics: every leaderboard sort except *Installed*,** which deliberately has no badge
+  (see *Skills installed* above) — Installs leader (installs received), Adoption
   leader (skills adopted), Fulfillment leader (requests fulfilled), Watch leader (skills watched),
   Request leader (skills requested, §26), and the follow leader (followers, §35.7), which has
   window-specific names: 📣 **Influencer-in-Chief** (all time) and 📈 **Trendsetter** (last 30
@@ -2378,11 +2452,13 @@ top a leaderboard metric. Purely derived from the leaderboard's own data; no new
   one visual unit. The §31.10 **level ring** takes the avatar's *outline*, not this slot,
   so the two systems never compete for space: ring around, badges below, both on the same
   bubble. The icons stay exactly where they are; the **directory hover card (§28)
-  additionally lists every badge the person holds, spelled out** (icon + `"Installs leader — all
-  time"`, `"Request leader — last 30 days"`), so the at-a-glance signal and the explanation now live
-  in two complementary places.
+  additionally lists every badge the person holds, spelled out** (icon + `"Installs leader — most
+  installs received, all time"`, `"Request leader — last 30 days"`), so the at-a-glance signal and
+  the explanation now live in two complementary places.
 - **Labels:** the `aria-label` on each badge stays (`"<Metric> leader — all time"` /
-  `"… — last 30 days"`), but the native **`title=` tooltip is removed** — with §28 shipped, a
+  `"… — last 30 days"`). The installs badge alone spells its metric out, `"Installs leader — most
+  installs received, all time"` / `"Installs leader — most installs received, last 30 days"`,
+  because *Installs* on its own was read as "skills I installed". The native **`title=` tooltip is removed** — with §28 shipped, a
   browser tooltip would race and overlap the hover card on the very same element. Sighted users
   read the spelled-out list in the card; screen readers keep the `aria-label`.
 - **Everywhere an avatar renders.** All user-avatar rendering across the app was consolidated onto
@@ -3141,8 +3217,8 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
   They count in trends and `install_counters` like any clone; `skills.install_count` increments
   **once per system installation, at first clone** (the `used_at` stamping — the per-token
   analogue of the per-user first-install rule). They **never** touch the per-user
-  `skill_installs` ledger (no related-skills co-install signal, no already-installed exclusion)
-  and **never write `install_credits`** — a CI job cloning hourly can never manufacture
+  `skill_installs` ledger (no related-skills co-install signal, no already-installed exclusion,
+  no leaderboard *skills installed*, §21) and **never write `install_credits`** — a CI job cloning hourly can never manufacture
   leaderboard standing. The per-skill drill-down surfaces them as a **"System install"** bucket.
 
 ### Quick start (first-login onboarding) — `/quick-start`
@@ -4313,7 +4389,8 @@ skill that **already** satisfies it.
   the row and the credit with it. Supported by an index on `skill_requests (requester_user_id, created_at)`
   (migration 0071). Rendered in the row's stat line as `N skill(s) requested`, after "skills watched",
   and — like the other stats — only when > 0.
-- A **sort toggle** above the board: **Installs** (default) / **Skills adopted** / **Requests
+- A **sort toggle** above the board: **Installs** (default; relabelled **Installs received** by
+  §21 *Skills installed*) / **Skills adopted** / **Requests
   fulfilled** / **Watched** / **Requested** — re-ranks rows by the chosen stat (ties broken by the other
   stats, then name; for the **Requested** sort the chain is requested desc, installs desc, skills adopted
   desc, requests fulfilled desc, skills watched desc, name asc; the four existing sorts append requested
@@ -7853,7 +7930,8 @@ way a `follow.*` row reaches email; per-update recipients still get them in-app 
   - No self-credit rule applies, since self-follow is impossible. **Not transferred** on erasure
     (§4): follows are deleted, not reassigned.
 - **A sixth sort: *Followed*.** It is appended to the toggle: *Installs / Skills adopted / Requests
-  fulfilled / Watched / Requested / Followed*.
+  fulfilled / Watched / Requested / Followed*. (*Installs* is now labelled *Installs received*, and
+  an eighth sort, *Installed*, follows *Curated*: §21 *Skills installed*.)
   - **Tie-break chain** for the Followed sort: followers desc, installs desc, skills adopted desc,
     requests fulfilled desc, skills watched desc, skills requested desc, name asc.
   - The five existing sorts append **followers desc** as their last numeric tie-breaker, before name.
@@ -16063,7 +16141,8 @@ Only skill repos change; marketplace repos and push handling are untouched.
   same call inserts an **`access_log`** row with `source = 'aion'`, the forensic record of who
   fetched what.
 - **Not counted (decision 6).** Nothing else is written. No `skill_installs` row, so no *installed*
-  mark on catalog cards, no *Popular in your department* contribution and no related-skills signal.
+  mark on catalog cards, no *Popular in your department* contribution, no related-skills signal and
+  no leaderboard *skills installed* (§21).
   No `skills.install_count` bump, no `install_credits` (leaderboard), no monthly
   `install_counters`. No achievement and no Habits event. The §21 usage dashboard reads `access_log`
   rows with `source = 'git'`, so agent clones are outside it. The owner is not an "installer" for

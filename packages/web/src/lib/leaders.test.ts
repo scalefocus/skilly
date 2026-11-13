@@ -6,12 +6,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeLeaderBadges, type BoardReader } from "./leaders";
 import { leaderboardOrderBy, type LeaderboardEntry, type LeaderboardSort, type LeaderboardWindow } from "./leaderboard";
+import { badgeLabel } from "../components/leaderBadges";
 
 function entry(userId: string, over: Partial<LeaderboardEntry> = {}): LeaderboardEntry {
   return {
     userId, displayName: userId, email: `${userId}@org`, avatar: null,
     skillCount: 0, installs: 0, requestsFulfilled: 0, skillsWatched: 0, skillsRequested: 0,
-    followers: 0, collections: 0, followable: true,
+    followers: 0, collections: 0, skillsInstalled: 0, followable: true,
     ...over,
   };
 }
@@ -24,6 +25,7 @@ const VALUE: Record<LeaderboardSort, (e: LeaderboardEntry) => number> = {
   requested: (e) => e.skillsRequested,
   followed: (e) => e.followers,
   curated: (e) => e.collections,
+  installed: (e) => e.skillsInstalled,
 };
 
 /** A fake board: the same rows for every window, sorted desc by the requested metric — exactly the
@@ -91,10 +93,30 @@ test("curated (§38.8): the person with the most qualifying collections is Curat
   assert.deepEqual(map["fresh"], [{ metric: "curated", window: "30d" }]);
 });
 
-test("leaderboardOrderBy: the existing chains append followers then collections; Followed and Curated lead with their own metric (§35.7 / §38.8)", () => {
-  assert.equal(leaderboardOrderBy("installs"), "installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, followers desc, collections desc, display_name asc");
-  assert.equal(leaderboardOrderBy("requested"), "skills_requested desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, followers desc, collections desc, display_name asc");
-  assert.equal(leaderboardOrderBy("watched"), "skills_watched desc, installs desc, skill_count desc, requests_fulfilled desc, skills_requested desc, followers desc, collections desc, display_name asc");
-  assert.equal(leaderboardOrderBy("followed"), "followers desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, collections desc, display_name asc");
-  assert.equal(leaderboardOrderBy("curated"), "collections desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, followers desc, display_name asc");
+test("skills installed (§21): the Installed sort has no leader badge, in either window", async () => {
+  // The top installer leads nothing; the only badges here are the maintainer's.
+  const map = await computeLeaderBadges(reader([
+    entry("installer", { skillsInstalled: 40 }),
+    entry("builder", { installs: 3, skillCount: 1, skillsInstalled: 2 }),
+  ]));
+  assert.equal(map["installer"], undefined);
+  assert.deepEqual(map["builder"]!.map((b) => b.metric).sort(), ["installs", "installs", "skills", "skills"]);
+  const metrics = new Set(Object.values(map).flat().map((b) => b.metric as string));
+  assert.ok(!metrics.has("installed"));
+});
+
+test("badgeLabel: the installs badge spells out 'installs received'; the others keep their wording", () => {
+  assert.equal(badgeLabel({ metric: "installs", window: "all" }), "Installs leader — most installs received, all time");
+  assert.equal(badgeLabel({ metric: "installs", window: "30d" }), "Installs leader — most installs received, last 30 days");
+  assert.equal(badgeLabel({ metric: "requested", window: "30d" }), "Request leader — last 30 days");
+  assert.equal(badgeLabel({ metric: "curated", window: "all" }), "Curator — most collections, all time");
+});
+
+test("leaderboardOrderBy: every chain ends with skills installed before name; each sort leads with its own metric (§21 / §35.7 / §38.8)", () => {
+  assert.equal(leaderboardOrderBy("installs"), "installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, followers desc, collections desc, skills_installed desc, display_name asc");
+  assert.equal(leaderboardOrderBy("requested"), "skills_requested desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, followers desc, collections desc, skills_installed desc, display_name asc");
+  assert.equal(leaderboardOrderBy("watched"), "skills_watched desc, installs desc, skill_count desc, requests_fulfilled desc, skills_requested desc, followers desc, collections desc, skills_installed desc, display_name asc");
+  assert.equal(leaderboardOrderBy("followed"), "followers desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, collections desc, skills_installed desc, display_name asc");
+  assert.equal(leaderboardOrderBy("curated"), "collections desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, followers desc, skills_installed desc, display_name asc");
+  assert.equal(leaderboardOrderBy("installed"), "skills_installed desc, installs desc, skill_count desc, requests_fulfilled desc, skills_watched desc, skills_requested desc, followers desc, collections desc, display_name asc");
 });
