@@ -5,7 +5,9 @@
 // offered *Assign to me* on their own proposal and never appears in the picker; on the queue,
 // *Unassigned* keeps the row (with its due pill) and *Assigned to me* drops it.
 //
-// Self-cleaning: the proposal is deleted and team-a's review target restored.
+// Self-cleaning: the proposal is deleted and team-a's review target restored. The target is also
+// cleared through the API before the UI sets it: Save stays disabled until the field differs from
+// the stored value, so a target an earlier attempt left at 1 would block the save.
 import { test, expect, devSignIn, signedInDisplayName } from "./fixtures";
 import { clickAndAwait, gotoLoaded } from "./helpers/ready";
 import { createHostedProposal } from "./helpers/skills";
@@ -21,7 +23,10 @@ test("§65 review target, reviewer line, picker and queue filters", async ({ pag
   const slug = `e2e-assign-${Date.now().toString(36)}`;
   let proposalId: string | null = null;
   try {
-    // 1. A 1-business-day target, set on the Namespace administration page.
+    // 1. A 1-business-day target, set on the Namespace administration page — from no target, so the
+    //    field is dirty and Save enabled whatever an earlier attempt left behind.
+    const cleared = await page.request.patch(`/api/namespaces/${team!.id}/settings`, { data: { reviewTargetDays: null } });
+    expect(cleared.ok(), await cleared.text()).toBeTruthy();
     await gotoLoaded(page, "/namespaces", "/api/namespaces/administered");
     const card = page.locator("div.row").filter({ hasText: `@${NS}` }).first();
     await card.getByTestId("ns-review-target-input").fill("1");
