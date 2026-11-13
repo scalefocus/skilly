@@ -82,12 +82,17 @@ export async function clickAndAwait(
  * or several, when the spec needs the page's SECONDARY panels in too (a late-arriving panel above
  * the element under test shifts the layout, and layout shifts fire scroll events that dismiss
  * caret-anchored popups such as the mention picker).
+ *
+ * The data waits are armed before the navigation and joined with it in ONE `Promise.all`, so
+ * whichever fails first rejects this call. Awaiting them one after the other would leave the data
+ * wait unhandled while the shell loads: if it timed out first, Node would raise an unhandled
+ * rejection, Playwright would end the test on it, and the spec's `finally` cleanup would die with
+ * "apiRequestContext.send: Test ended", leaving its state behind for the retry.
  */
 export async function gotoLoaded(page: Page, url: string, dataUrl: UrlMatch | UrlMatch[]): Promise<void> {
   const urls = Array.isArray(dataUrl) ? dataUrl : [dataUrl];
   const data = Promise.all(urls.map((u) => awaitApi(page, u)));
-  await gotoReady(page, url);
-  await data;
+  await Promise.all([data, gotoReady(page, url)]);
 }
 
 /**
