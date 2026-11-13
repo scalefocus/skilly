@@ -1606,7 +1606,9 @@ Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO*
     card — the card's identity is carried by the **navy field + cyan diamond + layout**, not the
     typeface. Artwork = the skilly
     wordmark + mark (navy `#082773` field, cyan `#14ABE3` diamond) over the existing title/tagline
-    (`skilly — agent skills registry` and the §14 description). **`metadataBase` derives from the
+    (`skilly - agent skills registry` and the §14 description). The title is written with a
+    plain hyphen, not an em dash, wherever it appears: the browser tab title, `og:title`,
+    `twitter:title` and the card's alt text. **`metadataBase` derives from the
     web tier's external base URL** (an og:image URL must be absolute) — the first set of
     **`PUBLIC_BASE_URL` → `SKILLY_REGISTRY_URL` → `NEXTAUTH_URL`**, the same chain the web tier's
     email links use. The stock compose and Helm web containers receive only the latter two (both set
