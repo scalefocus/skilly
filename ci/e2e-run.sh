@@ -57,9 +57,61 @@ host_port() {
   echo "$_hp"
 }
 
-# Fetch the Chromium browser (+ its OS deps) before anything else: a missing browser fails the stage
-# here, before a stack is provisioned. On a warm agent Playwright's cache makes this a no-op.
-pnpm --filter @skilly/web exec playwright install --with-deps chromium
+# Fetch the Chromium browser (+ its OS packages) before anything else: a browser that cannot start
+# fails the stage here, before a stack is provisioned.
+#
+# The download needs no root and is a no-op on a warm agent (Playwright's cache). The OS packages
+# are different: `playwright install --with-deps` runs `apt-get update` + `apt-get install` as root
+# on EVERY run, needed or not, and apt fails at once when another process holds the dpkg lock — on
+# a Jenkins agent, unattended-upgrades ("Could not get lock /var/lib/dpkg/lock-frontend"). So apt
+# runs only when Chromium does not start, and a locked apt is waited out rather than failing the run.
+
+# Does the browser the suite uses (headless Chromium, Playwright's default launch) start here?
+# Playwright checks the browser's shared libraries first and names the missing ones.
+chromium_starts() {
+  ( cd packages/web
+    node -e "require('@playwright/test').chromium.launch({timeout:60000}).then(b=>b.close()).then(()=>process.exit(0),e=>{console.error(String(e&&e.message||e));process.exit(1)})"
+  )
+}
+
+# Chromium's OS packages, through apt as root. A failure that names an apt/dpkg lock is retried
+# until the lock is free (APT_LOCK_TRIES x APT_LOCK_WAIT_S, 15 minutes by default — an
+# unattended-upgrades run can take that long); any other failure fails the stage at once.
+install_os_packages() {
+  _apt_log="$(mktemp)"
+  _apt_try=1
+  while :; do
+    if pnpm --filter @skilly/web exec playwright install-deps chromium >"${_apt_log}" 2>&1; then
+      cat "${_apt_log}"; rm -f "${_apt_log}"
+      return 0
+    fi
+    cat "${_apt_log}" >&2
+    if ! grep -Eq 'Could not get lock|Unable to (acquire|lock)' "${_apt_log}"; then
+      rm -f "${_apt_log}"
+      return 1
+    fi
+    if [ "${_apt_try}" -ge "${APT_LOCK_TRIES:-45}" ]; then
+      rm -f "${_apt_log}"
+      echo "[e2e] apt was still locked by another process after ${_apt_try} attempts — giving up" >&2
+      return 1
+    fi
+    echo "[e2e] apt is locked by another process (attempt ${_apt_try}/${APT_LOCK_TRIES:-45}) — retrying in ${APT_LOCK_WAIT_S:-20}s" >&2
+    _apt_try=$((_apt_try + 1))
+    sleep "${APT_LOCK_WAIT_S:-20}"
+  done
+}
+
+pnpm --filter @skilly/web exec playwright install chromium
+if chromium_starts; then
+  echo "[e2e] Chromium starts — its OS packages are in place, apt not needed"
+else
+  echo "[e2e] Chromium did not start (above) — installing its OS packages"
+  install_os_packages
+  if ! chromium_starts; then
+    echo "[e2e] Chromium still does not start after installing its OS packages" >&2
+    exit 1
+  fi
+fi
 
 PG_IMAGE="$(resolve_image "${CI_PG_IMAGES}")"
 MINIO_IMAGE="$(resolve_image "${CI_MINIO_IMAGES}")"

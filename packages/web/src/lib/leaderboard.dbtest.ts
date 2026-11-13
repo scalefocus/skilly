@@ -128,3 +128,69 @@ test("leaderboard: 'skills requested' counts open + fulfilled by requester, wind
     await pool.query(`delete from skill_requests where title like 'lbrq %'`);
   }
 });
+
+// Regression: the board once joined access_log on source = 'git', so a credit written by a first
+// DOWNLOAD or a first MCP READ was never counted — and never could be, because the shared
+// skill_installs ledger stops a later clone by the same person from crediting again. Drives the
+// three real recorders rather than seeding rows, so the test follows whatever they write.
+test("leaderboard: a first adoption credits the maintainer through every door — clone, download, MCP read (§21/§29)", { skip: !enabled }, async () => {
+  const ns = (await pool.query<{ id: string }>(
+    `insert into namespaces (slug, display_name, require_review) values ('lb-ns','lb-ns',true)
+     on conflict (slug) do update set display_name = excluded.display_name returning id`,
+  )).rows[0]!.id;
+  const mkUser = async (oid: string) => (await pool.query<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ($1,$2,$3)
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+    [oid, `${oid}@org`, oid],
+  )).rows[0]!.id;
+  const maint = await mkUser("lb-door-maint");
+  const cloner = await mkUser("lb-door-clone");
+  const downloader = await mkUser("lb-door-download");
+  const reader = await mkUser("lb-door-mcp");
+
+  const skill = (await pool.query<{ id: string }>(
+    `insert into skills (namespace_id, slug, title, description, tool_harness, type, visibility)
+     values ($1,'lb-door-skill','lb-door-skill','d','claude','hosted','org')
+     on conflict (namespace_id, slug) do update set title = excluded.title returning id`, [ns],
+  )).rows[0]!.id;
+
+  // Read our own writes past the TTL cache; the assertions only ever look at the maintainer's row.
+  const credited = async (window: "all" | "30d" = "all") => {
+    const row = (await getLeaderboard(window, "installs", { bypassCache: true })).find((e) => e.userId === maint);
+    return { installs: row?.installs ?? 0, skillCount: row?.skillCount ?? 0 };
+  };
+
+  try {
+    // Deterministic across re-runs: no prior adoptions of this skill (credits cascade from access_log).
+    await pool.query(`delete from access_log where skill_id = $1`, [skill]);
+    await pool.query(`delete from skill_installs where skill_id = $1`, [skill]);
+    await pool.query(`delete from skill_maintainers where skill_id = $1`, [skill]);
+    await pool.query(`insert into skill_maintainers (skill_id, user_id) values ($1, $2)`, [skill, maint]);
+
+    await pool.query(`select record_git_access($1, $2, false, false)`, [skill, cloner]);
+    assert.deepEqual(await credited(), { installs: 1, skillCount: 1 }, "a first clone credits the maintainer");
+
+    await pool.query(`select record_skill_download($1, $2)`, [skill, downloader]);
+    assert.deepEqual(await credited(), { installs: 2, skillCount: 1 }, "a first download credits the maintainer");
+
+    await pool.query(`select record_mcp_read($1, $2)`, [skill, reader]);
+    assert.deepEqual(await credited(), { installs: 3, skillCount: 1 }, "a first MCP read credits the maintainer");
+
+    assert.deepEqual(await credited("30d"), { installs: 3, skillCount: 1 }, "the 30d window counts every door too");
+
+    // Three doors, one fact: the same people coming back through a different door add nothing.
+    await pool.query(`select record_git_access($1, $2, false, false)`, [skill, downloader]);
+    await pool.query(`select record_git_access($1, $2, false, false)`, [skill, reader]);
+    await pool.query(`select record_skill_download($1, $2)`, [skill, cloner]);
+    await pool.query(`select record_mcp_read($1, $2)`, [skill, cloner]);
+    assert.deepEqual(await credited(), { installs: 3, skillCount: 1 }, "a repeat adoption through another door never re-credits");
+
+    // No self-credit, whichever door the maintainer uses on their own skill.
+    await pool.query(`select record_skill_download($1, $2)`, [skill, maint]);
+    assert.deepEqual(await credited(), { installs: 3, skillCount: 1 }, "a maintainer adopting their own skill earns nothing");
+  } finally {
+    // install_credits cascade with access_log; skill_installs/skill_maintainers go with the skill.
+    await pool.query(`delete from access_log where skill_id = $1`, [skill]);
+    await pool.query(`delete from skills where id = $1`, [skill]);
+  }
+});
