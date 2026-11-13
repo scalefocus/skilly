@@ -245,11 +245,16 @@ test("agent sync API: skills, errors, key, prune, Installed rows, clone recordin
   assert.equal(noScope.status, 403);
   assert.equal((await noScope.json()).error, "insufficient_scope");
 
-  const usersBefore = Number((await pool.query<{ n: string }>(`select count(*) as n from users`)).rows[0]!.n);
-  const unknown = await syncAs(OID.unknown, { email: "nobody@org.test", name: "Nobody" });
+  // Scoped to this token's own identity, never `count(*) from users`: the other DB test files run
+  // in parallel against this database and create users of their own in the meantime.
+  const unknownEmail = `${T}-nobody@org.test`;
+  const unknownRows = async () =>
+    (await pool.query(`select 1 from users where entra_object_id = $1 or lower(email) = $2`, [OID.unknown, unknownEmail])).rowCount;
+  assert.equal(await unknownRows(), 0, "fixture: the unknown identity has no row to begin with");
+  const unknown = await syncAs(OID.unknown, { email: unknownEmail, name: "Nobody" });
   assert.equal(unknown.status, 403);
   assert.equal((await unknown.json()).error, "user_not_provisioned");
-  assert.equal(Number((await pool.query<{ n: string }>(`select count(*) as n from users`)).rows[0]!.n), usersBefore, "no user is ever created");
+  assert.equal(await unknownRows(), 0, "no user is ever created");
 
   const disabled = await syncAs(OID.inactive);
   assert.equal(disabled.status, 403);
@@ -323,11 +328,26 @@ test("agent sync API: skills, errors, key, prune, Installed rows, clone recordin
 
   // ── The gateway's clone recorder: one record per (user, skill, source), never counted ─────────
   await pool.query(`delete from agent_installs where user_id = $1 and skill_id = $2`, [outsider, org]);
-  const counts = async () => (await pool.query<{ ic: string; si: string; cr: string; ctr: string; al: string }>(
+  // `install_counters` is one platform-wide total, and the other DB test files install skills in
+  // parallel against this database — so it is compared inside a REPEATABLE READ transaction, whose
+  // snapshot hides what they commit meanwhile: the total can only move if these clones moved it.
+  // Both paths (first clone, repeat clone), then rolled back.
+  const tx = await pool.connect();
+  try {
+    await tx.query(`begin isolation level repeatable read`);
+    const total = async () => (await tx.query<{ n: string }>(`select coalesce(sum(total), 0)::text as n from install_counters`)).rows[0]!.n;
+    const totalBefore = await total();
+    await recordAgentClone(tx, { userId: outsider, skillId: org, userAgent: "git/2.45.0", clientIp: "10.9.9.9" });
+    await recordAgentClone(tx, { userId: outsider, skillId: org, userAgent: "git/2.46.0", clientIp: "10.8.8.8" });
+    assert.equal(await total(), totalBefore, "the platform-wide install total does not move");
+  } finally {
+    await tx.query(`rollback`).catch(() => {});
+    tx.release();
+  }
+  const counts = async () => (await pool.query<{ ic: string; si: string; cr: string; al: string }>(
     `select (select install_count from skills where id = $1)::text as ic,
             (select count(*) from skill_installs where skill_id = $1 and user_id = $2)::text as si,
             (select count(*) from install_credits c join access_log l on l.id = c.access_log_id where l.skill_id = $1)::text as cr,
-            (select coalesce(sum(total), 0) from install_counters)::text as ctr,
             (select count(*) from access_log where skill_id = $1 and actor_user_id = $2 and source = 'aion')::text as al`,
     [org, outsider],
   )).rows[0]!;
@@ -348,7 +368,7 @@ test("agent sync API: skills, errors, key, prune, Installed rows, clone recordin
   assert.ok(recs[0]!.last_cloned_at.getTime() >= first.first_cloned_at.getTime());
   const afterCounts = await counts();
   assert.equal(Number(afterCounts.al), Number(before.al) + 2, "one access_log row per clone, source 'aion'");
-  assert.deepEqual({ ...afterCounts, al: "" }, { ...before, al: "" }, "no install_count, skill_installs, credits or counters move");
+  assert.deepEqual({ ...afterCounts, al: "" }, { ...before, al: "" }, "no install_count, skill_installs or credits move");
 
   // ── Erasure removes agent keys and records ────────────────────────────────────────────────────
   const erasable = await mkUser(OID.erasable);
