@@ -2,6 +2,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toAbsoluteUrl } from "../lib/baseUrl";
+import { fetchJson, subscribeApi } from "./apiCache";
+
+export { invalidateApi, refreshApi } from "./apiCache";
 
 // Compact number formatting for display counts (15843 → "15.8K", 2_400_000 → "2.4M").
 // Values under 1000 render verbatim. Used across overview/catalog/usage so large counts
@@ -252,46 +255,8 @@ export function Switch({
   );
 }
 
-// Shared client-side cache for GET JSON: dedupes concurrent identical requests and serves a
-// fresh-enough cached body to components that mount close together (e.g. several widgets all
-// reading /api/me on one page) or across a quick navigation — instead of every caller firing
-// its own request. Short TTL keeps it from masking real updates; `reload()` always refetches.
-const API_TTL_MS = 5_000;
-const apiCache = new Map<string, { data: unknown; ts: number }>();
-const apiInflight = new Map<string, Promise<unknown>>();
-
-async function fetchJson(url: string, force: boolean): Promise<unknown> {
-  if (force) {
-    apiCache.delete(url);
-    apiInflight.delete(url);
-  } else {
-    const cached = apiCache.get(url);
-    if (cached && Date.now() - cached.ts < API_TTL_MS) return cached.data;
-    const flight = apiInflight.get(url);
-    if (flight) return flight;
-  }
-  const p = fetch(url)
-    .then(async (r) => {
-      if (r.status === 401) throw new Error("Sign in to view the registry.");
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Request failed (${r.status})`);
-      return r.json();
-    })
-    .then((j) => {
-      apiCache.set(url, { data: j, ts: Date.now() });
-      return j;
-    })
-    .finally(() => {
-      if (apiInflight.get(url) === p) apiInflight.delete(url);
-    });
-  apiInflight.set(url, p);
-  return p;
-}
-
-/** Invalidate a cached GET (call after a mutation that changes what `url` would return). */
-export function invalidateApi(url: string): void {
-  apiCache.delete(url);
-  apiInflight.delete(url);
-}
+// The shared GET cache (dedupe, short TTL, subscribers) lives in ./apiCache — React-free so its
+// rules are unit-tested. `reload()` always refetches.
 
 /** Shared cached GET for non-hook callers (providers, effects) — same dedupe/cache as useApi. */
 export function cachedGet<T>(url: string): Promise<T> {
@@ -364,8 +329,25 @@ export function usePopoverPresence(open: boolean, duration = 160): "open" | "clo
   return state;
 }
 
+type ApiState<T> = { data: T | null; loading: boolean; error: string | null; reload: () => void };
+
 /** Tiny JSON fetch hook with loading / error / 401 awareness, backed by a shared cache. */
-export function useApi<T>(url: string | null): { data: T | null; loading: boolean; error: string | null; reload: () => void } {
+export function useApi<T>(url: string | null): ApiState<T> {
+  return useApiCore<T>(url, false);
+}
+
+/**
+ * `useApi` for a URL that every component on screen must agree on: besides its own fetch, it takes
+ * every later fetch of `url` by any other component (or `refreshApi`). The avatar bubbles' page-wide
+ * maps use it (§31.10, §21, §67.3) — the sidebar's account bubble stays mounted for the whole visit,
+ * so with plain `useApi` it kept the level it saw on first load while each page's own bubble of the
+ * same person showed the current one.
+ */
+export function useSharedApi<T>(url: string | null): ApiState<T> {
+  return useApiCore<T>(url, true);
+}
+
+function useApiCore<T>(url: string | null, shared: boolean): ApiState<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -385,6 +367,15 @@ export function useApi<T>(url: string | null): { data: T | null; loading: boolea
       live = false;
     };
   }, [url, tick]);
+
+  useEffect(() => {
+    if (!url || !shared) return;
+    return subscribeApi(url, (j) => {
+      setData(j as T);
+      setError(null);
+      setLoading(false);
+    });
+  }, [url, shared]);
 
   return { data, loading, error, reload: () => setTick((t) => t + 1) };
 }
