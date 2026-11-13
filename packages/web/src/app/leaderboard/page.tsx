@@ -10,41 +10,7 @@ import { FollowButton } from "../../components/FollowButton";
 import { leaderBadgeSize } from "../../components/leaderBadges";
 import { ringGeometry } from "../../components/levelRing";
 import { reportFeatureUse } from "../../lib/surveyClient";
-
-interface Entry {
-  userId: string;
-  displayName: string;
-  email: string;
-  avatar: string | null;
-  skillCount: number;
-  installs: number;
-  requestsFulfilled: number;
-  skillsWatched: number;
-  skillsRequested: number;
-  /** Active followers (§35.7) — 0 while the person has paused follows. */
-  followers: number;
-  /** Collections holding at least 3 eligible skills (§38.8). */
-  collections: number;
-  /** Skills this person installed themselves, one per skill (§21 "Skills installed"). */
-  skillsInstalled: number;
-  followable: boolean;
-}
-
-// The ranking metrics, in toggle order (§21/§26/§35.7/§38.8): the button label, the caption under
-// the row's big number, and the number itself. `installs` counts OTHER people's first installs of
-// the skills someone maintains, hence the button "Installs received"; `installed` is the person's
-// own installs. Captions stay one short word so the name column keeps its width (§21 "Row layout").
-type Sort = "installs" | "skills" | "requests" | "watched" | "requested" | "followed" | "curated" | "installed";
-const SORTS: { key: Sort; label: string; caption: string; value: (e: Entry) => number }[] = [
-  { key: "installs", label: "Installs received", caption: "installs", value: (e) => e.installs },
-  { key: "skills", label: "Skills adopted", caption: "adopted", value: (e) => e.skillCount },
-  { key: "requests", label: "Requests fulfilled", caption: "fulfilled", value: (e) => e.requestsFulfilled },
-  { key: "watched", label: "Watched", caption: "watched", value: (e) => e.skillsWatched },
-  { key: "requested", label: "Requested", caption: "requested", value: (e) => e.skillsRequested },
-  { key: "followed", label: "Followed", caption: "followers", value: (e) => e.followers },
-  { key: "curated", label: "Curated", caption: "collections", value: (e) => e.collections },
-  { key: "installed", label: "Installed", caption: "installed", value: (e) => e.skillsInstalled },
-];
+import { DEFAULT_SORT, SORTS, statLine, type Entry, type Sort } from "./board";
 
 // §21 "Row layout": every row is the same height. The avatar slot is fixed: room for a level ring
 // (§31.10) and ONE line of leader badges, at most LB_MAX_BADGES plus a `+N` marker, whether or not
@@ -54,19 +20,6 @@ const LB_MAX_BADGES = 4;
 const LB_BADGE = leaderBadgeSize(LB_AVATAR);
 const LB_SLOT_HEIGHT = ringGeometry(LB_AVATAR).outer + 2 + LB_BADGE;
 const LB_SLOT_WIDTH = Math.max(ringGeometry(LB_AVATAR).outer, LB_MAX_BADGES * (LB_BADGE + 2) + 26);
-
-/** The stat line under a name, as one string so it can also be the hover text when it is cut. */
-function statLine(e: Entry): string {
-  const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
-  const parts = [`${n(e.skillCount, "skill")} adopted`];
-  if (e.requestsFulfilled > 0) parts.push(`${n(e.requestsFulfilled, "request")} fulfilled`);
-  if (e.skillsWatched > 0) parts.push(`${n(e.skillsWatched, "skill")} watched`);
-  if (e.skillsRequested > 0) parts.push(`${n(e.skillsRequested, "skill")} requested`);
-  if (e.followers > 0) parts.push(n(e.followers, "follower"));
-  if (e.collections > 0) parts.push(n(e.collections, "collection"));
-  if (e.skillsInstalled > 0) parts.push(`${n(e.skillsInstalled, "skill")} installed`);
-  return parts.join(" · ");
-}
 
 // §50.6 two tabs: People (the contributor board, unchanged) and Hyped skills. `?tab=hyped` opens
 // the second (the home page's "see the board" link). The Hyped tab is hidden while hype is off.
@@ -84,7 +37,7 @@ function LeaderboardTabs() {
       <div className="page-head reveal">
         <div className="eyebrow">Community</div>
         <h1 className="page-title">Leaderboard.</h1>
-        {!showHyped && <p className="page-sub">Top contributors by installs received: other people’s first installs of the skills they maintain. Your own installs count under Skills installed.</p>}
+        {!showHyped && <p className="page-sub">Ranked by skills installed: the skills each person has installed themselves. Installs received counts other people’s first installs of the skills someone maintains.</p>}
       </div>
       {hypeOn && (
         <div className="sort-toggle" role="tablist" aria-label="Leaderboard" style={{ marginBottom: 16 }}>
@@ -101,8 +54,8 @@ function Leaderboard() {
   // §36.3 opening the leaderboard is the `leaderboard` feature's first use.
   useEffect(() => { reportFeatureUse("leaderboard"); }, []);
   const [window, setWindow] = useState<"all" | "30d">("all");
-  // Ranking metric (SORTS above): installs received is the default.
-  const [sort, setSort] = useState<Sort>("installs");
+  // Ranking metric (./board): Installed, a person’s own installs, is the default.
+  const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
   const active = SORTS.find((s) => s.key === sort) ?? SORTS[0]!;
   const { data, loading, error } = useApi<{ entries: Entry[] }>(`/api/leaderboard?window=${window}&sort=${sort}`);
   // Current user's id → identify your own row (hide "Reach out" on it; link "Skills" to My Skills and "Requests" to Mine).
