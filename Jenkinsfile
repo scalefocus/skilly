@@ -361,7 +361,11 @@ pipeline {
 
                 # ── 3. Build images and (re)start the stack on the remote host ─────────────────
                 #       SSH into the target and run docker compose there directly.
-                $SSH "${DEPLOY_HOST}" "cd ${DEPLOY_PATH}/deploy && docker compose up --build -d"
+                #       CADDYFILE_SHA256 changes exactly when the Caddyfile does, which makes compose
+                #       recreate the proxy so Caddy loads the new routing (see the proxy service in
+                #       docker-compose.yml). Without it the proxy kept its old rules: v2.59.5 moved the
+                #       MCP page to /mcp-server and the stale /mcp* rule still sent it to the worker.
+                $SSH "${DEPLOY_HOST}" "cd ${DEPLOY_PATH}/deploy && CADDYFILE_SHA256=\\$(sha256sum Caddyfile | cut -d' ' -f1) docker compose up --build -d"
 
                 # ── 4. Ensure the MinIO artifact bucket exists (idempotent) ──────────────────
                 #    Write script locally (single-quoted heredoc = no local expansion),
@@ -381,6 +385,15 @@ MINIO_SCRIPT
                 # ── 5. Smoke-check readiness ──────────────────────────────────────────────────
                 #       Inside the web container: the proxy answers 404 for /readyz (SKILLY_SPEC.md §13).
                 $SSH "${DEPLOY_HOST}" "cd ${DEPLOY_PATH}/deploy && for i in \\$(seq 1 30); do docker compose exec -T web wget -qO- http://localhost:3000/readyz && break || sleep 3; done"
+
+                # ── 6. The proxy must be running the Caddyfile just checked out ───────────────
+                #       Compares the file the proxy container sees with the one on disk. Step 3
+                #       recreates the proxy when the Caddyfile changes, so this only fails if that
+                #       stops working; the deploy then goes red instead of serving stale routes.
+                $SSH "${DEPLOY_HOST}" "cd ${DEPLOY_PATH}/deploy && docker compose exec -T proxy cat /etc/caddy/Caddyfile | cmp -s - Caddyfile" || {
+                  echo "The proxy is running a stale Caddyfile. On ${DEPLOY_HOST}, in ${DEPLOY_PATH}/deploy run: docker compose up -d --force-recreate --no-deps proxy" >&2
+                  exit 1
+                }
               '''
             } // withEnv
           } // withCredentials

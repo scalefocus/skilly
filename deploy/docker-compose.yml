@@ -277,6 +277,13 @@ services:
     depends_on:
       - web
       - worker
+    environment:
+      # The Caddyfile's sha256, set by the Jenkins deploy (blank otherwise). Caddy reads its config
+      # only at startup, and the single-file bind mount below keeps showing the OLD file once
+      # `git checkout` replaces it, so a changed Caddyfile does nothing until this container is
+      # recreated. Compose recreates a service whose config changed; this value changes exactly when
+      # the Caddyfile does, so a deploy that changes routing restarts the proxy (§13).
+      CADDYFILE_SHA256: ${CADDYFILE_SHA256:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     ports:
