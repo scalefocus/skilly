@@ -24,7 +24,7 @@ export const RUM_PAGE_ROUTES: readonly RumPageRoute[] = [
   { template: "/catalog", label: "Catalog" },
   { template: "/catalog/marketplaces", label: "Marketplaces" },
   { template: "/marketplaces", label: "My marketplaces" },
-  { template: "/mcp", label: "MCP" },
+  { template: "/mcp-server", label: "MCP" },
   { template: "/oauth/authorize", label: "MCP consent" },
   { template: "/propose", label: "Propose skills" },
   { template: "/proposals", label: "Review queue" },

@@ -298,7 +298,7 @@ export async function takeAuthorizeRequest(
   return row ? { clientId: row.client_id, request: row.request } : null;
 }
 
-// ── Connections (the /mcp page) ─────────────────────────────────────────────────────────────────
+// ── Connections (the /mcp-server page) ──────────────────────────────────────────────────────────
 
 export interface ConnectionView {
   grantId: string;

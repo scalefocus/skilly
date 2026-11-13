@@ -12,7 +12,7 @@ const ROUTES = [
   "/catalog/marketplaces",
   "/marketplaces",
   "/installed",
-  "/mcp",
+  "/mcp-server",
   "/leaderboard",
   "/usage",
   "/requests",

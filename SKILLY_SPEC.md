@@ -331,7 +331,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `oauth_clients` / `oauth_grants` / `oauth_tokens` (migration 0063; `audit_source` gains `mcp` in 0064, detailed in §29)
 - The **§29 MCP server**'s OAuth 2.1 authorization-server state. Deliberately **separate from `tokens`** (now install-only): different lifetime, different presentation (`Authorization` header, never a URL), different revocation model.
 - **`oauth_clients`** — `id`, `client_id` (unique), `client_name`, `client_uri`, `logo_uri`, `redirect_uris` (text[]), `token_endpoint_auth_method` (`none` — public clients only in v1), `software_id`, `software_version`, `registered_ip`, `created_at`, `last_used_at`, `blocked_at` (admin block). Written by open **Dynamic Client Registration**; unused registrations are pruned after 7 days.
-- **`oauth_grants`** — `id`, `user_id` (FK → `users`, CASCADE), `client_id` (FK → `oauth_clients`, CASCADE), `scope`, `created_at`, `last_used_at`, `revoked_at`, `revoked_by_user_id` (FK, SET NULL). **Partial unique on `(user_id, client_id)` where `revoked_at IS NULL`** — one live grant per user×client. This row **is** the "connection" listed and revoked on `/mcp`.
+- **`oauth_grants`** — `id`, `user_id` (FK → `users`, CASCADE), `client_id` (FK → `oauth_clients`, CASCADE), `scope`, `created_at`, `last_used_at`, `revoked_at`, `revoked_by_user_id` (FK, SET NULL). **Partial unique on `(user_id, client_id)` where `revoked_at IS NULL`** — one live grant per user×client. This row **is** the "connection" listed and revoked on `/mcp-server`.
 - **`oauth_tokens`** — `id`, `grant_id` (FK → `oauth_grants`, CASCADE), `kind` (`code` | `access` | `refresh`), `hashed_token`, `expires_at`, `used_at`, `rotated_from_id` (self-FK — the rotation lineage behind refresh-reuse detection), `code_challenge`, `redirect_uri`, `resource` (last three are `kind='code'` only), `created_at`. One table, three kinds; swept by the worker's housekeeping sweep.
 
 ### `user_achievements` (migration 0071, detailed in §31)
@@ -1566,7 +1566,8 @@ current or future type can ever leak JSON to a user.
 
 ### Deployment — docker compose (v1)
 Six core services: **Next.js app**, **SCIM/sync worker**, **Postgres**, **MinIO**, **ClamAV**, **DB migrations** (run on startup) — plus, in `deploy/docker-compose.yml`, a one-shot **`git-perms`** init job (chowns the git volume) and a dev-only **`proxy`** (Caddy sample), for **eight** compose services total. TLS terminated at the **org reverse proxy** (the bundled `proxy` is for dev). **Helm/K8s** are now **shipped** (chart at `deploy/helm/skilly`, §16 Tier 4), not deferred.
-- **§29 routing (new, and it splits across both processes):** `/mcp`, `/oauth/token`, `/oauth/revoke` and both `/.well-known/oauth-*` paths route to the **worker** (beside `/scim` and `*.git`); `/oauth/authorize` and `/oauth/register` route to **web** (the authorize leg needs the Auth.js/Entra session, which only web has). The dev Caddy sample and the Helm Ingress rules (§16 #19) both gain this split. No new service and no new port — MCP rides the worker's existing Express app and is **not** gated on its leader lock.
+- **§29 routing (new, and it splits across both processes):** `/mcp`, `/oauth/token`, `/oauth/revoke` and both `/.well-known/oauth-*` paths route to the **worker** (beside `/scim` and `*.git`); `/oauth/authorize` and `/oauth/register` route to **web** (the authorize leg needs the Auth.js/Entra session, which only web has). The dev Caddy sample and the Helm Ingress rules (§16 #19) both gain this split. No new service and no new port — MCP rides the worker's existing Express app and is **not** gated on its leader lock. **The `/mcp` rule matches the path `/mcp` and `/mcp/*` only — never a bare string prefix (`/mcp*`)**, which would also swallow web pages that merely start with those letters, such as `/mcp-server` (§29). The Caddy sample matches `path /mcp /mcp/*`. The Helm Ingress cannot use `Prefix /mcp`: its `nginx.ingress.kubernetes.io/use-regex: "true"` annotation (needed for the git rule) makes ingress-nginx read every path as a case-insensitive regex anchored only at the start (`^/mcp`), so it routes `/mcp(/|$)` as an `ImplementationSpecific` regex instead. Operators writing their own edge rules must match the same way.
+- **No web page may live under a worker-bound path.** The proxy routes by path alone, so a page there is unreachable in production while it works in `pnpm dev` and in the e2e suite, which both reach Next directly with no proxy in front. This shipped once: the §29 user page lived at `/mcp` from v1.143.0, and behind the proxy it only ever showed the worker's `405` JSON, until it moved to `/mcp-server`. A **routing-guard unit test** in `packages/web` enforces the rule: it lists every page and route handler under `packages/web/src/app` (`page.tsx` / `route.ts`; route groups dropped, private folders skipped, dynamic segments filled with a sample value) and fails if any of them matches a worker-bound rule in `deploy/Caddyfile` (`handle` path globs, named `path` matchers and `path_regexp`, each matched the way Caddy matches them) or in the Helm Ingress (every path read as ingress-nginx reads it under `use-regex`: a case-insensitive regex anchored at the start). The parser fails loudly on Caddy syntax it does not model, so a new kind of rule cannot slip past it. So the guard cannot pass by parsing nothing, it also asserts a fixed table of known routes: `/mcp`, `/mcp/`, `/scim/v2/Users`, `/oauth/token`, `/oauth/revoke`, `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource` and `/<ns>/<skill>.git/info/refs` reach the worker, and `/mcp-server`, `/oauth/authorize` and `/oauth/register` reach web, in both files.
 - **Ops paths are internal-only at the proxy:** the dev Caddy sample answers **`404`** for `/healthz`, `/readyz` and `/metrics` (exact paths, matched before every other route) and never forwards them to web or worker. Probes and scrapes reach the containers directly — compose/Kubernetes probes and Prometheus never go through the proxy — so nothing legitimate breaks, and the public edge loses an unauthenticated path that runs a DB query (`/readyz`). Out-of-band readiness checks use the container network instead: the Jenkins deploy smoke check (and `deployment_manual.md` §8) runs `docker compose exec -T web wget -qO- http://localhost:3000/readyz` (busybox `wget` ships in the `node:20-alpine` web image), and the worker's `/readyz` likewise through `docker compose exec -T worker node -e "fetch('http://localhost:4000/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"` (the `node:20-slim` worker image has no `curl`/`wget`). The Helm chart is **not** changed: its Ingress is controller-agnostic (`className: ""`), so operators block these paths at their own ingress/edge (§22 *Rate limiting (worker HTTP surfaces)*).
 
 - **Hardening shipped with §49 (October 2026 OWASP review, round 2):** runtime images move to **Node 22** (`node:22-alpine` / `node:22-slim`, `engines.node >= 22`) and every third-party image in compose and Helm (Postgres, MinIO, ClamAV, Caddy, Alpine, Node) is **pinned by digest** and bumped through reviewed changes; the MinIO console port is bound to **`127.0.0.1:9001`** (never a host interface), and web/worker authenticate to MinIO with a **bucket-scoped service account** (`S3_ACCESS_KEY` / `S3_SECRET_KEY` are now distinct from `MINIO_ROOT_*` and created by a one-shot `minio-init` job — operators add the two new `.env` values); **`CLAMAV_HOST` is set on web as well as worker** so hosted uploads are AV-scanned (§49.2); the Caddy sample sets `X-Forwarded-Proto` / `X-Forwarded-Host` from its own `{scheme}` / `{host}` placeholders instead of forwarding the client's headers, and `TRUST_PROXY` is documented for **web** too (it keys the DCR rate limit, §49.9). `AI_ALLOW_PRIVATE_BASE_URL=1` is the explicit opt-in for an on-network AI provider (§49.11); a platform admin can also allow private-network (but not loopback or link-local) AI hosts from the AI integration card (§40.16).
@@ -1853,9 +1854,9 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/installs` (+ `?scope=system` — all system installations, **platform-admin only**), `DELETE /api/installs/:id` (uninstall), `PATCH /api/installs/:id {expiresAt}` (reactivate) — owner-checked for personal rows; on **system** rows the DELETE/PATCH check is **platform admin** instead (any admin). *(Replaces the old `POST /api/tokens` PAT path.)*
 
 **MCP server & OAuth (§29)**
-- **On the worker:** `POST /mcp` (Streamable HTTP — the MCP endpoint; 25 curated tools + resource templates), `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server` (RFC 8414), `GET /.well-known/oauth-protected-resource` (RFC 9728).
+- **On the worker:** `POST /mcp` (Streamable HTTP — the MCP endpoint; 25 curated tools + resource templates), `GET /mcp` (no stream: `303` → `/mcp-server` for a browser, `405` JSON for anything else — §29), `POST /oauth/token`, `POST /oauth/revoke`, `GET /.well-known/oauth-authorization-server` (RFC 8414), `GET /.well-known/oauth-protected-resource` (RFC 9728).
 - **On web:** `GET /oauth/authorize` + the consent screen (session-authenticated — the only leg needing Entra sign-in), `POST /oauth/register` (open Dynamic Client Registration, RFC 7591).
-- **Management:** `GET /api/mcp/connections` (the caller's own live grants — the `/mcp` page's Connections list), `DELETE /api/mcp/connections/:grantId` (revoke; audited `mcp.grant_revoked`). Admin: `GET /api/admin/mcp` (enabled flag, live-grant count, registered clients), `POST /api/admin/mcp/clients/:id/block` + `.../unblock` (platform-admin, audited). The on/off toggle itself is `PATCH /api/admin/settings { mcp_enabled }`.
+- **Management:** `GET /api/mcp/connections` (the caller's own live grants — the `/mcp-server` page's Connections list), `DELETE /api/mcp/connections/:grantId` (revoke; audited `mcp.grant_revoked`). Admin: `GET /api/admin/mcp` (enabled flag, live-grant count, registered clients), `POST /api/admin/mcp/clients/:id/block` + `.../unblock` (platform-admin, audited). The on/off toggle itself is `PATCH /api/admin/settings { mcp_enabled }`.
 - **No REST twin for the tools.** They are implemented directly on the worker against Postgres — there is deliberately **no** generic `/api` proxy, no "act as user" service credential, and no escape-hatch tool.
 
 **Messaging (§24)**
@@ -1986,7 +1987,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 24. **Per-type notification opt-outs + drift-onset dedup (§12):** two per-user Profile toggles (`users.drift_notifications`, `users.new_version_notifications`, both default ON — migration 0057) that filter the **implicit-maintainer** recipients at insert time in the worker (row-level: no in-app row, no email — unlike the channel-level `email_notifications`); an explicit `skill_watches` row always outranks the new-version opt-out; **no safety floor** (namespace admins may opt out too — audit rows, scan reports, and the skill page keep recording drift regardless); and the pointer-refresh job notifying `skill.drift` **only at drift onset** (most recent non-`unreachable` `pointer_ref` report not already `drift`) instead of on every ~daily pass. *(Spec'd 2026-07-17; not yet built.)*
 
 **Phase 7 — Integrated MCP server**
-25. **MCP server + skilly as an OAuth 2.1 AS (§29):** a first-party Model Context Protocol server on the worker (Streamable HTTP, not leader-gated) exposing **24 curated tools** (core read / install / propose / social) and **resource templates only**; skilly becomes its own **authorization server** (open DCR, authorization-code + mandatory PKCE, resource indicators, rotating refresh tokens with reuse detection, opaque sha256-hashed tokens in the `Authorization` header) delegating login to the existing Entra session via `/oauth/authorize` in web; a `/mcp` user page (connect snippets + revocable Connections) and an Administration card with an **on/off toggle, default on, dormant-not-revoking**; “via MCP” attribution surfaced wherever a human reads agent-created content; first-`SKILL.md`-read counted as adoption through the shared `skill_installs` ledger; migrations 0063 (`oauth_clients` / `oauth_grants` / `oauth_tokens`, the `via_mcp_client` attribution columns, `record_mcp_read()`) + 0064 (the `mcp` audit source). **Prerequisite refactor (done):** the **visibility predicate**, **role resolution** and the **`git ls-remote` ref discovery** now live in `@skilly/shared` so invariants #1/#3 and the SSRF guards have one implementation across web and worker. **DONE.**
+25. **MCP server + skilly as an OAuth 2.1 AS (§29):** a first-party Model Context Protocol server on the worker (Streamable HTTP, not leader-gated) exposing **24 curated tools** (core read / install / propose / social) and **resource templates only**; skilly becomes its own **authorization server** (open DCR, authorization-code + mandatory PKCE, resource indicators, rotating refresh tokens with reuse detection, opaque sha256-hashed tokens in the `Authorization` header) delegating login to the existing Entra session via `/oauth/authorize` in web; a `/mcp-server` user page (connect snippets + revocable Connections) and an Administration card with an **on/off toggle, default on, dormant-not-revoking**; “via MCP” attribution surfaced wherever a human reads agent-created content; first-`SKILL.md`-read counted as adoption through the shared `skill_installs` ledger; migrations 0063 (`oauth_clients` / `oauth_grants` / `oauth_tokens`, the `via_mcp_client` attribution columns, `record_mcp_read()`) + 0064 (the `mcp` audit source). **Prerequisite refactor (done):** the **visibility predicate**, **role resolution** and the **`git ls-remote` ref discovery** now live in `@skilly/shared` so invariants #1/#3 and the SSRF guards have one implementation across web and worker. **DONE.**
 26. **Achievements (§31):** 20 one-time, non-competitive badges (`@skilly/shared/achievements` catalog) awarded inline in the write path (`awardAchievement()`, `user_achievements`, migration 0071 with a history backfill), browser-reported `users.time_zone` behind the Night Shift / Weekend Warrior badges (deferred per-user backfill on first capture), an in-app-only `achievement.earned` notification + toast, the profile-page Achievements card (locked badges with how-to-earn hints, progress, Share), the shareable hall at `/achievements/[userId]` (earned-only for others, `?badge=` spotlight, `achievements_hidden` opt-out), a hover-card count, erasure sweep, and the `achievements_enabled` platform toggle (dormant-not-destructive). **DONE.**
 
 **Phase 8 — Achievement levels**
@@ -3303,11 +3304,11 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
     unchanged): marketplaces need Claude Code; MCP needs an MCP-capable agent. A closing caveat
     line: *your administrator decides whether these are enabled* — the card is **static** content
     like the rest of the page and does **not** consult `mcp_enabled` / `marketplace_public_enabled`
-    (a user whose platform has neither on simply finds an empty directory or the `/mcp` disabled
+    (a user whose platform has neither on simply finds an empty directory or the `/mcp-server` disabled
     notice, both of which explain themselves).
   - **Two internal link buttons** below the card, same-tab (Next `Link`, not the external
     `links` buttons which open in a new tab): **Marketplaces →** `/catalog/marketplaces` and
-    **MCP server →** `/mcp`. The content module gains an **`internalLinks`** field for these,
+    **MCP server →** `/mcp-server`. The content module gains an **`internalLinks`** field for these,
     kept separate from `links` so the two link kinds cannot be confused.
   - **Screenshot**: `/quickstart/connect.png` — a capture of the Marketplaces directory page
     (captured with at least one marketplace enabled so the rows show). **Re-captured** in the same
@@ -4703,9 +4704,22 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
 - **Transport is Streamable HTTP only.** The deprecated HTTP+SSE transport is **not** implemented.
   Sessions are **stateless request/response** (no server-held session state beyond the OAuth token),
   so the worker can be replicated without sticky routing.
+- **`GET /mcp` opens no stream.** Streamable HTTP lets a server refuse the optional GET stream with
+  `405`, and skilly does for every client: `405` with a JSON pointer to the transport (`503`
+  "MCP is disabled on this registry" while the toggle is off). The one exception is a **browser**: a
+  `GET /mcp` whose `Accept` header includes `text/html` gets **`303 See Other` →
+  `/mcp-server`** (a relative `Location`; any query string is dropped), so a person who pastes the
+  server URL into a browser, or follows an old bookmark to the setup page, lands on that page. MCP
+  clients send `Accept: text/event-stream` on GET and `application/json, text/event-stream` on POST,
+  so they never see the redirect (a `text/html` range with `q=0`, and the `*/*` / `text/*`
+  wildcards, do not count as asking for HTML). Both answers carry `Vary: Accept`, so no cache hands
+  the redirect to an MCP client. The redirect is answered whether or not MCP is enabled, because the
+  page renders its own disabled state. It is a `303`, not a `301`/`308`: browsers cache a permanent
+  redirect, and it would outlive any later move of the page. `POST /mcp` is unchanged.
 - **MCP serving is NOT gated on the worker's leader lock.** The lock guards batch jobs (§2); MCP is
   request-serving, like the git server.
-- **Reverse proxy / Ingress** must route `/mcp`, `/oauth/token`, `/oauth/revoke` and both
+- **Reverse proxy / Ingress** must route `/mcp` (the path `/mcp` and `/mcp/*`, never a `/mcp*`
+  string prefix, §13), `/oauth/token`, `/oauth/revoke` and both
   `/.well-known/oauth-*` paths to the **worker**, and `/oauth/authorize` + `/oauth/register` to
   **web** (§13; the Helm Ingress rules of §16 #19 gain the same split).
 
@@ -4726,7 +4740,7 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
 - **Consent screen** (in web, after sign-in) names the **client**, the **user**, what access is being
   granted in plain language ("read the catalog you can already see; create proposals, ratings and
   comments as you; mint install commands for skills you can access"), and that the grant is
-  revocable from the `/mcp` page. Approving writes an `oauth_grants` row.
+  revocable from the `/mcp-server` page. Approving writes an `oauth_grants` row.
 - **The validated request is handed from the consent screen to its submit target in the database,
   never in process memory.** Rendering `/oauth/authorize` persists the already-validated request to
   `oauth_pending_authorizations` and puts only its opaque id in the form; `POST /oauth/consent`
@@ -4801,7 +4815,7 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   `revoked_by_user_id` (nullable FK, `ON DELETE SET NULL`).
 - **One live grant per `(user_id, client_id)`** (partial unique index where `revoked_at IS NULL`) —
   re-consenting refreshes the existing grant rather than piling rows up. This row **is** the
-  connection the user sees and revokes on the `/mcp` page.
+  connection the user sees and revokes on the `/mcp-server` page.
 
 #### `oauth_tokens`
 - `id` (uuid PK), `grant_id` (FK → `oauth_grants`, `ON DELETE CASCADE`), `kind`
@@ -5055,21 +5069,39 @@ depend on knowing:
   **"MCP is disabled on this registry"** error (`503`, plus the `mcp_disabled` `system_event`), and
   everything resumes on re-enable with no re-authorization. A mistaken flip costs nobody their
   consent. **Both flips are audited** (`settings.updated`).
-- **There is no "revoke all" button.** Per-client **block** and per-user **revoke** (on `/mcp`) cover
+- **There is no "revoke all" button.** Per-client **block** and per-user **revoke** (on `/mcp-server`) cover
   the incident case at the right granularity; a one-click org-wide purge is a footgun whose only
   outcome is re-onboarding everybody. *(Deferred deliberately — revisit if an incident proves the
   need.)*
 - **Turning MCP off cannot revoke an install token minted through MCP.** Those are ordinary §23
   install tokens and keep cloning through the git gateway; the toggle governs the MCP surface, not
   skills already installed through it. Uninstall (§23) is the control for those.
-- While off, the **`/mcp` page** stays reachable and renders a disabled state explaining that a
+- While off, the **`/mcp-server` page** stays reachable and renders a disabled state explaining that a
   platform admin has turned the server off — it does not 404, and it still lists the user's existing
   connections so they can revoke them.
 
-### The `/mcp` page (user surface)
+### The `/mcp-server` page (user surface)
 
 Reachable from the **account menu**, above *Installed skills* (§23) — **any authenticated user**,
 since consumption is universal.
+
+- **The path is `/mcp-server`, not `/mcp`.** `/mcp` is the worker's MCP endpoint and every proxy
+  routes it to the worker (§13), so a page there is unreachable in production. The page shows
+  `<base>/mcp` as the server URL — that is the endpoint, not this page — and a browser that opens it
+  is redirected back here (*`GET /mcp` opens no stream*, above). Every link to the page (account
+  menu, Quick-start card and button, Administration card, consent and error screens) points at
+  `/mcp-server`.
+- **Regression tests** ship with the move, so the page cannot be shadowed again:
+  - **Worker** (`server.test.ts`): `GET /mcp` with a browser `Accept` header
+    (`text/html,application/xhtml+xml,…`) returns `303` with `Location: /mcp-server`, with MCP
+    enabled and disabled, and with a query string on the request; with `Accept: text/event-stream`,
+    `Accept: application/json` or no `Accept` it returns `405` JSON (`503` while disabled); `POST /mcp`
+    still serves JSON-RPC.
+  - **Routing guard** (web unit test, §13): no web page route matches a worker-bound rule in the
+    Caddyfile or the Helm Ingress, plus the known-routes table.
+  - **e2e:** the MCP page specs, the protected-routes list, the all-routes smoke list and the
+    warm-up list use `/mcp-server`; the account-menu MCP link and both Quick-start links assert
+    `href="/mcp-server"`.
 
 - **Connect** — the server URL, and copy-paste configuration for **Claude Code**
   (`claude mcp add --transport http skilly <url>`), **Claude Desktop** (JSON snippet) and
@@ -5087,7 +5119,7 @@ since consumption is universal.
     with a per-field accessible name rather than five lines of JSON read aloud. The box is laid out as
     a block, not a flex row: Chromium cannot drag-select text inside a flex container, and a snippet a
     user cannot partially select would be a step back from the plain `<pre>` this replaces. Neither
-    `/mcp` snippet carries the `$` prompt the shell-command row shows — one of them is JSON. If the
+    `/mcp-server` snippet carries the `$` prompt the shell-command row shows — one of them is JSON. If the
     clipboard write is blocked, a legacy selection-based copy is attempted and the text stays
     selectable regardless.
     Neither snippet renders before the server URL has loaded — a mid-fetch snippet would carry an
@@ -6363,7 +6395,7 @@ not backfilled).
 - **Platform toggle — `achievements_enabled`** (Administration page, a card with the shared
   `Switch`, default **on**; `settings.updated` audit like every setting). **Off** hides the
   profile card and the preference block, makes `/achievements/[userId]` render the same
-  *"disabled by your administrator"* notice pattern as `/mcp` (§29), drops the hover-card line
+  *"disabled by your administrator"* notice pattern as `/mcp-server` (§29), drops the hover-card line
   (`achievementCount: null`), **drops the level ring everywhere** (`GET /api/levels` returns `{}`,
   §31.10), and **stops creating notifications and toasts**. **Awards and the `hero_at` stamp keep
   recording while off** (dormant-not-destructive, the §29 toggle's stance) so switching back on

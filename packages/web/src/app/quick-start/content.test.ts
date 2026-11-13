@@ -29,7 +29,7 @@ test("quick start: step 4 links same-tab to the Marketplaces directory and the M
   assert.ok(connect);
   assert.deepEqual(
     connect.internalLinks?.map((l) => l.href),
-    ["/catalog/marketplaces", "/mcp"],
+    ["/catalog/marketplaces", "/mcp-server"],
   );
   // Internal routes must never be declared as external (new-tab) links.
   assert.equal(connect.links, undefined);

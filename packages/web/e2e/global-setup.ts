@@ -81,7 +81,7 @@ const PAGES = [
   "/proposals/00000000-0000-0000-0000-000000000000",
   "/propose",
   "/marketplaces",
-  "/mcp",
+  "/mcp-server",
   "/audit",
   "/system-log",
   "/tokens",

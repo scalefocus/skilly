@@ -14,7 +14,34 @@ import {
   rpcError,
   toolError,
   toolJson,
+  acceptsHtml,
+  MCP_ENDPOINT_PATH,
+  MCP_PAGE_PATH,
 } from "./mcp.js";
+
+test("acceptsHtml: a browser navigation asks for HTML; MCP clients and wildcards do not", () => {
+  // Chromium / Firefox / Safari top-level navigations.
+  assert.equal(acceptsHtml("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"), true);
+  assert.equal(acceptsHtml("TEXT/HTML"), true);
+  assert.equal(acceptsHtml("application/json, text/html;q=0.5"), true);
+  // MCP clients: Streamable HTTP GET and POST.
+  assert.equal(acceptsHtml("text/event-stream"), false);
+  assert.equal(acceptsHtml("application/json, text/event-stream"), false);
+  // Wildcards, explicit refusal, nothing at all.
+  assert.equal(acceptsHtml("*/*"), false);
+  assert.equal(acceptsHtml("text/*"), false);
+  assert.equal(acceptsHtml("text/html;q=0"), false);
+  assert.equal(acceptsHtml("text/html; q=0.0"), false);
+  assert.equal(acceptsHtml(""), false);
+  assert.equal(acceptsHtml(undefined), false);
+  assert.equal(acceptsHtml(null), false);
+});
+
+test("the MCP setup page never sits under the MCP endpoint path (§13: the proxy would take it)", () => {
+  assert.equal(MCP_ENDPOINT_PATH, "/mcp");
+  assert.notEqual(MCP_PAGE_PATH, MCP_ENDPOINT_PATH);
+  assert.equal(MCP_PAGE_PATH.startsWith(`${MCP_ENDPOINT_PATH}/`), false);
+});
 
 test("the tool inventory is exactly the §29 ceiling, with unique names", () => {
   assert.equal(MCP_TOOL_NAMES.length, MCP_TOOL_CEILING);

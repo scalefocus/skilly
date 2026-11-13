@@ -134,7 +134,7 @@ async function go(page, url, waitSel) {
     ["/whats-new", "14-whats-new", "main", false],
     ["/leaderboard", "15-leaderboard", "main", false],
     ["/catalog/marketplaces", "16-marketplaces", "main", false],
-    ["/mcp", "17-mcp", "main", false],
+    ["/mcp-server", "17-mcp", "main", false],
     // Quick start's achievements card (§23): the Achievements section on the profile page, framed
     // so EARNED and LOCKED tiles are visible together — the locked how-to-earn hints are the whole
     // point of the nudge, so a capture of an empty (or a full) shelf would miss it. The capture

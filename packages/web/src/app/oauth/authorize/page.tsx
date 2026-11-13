@@ -41,7 +41,7 @@ function ErrorCard({ message }: { message: string }) {
       <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--muted)", margin: "0 0 14px" }}>{message}</p>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--faint)", margin: 0 }}>
         Nothing was authorized. This is usually a misconfigured client — check the MCP server URL in
-        its settings, or start again from the <a href="/mcp">MCP page</a>.
+        its settings, or start again from the <a href="/mcp-server">MCP page</a>.
       </p>
     </div>
   );
@@ -122,7 +122,7 @@ export default async function AuthorizePage({
 
       <p style={{ fontSize: 12.5, color: "var(--faint)", lineHeight: 1.6, margin: "0 0 20px" }}>
         Anything it creates is marked as coming from an agent, and you can revoke this connection at
-        any time from the <a href="/mcp">MCP page</a>.
+        any time from the <a href="/mcp-server">MCP page</a>.
       </p>
 
       <form method="post" action="/oauth/consent" style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
