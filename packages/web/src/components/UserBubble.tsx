@@ -8,7 +8,7 @@
 // person's Entra job title / department / office, plus name, email, presence and their badges
 // spelled out (§28). A person in their first 30 days wears a small propeller beanie above the
 // bubble (§67.3).
-import { useApi } from "./ui";
+import { useSharedApi } from "./ui";
 import { useDirectoryCard } from "./DirectoryCard";
 import { BADGE_META, badgeIcon, badgeLabel, leaderBadgeSize, splitBadges, type LeaderBadgeInfo } from "./leaderBadges";
 import { ACHIEVEMENT_TOTAL, levelAriaLabel } from "@skilly/shared/achievements";
@@ -183,16 +183,19 @@ function MoreBadges({ count, bubbleSize }: { count: number; bubbleSize: number }
 export function UserBubble({ name, avatar, size = 28, userId, maxBadges }: { name: string; avatar: string | null; size?: number; userId?: string | null; maxBadges?: number }) {
   // Shared cached GET (components/ui.tsx) — every UserBubble instance on a page dedupes onto the
   // same one request, so badging is effectively free regardless of how many bubbles are on screen.
-  const { data } = useApi<Record<string, LeaderBadgeInfo[]>>(userId ? "/api/leaders" : null);
+  // `useSharedApi`, not `useApi`: every bubble also takes any later fetch of the map, so the sidebar's
+  // account bubble (mounted once for the whole visit) never shows an older ring, badge line or hat
+  // than the page's own bubble of the same person.
+  const { data } = useSharedApi<Record<string, LeaderBadgeInfo[]>>(userId ? "/api/leaders" : null);
   const badges = (userId ? data?.[userId] : undefined) ?? NO_BADGES;
   // The level map is the same shape of shared, page-wide cached GET (§31.10). A user who opted out,
   // is inactive, or is at level 0 is simply absent from it — so no ring, and no client-side check.
-  const { data: levelData } = useApi<LevelMap>(userId ? "/api/levels" : null);
+  const { data: levelData } = useSharedApi<LevelMap>(userId ? "/api/levels" : null);
   const level = (userId ? levelData?.levels?.[userId] : undefined) ?? 0;
   const hero = !!userId && !!levelData?.heroes?.includes(userId);
   // New users wear the hat (§67.3) — same page-wide cached GET. Opted-out, inactive and erased people
   // are absent from the list, and a Hero's crown takes the hat's spot.
-  const { data: newcomerData } = useApi<NewcomerMap>(userId ? "/api/newcomers" : null);
+  const { data: newcomerData } = useSharedApi<NewcomerMap>(userId ? "/api/newcomers" : null);
   const hatted = showHat(userId, newcomerData?.ids, hero);
   // The card reuses those same badges from memory — it never refetches them (§28).
   const { triggerProps, card } = useDirectoryCard(userId, name, badges);

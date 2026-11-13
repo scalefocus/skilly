@@ -6,7 +6,7 @@
 // dev stack (SKILLY_DEV_AUTH=1). Read-only — nothing to clean up.
 import { test, expect, devSignIn } from "./fixtures";
 
-const PROTECTED = ["/catalog", "/admin", "/proposals", "/usage", "/requests", "/audit", "/mcp"];
+const PROTECTED = ["/catalog", "/admin", "/proposals", "/usage", "/requests", "/audit", "/mcp-server"];
 
 test.describe("access gating", () => {
   // Each protected route, unauthenticated, shows the sidebar sign-in affordance and hides the

@@ -6,7 +6,7 @@
 // registered client untouched — requests are simply refused with a clear message, and re-enabling
 // resumes everything with no re-authorization. That is why there is no org-wide "revoke all" button
 // here: a one-click mass purge's only outcome is re-onboarding the whole org. The per-client BLOCK
-// below is the incident control, and a user can revoke their own connection on /mcp.
+// below is the incident control, and a user can revoke their own connection on /mcp-server.
 import { useState } from "react";
 import { Pill, useApi } from "../../components/ui";
 import { useDateFmt } from "../../components/DateFormat";
@@ -110,7 +110,7 @@ export function McpCard({ open, onToggle }: { open: boolean; onToggle: () => voi
       <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, margin: "0 0 12px" }}>
         Lets people connect a coding agent to this registry over the Model Context Protocol. Agents act as the
         signed-in user with exactly their permissions — they cannot approve proposals, administer the platform, or
-        delete anything. Users connect from their own <a href="/mcp">MCP page</a>.
+        delete anything. Users connect from their own <a href="/mcp-server">MCP page</a>.
       </p>
 
       {flash && (

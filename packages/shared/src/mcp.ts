@@ -17,6 +17,34 @@ export const MCP_PROTOCOL_VERSIONS_SUPPORTED = ["2025-06-18", "2025-03-26"] as c
 
 export const MCP_SERVER_NAME = "skilly";
 
+// ── Paths (§13, §29) ────────────────────────────────────────────────────────────────────────────
+
+/** The MCP endpoint, served by the worker. Every proxy routes `/mcp` and `/mcp/*` there (§13). */
+export const MCP_ENDPOINT_PATH = "/mcp";
+
+/**
+ * The user's "MCP server" setup page, served by web. It must never sit under
+ * {@link MCP_ENDPOINT_PATH}: the proxy would hand it to the worker, and the page would be
+ * unreachable in production while still working in `pnpm dev` (§13).
+ */
+export const MCP_PAGE_PATH = "/mcp-server";
+
+/**
+ * Does this `Accept` header ask for an HTML page, i.e. is it a browser opening the URL rather than
+ * an MCP client? Browsers list `text/html` on a navigation; MCP clients send `text/event-stream`
+ * and/or `application/json`. A range carrying `q=0` is a refusal, not a request, so it doesn't count.
+ * Wildcards (`*\/*`, `text/*`) don't count either: an MCP client may send them too.
+ */
+export function acceptsHtml(accept: string | null | undefined): boolean {
+  if (!accept) return false;
+  return accept.split(",").some((range) => {
+    const [type, ...params] = range.split(";").map((p) => p.trim().toLowerCase());
+    if (type !== "text/html") return false;
+    const q = params.find((p) => p.startsWith("q="));
+    return q === undefined || Number(q.slice(2)) > 0;
+  });
+}
+
 // ── Tool inventory (the §29 ceiling) ────────────────────────────────────────────────────────────
 
 /** Core read (7) — `get_collections` joined in §38.9 (read-only; agents never curate). */

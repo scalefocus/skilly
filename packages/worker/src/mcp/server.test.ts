@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import request from "supertest";
-import { MCP_TOOL_NAMES, MCP_TOOL_CEILING } from "@skilly/shared";
+import { MCP_PAGE_PATH, MCP_TOOL_NAMES, MCP_TOOL_CEILING } from "@skilly/shared";
 import { mcpRouter } from "./server.js";
 import { fakePool, authRows, type FakePool } from "./testPool.js";
 import { invalidateMcpSettingsCache } from "./settings.js";
@@ -159,6 +159,58 @@ test("GET /mcp explains the transport instead of 404-ing", async () => {
   const res = await request(app(fp)).get("/mcp");
   assert.equal(res.status, 405);
   assert.match(res.body.error, /Streamable HTTP/);
+  assert.match(res.headers["vary"] ?? "", /accept/i);
+});
+
+// ── GET /mcp from a browser → the setup page (§29). The page used to live AT /mcp, where the proxy
+// sent it to the worker; a browser opening the server URL now lands on the page instead. ───────────
+
+const BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+
+for (const enabled of [true, false]) {
+  test(`GET /mcp from a browser → 303 to ${MCP_PAGE_PATH} (MCP ${enabled ? "on" : "off"})`, async () => {
+    const fp = signedIn({ enabled });
+    const res = await request(app(fp)).get("/mcp").set("accept", BROWSER_ACCEPT);
+    assert.equal(res.status, 303);
+    assert.equal(res.headers["location"], MCP_PAGE_PATH);
+    assert.match(res.headers["vary"] ?? "", /accept/i);
+  });
+}
+
+test("GET /mcp from a browser drops the query string from the redirect", async () => {
+  const fp = signedIn();
+  const res = await request(app(fp)).get("/mcp?utm_source=chat&x=1").set("accept", BROWSER_ACCEPT);
+  assert.equal(res.status, 303);
+  assert.equal(res.headers["location"], MCP_PAGE_PATH);
+});
+
+for (const accept of ["text/event-stream", "application/json", "application/json, text/event-stream", "*/*", "text/html;q=0"]) {
+  test(`GET /mcp with Accept "${accept}" is an MCP client → 405 JSON, no redirect`, async () => {
+    const fp = signedIn();
+    const res = await request(app(fp)).get("/mcp").set("accept", accept);
+    assert.equal(res.status, 405);
+    assert.equal(res.headers["location"], undefined);
+    assert.match(res.body.error, /Streamable HTTP/);
+  });
+}
+
+test("GET /mcp from an MCP client while MCP is off → 503, no redirect", async () => {
+  const fp = signedIn({ enabled: false });
+  const res = await request(app(fp)).get("/mcp").set("accept", "text/event-stream");
+  assert.equal(res.status, 503);
+  assert.equal(res.headers["location"], undefined);
+  assert.match(res.body.error, /disabled/i);
+});
+
+test("POST /mcp with a browser-like Accept still serves JSON-RPC (only GET redirects)", async () => {
+  const fp = signedIn();
+  const res = await request(app(fp))
+    .post("/mcp")
+    .set("authorization", "Bearer tok")
+    .set("accept", BROWSER_ACCEPT)
+    .send({ jsonrpc: "2.0", id: 42, method: "ping" });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.id, 42);
 });
 
 // ── Invariant #3: the negative visibility cases ────────────────────────────────────────────────
