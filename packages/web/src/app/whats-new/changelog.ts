@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.58.1",
+    date: "2026-11-13",
+    summary:
+      "Leaderboard fix: an install now counts when someone's first use of your skill was a download or a read through the MCP connector, not only a git install. Those were recorded but never shown, so some maintainers will see their installs go up. The page also says plainly that an install credits the skill's maintainers, not the person installing.",
+  },
+  {
     version: "2.58.0",
     date: "2026-11-12",
     summary:
