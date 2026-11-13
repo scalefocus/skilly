@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.60.0",
+    date: "2026-11-13",
+    summary:
+      "Skills that arrive through a plugin marketplace no longer count on the leaderboard, in Popular in your department or in Skills you might like; installing a skill on its own counts it. Past marketplace deliveries were recounted, so some leaderboard numbers drop. Install counts on catalog cards are unchanged.",
+  },
+  {
     version: "2.59.3",
     date: "2026-11-13",
     summary:

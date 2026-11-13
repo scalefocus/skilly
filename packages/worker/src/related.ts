@@ -30,6 +30,8 @@ export async function recomputeRelatedSkills(pool: Pool, topN = 12): Promise<num
       // Self-join skill_installs on user_id: each shared adopter contributes one row per ordered
       // (a,b) skill pair (PK(skill_id,user_id) means one row per user-skill), so count(*) = shared
       // adopters. Both sides constrained to active skills. row_number keeps the top-N per skill.
+      // Adopted rows only (§21 "Plugin deliveries are not adoption"): a marketplace delivers every
+      // skill at once, which would make every pair in it "installed together".
       const res = await client.query(
         `insert into related_skills (skill_id, related_skill_id, shared_count)
          select skill_id, related_skill_id, shared_count from (
@@ -38,9 +40,10 @@ export async function recomputeRelatedSkills(pool: Pool, topN = 12): Promise<num
                   count(*)   as shared_count,
                   row_number() over (partition by a.skill_id order by count(*) desc, b.skill_id) as rn
              from skill_installs a
-             join skill_installs b on b.user_id = a.user_id and b.skill_id <> a.skill_id
+             join skill_installs b on b.user_id = a.user_id and b.skill_id <> a.skill_id and b.adopted_at is not null
              join skills sa on sa.id = a.skill_id and sa.status = 'active'
              join skills sb on sb.id = b.skill_id and sb.status = 'active'
+            where a.adopted_at is not null
             group by a.skill_id, b.skill_id
          ) ranked
          where rn <= $1`,

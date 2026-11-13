@@ -254,16 +254,17 @@ export function pgGitDeps(pool: Pool): GitServerDeps {
             scope.kind === "public" ? [slugs] : [slugs, namespaceId],
           );
           for (const { id } of rows) {
-            // Same trio as a direct install — access_log row, monthly counter, and the
-            // once-per-(user, skill) install_count bump + maintainer credits. Reusing
-            // record_git_access is what makes a marketplace install indistinguishable from an
-            // `npx skills add` one in every downstream metric (§21).
-            await client.query(`select record_git_access($1, $2, false, false)`, [id, userId]);
+            // A PLUGIN DELIVERY (§21 "Plugin deliveries are not adoption", §30.7): the access_log
+            // row (flagged is_plugin), the monthly counter and the once-per-(user, skill)
+            // install_count bump, as for a direct install, but the ledger row is delivered only
+            // and no maintainer is credited. It counts as reach, never as adoption.
+            await client.query(`select record_git_access($1, $2, false, false, true)`, [id, userId]);
             credited++;
           }
         }
         await client.query(`update tokens set last_served_commit = $2 where id = $1 and type = 'marketplace'`, [tokenId, newCommit]);
-        // §31 Bulk Buyer on the first served fetch; the delivered skills are adoptions (Hello, Skill).
+        // §31 Bulk Buyer on the first served fetch. Hello, Skill too: a delivered skill is HELD, which
+        // is what that badge marks, although a delivery is not an adoption on the leaderboard (§21).
         await awardAchievement(client, userId, "first_marketplace");
         if (credited > 0) await awardAchievement(client, userId, "first_install", { noHabits: true });
         await client.query("commit");

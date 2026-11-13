@@ -314,7 +314,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### `usage_events` is documented above (§21).
 
 ### `related_skills` (migration 0046)
-- Precomputed "Skills you might like" neighbours: `skill_id`, `related_skill_id` (PK pair), `shared_count`. Rebuilt **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the co-install ledger `skill_installs`: `shared_count` = number of users who adopted both skills. Stores a wider top-N candidate list per skill (top ~12 by shared adopters, active **and non-deprecated** skills only as *neighbours* — a deprecated skill is never recommended, though it still has its own neighbours, §45) so the read path can drop any the viewer can't see and still fill the top 3 visible. Purely derived/advisory — rebuilt wholesale each run. Surfaced on the detail page (§10).
+- Precomputed "Skills you might like" neighbours: `skill_id`, `related_skill_id` (PK pair), `shared_count`. Rebuilt **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the co-install ledger `skill_installs` (adopted rows only, §21): `shared_count` = number of users who adopted both skills. Stores a wider top-N candidate list per skill (top ~12 by shared adopters, active **and non-deprecated** skills only as *neighbours* — a deprecated skill is never recommended, though it still has its own neighbours, §45) so the read path can drop any the viewer can't see and still fill the top 3 visible. Purely derived/advisory — rebuilt wholesale each run. Surfaced on the detail page (§10).
 
 ### `skill_requests` (+ `skill_request_categories`) (migration 0048; `skill_request_files` dropped in 0049; detailed in §26)
 - "Request a skill": org-visible wishes for skills that don't exist yet. `skill_requests`: `id`, `requester_user_id` (nullable since migration 0103: null exactly when `origin = 'search_gap'`, a *Platform* request, §62.10), `origin` (`user` | `search_gap`, migration 0103), `title`, `description`, `usage_examples`, `tool_harness`, `state` (`open` | `fulfilled` | `withdrawn` | `removed`), `fulfilled_skill_id`, `fulfilled_by_user_id`, `fulfilled_at`, `created_at`, `updated_at`. Categories via `skill_request_categories` (FK to the shared `categories` vocabulary). Requests are **text-only** — no file attachments (the original `skill_request_files` table was dropped in migration 0049). Fulfilment fields are set once (a snapshot) when a linked proposal is accepted; the row is never deleted on fulfilment (state flips). §26.
@@ -1263,7 +1263,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **API compatibility.** `POST /api/proposals`, `POST /api/publish`, proposer `revise`/`resubmit`, and the reviewer metadata edit **silently ignore** a `tags` field in the request body (no 400) — no consumer other than skilly's own UI ever sent it, and a hard reject would only punish a stale browser tab mid-deploy.
   - **Marketplace manifest.** Tags used to fill the per-plugin `keywords` array; with plugins grouped by category (§30.3) it now carries the member skills' titles and slugs, and the §30.5 content hash covers category slugs instead of tags.
 - **Ranking:** with a query active, the **"Relevance"** sort (the default) orders by **match-quality tier** — every word in the name › every word within name/description/categories › every word anywhere (usage and body included) › *(any-word fallback only)* some words › substring/typo only — and, **within a tier**, by popularity (`install_count`), then the **Bayesian-smoothed rating (§18)**, then Official (§34.6). With no query, popularity leads. A dedicated **"Top rated"** sort orders the same match set by the smoothed rating directly, **"Latest"** by most-recent version. A star value is never a match term.
-- **"Skills you might like" (related skills):** the skill **detail page** ends with a *"Skills you might like"* section — up to **3** other skills **most often installed together** with this one (pure **co-install** signal, no content similarity). Computed **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the per-`(user, skill)` adoption ledger `skill_installs` (§21): two skills are related when the same users adopted both; `shared_count` = number of shared adopters. Stored in **`related_skills`** (migration 0046) as a wider top-N candidate list per skill so the read path (`relatedSkills` → `GET /api/skills/:ns/:slug/related`) can **visibility-filter per viewer** (invariant #3 — restricted skills never surface to outsiders) and still fill the **top 3 the viewer can see** **and hasn't adopted yet**, ranked by shared adopters then `install_count`. Active skills only. **Already-installed exclusion:** a neighbour the viewer has adopted (a `skill_installs` row — git install **or** first download, uninstall-agnostic) is dropped. **Empty-state:** if there were visible neighbours but the viewer has installed **all** of them, the section shows *"You have all related skills."*; if there were **no** visible neighbours to begin with (a new/low-adoption skill, or all its neighbours restricted-invisible), the section is **hidden** entirely. (`relatedSkills` returns `{ related, allInstalled }` to tell those two empty cases apart; the nightly rebuild means a brand-new skill won't appear as a neighbour until the next run.)
+- **"Skills you might like" (related skills):** the skill **detail page** ends with a *"Skills you might like"* section — up to **3** other skills **most often installed together** with this one (pure **co-install** signal, no content similarity). Computed **nightly** by the leader-locked worker (`recomputeRelatedSkills`) from the per-`(user, skill)` adoption ledger `skill_installs` (§21), **adopted rows only**: two skills are related when the same users adopted both; `shared_count` = number of shared adopters. A plugin marketplace delivery is not an adoption (§21 *Plugin deliveries are not adoption*), or every pair of skills in a marketplace would be "installed together". Stored in **`related_skills`** (migration 0046) as a wider top-N candidate list per skill so the read path (`relatedSkills` → `GET /api/skills/:ns/:slug/related`) can **visibility-filter per viewer** (invariant #3 — restricted skills never surface to outsiders) and still fill the **top 3 the viewer can see** **and hasn't adopted yet**, ranked by shared adopters then `install_count`. Active skills only. **Already-installed exclusion:** a neighbour the viewer has adopted (an *adopted* `skill_installs` row — git install, first download **or** first MCP read, uninstall-agnostic) is dropped. A neighbour the viewer holds only through a plugin delivery is **not** dropped. **Empty-state:** if there were visible neighbours but the viewer has installed **all** of them, the section shows *"You have all related skills."*; if there were **no** visible neighbours to begin with (a new/low-adoption skill, or all its neighbours restricted-invisible), the section is **hidden** entirely. (`relatedSkills` returns `{ related, allInstalled }` to tell those two empty cases apart; the nightly rebuild means a brand-new skill won't appear as a neighbour until the next run.)
 - **Overview stat row (home page).** Signed-in users see four tiles under the page head: **Skills visible to you**, **Hosted**, **External** and **Total installs**. The first three are **true totals, never the length of a listing**. *Hosted* and *External* are the caller's visibility-filtered counts of `active` skills by type — the **same computation and the same per-visibility-scope cache as the catalog's Source chips** (`GET /api/skills/facets` → `types`), so the Overview and the catalog can never disagree — and *Skills visible to you* is their sum. They count **every active skill the viewer can see** through the shared visibility predicate (invariant #3, §42 grants included): deprecated skills and skills with no installable version yet **are** counted, archived skills are **not**, and no catalog filter, sort or saved preference changes them. Freshness is the facet cache's (`FACETS_CACHE_TTL_MS`, 30 s by default): a newly published or archived skill can take that long to show, exactly as on the chips. *Total installs* is unchanged — the org-wide sum of `install_counters` (every clone, §21), not visibility-scoped because it identifies no skill. All four come from one read, `GET /api/stats` (§15); until it resolves the tiles show `0`. **Rule:** `GET /api/skills` is a capped listing with no total (§15), so **no count shown to a user may be derived from the number of rows it returns**. Through v2.57.0 the three tiles were, which froze *Skills visible to you* at 60 once a viewer could see 60 skills and made *Hosted* / *External* a split of the 60 most-installed. The catalog grid's own *N results* label still counts the rows it shows.
 - **"Recently published" (home page).** The Overview's closing grid shows the **6 skills with the most recent version** — the first 6 rows of the catalog's **Latest** sort, unchanged (`GET /api/skills?sort=latest&limit=6`; deprecated skills last). Publishing a new version of an existing skill brings it back to the front. Visibility-filtered like every listing and independent of the viewer's saved catalog filters; the *view all →* link opens the catalog as before, and with no visible skill the section keeps its empty card. Through v2.57.0 the grid took the first 6 rows of the default, most-installed order, so it showed the most popular skills under this heading.
 - **"Popular in your department" (home page):** up to 6 skills that at least 2 people in the viewer's Entra department first adopted (`skill_installs`, §21) in the last 90 days, ranked by how many did, with skills the viewer has adopted left out and only a count shown, never names. Visibility-filtered per viewer (invariant #3). A live query with a 10-minute cache per department, switchable off by platform admins; the *Directory details* opt-out keeps a person out of the counts. Full rules in §66.
@@ -2316,6 +2316,10 @@ A simple, owner-facing dashboard of **view** and **install** tendencies per skil
 
 ### Privacy & drill-down
 - The dashboard shows **counts + trend only**. The **platform aggregate is counts-only** — no "top users by what they install" ranking here. (The separate **contributor leaderboard** below ranks maintainers by installs of skills they maintain, exposing aggregates only.)
+- **Holders line.** The expanded row of a skill states how many people hold it and how many of
+  them only through a plugin marketplace: *"Held by 45 people · 40 by plugin only"* (`holders`
+  in the breakdown response; all-time, not windowed). It is why a skill's install count can be
+  far above its maintainers' *installs received* (*Plugin deliveries are not adoption*, below).
 - A **per-user drill-down** (top ~20 named viewers/installers for a window) is **on-demand per skill**, visible only to that skill's owners. Org installs surface an **"anonymous (tokenless)"** bucket since they have no actor; **system-installation clones** (§23) surface a separate **"System install"** bucket (told apart from the legacy tokenless rows by `access_log.is_system`). The breakdown endpoint re-checks ownership of that skill.
 - **Display is truncated at 5 with an expand toggle, independently per list.** The Top installers and Top viewers lists each render only their first 5 people by default; if a list has more than 5, a **"Show more" / "Show less"** control appears at its bottom and expands/collapses that list alone (up to the full ~20 the breakdown endpoint already returned — no extra fetch). The other list's expand state is unaffected. Collapsing always drops back to the top 5 (already the sort order — highest count first). Purely client-side UI state (no new endpoint, no persistence across reopen).
 
@@ -2336,7 +2340,7 @@ A simple, owner-facing dashboard of **view** and **install** tendencies per skil
 
 A separate `/leaderboard` surface (distinct from the usage dashboard's counts-only platform aggregate above) that recognizes the people who **maintain** widely-installed skills, and also shows how many skills each person has **installed themselves** (*Skills installed*, below: a separate number that is never mixed into the maintainer credit). Served by `GET /api/leaderboard`, computed in `lib/leaderboard.ts`.
 
-- **Attribution = current explicit maintainers, point-in-time, once per adopter.** A user's **first** install of a skill (a git clone or first download) is credited to **each explicit maintainer (`skill_maintainers`) of the skill at that moment, EXCEPT the installer themselves** — so re-installing never re-credits, and a maintainer earns **no self-credit** for installing a skill they maintain (a solo maintainer installing their own skill earns nothing). Namespace admins' *implicit* maintainership earns **nothing** (they must add themselves to the explicit list). One first-install with three (other) maintainers produces **+1 for each of the three** (equal credit, not split). A skill with no eligible explicit maintainers at that moment credits **no one** (forfeited, never reassigned). **System-installation clones credit no one, ever** (§23) — no user means no `skill_installs` first-install gate and no `install_credits` row, so a CI job cloning on a schedule can never manufacture leaderboard standing.
+- **Attribution = current explicit maintainers, point-in-time, once per adopter.** A user's **first deliberate** install of a skill (a git clone, a first download or a first MCP read; never a plugin marketplace delivery, see *Plugin deliveries are not adoption* below) is credited to **each explicit maintainer (`skill_maintainers`) of the skill at that moment, EXCEPT the installer themselves** — so re-installing never re-credits, and a maintainer earns **no self-credit** for installing a skill they maintain (a solo maintainer installing their own skill earns nothing). Namespace admins' *implicit* maintainership earns **nothing** (they must add themselves to the explicit list). One first-install with three (other) maintainers produces **+1 for each of the three** (equal credit, not split). A skill with no eligible explicit maintainers at that moment credits **no one** (forfeited, never reassigned). **System-installation clones credit no one, ever** (§23) — no user means no `skill_installs` first-install gate and no `install_credits` row, so a CI job cloning on a schedule can never manufacture leaderboard standing.
 - **Snapshot model (`install_credits`).** Attribution is frozen at first-install time into `install_credits (access_log_id, user_id)` — written **inside `record_git_access()` / `record_skill_download()`** only on the user's first install (gated by the shared `skill_installs` ledger). Because credit is captured when the adoption happens, **changing a skill's maintainers never moves existing credit**: removal stops only *future* credit; additions earn only *future* first-installs. This is the mechanism behind "new installs follow the current maintainers; old installs stay put."
 - **Backfill.** Installs that predate `install_credits` are seeded **once** (in the creating migration) to the skill's **original proposer(s)** — the prior attribution model — excluding already-erased users (`erased_at IS NULL`). This keeps the board continuous across the cutover and faithful to point-in-time (the proposer was, by default, the sole maintainer then). After the backfill the old proposer-based query is retired.
 - **Metrics.** Both displayed numbers derive from `install_credits` (so they are always mutually consistent): `installs` = count of the user's credit rows in the window, displayed as **"installs received"** (it was labelled plain *Installs* until the *Skills installed* change below, and was read as "skills I installed"); `skillCount` = distinct skills among them — displayed as **"skills adopted"**, deliberately not "skills proposed": a skill this user proposed/maintains with zero credited installs in the window (too new, or only ever self-installed) contributes zero, even though they proposed or maintain it. That's intentional — the metric stays adoption-weighted for the anti-gaming reasons above — but the label must say what the number actually measures, so it never reads as "skills submitted/published by this user." Windows are **all-time** and **30d** (by the install's `access_log.created_at`). Because each install fans out to every maintainer, the board's summed installs **exceed** the real clone count — the number is "installs credited to you", not a global clone total.
@@ -2367,10 +2371,11 @@ The board's eighth stat, and the only one about what a person **consumes** rathe
 maintain or contribute. It exists because the plain label *Installs* was read as "skills I
 installed": people installed a skill and expected their own row to move.
 
-- **What it counts.** The user's rows in the adoption ledger `skill_installs`: **one per skill, the
-  first time they adopt it** through any of the three doors (§29): a git clone with a personal
-  install token or a personal marketplace key (§30.7), a first zip download, or a first MCP
-  `SKILL.md` read. API field `skillsInstalled`.
+- **What it counts.** The user's **adopted** rows in the ledger `skill_installs`: **one per skill,
+  the first time they install it deliberately** through any of the three doors (§29): a git clone
+  with a personal install token, a first zip download, or a first MCP `SKILL.md` read. A plugin
+  marketplace fetch is not one of them (*Plugin deliveries are not adoption*, below). API field
+  `skillsInstalled`.
   - **Uninstalling, reinstalling, an expired token and repeat clones never change it.** The ledger
     is written once per (user, skill) and is not deleted on uninstall. The number means "skills
     this person has installed", not "installations active right now" (that list is the owner's own
@@ -2383,8 +2388,11 @@ installed": people installed a skill and expected their own row to move.
     persists, and the board shows a count, never an identity. A **hard-deleted** skill's rows
     cascade away, so the count drops with it.
   - **Not counted:** system installations (no user, §23); agent-key clones (§69.7 writes no
-    ledger row); an install token that is minted and never cloned; viewing a skill.
-- **Windows.** All-time = every row. 30d = rows whose `first_at` is in the trailing 30 days.
+    ledger row); an install token that is minted and never cloned; viewing a skill; and a skill
+    that only a **plugin marketplace fetch** delivered, until the person installs it deliberately
+    (*Plugin deliveries are not adoption*, below).
+- **Windows.** All-time = every adopted row. 30d = rows whose `adopted_at` is in the trailing 30
+  days (*Plugin deliveries are not adoption*, below).
 - **Independent of installs received.** One first install can move two numbers on two different
   rows: the installer's *skills installed* (+1) and, for each explicit maintainer other than the
   installer, *installs received* (+1, by the unchanged rules above). Installing a skill you alone
@@ -2425,7 +2433,7 @@ installed": people installed a skill and expected their own row to move.
 - **Copy.**
   - Leaderboard subtitle (People tab): *"Ranked by skills installed: the skills each person has
     installed themselves. Installs received counts other people’s first installs of the skills
-    someone maintains."*
+    someone maintains. Skills that arrive through a plugin marketplace are not counted."*
   - Profile, under *Hide me from the leaderboard*: *"The leaderboard ranks people by the installs
     their skills receive, and shows how many skills each person has installed. You can hide
     yourself from it."*
@@ -2439,11 +2447,119 @@ installed": people installed a skill and expected their own row to move.
   - `GET /api/leaderboard` accepts `sort=installed`, and every entry gains `skillsInstalled`
     (integer). A missing or unknown `sort` still falls back to `installs`, whatever the page
     opens on.
-  - The board query gains one CTE over `skill_installs` grouped by `user_id` (windowed on
-    `first_at`), left-joined like the other six and added to the "has any standing" predicate. It
+  - The board query gains one CTE over the **adopted** rows of `skill_installs` grouped by
+    `user_id` (windowed on `adopted_at`; it read every row, by `first_at`, before plugin
+    deliveries stopped counting), left-joined like the other six and added to the "has any standing" predicate. It
     is covered by the same 60 s per-(window, sort) cache. **No migration and no new index**: the
     ledger and `idx_skill_installs_user` already exist, and history counts from the first row.
   - No MCP tool, no notification, no achievement and no audit entry.
+
+### Plugin deliveries are not adoption
+
+A plugin marketplace fetch (§30) delivers **every** listed skill at once: the person chose the
+marketplace, not any one skill. It first counted as a real install of each skill (§30.7), which put
+*70 skills installed* on the row of someone who had run one command, and gave every maintainer a
+credit from every subscriber. A **plugin delivery** is now recorded as **reach**, never as adoption.
+
+- **Two ways to have a skill.** A `skill_installs` row is one of two things:
+  - **Adopted.** The person installed the skill **deliberately**: a git clone with a personal
+    install token, a first download, or a first MCP `SKILL.md` read (the three doors, §29).
+    `adopted_at` holds when.
+  - **Delivered only.** A plugin marketplace fetch delivered it and the person has not installed
+    it deliberately. `adopted_at` is `NULL`; `first_at` still holds when they first got it.
+- **What a plugin delivery still counts for** (unchanged):
+  - an `access_log` row (`source = 'git'`, now also flagged `is_plugin`) and the monthly
+    `install_counters`, so the usage dashboard, the trend charts and the monthly totals keep it;
+  - `skills.install_count`, once per (user, skill): the install count on a catalog card stays
+    "people who have this skill, by any route";
+  - the *Hello, Skill* and *Bulk Buyer* badges (§31).
+- **What it no longer counts for:**
+  - **the leaderboard**: it is not in *skills installed*, and it writes no `install_credits`, so
+    it is not in *installs received* either;
+  - ***Popular in your department*** (§66) and ***Skills you might like*** (§10), which count
+    adopted rows only. Two colleagues adding a marketplace used to make every skill "popular"
+    and every pair of skills "installed together".
+- **A later deliberate install counts then.** When someone who holds a skill as *delivered only*
+  installs it through any of the three doors, the row becomes *adopted*: `adopted_at` is set to
+  that moment, and the skill's explicit maintainers at that moment are credited by the usual rule
+  (other than the installer, active, not erased). The access-log row and the monthly counter are
+  written as for any first adoption through that door. **`install_count` does not move again**:
+  it is still one person. A download or an MCP read used to return without recording anything
+  when a ledger row already existed; both now perform this upgrade.
+- **The other order changes nothing.** A skill adopted first and delivered by a plugin later
+  stays adopted, with its original date.
+- **Which fetches.** Every credit made through a `marketplace` token: the public and the
+  namespace marketplaces alike, the first fetch and any later fetch that delivers a newly listed
+  or re-versioned skill. Agent keys (§69.7) and system installations (§23) are unchanged; neither
+  writes the ledger.
+- **Dates.** The leaderboard's 30-day window and §66's 90-day window read `adopted_at`.
+- **Viewer side.** The two discovery lists leave out only the skills the viewer has **adopted**.
+  A skill they hold as *delivered only* can be suggested. A marketplace subscriber "had" every
+  skill, so both lists were empty for them.
+- **Usage view.** Because install counts keep plugin deliveries and the leaderboard does not, a
+  skill can show *45 installs* while its maintainer's *installs received* shows 5. The owner-only
+  breakdown on `/usage` (§21) states the split: ***"Held by 45 people · 40 by plugin only"***.
+  `GET /api/usage/:ns/:slug/breakdown` gains `holders: { total, pluginOnly }`: the skill's ledger
+  rows, and those with no `adopted_at`. Counts only, all-time, not windowed. Catalog cards keep
+  the single number.
+- **Copy.**
+  - The leaderboard subtitle gains a third sentence: *"Skills that arrive through a plugin
+    marketplace are not counted."*
+  - The marketplace add-command panel (`/catalog/marketplaces`, and `/namespaces` after a mint,
+    §30.6) and the introduction of `/marketplaces`: *"Adding a marketplace delivers every skill in
+    it. Those deliveries do not count on the leaderboard; install a skill on its own to count it."*
+- **Data (migration 0111).**
+  - `skill_installs.adopted_at TIMESTAMPTZ NULL`, defaulting to `now()` once the recount has run
+    (a row written without it is a deliberate adoption; only the plugin path writes `NULL`), with a
+    partial index on `(user_id, adopted_at)` where it is not null for the board's count.
+    `access_log.is_plugin BOOLEAN NOT NULL DEFAULT false`.
+  - The recount is a function, `recount_plugin_deliveries(p_users uuid[] DEFAULT NULL)`, that the
+    migration runs once for everyone. Only the database owner may execute it (the app role may
+    not), so the DB test can run the exact recount on its own fixture users. Running it again
+    changes nothing: a row adopted after it was first held is never touched.
+  - `record_git_access()` gains a fifth parameter, `p_plugin boolean DEFAULT false`. The gateway's
+    marketplace credit path (§30.7) passes `true`; a direct clone keeps the default.
+    `record_skill_download()` and `record_mcp_read()` treat a *delivered only* row as upgradable.
+- **Recount of history** (the same migration, one transaction):
+  1. Every existing ledger row starts adopted: `adopted_at = first_at`.
+  2. **Who had added a marketplace, and since when.** A person's *marketplace start* is the
+     earliest of three traces: the first fetch of a marketplace token they still hold
+     (`tokens.used_at`), their *Bulk Buyer* badge (§31: earned at the first marketplace fetch and
+     never lost), and their first same-instant burst (step 3). Adding a marketplace is not audited
+     and its token is deleted when it is removed, so these are what survives. A person with none
+     of them never had a marketplace, and nothing of theirs changes.
+  3. **Past deliveries.** A personal `source = 'git'` access-log row (a user, not a system
+     installation) is flagged `is_plugin` when either:
+     - it shares `(actor_user_id, created_at)` with another such row. A marketplace fetch records
+       all the skills it delivers in one transaction, at one microsecond; a direct clone is a
+       statement of its own. Or
+     - it falls on or after the person's marketplace start and **nothing proves it deliberate**.
+       The proof is a used personal install token for that skill whose first clone (`used_at`)
+       is no later than one minute after the row. A skill that reached a subscriber on its own,
+       after their first fetch, looks exactly like a direct clone in the log; the token is the
+       only thing that tells them apart.
+  4. A ledger row whose first access-log row (same user and skill, `created_at = first_at`) is
+     flagged becomes *delivered only* (`adopted_at = NULL`). Rows first written by a download or
+     an MCP read stay adopted.
+  5. The `install_credits` rows hanging off flagged access-log rows are **deleted, with no
+     backup**. This step cannot be undone: who maintained a skill at that moment is stored only
+     in those rows.
+  6. **Later deliberate clones are recovered.** For each *delivered only* row, the earliest later
+     unflagged personal `source = 'git'` row of that skill by that person, if there is one (by
+     step 3, an install token proves it), becomes the adoption: `adopted_at` is that row's time,
+     and the skill's **current** explicit maintainers other than the installer (active, not
+     erased) are credited against it, because the maintainers of that time were never recorded.
+  7. One `audit_log` row, `leaderboard.plugin_recount` (no actor), records the four totals:
+     access-log rows flagged, ledger rows reclassified, credits removed, adoptions recovered.
+  - **Known limits.** A deliberate install that the person later removed from *Installed skills*
+    took its token with it, so after their marketplace start it has no proof left: it is treated
+    as a delivery, and they count again the next time they install the skill. A download or MCP
+    read made after a delivery left no row, so it is not recovered either.
+  - `skills.install_count` is not touched by the recount.
+- **At release.** Numbers drop for people whose installs came through a marketplace, installers
+  and maintainers alike, and a person who only uses plugins shows no skills installed. Leader
+  badges follow the new numbers. Nobody is notified; the changelog entry explains it.
+- Opt-out, erasure and the *Replace maintainer to* transfer (§4) are unchanged.
 
 ### Leader badges
 
@@ -4997,7 +5113,10 @@ depend on knowing:
   ledger, **clone / download / MCP read are three doors to one fact** — a user who downloads a skill
   and later reads it via MCP is counted **once**, and the leaderboard cannot be farmed by switching
   channels. Repeat reads are no-ops for counting; every read is still an `access_log` row (raw
-  activity), exactly like every clone.
+  activity), exactly like every clone. **One case is not a no-op:** a first read of a skill the
+  reader holds only through a plugin marketplace delivery *adopts* it (§21 *Plugin deliveries are
+  not adoption*): the row gains its `adopted_at` and the maintainers are credited, while
+  `install_count` stays put. A first download does the same.
 - **Bundle-file reads do not count** — only the `SKILL.md` read does. Reading six files is one
   adoption, not six.
 - **Resource reads are never listed as installations** on `/installed` (§23) — installations come
@@ -5657,6 +5776,11 @@ generally**, not a single-toggle page:
 - Nav: a **Namespace administration** entry beside **Administration**, rendered only when the
   caller administers ≥ 1 namespace.
 
+**Leaderboard note on Pages 2 and 3.** The add-command panel (Page 3, and Page 1 after a mint,
+which share it) and Page 2's introduction carry one line: *"Adding a marketplace delivers every skill in it. Those deliveries do not
+count on the leaderboard; install a skill on its own to count it."* (§21 *Plugin deliveries are
+not adoption*).
+
 **Page 2 — Added marketplaces (`/marketplaces`), new.** The marketplace analogue of
 **Installed skills** (§23), and its structural twin: one row per `marketplace` token the
 caller owns, showing the marketplace name and scope, derived state (*generated-unused* /
@@ -5807,8 +5931,11 @@ per marketplace, a bubble for the namespace's contact, and per-row actions. Avai
 
 A marketplace clone delivers **every** listed skill in one fetch; the git protocol gives
 skilly no per-plugin signal, and `defaultEnabled` is `true`, so every listed plugin is
-installed unless the consumer later disables it. Marketplace fetches are therefore credited
-as **real installs of the individual skills**, via a commit cursor:
+installed unless the consumer later disables it. Marketplace fetches are therefore recorded
+per skill, via a commit cursor, as **plugin deliveries**: they count as *reach* (install counts,
+the usage dashboard, the monthly totals) and **never as adoption** (the leaderboard and the two
+discovery lists). §21 *Plugin deliveries are not adoption* has the rule; they first counted as
+real installs of each skill.
 
 - `tokens.last_served_commit` records the marketplace `main` commit that token was last
   served.
@@ -5822,27 +5949,28 @@ as **real installs of the individual skills**, via a commit cursor:
     new version is neither "added" nor "version-changed" in the ledger, even though its plugin's
     `1.0.<n>` bumped — the consumer received bytes they already had.
   - **Equal** ⇒ credit nothing (a no-op poll).
-- Each credit goes through the **same `record_git_access` path as a direct install**, so a
-  marketplace install is indistinguishable from an `npx skills add` one in every downstream
-  metric — and inherits that path's rules exactly: an **`access_log` row and the monthly
-  `install_counters` increment on every credit**, and the **`install_count` bump + maintainer
-  leaderboard credits once per (user, skill)**, deduped through `skill_installs`.
-  `last_served_commit` is then advanced, in the same transaction as the credits.
-- **So an update is recorded as an install *event*, not as a second *adopter*.** A consumer
+- Each credit goes through **`record_git_access` with its plugin flag set** (§21), so it is told
+  apart from an `npx skills add` clone: an **`access_log` row flagged `is_plugin` and the monthly
+  `install_counters` increment on every credit**, and the **`install_count` bump once per
+  (user, skill)**, deduped through `skill_installs`, where the row is written as *delivered
+  only*. **No maintainer leaderboard credit is written, and the installer's *skills installed*
+  does not move.** `last_served_commit` is then advanced, in the same transaction as the credits.
+- **So an update is recorded as an install *event*, not as a second holder.** A consumer
   receiving v1.1.0 of a skill they already had writes a fresh `access_log` row (it shows in the
-  usage dashboard and the monthly totals) but does not re-bump `install_count`. This is
-  deliberate and is what "the same as a direct install" means — re-running `npx skills add` for
-  a new version behaves identically. Doing otherwise would make `install_count` grow without
-  bound on every republish and would fan phantom credits into the §21 contributor leaderboard.
+  usage dashboard and the monthly totals) but does not re-bump `install_count`. Doing otherwise
+  would make `install_count` grow without bound on every republish.
 
 **Accepted consequences, stated rather than hidden:**
 - A consumer who **disables** a plugin still counted as installing it. skilly cannot see it.
 - A namespace-wide republish credits an install to **every changed skill** for **every**
   marketplace consumer, whether or not they use those skills.
-- A user holding **both** a per-skill install token and a marketplace token double-counts
-  that skill. Neither path is suppressed.
-- These numbers are therefore **reach**, not engagement — the same thing `install_count`
-  already measured for `npx skills add`, applied consistently.
+- A user holding **both** a per-skill install token and a marketplace token writes an
+  `access_log` row through each. Neither path is suppressed. They are one holder in
+  `install_count`, and adopted once, by the deliberate install.
+- These numbers are therefore **reach**, not engagement, and that is why they stopped feeding the
+  leaderboard and the discovery lists (§21). `install_count` on a catalog card is the count of
+  people who hold the skill by any route; the owner's usage view states how many of them hold
+  it by plugin only.
 
 ### 30.8 Audit, settings, API
 
@@ -5973,7 +6101,7 @@ Keys are stable identifiers — **renaming a badge never changes its key**.
 
 | Key | Name | Earned when (the event) | Group |
 |---|---|---|---|
-| `first_install` | **Hello, Skill** | First skill **adopted** — a first row in the `skill_installs` ledger (git clone, first download or first MCP `SKILL.md` read; three doors, one fact — §21). Minting an unused install token earns nothing. | Consume |
+| `first_install` | **Hello, Skill** | First skill **held** — a first row in the `skill_installs` ledger (git clone, first download or first MCP `SKILL.md` read; three doors, one fact — §21). A first **plugin marketplace delivery** earns it too, although that row is *delivered only* and does not count on the leaderboard (§21 *Plugin deliveries are not adoption*). Minting an unused install token earns nothing. | Consume |
 | `first_update` | **Fresh Coat** | A clone on one of the user's **existing installations** served a **higher stable version** than that installation last recorded — re-running the install command or `npx skills update` on an install that had fallen behind (§39). First clones, *unknown* installs and pinned installs (which cannot move) earn nothing. See §31.12. | Consume |
 | `first_marketplace` | **Bulk Buyer** | First **git fetch** served with a personal `marketplace` token (§30.7's `/info/refs` credit path). Minting the key alone earns nothing. | Consume |
 | `first_mcp` | **Ghost in the Machine** | First **MCP tool call** made under one of the user's grants (§29). Completing consent alone earns nothing. | Consume |
@@ -15295,12 +15423,12 @@ adoption ledger `skill_installs` (§21) with a short cache.
 ### 66.1 Decisions
 | # | Decision | Why |
 |---|---|---|
-| 1 | **Adopting means a first adoption in the trailing 90 days.** A colleague counts for a skill when their `skill_installs` row (§21: the first clone, first download or first MCP read, three doors to one adoption) has `first_at` within the last 90 days. Re-clones, later versions and uninstalls change nothing. | "Adopting" is about what people are picking up now. The ledger is the de-duplicated signal behind install counts and *Skills you might like* (§10), so re-cloning can't inflate it. Ninety days leaves mid-size departments enough data. |
+| 1 | **Adopting means a first adoption in the trailing 90 days.** A colleague counts for a skill when their `skill_installs` row (§21: the first clone, first download or first MCP read, three doors to one adoption) has `adopted_at` within the last 90 days. A skill that only a plugin marketplace delivered has no `adopted_at` and does not count (§21 *Plugin deliveries are not adoption*). Re-clones, later versions and uninstalls change nothing. | "Adopting" is about what people are picking up now. The ledger is the de-duplicated signal behind install counts and *Skills you might like* (§10), so re-cloning can't inflate it. Ninety days leaves mid-size departments enough data. |
 | 2 | **Same department means trimmed, case-insensitive equality** of `users.department`. A value that is empty after trimming is no department. There is no alias table. | `Engineering` and `engineering ` are one team. `R&D` against `Research & Development` is the tenant's Entra hygiene, not a new admin screen. |
 | 3 | **Colleagues count by their department today, and only while active**: `status = 'active'`, not erased. Nothing is stamped at adoption time. | Someone who moves teams takes their recent adoptions with them, and a leaver drops out. A stamp at adoption time couldn't be backfilled, so the row would start empty. |
 | 4 | **A skill needs at least 2 colleague adopters** in the window. | With one adopter the row would show exactly what one named person installed, which today only the skill's owners can see (§21). Two is the accepted floor (§66.8). |
 | 5 | **The card shows the count, never the people**: *"👥 3 colleagues"*. No names, avatars or hover list. | The count is the signal. Who adopted what stays on `/usage`, for the skill's owners. |
-| 6 | **Skills the viewer has adopted are left out**: any `skill_installs` row for the viewer and the skill, whether or not they uninstalled, the *Skills you might like* rule (§10). | It is a discovery row. It also means the viewer's own adoption never counts toward a skill they see. |
+| 6 | **Skills the viewer has adopted are left out**: an *adopted* `skill_installs` row for the viewer and the skill, whether or not they uninstalled, the *Skills you might like* rule (§10). A skill the viewer holds only through a plugin delivery is **not** left out (§21). | It is a discovery row. It also means the viewer's own adoption never counts toward a skill they see. |
 | 7 | **Ranked by colleague adopters**, then the most recent of those adoptions, then the global `install_count`, then title. **Up to 6 cards** and no *see all* page. | The most-shared skill first, and the fresher one breaks a tie. Six is the *Recently published* grid. |
 | 8 | **The row sits right after Featured**, before the *Installing is one command* explainer. | The organization-wide spotlights (Hyped, Featured) first, then the personal row. |
 | 9 | **No empty state.** The row is omitted when the switch is off, when the viewer has no department, and when nothing qualifies once the viewer's filters are applied. | The rule Hyped and Featured follow. A permanent empty card would nag people the row can't serve. |
@@ -15319,7 +15447,7 @@ adoption ledger `skill_installs` (§21) with a short cache.
   - is `status = 'active'` with `erased_at IS NULL`;
   - has `directory_hidden = false`;
   - has `lower(btrim(department))` equal to the key;
-  - has a `skill_installs` row for the skill with `first_at >= now() - 90 days`.
+  - has a `skill_installs` row for the skill with `adopted_at >= now() - 90 days`.
   System installations have no user and never count (§23). An adopter needs no access check: they
   adopted the skill, so they could see it.
 - **A qualifying skill** for a viewer:
@@ -15328,7 +15456,7 @@ adoption ledger `skill_installs` (§21) with a short cache.
   - is not deprecated (§45);
   - is visible to the viewer through the shared visibility predicate (invariant #3; §42 grants
     count);
-  - has no `skill_installs` row for the viewer (decision 6).
+  - has no *adopted* `skill_installs` row for the viewer (decision 6).
 - Because a skill the viewer adopted is never shown, the viewer is never part of a count they see. A
   shown count is always colleagues only.
 

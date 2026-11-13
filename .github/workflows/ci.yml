@@ -97,6 +97,9 @@ jobs:
       - run: node --test packages/worker/dist/integration/searchGapSweep.test.js
       # §63 upstream release alerts — the sweep with a stubbed upstream, scoped to its own fixtures.
       - run: node --test packages/worker/dist/integration/upstreamReleaseSweep.test.js
+      # §21 plugin deliveries — the marketplace credit path and the related-skills rebuild. Alone and
+      # before the web DB tests: the rebuild rewrites the whole related_skills table.
+      - run: node --test packages/worker/dist/integration/pluginDeliveries.test.js
       - run: pnpm --filter @skilly/web test:db
 
   build:

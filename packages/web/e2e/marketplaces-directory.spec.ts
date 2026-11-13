@@ -55,6 +55,10 @@ test.describe.serial("marketplaces directory (§30.6 Page 3)", () => {
       const tabs = row.getByRole("tablist", { name: "How to add this marketplace" });
       await expect(tabs).toBeVisible({ timeout: 15_000 });
       await expect(tabs.getByRole("tab")).toHaveText(["Terminal", "Claude CLI", "Settings file"]);
+      // §21 "Plugin deliveries are not adoption": the panel says the deliveries do not count.
+      await expect(row.getByTestId("mk-leaderboard-note")).toHaveText(
+        "Adding a marketplace delivers every skill in it. Those deliveries do not count on the leaderboard; install a skill on its own to count it.",
+      );
 
       // Terminal is the default: the `claude` CLI subcommand, token-in-URL, plus the disclosure.
       await expect(tabs.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
