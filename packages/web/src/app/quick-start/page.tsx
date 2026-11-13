@@ -164,7 +164,7 @@ function QuickStart() {
             <Link href="/whats-new" className="btn btn-sm">What&rsquo;s new</Link>
             <Link href="/installed" className="btn btn-sm">Installed skills</Link>
             <Link href="/catalog/marketplaces" className="btn btn-sm">Marketplaces</Link>
-            <Link href="/mcp" className="btn btn-sm">MCP server</Link>
+            <Link href="/mcp-server" className="btn btn-sm">MCP server</Link>
           </div>
         </section>
       )}

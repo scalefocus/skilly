@@ -1,5 +1,5 @@
 // §29: the caller's own live MCP connections — one row per client they have authorized. Powers the
-// Connections list on /mcp. Read-only; revocation is the DELETE on [grantId].
+// Connections list on /mcp-server. Read-only; revocation is the DELETE on [grantId].
 import { currentAccess } from "../../../../lib/guard";
 import { listConnections, publicBaseUrl } from "../../../../lib/mcpOauth";
 import { getPlatformSettings } from "../../../../lib/settings";

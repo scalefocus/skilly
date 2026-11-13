@@ -10,6 +10,8 @@ import express from "express";
 import type { Pool } from "pg";
 import {
   JSONRPC_VERSION,
+  MCP_ENDPOINT_PATH,
+  MCP_PAGE_PATH,
   MCP_PROTOCOL_VERSION,
   MCP_PROTOCOL_VERSIONS_SUPPORTED,
   MCP_SERVER_NAME,
@@ -18,6 +20,7 @@ import {
   RPC_INVALID_PARAMS,
   RPC_INVALID_REQUEST,
   RPC_METHOD_NOT_FOUND,
+  acceptsHtml,
   buildSkillResourceUri,
   isJsonRpcRequest,
   parseSkillResourceUri,
@@ -40,7 +43,7 @@ import { publicBaseUrl } from "./url.js";
 import { M } from "../metrics.js";
 import { tryAward } from "../achievements.js";
 
-const MCP_PATH = "/mcp";
+const MCP_PATH = MCP_ENDPOINT_PATH;
 
 /** The one client-facing 401. It never says WHY — the reason lives in the system log (§25). */
 function unauthorized(res: Response): void {
@@ -232,7 +235,16 @@ export function mcpRouter(pool: Pool): Router {
   const r = Router();
   const json = express.json({ limit: "24mb", type: ["application/json"] });
 
-  r.get(MCP_PATH, async (_req, res) => {
+  r.get(MCP_PATH, async (req, res) => {
+    // The answer depends on Accept, so no cache may hand a browser's redirect to an MCP client.
+    res.vary("Accept");
+    // A browser opening the server URL (pasted from the setup page, or an old bookmark from when
+    // the page lived here) goes to the setup page. 303, not 301/308: browsers cache a permanent
+    // redirect. Answered before the enabled check, because the page renders its own disabled state.
+    if (acceptsHtml(req.header("accept"))) {
+      res.redirect(303, MCP_PAGE_PATH);
+      return;
+    }
     // The deprecated SSE transport opened a stream on GET. We answer with a clear pointer instead
     // of a bare 405 so a misconfigured client's error message is actionable.
     const { enabled } = await getMcpSettings(pool);

@@ -17,7 +17,7 @@ test.describe("Quick start — connect step (§23)", () => {
     const mkt = card.getByRole("link", { name: /^Marketplaces/ });
     const mcp = card.getByRole("link", { name: /^MCP server/ });
     await expect(mkt).toHaveAttribute("href", "/catalog/marketplaces");
-    await expect(mcp).toHaveAttribute("href", "/mcp");
+    await expect(mcp).toHaveAttribute("href", "/mcp-server");
     // Same-tab: internal buttons never carry the external new-tab target.
     await expect(mkt).not.toHaveAttribute("target", "_blank");
     await expect(mcp).not.toHaveAttribute("target", "_blank");
@@ -28,7 +28,7 @@ test.describe("Quick start — connect step (§23)", () => {
     await page.goto("/quick-start", { waitUntil: "domcontentloaded" });
     const cta = page.locator(".qs-cta");
     await expect(cta.getByRole("link", { name: "Marketplaces" })).toHaveAttribute("href", "/catalog/marketplaces", { timeout: 25_000 });
-    await expect(cta.getByRole("link", { name: "MCP server" })).toHaveAttribute("href", "/mcp");
+    await expect(cta.getByRole("link", { name: "MCP server" })).toHaveAttribute("href", "/mcp-server");
   });
 
   // §23 / §31.5 — the achievements card: unnumbered, sits between the last step and the contribute

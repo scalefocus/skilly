@@ -1,5 +1,5 @@
 // e2e: the §29 MCP connect flow — Dynamic Client Registration → authorize → consent → a
-// single-use authorization code, plus the /mcp page and the admin card.
+// single-use authorization code, plus the /mcp-server page and the admin card.
 //
 // DOCUMENTED BOUNDARY: the token endpoint and the MCP endpoint itself live on the WORKER (§29
 // "Shape & placement"), and this suite runs against the web dev server only. So this spec covers
@@ -166,7 +166,7 @@ test.describe("MCP connect flow (§29)", () => {
     // interrupted ("interrupted by another navigation to chrome-error://chromewebdata/").
     await page.waitForURL((u) => !u.toString().includes("/oauth/authorize"), { timeout: 15_000 }).catch(() => {});
 
-    await page.goto("/mcp");
+    await page.goto("/mcp-server");
     await expect(page.getByRole("heading", { name: "MCP server" })).toBeVisible();
     await expect(page.getByText(name)).toBeVisible();
     // No credential is ever shown in a connect snippet — that's the point of the OAuth flow.
@@ -200,7 +200,7 @@ test.describe("MCP connect flow (§29)", () => {
 
   test("the MCP page shows the server URL and the connect snippets", async ({ page }) => {
     await devSignIn(page);
-    await page.goto("/mcp");
+    await page.goto("/mcp-server");
     // The copy affordance is the box itself, named per field (§29) — not a "Copy" button beside it.
     // Neither box renders until the server URL has loaded, and a cold `next dev` route compile can
     // outlast the default expect timeout, so the first wait is explicit.
@@ -221,7 +221,7 @@ test.describe("MCP connect flow (§29)", () => {
   test("clicking either connect snippet copies it to the clipboard", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await devSignIn(page);
-    await page.goto("/mcp");
+    await page.goto("/mcp-server");
 
     await page.getByRole("button", { name: "Copy the Claude Code command" }).click();
     await expect(copyToast(page)).toHaveText("✓ Copied");
@@ -240,7 +240,7 @@ test.describe("MCP connect flow (§29)", () => {
   test("clicking the copy pill itself copies, not just the field", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await devSignIn(page);
-    await page.goto("/mcp");
+    await page.goto("/mcp-server");
     await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
 
     const box = page.getByRole("button", { name: "Copy the Claude Code command" });
@@ -265,7 +265,7 @@ test.describe("MCP connect flow (§29)", () => {
   test("drag-selecting inside a snippet does not copy the whole snippet", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await devSignIn(page);
-    await page.goto("/mcp");
+    await page.goto("/mcp-server");
     await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
 
     const box = page.getByRole("button", { name: "Copy the mcp.json configuration" });
@@ -290,7 +290,11 @@ test.describe("MCP connect flow (§29)", () => {
     await devSignIn(page);
     await page.goto("/");
     await page.getByRole("button", { name: /account/i }).click();
-    await expect(page.getByRole("menuitem", { name: "MCP server" })).toBeVisible();
+    const item = page.getByRole("menuitem", { name: "MCP server" });
+    await expect(item).toBeVisible();
+    // Never /mcp: that is the worker's endpoint, and behind the proxy the page there is unreachable
+    // (§13). proxyRouting.test.ts guards the proxy side; this guards the link.
+    await expect(item).toHaveAttribute("href", "/mcp-server");
   });
 
   test("the admin card reports status and can toggle the server off and back on", async ({ page }) => {
@@ -300,7 +304,7 @@ test.describe("MCP connect flow (§29)", () => {
     await card.getByRole("heading", { name: "MCP server" }).click();
     await expect(card.getByText(/Switch off|Switch on/)).toBeVisible();
 
-    // Off is a KILL-SWITCH, not a purge: grants survive, and the /mcp page still lists them.
+    // Off is a KILL-SWITCH, not a purge: grants survive, and the /mcp-server page still lists them.
     const off = await page.request.patch("/api/admin/settings", { data: { mcpEnabled: false } });
     expect(off.ok(), await off.text()).toBeTruthy();
     const disabled = await (await page.request.get("/api/mcp/connections")).json();

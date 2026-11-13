@@ -45,7 +45,11 @@
 	# below), because the authorize leg needs the Auth.js/Entra session that only web has. Getting
 	# this wrong breaks the consent screen, not the token exchange, so it fails late — keep the two
 	# lists in sync with the Helm ingress.
-	handle /mcp* {
+	# /mcp is matched as the path /mcp and /mcp/*, NEVER the glob /mcp*: that would also swallow the
+	# web page /mcp-server (the user's MCP setup page), which is how it was unreachable until v2.59.5.
+	# packages/web/src/lib/proxyRouting.test.ts fails if any web page route lands on the worker.
+	@mcp path /mcp /mcp/*
+	handle @mcp {
 		reverse_proxy worker:4000 {
 			header_up X-Forwarded-Proto {scheme}
 			header_up X-Forwarded-Host  {host}

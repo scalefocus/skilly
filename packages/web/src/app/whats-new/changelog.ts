@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.59.5",
+    date: "2026-11-13",
+    summary:
+      "The MCP server page opens again: it moved to /mcp-server, because /mcp is the server endpoint itself and only ever showed an error in the browser. Opening the server URL in a browser now takes you to the page. Your MCP clients keep the same URL and need no changes.",
+  },
+  {
     version: "2.59.4",
     date: "2026-11-13",
     summary:

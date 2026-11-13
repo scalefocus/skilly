@@ -106,7 +106,7 @@ export const QUICK_START: QuickStartStep[] = [
     ],
     internalLinks: [
       { label: "Marketplaces →", href: "/catalog/marketplaces" },
-      { label: "MCP server →", href: "/mcp" },
+      { label: "MCP server →", href: "/mcp-server" },
     ],
     image: "/quickstart/connect.png",
     alt: "The Marketplaces page listing the marketplaces you can add to Claude Code",

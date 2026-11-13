@@ -35,9 +35,12 @@ spec:
                 name: {{ $fullName }}-worker
                 port:
                   number: 4000
-          # §29 MCP server → worker (Streamable HTTP JSON-RPC).
-          - path: /mcp
-            pathType: Prefix
+          # §29 MCP server → worker (Streamable HTTP JSON-RPC). A regex, not `Prefix /mcp`: with
+          # use-regex on, ingress-nginx turns every path into `~* "^<path>"`, so a Prefix /mcp would
+          # also catch the web page /mcp-server (the user's MCP setup page). Keep in sync with the
+          # Caddyfile; packages/web/src/lib/proxyRouting.test.ts checks both.
+          - path: /mcp(/|$)
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: {{ $fullName }}-worker

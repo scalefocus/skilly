@@ -884,7 +884,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </svg>
                     What&rsquo;s new
                   </Link>
-                  <Link href="/mcp" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
+                  <Link href="/mcp-server" className="user-menu-item" role="menuitem" onClick={() => setUserMenuOpen(false)}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0M12 12v9M4 7h16" />
                     </svg>
