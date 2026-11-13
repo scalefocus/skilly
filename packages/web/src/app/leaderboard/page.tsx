@@ -146,16 +146,26 @@ function Leaderboard() {
                   {active.caption}
                 </div>
               </div>
+              {/* §21 "Action slots": four slots, always rendered, so every button sits at the same
+                  place on every row; a missing action leaves its slot empty. */}
               <div className="lb-actions">
-                <Link href={skillsHref} className="btn btn-sm" title={isSelf ? "Your maintained skills" : `Skills maintained by ${e.displayName}`}>Skills</Link>
-                <Link href={requestsHref} className="btn btn-sm" title={isSelf ? "Your skill requests" : `Skills requested by ${e.displayName}`}>Requests</Link>
-                {!isSelf && (
-                  <button type="button" className="btn btn-sm" disabled={reaching === e.userId} onClick={() => reachOut(e.userId)} title={`Message ${e.displayName}`}>
-                    {reaching === e.userId ? "…" : "Reach out"}
-                  </button>
-                )}
-                {/* §35.4 — right of Reach out; renders nothing on your own row or for the unfollowable. */}
-                <FollowButton userId={e.userId} followable={e.followable} name={e.displayName} />
+                <span className="lb-slot">
+                  <Link href={skillsHref} className="btn btn-sm" title={isSelf ? "Your maintained skills" : `Skills maintained by ${e.displayName}`}>Skills</Link>
+                </span>
+                <span className="lb-slot">
+                  <Link href={requestsHref} className="btn btn-sm" title={isSelf ? "Your skill requests" : `Skills requested by ${e.displayName}`}>Requests</Link>
+                </span>
+                <span className="lb-slot">
+                  {!isSelf && (
+                    <button type="button" className="btn btn-sm" disabled={reaching === e.userId} onClick={() => reachOut(e.userId)} title={`Message ${e.displayName}`}>
+                      {reaching === e.userId ? "…" : "Reach out"}
+                    </button>
+                  )}
+                </span>
+                <span className="lb-slot">
+                  {/* §35.4 — right of Reach out; renders nothing on your own row or for the unfollowable. */}
+                  <FollowButton userId={e.userId} followable={e.followable} name={e.displayName} />
+                </span>
               </div>
             </div>
             );

@@ -1354,11 +1354,11 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
 
 /* Leaderboard rows (SKILLY_SPEC.md §21 "Row layout"): one line of columns, rank · avatar · name and
    stat line · number · actions, every row the same height. The number and action columns have fixed
-   widths (actions right-aligned), so the name column is the same width on every row. The avatar
-   slot's size is set inline from the bubble size (room for a ring and one badge line). The name
-   and stat line never wrap: a long one ends in an ellipsis and shows in full on hover (title).
-   Scoped to the People board (.lb-people): the Hyped tab and the marketplaces page reuse .lb-row
-   and .lb-actions with their own inline layout. */
+   widths (the action column at the right edge), so the name column is the same width on every row.
+   The avatar slot's size is set inline from the bubble size (room for a ring and one badge line).
+   The name and stat line never wrap: a long one ends in an ellipsis and shows in full on hover
+   (title). Scoped to the People board (.lb-people): the Hyped tab and the marketplaces page reuse
+   .lb-row and .lb-actions with their own inline layout. */
 .lb-people .lb-row { gap: 12px; }
 .lb-people .lb-rank { flex-shrink: 0; min-width: 28px; text-align: right; font-size: 14px; font-weight: 600; }
 .lb-people .lb-av { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
@@ -1367,19 +1367,32 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
 .lb-people .lb-name { font-weight: 600; font-size: 14.5px; }
 .lb-people .lb-stats { font-size: 11.5px; }
 .lb-people .lb-num { flex-shrink: 0; min-width: 72px; text-align: right; }
-.lb-people .lb-actions { display: flex; gap: 8px; flex-shrink: 0; min-width: 340px; justify-content: flex-end; }
+/* §21 "Action slots": four slots (Skills · Requests · Reach out · Follow), always rendered, at the
+   same place on every row. Skills and Requests never change, so their tracks fit their labels; the
+   Reach out and Follow tracks keep a floor wide enough for "Reach out" and "Unfollow", so an empty
+   slot (your own row, someone unfollowable), the "…" of a pending Reach out and the shorter "Follow"
+   all hold the same width. The floor is a minimum, not a fixed size: a wider fallback font grows
+   the track rather than clipping the label. The button fills its slot, label centred. */
+.lb-people .lb-actions {
+  display: grid; flex-shrink: 0; column-gap: 8px; align-items: center;
+  grid-template-columns: max-content max-content minmax(88px, max-content) minmax(82px, max-content);
+}
+.lb-people .lb-slot { display: flex; min-width: 0; }
+.lb-people .lb-slot > .btn { flex: 1 1 auto; justify-content: center; }
 /* A NARROW board (§21 "Narrow screens"): the page marks the board .lb-compact when the board's own
    width is under 760 px — a phone, a tablet, or a window the sidebar has squeezed — so this is not
    a media query. Three bands, every row still the same height:
      1. rank · avatar · name · number — the rank and number shrink to their content and the avatar
         slot is narrower (2 badges, sized by the page), so the name takes the width;
-     2. the stat line across the full row, exactly two rows reserved (clamped with an ellipsis);
-     3. the actions on one line, sharing the width, each label on one row in a smaller font.
+     2. the stat line under the name (from the name's left edge to the row's right edge), exactly
+        two rows reserved (clamped with an ellipsis);
+     3. the four action slots on one line, a quarter of the width each (also when a slot is
+        empty), each label on one row in a smaller font.
    .lb-who dissolves (display: contents) so the name and the stat line land in different bands. */
 .lb-people.lb-compact .lb-row {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
-  grid-template-areas: "rank av name num" "stats stats stats stats" "actions actions actions actions";
+  grid-template-areas: "rank av name num" ". . stats stats" "actions actions actions actions";
   column-gap: 8px; row-gap: 8px; align-items: center; padding: 14px;
 }
 .lb-people.lb-compact .lb-rank { grid-area: rank; min-width: 18px; }
@@ -1391,7 +1404,7 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
 }
 .lb-people.lb-compact .lb-num { grid-area: num; min-width: 0; }
-.lb-people.lb-compact .lb-actions { grid-area: actions; min-width: 0; justify-content: stretch; }
+.lb-people.lb-compact .lb-actions { grid-area: actions; min-width: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .lb-people.lb-compact .lb-actions .btn {
   flex: 1 1 0; min-width: 0; justify-content: center; white-space: nowrap;
   font-size: 12px; padding: 6px 4px;

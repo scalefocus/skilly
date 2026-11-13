@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.60.2",
+    date: "2026-11-13",
+    summary:
+      "On the leaderboard, Skills, Requests, Reach out and Follow now line up on every row, whether a row says Follow or Unfollow; your own row keeps its two buttons in the same place too. On a phone, the line \"5 skills installed · 0 skills adopted\" now starts under the person's name instead of at the edge of the row.",
+  },
+  {
     version: "2.60.1",
     date: "2026-11-13",
     summary:
