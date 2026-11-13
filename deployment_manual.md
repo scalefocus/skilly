@@ -39,13 +39,16 @@ backends:
 |---|---|---|
 | **web** (`packages/web`) | 3000 | Next.js app: UI + REST API + OIDC sign-in (Auth.js/Entra) |
 | **worker** (`packages/worker`) | 4000 | SCIM 2.0 endpoint, Entra reconciliation, the **git smart server**, publish/scan/notify/pointer sweeps. Singleton (Postgres advisory-lock leader). |
-| **proxy** (Caddy, dev sample) | 8080 | Routes `/scim/*` and `*.git/...` → worker; everything else → web |
+| **proxy** (Caddy, dev sample) | 8080 | Routes `/scim/*`, `*.git/...`, the MCP endpoint and the OAuth token paths → worker; everything else → web |
 | **Postgres** | 5432 | Metadata, FTS, append-only audit |
 | **MinIO / S3** | 9000 (API), 9001 (console, bound to `127.0.0.1` on the host only) | Immutable skill artifact storage |
 | **ClamAV** (optional) | 3310 | Malware scanning at ingest |
 
-Key routing rule (any proxy must honor it): **`/scim/*` and `*.git/...` go to the worker; all
-other paths go to web.** Both share the same hostname so install URLs and SCIM/OIDC line up.
+Key routing rule (any proxy must honor it): **`/scim/*`, `*.git/...`, `/mcp` and `/mcp/*`,
+`/oauth/token`, `/oauth/revoke` and `/.well-known/oauth-*` go to the worker; all other paths go to
+web** (including `/oauth/authorize`, `/oauth/register` and the `/mcp-server` page). Both share the
+same hostname so install URLs and SCIM/OIDC line up. Match `/mcp` as that path and `/mcp/*`, never
+as a string prefix: a `/mcp*` rule (or nginx `location /mcp`) also catches the `/mcp-server` page.
 
 ---
 
@@ -397,6 +400,16 @@ checklist in [docs/agent-sync-api.md](docs/agent-sync-api.md#ops-checklist-entra
 
 ## 10. Operations
 
+- **A changed Caddyfile needs a new proxy container.** Caddy reads its config only at startup, and
+  the single-file bind mount keeps showing the old file after `git checkout` replaces it. A plain
+  `docker compose up --build -d` leaves the proxy running, so the new routing never loads. The
+  Jenkins deploy passes the Caddyfile's hash as `CADDYFILE_SHA256`, which makes Compose recreate the
+  proxy whenever the file changes, and fails the build if the proxy still sees a different file.
+  By hand, either deploy the same way or recreate the proxy:
+  ```bash
+  CADDYFILE_SHA256=$(sha256sum Caddyfile | cut -d' ' -f1) docker compose up --build -d
+  docker compose up -d --force-recreate --no-deps proxy
+  ```
 - **Persist these volumes:** Postgres data, MinIO data, and the **git repo volume**
   (`GIT_REPO_ROOT`, `deploy/data/git` in Compose). Back up all three.
 - **Git volume ownership:** the worker runs unprivileged as uid 1000, so the git repo volume
@@ -433,6 +446,7 @@ checklist in [docs/agent-sync-api.md](docs/agent-sync-api.md#ops-checklist-entra
 
 | Symptom | Cause / Fix |
 |---|---|
+| A page shows `Cannot GET /<path>` (e.g. `/mcp-server`) | That is the worker's 404: the proxy sent a web page to the worker. Either the proxy is running an old Caddyfile (recreate it: `docker compose up -d --force-recreate --no-deps proxy`, see §10), or your own edge routes `/mcp` as a string prefix (match `/mcp` and `/mcp/*` only, see §1). |
 | `AADSTS50011: redirect URI … does not match` | The registered redirect URI ≠ `PUBLIC_BASE_URL`/`NEXTAUTH_URL` + `/api/auth/callback/azure-ad`. Make them identical (scheme, host, port, no trailing slash). Behind a proxy, use the external `https://` URL. |
 | Signed in but **no access** / `/admin` hidden | Your user/group membership isn't synced yet. Run SCIM provisioning or enable Graph reconciliation (7.4), and make sure you're in the bootstrap group. |
 | SCIM **Test Connection** fails / 401 | `SCIM_BEARER_TOKEN` mismatch, or the tenant URL isn't reachable from Azure (localhost needs a public tunnel). Confirm the proxy routes `/scim/*` → worker. |
