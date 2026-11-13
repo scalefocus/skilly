@@ -18,6 +18,19 @@ export const BADGE_META: Record<LeaderMetric, { icon: string; color: string; lab
   curated: { icon: "🗂", color: "var(--badge-curate)", label: "Curator" },
 };
 
+/** The diameter of one leader badge under a bubble of `bubbleSize` px: it scales with the bubble,
+ *  floored so the icon stays legible on the smallest avatars. */
+export function leaderBadgeSize(bubbleSize: number): number {
+  return Math.max(11, Math.round(bubbleSize * 0.42));
+}
+
+/** At most `max` badges, plus how many more there are (§21 "Row layout": a leaderboard row shows 4
+ *  and a `+N` marker so every row keeps one badge line). No `max` = every badge, nothing more. */
+export function splitBadges<T>(badges: readonly T[], max?: number): { shown: readonly T[]; more: number } {
+  if (max === undefined || badges.length <= max) return { shown: badges, more: 0 };
+  return { shown: badges.slice(0, max), more: badges.length - max };
+}
+
 /** The glyph for a badge — per-window only for `followed` (📣 all time, 📈 last 30 days). */
 export function badgeIcon(b: LeaderBadgeInfo): string {
   if (b.metric === "followed" && b.window === "30d") return "📈";

@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.59.1",
+    date: "2026-11-13",
+    summary:
+      "Leaderboard layout: the board is wider, names have room to show in full, and every row is the same height. Rows show up to four leader badges plus a +N count, the number under each row reads Installs again, and the Collections button is gone from rows.",
+  },
+  {
     version: "2.59.0",
     date: "2026-11-13",
     summary:

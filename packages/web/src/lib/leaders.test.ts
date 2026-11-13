@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeLeaderBadges, type BoardReader } from "./leaders";
 import { leaderboardOrderBy, type LeaderboardEntry, type LeaderboardSort, type LeaderboardWindow } from "./leaderboard";
-import { badgeLabel } from "../components/leaderBadges";
+import { badgeLabel, leaderBadgeSize, splitBadges } from "../components/leaderBadges";
 
 function entry(userId: string, over: Partial<LeaderboardEntry> = {}): LeaderboardEntry {
   return {
@@ -110,6 +110,19 @@ test("badgeLabel: the installs badge spells out 'installs received'; the others 
   assert.equal(badgeLabel({ metric: "installs", window: "30d" }), "Installs leader — most installs received, last 30 days");
   assert.equal(badgeLabel({ metric: "requested", window: "30d" }), "Request leader — last 30 days");
   assert.equal(badgeLabel({ metric: "curated", window: "all" }), "Curator — most collections, all time");
+});
+
+test("splitBadges (§21 'Row layout'): a leaderboard row shows at most 4 and counts the rest; no cap shows all", () => {
+  const six = ["a", "b", "c", "d", "e", "f"];
+  assert.deepEqual(splitBadges(six, 4), { shown: ["a", "b", "c", "d"], more: 2 });
+  assert.deepEqual(splitBadges(six.slice(0, 4), 4), { shown: ["a", "b", "c", "d"], more: 0 }, "exactly 4: no marker");
+  assert.deepEqual(splitBadges([], 4), { shown: [], more: 0 });
+  assert.deepEqual(splitBadges(six), { shown: six, more: 0 }, "everywhere else: every badge");
+});
+
+test("leaderBadgeSize: scales with the bubble, never below 11 px", () => {
+  assert.equal(leaderBadgeSize(34), 14);
+  assert.equal(leaderBadgeSize(20), 11);
 });
 
 test("leaderboardOrderBy: every chain ends with skills installed before name; each sort leads with its own metric (§21 / §35.7 / §38.8)", () => {

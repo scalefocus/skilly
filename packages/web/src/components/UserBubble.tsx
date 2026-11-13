@@ -10,7 +10,7 @@
 // bubble (§67.3).
 import { useApi } from "./ui";
 import { useDirectoryCard } from "./DirectoryCard";
-import { BADGE_META, badgeIcon, badgeLabel, type LeaderBadgeInfo } from "./leaderBadges";
+import { BADGE_META, badgeIcon, badgeLabel, leaderBadgeSize, splitBadges, type LeaderBadgeInfo } from "./leaderBadges";
 import { ACHIEVEMENT_TOTAL, levelAriaLabel } from "@skilly/shared/achievements";
 import { ringDashArray, ringGeometry, showRing } from "./levelRing";
 import { hatGeometry, showHat } from "./hatGeometry";
@@ -110,7 +110,7 @@ function WithHat({ base, children }: { base: number; children: React.ReactNode }
  *  element would race it. The aria-label stays for screen readers. */
 function LeaderBadgeIcon({ badge, bubbleSize }: { badge: LeaderBadgeInfo; bubbleSize: number }) {
   const meta = BADGE_META[badge.metric];
-  const dim = Math.max(11, Math.round(bubbleSize * 0.42));
+  const dim = leaderBadgeSize(bubbleSize);
   return (
     <span
       aria-label={badgeLabel(badge)}
@@ -149,7 +149,38 @@ function LeaderBadgeIcon({ badge, bubbleSize }: { badge: LeaderBadgeInfo; bubble
   );
 }
 
-export function UserBubble({ name, avatar, size = 28, userId }: { name: string; avatar: string | null; size?: number; userId?: string | null }) {
+/** The `+N` after a capped badge line: the badges that did not fit. Same height as a badge; the
+ *  hover card (§28) still lists every one of them. */
+function MoreBadges({ count, bubbleSize }: { count: number; bubbleSize: number }) {
+  const dim = leaderBadgeSize(bubbleSize);
+  return (
+    <span
+      aria-label={`${count} more leader badge${count === 1 ? "" : "s"}`}
+      style={{
+        height: dim,
+        minWidth: dim,
+        padding: "0 3px",
+        borderRadius: dim / 2,
+        border: "1px solid var(--line)",
+        background: "var(--surface-2)",
+        color: "var(--muted)",
+        fontFamily: "var(--font-mono)",
+        fontSize: Math.round(dim * 0.62),
+        lineHeight: 1,
+        display: "grid",
+        placeItems: "center",
+        boxSizing: "border-box",
+        flexShrink: 0,
+      }}
+    >
+      <span aria-hidden>+{count}</span>
+    </span>
+  );
+}
+
+/** `maxBadges` caps the badge line at that many badges plus a `+N` marker, on one line that never
+ *  wraps (§21 "Row layout": leaderboard rows). Omitted = every badge, wrapping as needed. */
+export function UserBubble({ name, avatar, size = 28, userId, maxBadges }: { name: string; avatar: string | null; size?: number; userId?: string | null; maxBadges?: number }) {
   // Shared cached GET (components/ui.tsx) — every UserBubble instance on a page dedupes onto the
   // same one request, so badging is effectively free regardless of how many bubbles are on screen.
   const { data } = useApi<Record<string, LeaderBadgeInfo[]>>(userId ? "/api/leaders" : null);
@@ -200,13 +231,16 @@ export function UserBubble({ name, avatar, size = 28, userId }: { name: string; 
     );
   }
 
+  const { shown, more } = splitBadges(badges, maxBadges);
+  const capped = maxBadges !== undefined;
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
       {ringed}
-      <span style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center", maxWidth: size * 2 }}>
-        {badges.map((b) => (
+      <span style={{ display: "flex", gap: 2, flexWrap: capped ? "nowrap" : "wrap", justifyContent: "center", maxWidth: capped ? undefined : size * 2 }}>
+        {shown.map((b) => (
           <LeaderBadgeIcon key={`${b.metric}:${b.window}`} badge={b} bubbleSize={size} />
         ))}
+        {more > 0 && <MoreBadges count={more} bubbleSize={size} />}
       </span>
       {card}
     </span>
