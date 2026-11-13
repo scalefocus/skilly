@@ -3,8 +3,11 @@
 // — a user's FIRST install only (re-clones never re-credit), and a maintainer installing a skill
 // they maintain earns NO self-credit — so the board can't be inflated by re-installing (§21).
 // The first install is attributed AT THAT TIME to every (other) explicit maintainer of the skill
-// then, snapshotted into install_credits by record_git_access()/record_skill_download() — so a
-// maintainer change never moves past credit (removal stops only future credit). Implicit
+// then, snapshotted into install_credits by record_git_access()/record_skill_download()/
+// record_mcp_read() — so a maintainer change never moves past credit (removal stops only future
+// credit). Clone, download and MCP read are three doors to ONE adoption (§29): whichever comes
+// first writes the only credit row that user will ever generate for the skill, so the board counts
+// credit rows from EVERY source — filtering on access_log.source would lose them for good. Implicit
 // namespace-admin maintainership earns nothing. One install with N maintainers yields +1 for each
 // (equal credit), so the board's summed installs exceed the unique-install count — this is
 // "installs credited to you", not a global total.
@@ -119,7 +122,8 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
     skill_count: number; installs: number; requests_fulfilled: number; skills_watched: number; skills_requested: number;
     followers: number; collections: number; followable: boolean;
   }>(
-    // Each install_credits row = one credited install; skillCount = distinct skills behind them.
+    // Each install_credits row = one credited install, whatever door it came through (clone,
+    // download or MCP read — no source filter); skillCount = distinct skills behind them.
     // requests_fulfilled = fulfilled skill_requests where this user built the skill and the
     // requester is someone else (no self-credit, §26). skills_watched = distinct skills this user
     // EXPLICITLY maintains (skill_maintainers — implicit namespace-admin maintainership earns
@@ -130,7 +134,7 @@ async function computeLeaderboard(window: LeaderboardWindow, sort: LeaderboardSo
     `with credits as (
        select ic.user_id, count(*) as installs, count(distinct al.skill_id) as skill_count
          from install_credits ic
-         join access_log al on al.id = ic.access_log_id and al.source = 'git' ${sinceInstalls}
+         join access_log al on al.id = ic.access_log_id ${sinceInstalls}
         group by ic.user_id
      ), fulfilled as (
        select fulfilled_by_user_id as user_id, count(*) as requests_fulfilled
