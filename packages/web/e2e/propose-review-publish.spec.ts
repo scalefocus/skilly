@@ -11,6 +11,7 @@
 // remains, like the other upload-driven specs).
 import { test, expect, devSignIn } from "./fixtures";
 import { createHostedProposal, deleteSkillFully } from "./helpers/skills";
+import { gotoLoaded } from "./helpers/ready";
 
 test.describe.serial("propose → review → publish (§8)", () => {
   test("a proposal is reviewed, accepted, materialized and appears in the catalog", async ({ page }) => {
@@ -22,7 +23,7 @@ test.describe.serial("propose → review → publish (§8)", () => {
 
     try {
       // ── UI: the proposal detail renders (first hit pays the dev-server compile). ──
-      await page.goto(`/proposals/${id}`);
+      await gotoLoaded(page, `/proposals/${id}`, new RegExp(`/api/proposals/${id}$`));
       await expect(page.getByText(title).first()).toBeVisible({ timeout: 20_000 });
 
       // Fresh proposal sits in `proposed` with a single revision.

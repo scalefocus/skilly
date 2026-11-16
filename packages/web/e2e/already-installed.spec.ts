@@ -128,7 +128,9 @@ test.describe("already-installed prompt, show install URL, sort (§23)", () => {
     };
 
     // Seeded: Lint Fixer (10 days ago), PDF Tools (3 days), Secret Helper (20 days); Web Scraper was
-    // claimed just now by the previous test.
+    // claimed just now by the previous test. The rows render after /api/installs arrives, so wait
+    // for them before reading their order (evaluateAll does not wait).
+    await expect(page.locator('.rows [data-install-ref="global/web-scraper"]')).toBeVisible();
     let at = await order();
     expect(at("global/web-scraper")).toBeGreaterThanOrEqual(0);
     expect(at("global/lint-fixer")).toBeLessThan(at("global/pdf-tools"));

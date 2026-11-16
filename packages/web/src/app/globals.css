@@ -1372,9 +1372,12 @@ li[role="option"] + .search-ac-group { margin-top: 4px; border-top: 1px solid va
    Reach out and Follow tracks keep a floor wide enough for "Reach out" and "Unfollow", so an empty
    slot (your own row, someone unfollowable), the "…" of a pending Reach out and the shorter "Follow"
    all hold the same width. The floor is a minimum, not a fixed size: a wider fallback font grows
-   the track rather than clipping the label. The button fills its slot, label centred. */
+   the track rather than clipping the label. The button fills its slot, label centred, and every
+   slot stretches to the action line's height: a <button> takes the UA's `line-height: normal`
+   while a link inherits the body's 1.55, so a slot sized to its own button would leave Reach out
+   and Follow ~1.6 px shorter than Skills and Requests. */
 .lb-people .lb-actions {
-  display: grid; flex-shrink: 0; column-gap: 8px; align-items: center;
+  display: grid; flex-shrink: 0; column-gap: 8px; align-items: stretch;
   grid-template-columns: max-content max-content minmax(88px, max-content) minmax(82px, max-content);
 }
 .lb-people .lb-slot { display: flex; min-width: 0; }

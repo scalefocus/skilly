@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.60.3",
+    date: "2026-11-16",
+    summary:
+      "On the leaderboard, the Reach out and Follow buttons are the same height as Skills and Requests again; since 2.60.2 they stood slightly shorter.",
+  },
+  {
     version: "2.60.2",
     date: "2026-11-13",
     summary:
