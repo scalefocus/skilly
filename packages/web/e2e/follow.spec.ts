@@ -6,6 +6,7 @@
 // notification fan-out needs a SECOND actor publishing / requesting, so it is covered by the
 // live-DB tests (src/lib/follows.dbtest.ts, worker integration/publishFlow.test.ts).
 import { authedTest as test, expect } from "./fixtures";
+import { gotoLoaded } from "./helpers/ready";
 
 test.describe.configure({ mode: "serial" });
 
@@ -46,8 +47,9 @@ test("hall: Follow flips to Unfollow, the profile pane lists them, and Unfollow 
   const list = (await (await page.request.get("/api/me/following")).json()) as { following: { userId: string; state: string }[] };
   expect(list.following.find((f) => f.userId === alice)?.state).toBe("active");
 
-  // Profile: the pane is collapsed by default; its header carries the count.
-  await page.goto("/profile", { timeout: 20_000 });
+  // Profile: the pane is collapsed by default; its header carries the count once the follow store
+  // has read /api/me/following (until then it reads a bare "People I follow").
+  await gotoLoaded(page, "/profile", /\/api\/me\/following$/);
   const header = page.getByRole("button", { name: /People I follow \(\d+\)/ });
   await expect(header).toBeVisible({ timeout: 20_000 });
   const before = Number(/\((\d+)\)/.exec((await header.textContent()) ?? "")![1]);

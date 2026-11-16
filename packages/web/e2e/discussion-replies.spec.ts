@@ -133,11 +133,17 @@ test.describe("discussion replies (@global/pdf-tools)", () => {
       // No replying into a tombstoned thread.
       await expect(t.getByTestId("discussion-reply")).toHaveCount(0);
 
-      // Delete both replies: the last one takes the emptied tombstone with it.
+      // Delete both replies: the last one takes the emptied tombstone with it. Each delete waits for
+      // its row to go before the next click: the row leaves only once the page has read the
+      // response body, after clickAndAwait resolves, so `.first()` could still be the reply just
+      // deleted, whose second DELETE is a 404 that clickAndAwait (OK responses only) never sees.
+      const deletes = t.getByRole("button", { name: "delete" });
       for (let i = 0; i < seeded.replies.length; i++) {
+        const before = await deletes.count();
         accepted = acceptNextDialog(page);
-        await clickAndAwait(page, () => t.getByRole("button", { name: "delete" }).first().click(), DELETE, { method: "DELETE" });
+        await clickAndAwait(page, () => deletes.first().click(), DELETE, { method: "DELETE" });
         await accepted;
+        await expect(deletes).toHaveCount(before - 1);
       }
       await expect(t).toHaveCount(0);
     } finally {
