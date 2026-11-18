@@ -205,8 +205,11 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id` (bigserial), `skill_id`, `namespace_id` (denormalized for the namespace aggregate), `actor_user_id` (always set — views are authenticated), `created_at`. Append-only analytics of **skill-detail views**. Installs are NOT duplicated here — they're read from `access_log` (the git clone). Both FKs cascade (user → SET NULL).
 
 ### `proposals`
-- `id`, `target_namespace_id`, `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `accepted` | `rejected`), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `import_id` (nullable — the repository import it came from, §64; set at creation, never changed; migration 0105), the **review-assignment columns** (`assignee_id`, `assigned_by`, `assignment_changed_at`, `turn_started_at`, `turn_due_at`, `turn_escalate_at`, `turn_reminded_at`, `turn_escalated_at`; migration 0106, §65.9), `created_at`, `updated_at`.
+- `id`, `target_namespace_id`, `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `awaiting_destination` | `accepted` | `rejected` — `awaiting_destination` only for a move, §70.3), the **move columns** (`destination_namespace_id`, `owner_accepted_by`, `owner_accepted_at`, `owner_accepted_revision`; migration 0112, §70.11), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `import_id` (nullable — the repository import it came from, §64; set at creation, never changed; migration 0105), the **review-assignment columns** (`assignee_id`, `assigned_by`, `assignment_changed_at`, `turn_started_at`, `turn_due_at`, `turn_escalate_at`, `turn_reminded_at`, `turn_escalated_at`; migration 0106, §65.9), `created_at`, `updated_at`.
 - **Original submission stored immutably**; reviewer edits tracked as revisions.
+
+### `skill_path_aliases` (migration 0112, detailed in §70.11)
+- `(namespace_id, slug) → skill_id`: the old addresses of a skill that moved to another namespace (§70.6). Resolved after the live skill on every `<ns>/<slug>` surface, and reserves its slug in that namespace.
 
 ### `proposal_imports` (migration 0105, detailed in §64.8)
 - One row per repository import: submitter, namespace, normalized origin, ref, pinned commit, scan folder, mode (`review` | `direct`) and item counts. Links the proposals one import created (`proposals.import_id`); display and notification only.
@@ -415,6 +418,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Mint a **namespace** marketplace token (§30.4) | ✅ | ✅ (own ns) | ✅ (own ns) | ❌ |
 | Mint a **public** marketplace token (§30.4) | ✅ | ✅ | ✅ | ✅ |
 | Approve/reject proposal | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
+| Accept / request changes / reject the **destination stage** of a move (§70.3) | ✅ (any) | ✅ (destination ns) | ❌ | ❌ |
 | Edit proposal in review | ✅ | ✅ (own ns) | ❌ | ❌ |
 | Assign / reassign / unassign a proposal's reviewer (§65.2) — only reviewers of the target namespace are assignable, never the proposer | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Direct publish/version | ✅ | ✅ (own ns) | ✅ if `require_review=false` | ❌ |
@@ -999,10 +1003,13 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
                   └──────────────────────────────────────────────► Rejected (with reason)
 ```
 
+A new-version proposal that **moves the skill to another namespace** adds one state between the
+owner's accept and publication, **Awaiting destination** (§70.3).
+
 - A proposal targets **a new skill OR a new version of an existing skill**, scoped to a namespace.
 - **Closed tool/harness (coding-agent) vocabulary → install `--agent`.** The propose form's tool/harness is a **closed but searchable** picker over the curated agent list (`shared/agents.ts`; label shown, slug stored) — filter by label or slug, `Generic` first then alphabetical. The chosen agent **drives the install command**: a recognized non-generic slug appends `--agent <slug>` at the end of `npx skills add <url>` (§9); `Generic` (the default) appends nothing. Server-side, `verifySubmissionPayload` enforces **closed membership** (`generic` ∪ known agent slugs) — gating propose, direct publish, and reviewer edits/resubmits (`newPayload`). The old open vocabulary (type-a-new-value + derived suggestions) is removed; pre-existing values not in the list are **grandfathered** (shown raw, no `--agent`, **re-validated only when changed** — an unchanged value equal to the target skill's stored `tool_harness` passes even if it's a legacy slug; this carve-out is load-bearing now that new-version mode resends the field). The propose form's **paste-to-fill** preselects the agent when a pasted command carries a recognized `--agent <slug>`. **New-version mode:** the tool/harness picker stays **active** — a re-version may re-target the skill's coding agent (synced to the skill on accept, §8 below). Since `tool_harness` is skill-level, a change updates the `--agent` flag of the install command for **every** version, including already-published ones.
 - **Paste-to-fill for pointer proposals.** The propose form offers a paste box (the first field **inside the Pointer / external-git tab**, since it's pointer-specific; the Hosted/Pointer tab strip itself sits at the top of the form) that accepts a consumer-tool install command and fills the pointer fields from it — an **accelerator, not a third source type**: submission, validation, and review are unchanged, and every filled field stays editable. Parsing is a pure shared function (`parseInstallCommand`, beside the pinned wire-format adapter) covering the tool's source forms: full git URL (with optional `#ref`), GitHub `owner/repo` shorthand (normalized to `https://github.com/owner/repo.git`), GitHub `/tree/<ref>/<path>` URLs (split into URL + ref + folder), `--skill <name>` (→ the §6 skill folder; slug derived from its last segment), and the **skills-hub.ai install command** (`npx @skills-hub-ai/cli install <slug>` → the §6 API origin; the skilly slug is suggested from the registry slug and the ref must be a registry **version** — the command names none, so the form pins the registry's **latest version** via the ref pre-check, editable and quick-pickable from the published versions). Rules: for a **git** source, a command without a ref leaves the `main` default in charge (§8 below); `--all` fills nothing and offers **Import all skills from this repository** instead (one skill per proposal, §6; the repository import, §64.9); URL schemes are never rewritten (the §6 SSRF validator remains the gate). **New-version mode:** the paste fills URL/ref/folder but **never changes the locked slug** (and cannot flip the locked source type); pasting a source counts as **explicitly supplying it**, so it switches the form off *Keep current files* (§8 below). A folder whose last segment differs from the slug shows a **soft warning** — submission is allowed, and the mirror-time `name == slug` validation stays the hard gate.
-- **Propose a new version from the skill detail page.** Any authenticated user **who can see the skill** (*Target visibility gate*, below) can open the propose flow pre-filled from an existing skill (button on the detail page). In this mode only the **identity and access surface is LOCKED**: the **slug** (the install/repo identity — unique, read-only), the **visibility value** (`org`/`namespace`), and the **delivery type** (hosted vs pointer) — with **one deliberate exception**: on a `namespace`-visibility skill the **shared-namespaces list (§42) is editable**, pre-filled with the current grants, and lands at the same accept/publish gate as the version. **Everything else is editable**, pre-filled with the skill's current values: the skill-level metadata — **title, description, categories, and tool/harness** — and the version-level inputs — the semver (pre-filled with the next patch above the current latest stable), the usage examples, the **"What changed" note** (required in new-version mode — see the dedicated bullet below), and the **source**, which is now **optional** (default **Keep current files**, below; or a fresh hosted bundle / a new pinned ref+subdir for a pointer). Anyone who may propose may edit any of these — including retitling the skill — applied at the same accept/publish gate as the version (so in a `require_review = false` namespace, a member's direct publish retitles instantly; that is intended). It targets the existing skill and goes through the **normal review/approval** path (or direct publish where permitted). On accept, a new `skill_version` is created **and the skill's title, description, categories, and tool/harness are synced to the submitted values** (categories added/removed to match; all are skill-level metadata, not version content, so this is allowed — the sync re-fires the FTS trigger so search stays current, and it applies **on accept regardless of channel**: a prerelease re-version still updates the skill-level metadata immediately even though `latest` never moves). Only **visibility** stays frozen (a visibility change remains a skill-management action, never a re-version); the slug is immutable, period.
+- **Propose a new version from the skill detail page.** Any authenticated user **who can see the skill** (*Target visibility gate*, below) can open the propose flow pre-filled from an existing skill (button on the detail page). In this mode only the **identity and access surface is LOCKED**: the **slug** (the install/repo identity — unique, read-only), the **visibility value** (`org`/`namespace`), and the **delivery type** (hosted vs pointer) — with **two deliberate exceptions**: on a `namespace`-visibility skill the **shared-namespaces list (§42) is editable**, pre-filled with the current grants, and lands at the same accept/publish gate as the version; and the **namespace is editable** — picking another one proposes **moving the skill** there, which both namespaces must approve (§70). **Everything else is editable**, pre-filled with the skill's current values: the skill-level metadata — **title, description, categories, and tool/harness** — and the version-level inputs — the semver (pre-filled with the next patch above the current latest stable), the usage examples, the **"What changed" note** (required in new-version mode — see the dedicated bullet below), and the **source**, which is now **optional** (default **Keep current files**, below; or a fresh hosted bundle / a new pinned ref+subdir for a pointer). Anyone who may propose may edit any of these — including retitling the skill — applied at the same accept/publish gate as the version (so in a `require_review = false` namespace, a member's direct publish retitles instantly; that is intended). It targets the existing skill and goes through the **normal review/approval** path (or direct publish where permitted). On accept, a new `skill_version` is created **and the skill's title, description, categories, and tool/harness are synced to the submitted values** (categories added/removed to match; all are skill-level metadata, not version content, so this is allowed — the sync re-fires the FTS trigger so search stays current, and it applies **on accept regardless of channel**: a prerelease re-version still updates the skill-level metadata immediately even though `latest` never moves). Only **visibility** stays frozen (a visibility change remains a skill-management action, never a re-version); the slug is immutable, period.
 - **Target visibility gate (invariant #3).** A new-version submission is accepted only when the actor **can see the target skill** through the shared visibility predicate (`isSkillVisible`: org-wide, a role in the owning namespace, a §42 grant to one of their namespaces, or platform admin). A target that exists but is not visible is answered exactly like a nonexistent one — **404 `target skill not found`** from `POST /api/proposals`; on `POST /api/publish` and the MCP `propose_*` tools (§29), where the slug *is* the target identity, an invisible existing skill is treated exactly as **absent** (the request takes the ordinary new-skill path and meets its usual authorization — a non-member's 403 on direct publish, the visibility-filtered slug check over MCP — never a distinct status) — so the response confirms nothing about the skill's existence. The rule closes a leak: without it an outsider could file a *Keep current files* proposal against a restricted skill whose slug they guessed, then read its snapshotted bundle through their own proposal's artifact/files/diff views. Enforced in **three layers**, each evaluated against the **actor's** access at the moment of the call: the route (404 before any payload work); `resolveReuseSource`, which refuses to snapshot an invisible target's artifact (so `revise`/`resubmit` and reviewer edits re-check at their own time — a submitter whose grant was revoked mid-review can no longer switch to *Keep current files*); and `verifySubmissionPayload`, which refuses a payload whose `targetSkillId` the actor cannot see. Both helpers take the actor's access and **fail closed without it**. The contribution policy (§4 *proposals open*) is evaluated **before** this gate and keeps its 403 (it names only the namespace, never a skill). A proposal filed while the target was visible stays readable to its submitter (own-proposal rule) even if their visibility later lapses — the snapshot was taken legitimately and the reviewers already hold the bytes; retroactive revocation is out of scope.
 - **AI-drafted files (§44).** The new-version propose form can also be opened **from the §44 draft dialog**, carrying an assembled hosted bundle (the latest stable version's files with the AI changes the user kept) as an **explicitly supplied source** (so *Keep current files* is off — the same in-place transition the duplicate redirect uses), the **"What changed"** note pre-filled with an **AI-written prose summary** of the kept changes (§44.7 — falling back to one line per kept change when the summary call fails; an ordinary value, not the *Updated metadata* default, so the clear-on-source rule never touches it; an AI-written note carries the hint *"Written by &lt;AI name&gt; — edit as needed."* under the field until the proposer first edits it) and an `aiDraftToken`. Everything else is the normal new-version mode; replacing the bundle before submitting drops the token (the proposal is then not marked). A submitted proposal carrying a valid token is marked **Drafted with &lt;AI name&gt;** on the proposal and review pages (§44.8).
 - **Skill icon (§33) — an optional, skill-level field on every propose/publish path.** The propose form carries an **Icon · optional** field (after Title): an **emoji picker** (the existing `EmojiPicker`) and an **image upload framed in the icon crop dialog** (§33.4 — it opens by itself for a non-square image; *Adjust crop* re-opens it), plus a **preview tile** showing the *effective* icon and its **source label** — *from SKILL.md `icon:`*, *from icon.png in the bundle*, *uploaded*, *emoji*, or *default — skilly*. The effective icon is resolved by the **§33 precedence** — bundle frontmatter `icon:` → root `icon.png` → the uploaded image → the emoji → the default — against the bundle the materialized version will serve (*Keep current files* ⇒ the reused artifact; a pointer ⇒ its mirror), so **a bundle-borne icon beats an uploaded one**; when the bundle carries an icon the upload/emoji controls stay enabled but the preview says the bundle icon will be used (they persist as fallbacks). **New-version mode** pre-fills the current icon and offers three states — **keep**, **replace**, **remove** (the app's segmented pill, §33.4); *remove* clears the uploaded image and the emoji only — a bundle-borne icon can only be removed by shipping a bundle without it. **An icon change is a real change** for the metadata-only no-op guard (below). A **reviewer edit may remove the icon (image and/or emoji) but never upload a replacement** (the reviewer's *remove* is part of the ordinary reviewer-edit revision — no separate audit action). Revision payloads and audit rows carry the icon as **hash + filename + emoji, never bytes**. On accept (or direct publish) the resolved icon is **synced to the skill** exactly like title/categories/tool-harness — regardless of channel; **global promotion copies** the icon columns to the global copy; archive/yank leave it untouched. The **MCP `propose` / `update_proposal` tools silently ignore icon fields** (UI-only in this change, the same posture as the retired `tags` field).
@@ -1018,7 +1025,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
   - **Snapshot at submit.** The proposal payload pins the reused version's `artifact_object_key` / `artifact_sha256` / `content_sha256` / `artifact_filename` (and, for pointers, its `external_origin_url` / `external_ref` / `external_subdir`) at submit time — the reviewer approves exactly the bytes they inspected, even if other versions land mid-review. If the skill has **no stable active version** (nothing published, all yanked, or prereleases only), reuse is unavailable: the form requires a source and the API rejects a reuse submission with **422**.
   - **Hosted:** the materialized `skill_version` **references the same object** — no copy (safe: versions are never hard-deleted individually, objects die with the skill). Scan reports are keyed by object key, so the existing scan verdict carries over — **no re-scan**.
   - **Pointer:** reuse re-pins the same origin+ref+subdir **and reuses the previous version's mirrored artifact directly** — no `pending_mirrors` row, no upstream contact; the submit-time pointer verification (below) is **skipped** (nothing new to verify — the bytes are already in the object store). The scan cache (`cached_for_ref`) carries over the same way. An explicitly supplied source takes the normal path instead: submit-time verification + fresh mirror + worker re-scan.
-  - **No-op guard.** With reused files, **at least one field must actually differ** from the current state — title, description, categories, tool/harness or the **shared-namespaces list (§42)** vs the skill row, or usage examples vs the reused version's — otherwise submit is blocked in the form and rejected with **422** by `POST /api/proposals` / `/api/publish` (a bare semver bump is not a version). A fresh source needs no metadata change, as today. The required **"What changed"** note (§8 above) is **not** a satisfying field — it is required *in addition* to a real change; when the sole real change is metadata, the note **defaults to "Updated metadata"** (editable).
+  - **No-op guard.** With reused files, **at least one field must actually differ** from the current state — title, description, categories, tool/harness, the **shared-namespaces list (§42)** or the **namespace** (a move, §70) vs the skill row, or usage examples vs the reused version's — otherwise submit is blocked in the form and rejected with **422** by `POST /api/proposals` / `/api/publish` (a bare semver bump is not a version). A fresh source needs no metadata change, as today. The required **"What changed"** note (§8 above) is **not** a satisfying field — it is required *in addition* to a real change; when the sole real change is metadata, the note **defaults to "Updated metadata"** (editable).
   - **Stale frontmatter is accepted.** The carried-forward `SKILL.md` keeps its old frontmatter and body — its `description` (and optional `version`, and any old-title mentions) may disagree with the new catalog metadata. The catalog is authoritative for display; skilly **never rewrites the file** (bytes, `content_sha256`, and the git tree stay identical). Duplicate detection stays exempt for new-version proposals, so the reused digest matching the predecessor is expected and harmless.
   - **A normal version in every way.** Deterministic tag synthesis from the reused artifact (the `git_published` sweep, §6/§7), `latest`/`main` repoint if it becomes the highest stable, watchers get the standard `skill.new_version` notification, and it appears in the version list like any other — **no special "metadata-only" marker**.
   - **Review presentation.** The review page shows an explicit **old → new diff** of every changed metadata field (including the **"What changed"** note) and a clear *"Files: unchanged — reuses v\<semver\>'s bundle"* note; the **bundle file browser works over the reused artifact** — for pointer reuse too (the mirror is a skilly-stored tarball, so it browses exactly like a hosted bundle instead of only linking upstream). The file-change view (§8 *File-change view for reviewers*) renders this reuse case with **no added/modified/removed entries** ("Files: unchanged").
@@ -1046,12 +1053,12 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 - **Changes-requested** loops on the **same proposal thread** (revision history).
 - **Proposer edit-on-resubmit.** When a reviewer **requests changes** (`changes_requested`), the **submitter** can revise and **resubmit** (`resubmit` → `under_review`) from the proposal page — not just re-trigger review. The resubmit carries a **new revision** (`newPayload`) and may change, per proposal type:
   - **New-skill proposal:** every field — title, description, **tool/harness**, **visibility**, categories, usage, and the **files** (a fresh hosted bundle, or new pointer url/ref/subdir).
-  - **New-version proposal:** the same fields a re-version may otherwise change — **title**, **description**, **categories**, **tool/harness**, usage, the **"What changed"** note, and the **files** (including switching between *Keep current files* and a fresh bundle/pointer source, in either direction — a switch to reuse re-snapshots the then-latest stable artifact) — plus the **proposed semver**. Only the **slug** (immutable) and the **visibility value** remain frozen; flipping `org`↔`namespace` is never a re-version. The **shared-namespaces list** (§42) *is* part of a new-version proposal and may change here. The no-op guard (§8 above) applies on resubmit too.
+  - **New-version proposal:** the same fields a re-version may otherwise change — **title**, **description**, **categories**, **tool/harness**, usage, the **"What changed"** note, and the **files** (including switching between *Keep current files* and a fresh bundle/pointer source, in either direction — a switch to reuse re-snapshots the then-latest stable artifact) — plus the **proposed semver**. Only the **slug** (immutable) and the **visibility value** remain frozen; flipping `org`↔`namespace` is never a re-version. The **shared-namespaces list** (§42) *is* part of a new-version proposal and may change here, and so is the **destination namespace** (§70 — a resubmit always restarts at the owner stage). The no-op guard (§8 above) applies on resubmit too.
   - **Files are proposer-only on resubmit** (a reviewer edit stays metadata-only — the proposer owns the bytes). The **delivery type is locked** (a hosted proposal stays hosted; a pointer stays pointer). A changed artifact/pointer re-runs the **same gates as the initial submission**: `verifySubmissionPayload` (artifact ownership + scan, SSRF/transport allowlist), pointer **`verifyPointerSkill`**, and **duplicate detection** (warn/block policy). A new hosted bundle's scan flows into the accept-time override gate automatically; a changed pointer is re-scanned by the worker.
   - **Reviewers are notified on resubmit** (the namespace's reviewers get a "needs review" notification, excluding the proposer) so a resubmitted proposal doesn't silently re-enter the queue. When the proposal has an **assignee** (§65), only the assignee is notified. A resubmit also starts a fresh reviewer turn for the review target (§65.3).
   - The **`resubmit` verb** is gated to `changes_requested`; a proposal sitting in `proposed` or actively `under_review` is proposer-edited via the **`revise`** verb instead (next bullet) — same field set, **no state transition**, files replaceable on hosted proposals only.
-- **Proposer mid-review edits (`revise`).** Until a decision lands, the proposal stays the proposer's to improve: in **`proposed` and `under_review`** the **submitter** may update the proposal in place via a dedicated lifecycle verb **`revise`** (`POST /api/proposals/:id/actions`). No state change (`proposed` stays `proposed`, `under_review` stays `under_review`); each revise appends one `proposal_revision` (`newPayload`, author = proposer). Applies to **both proposal types** (new skill and new version).
-  - **Metadata:** the same field set as resubmit — title, description, categories, tool/harness, usage examples, the **"What changed"** note (new-version proposals only — hidden on new-skill); **visibility** editable only on new-skill proposals (the `org`/`namespace` value is frozen on new-version proposals, as everywhere) — the **shared-namespaces list** (§42) is editable on **both** proposal types whenever visibility is `namespace`. Slug and delivery type locked, as always.
+- **Proposer mid-review edits (`revise`).** Until a decision lands, the proposal stays the proposer's to improve: in **`proposed` and `under_review`** — and, for a move, **`awaiting_destination`**, where a revise returns the proposal to the owner stage (§70.3) — the **submitter** may update the proposal in place via a dedicated lifecycle verb **`revise`** (`POST /api/proposals/:id/actions`). No state change (`proposed` stays `proposed`, `under_review` stays `under_review`); each revise appends one `proposal_revision` (`newPayload`, author = proposer). Applies to **both proposal types** (new skill and new version).
+  - **Metadata:** the same field set as resubmit — title, description, categories, tool/harness, usage examples, the **"What changed"** note (new-version proposals only — hidden on new-skill); **visibility** editable only on new-skill proposals (the `org`/`namespace` value is frozen on new-version proposals, as everywhere) — the **shared-namespaces list** (§42) is editable on **both** proposal types whenever visibility is `namespace`; the **destination namespace** (§70) is editable on new-version proposals. Slug and delivery type locked, as always.
   - **Files — hosted proposals only.** The proposer may upload a **replacement bundle**, superseding the staged one; the proposal still materializes exactly **one** `skill_version` on accept. For hosted **new-version** proposals this includes switching between *Keep current files* and a fresh bundle in either direction (a switch to reuse re-snapshots the then-latest stable artifact, §8 above). **Pointer proposals' files are frozen mid-review** — url/ref/subdir are untouchable via revise; changing a pointer source still requires the reviewer to request changes → resubmit.
   - **The proposed semver is LOCKED mid-review.** A revise never changes the version number, for either proposal type. (Changing the semver remains possible only on **resubmit** after `changes_requested`, where it was already allowed.)
   - **Same gates as initial submission.** A replacement bundle runs the full §6 upload path (validation + ClamAV scan) and `verifySubmissionPayload` (artifact ownership + scan verdict — the new scan flows into the accept-time override gate automatically), and the revise re-runs **duplicate detection** under the platform warn/block policy. The **no-op guard** applies: at least one metadata field or the bundle must actually differ from the current revision, else **422**.
@@ -1065,7 +1072,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 
 ### Admin review dashboard
 - Gated by namespace-scoped reviewer authority: **Namespace Admins review their namespace; Platform Admins review anything.**
-- Reviewers can: inspect (instructions, metadata, bundled scripts, scan report, the **AI pre-review** — §46, advisory, with per-finding Agree/Dismiss), edit (metadata, SKILL.md, target namespace, visibility, the **shared-namespaces list** — add or strip grantee namespaces, §42), request changes, accept (publish), reject (notify with reason).
+- Reviewers can: inspect (instructions, metadata, bundled scripts, scan report, the **AI pre-review** — §46, advisory, with per-finding Agree/Dismiss), edit (metadata, SKILL.md, target namespace, visibility, the **shared-namespaces list** — add or strip grantee namespaces, §42; on a new-version proposal the **destination namespace** of a move, owner stage only, §70.3), request changes, accept (publish), reject (notify with reason). A move proposal needs a second accept from the **destination's** reviewers, who can accept, request changes or reject but not edit (§70.3).
 - **Assignment and the review target (§65).** A reviewer can **assign** an open proposal to one reviewer of its namespace (themselves included). Start review claims an unassigned proposal for the reviewer who clicks it. Assignment is advisory: every reviewer can still act on the proposal. When a namespace sets a **review target** in business days, each proposal waiting on reviewers shows a due date. A worker sweep reminds the assignee (or the namespace's admins) when it passes, and escalates once at twice the target. The queue gains *Assigned to me*, *Unassigned* and *Overdue* filters.
 - **Bundle file browser (hosted uploads):** the review page shows the uploaded bundle's full directory tree (`GET /api/proposals/:id/files`); a reviewer can read any **text** file inline and **download** the rest, to inspect every file before approving. Same access gate as the proposal detail (reviewer of the namespace or the submitter). Content is served `text/plain`/attachment with `nosniff` so a stored `.html`/`.svg` can never execute, and paths must match a real extracted entry (no traversal). Pointer proposals with a **fresh** source have no skilly-stored bundle pre-accept, so they link out to the upstream repo instead; a pointer **Keep-current-files** proposal (§8) *does* have one — the reused mirror tarball — and gets the same file browser as a hosted upload.
 - **File-change view for reviewers.** For a **new-version** proposal the review surface highlights **what changed in the files** against a baseline — the skill's **latest stable active version** (the bytes `main`/"latest" serves and that *Keep current files* reuses); a version proposed *below* current latest, or a prerelease, still diffs against **latest stable**. Every path is classified **added / modified / removed / unchanged** by comparing **per-file content hash** (the same per-file sha256 that feeds `content_sha256`, §8); a **rename shows as a remove + an add** (no rename detection). A top summary reads **"+X added · ~Y modified · −Z removed"**. This is the same surface for **hosted and pointer** proposals — only the byte source differs (below).
@@ -1275,7 +1282,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 
 - **Governance audit** (`audit_log`, append-only — enforced by the `audit_guard()` trigger **and**, again since migration 0096, by the app role lacking UPDATE/DELETE; the only delete path is the `SECURITY DEFINER` trim function, §49.6, which is itself audited):
   - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
-  - Catalog mutations (publish, new version, yank, archive, **deprecate / un-deprecate** (`skill.deprecated` / `skill.undeprecated`, §45 — payload: `successorSkillId` + `successorSlug` (nullable), `note`, and on an edit `previousSuccessorSkillId`; **no actor PII beyond the standard actor columns**), **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive, last-version yank or **deprecation**, §7), visibility change, namespace reassignment, **`skill.namespace_shared` / `skill.namespace_unshared`** (§42 — payload: the grantee `namespace_id` + slug, and `via` = `manage` | `proposal_accept` | `direct_publish` | `visibility_org` — a reviewer's edit of the list lands at accept, so it is audited as `proposal_accept` with the accepting reviewer as actor), plus the existing `skill.maintainer_removed` for maintainers pruned by an unshare).
+  - Catalog mutations (publish, new version, yank, archive, **deprecate / un-deprecate** (`skill.deprecated` / `skill.undeprecated`, §45 — payload: `successorSkillId` + `successorSlug` (nullable), `note`, and on an edit `previousSuccessorSkillId`; **no actor PII beyond the standard actor columns**), **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive, last-version yank or **deprecation**, §7), visibility change, namespace reassignment (**`skill.moved`** and the owner-stage **`proposal.owner_accepted`**, §70.10), **`skill.namespace_shared` / `skill.namespace_unshared`** (§42 — payload: the grantee `namespace_id` + slug, and `via` = `manage` | `proposal_accept` | `direct_publish` | `visibility_org` — a reviewer's edit of the list lands at accept, so it is audited as `proposal_accept` with the accepting reviewer as actor), plus the existing `skill.maintainer_removed` for maintainers pruned by an unshare).
   - **Scan overrides** (`proposal.scan_override`).
   - **Content risk (§37.12):** `proposal.routed_to_review`, `skill.publish_scan_override`, `skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
   - **Skill icons & share links (§33):** icon changes ride inside the existing proposal/reviewer-edit revision diffs (as `iconSha256` + `iconFilename` + `iconEmoji` — never bytes); minting a share link is audited as **`skill.share_link_created`** (actor, skill, expiry — **never the token**).
@@ -1416,6 +1423,8 @@ current or future type can ever leak JSON to a user.
   | `skill.ai_prereview_flagged` | AI pre-review flagged a skill | {aiName} pre-review found {n} high or critical issues in {ns}/{slug} v{semver}, which was published without a reviewer seeing them: {categories}. | Open the pre-review → `/skills/{ns}/{slug}#ai-prereview` |
   | `skill.marked_official` | Skill marked official | {ns}/{slug} was marked official. | View the skill → `/skills/{ns}/{slug}` |
   | `skill.deprecated` | Skill deprecated | {ns}/{slug} is deprecated — use {succNs}/{succSlug} instead. {note} *(without a visible successor: "{ns}/{slug} is deprecated. {note}")* | **Open the successor** → `/skills/{succNs}/{succSlug}` when the recipient can see it, else View the skill → `/skills/{ns}/{slug}` |
+  | `skill.moved` | Skill moved | {oldNs}/{slug} moved to {ns}/{slug} and published version {semver}. Existing installs keep working; new installs use the new address. *(+ "In plugin marketplaces it is now listed as {name}." when listed — §70.9)* | View the skill → `/skills/{ns}/{slug}` |
+  | `proposal.owner_accepted` | Proposal approved by the owner | {ownerNs} approved your proposal for {ns}/{slug}. It now waits for {destNs}. | View the proposal → `/proposals/{proposalId}` |
   | `request.fulfilled` | Skill request fulfilled | Your skill request "{requestTitle}" was fulfilled by {byName} with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
   | `search_gaps.ready` | Search gaps to review | A search gap is waiting for review. *({n} search gaps are waiting for review.)* | Review search gaps → `/admin/search-gaps` |
   | `skill.search_gap_hidden_match` | Search for a restricted skill | People searched for "{query}" and couldn't find {ns}/{slug}, because only its namespace can see it. Up to {n} people in the last {days} days. Consider sharing it with more namespaces or making it org-visible. | View the skill → `/skills/{ns}/{slug}` |
@@ -1845,6 +1854,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
   - **Existing endpoints that gain fields:** `GET /api/proposals/:id` and `GET /api/skills/:ns/:slug` gain `policy`; the accept gate's 409 gains `policy.tripped`; a policy override without a reason → **422**, without authority → **403 `policy_override_forbidden`**; `POST /api/publish` may answer **202** with `routedReason: 'policy'`. Re-checks use the §46 re-run endpoints.
 - **AI pre-review (§46.11):** `POST /api/proposals/:id/ai-prereview/rerun`, `POST /api/proposals/:id/ai-prereview/dispositions` (reviewers); `GET /api/skills/:ns/:slug/ai-prereview?semver=` (owners), `POST .../ai-prereview/rerun` and `.../ai-prereview/dispositions` (override holders); `GET /api/proposals/:id` gains `aiPrereview`.
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
+- **Moving a skill (§70.12):** new-version payloads of `POST /api/proposals` / `POST /api/publish` gain `destinationNamespaceId`; `accept` gains the owner stage (`awaiting_destination`) and the 409s `skill_moved` / `slug_exists_in_destination`; proposals gain `destination` and `ownerApproval`; every `/api/skills/:ns/:slug/…` route, the git gateway and `/skills/:ns/:slug` resolve old addresses through `skill_path_aliases` (§70.6).
 - `GET /api/propose/ai-draft` → `{ available, remainingToday, dailyCap }` (§64.5, §40.17); `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`, `cap`), 502 `draft_failed`. Nothing persisted.
 - **Repository import (§64):** `POST /api/propose/import/scan` — list a git repo's `SKILL.md` folders at a ref with name, description, last-changed date and importability (§64.3); `POST /api/propose/import` — submit up to 50 skills as one import, one ordinary pointer proposal (or direct publish) each, outcome per skill (§64.6). `GET /api/proposals` gains `import=`; `GET /api/proposals/:id` gains `import` (§64.7).
 - `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon). The web form never sends the picked file itself — it uploads its own **256×256 PNG** crop (§33.3), so the 512 KB cap binds API callers only and is independent of the form's **10 MB** source limit.
@@ -10564,7 +10574,9 @@ events, differing only in `via`:
    - **New-version proposal:** pre-filled with the skill's current grants and **editable** — the one
      part of the access surface a re-version may change (§8). Slug and the `org`/`namespace` value
      stay frozen. The list is synced at accept/direct publish like title/description: grants
-     **added and removed to match** the submitted list.
+     **added and removed to match** the submitted list. When the proposal **moves the skill**
+     (§70), picking a destination adds the current owner to the list (removable) and drops the
+     destination from it (§70.2).
    - **A grant change is a real change** for the metadata-only no-op guard (§8): a *Keep current
      files* re-version whose only difference is "also share with team-b" is a valid proposal; its
      "What changed" note defaults to *"Updated metadata"* as for any metadata-only change.
@@ -16517,3 +16529,332 @@ table, env vars, this checklist), linked from `README.md` and `deployment_manual
 - **Out of scope:** the agent's own code; system (platform-owned) agent keys; a UI to list or revoke
   agent keys; pinning a version per user; opting a skill out of the agent; any change to MCP or the
   marketplaces.
+
+---
+
+## 70. Moving a skill to another namespace
+
+A new-version proposal (§8) may name a **destination namespace**. Accepting it publishes the
+version **and moves the skill there**. Both namespaces must approve. Old addresses keep working.
+
+### 70.1 Semantics
+
+- **The same skill, a new owner.** On the final accept `skills.namespace_id` changes to the
+  destination. Nothing is copied. The skill keeps its `id`, versions, tags, artifacts, install
+  tokens, ratings, watches, maintainers, collection entries, discussion, request links,
+  featured/official/deprecated state and promotion provenance. Per-skill usage history follows it,
+  because it is keyed by skill id.
+- **What switches with the namespace:** the reviewers of future proposals, the `require_review`
+  flag, the namespace policy rules (§47), the `namespace`-visibility audience (destination plus
+  grants, §70.4), the namespace marketplace that lists it (§70.8) and the canonical install URL
+  `https://<host>/<dest-ns>/<slug>.git`.
+- **What never changes:** the slug (immutable), the visibility value (`org`/`namespace`) and the
+  delivery type. No version's bytes change (invariant #2). The namespace is skill-level metadata,
+  so the move applies at accept **regardless of channel**, like the §8 metadata sync. A prerelease
+  re-version moves the skill even though `latest` does not move.
+- **`global` is never a source or a destination.** Moving into `global` is promotion (§8), which
+  creates an independent copy. A `global` skill's new-version form keeps the namespace locked.
+- **Only through a re-version.** There is no standalone *Move* action. To move a skill without
+  changing anything else, propose a *Keep current files* re-version whose only change is the
+  namespace (§70.2).
+- **Per-namespace aggregates are not rewritten.** Usage rows recorded before the move keep the
+  namespace that owned the skill at the time. New events count for the destination.
+
+### 70.2 Proposing a move
+
+- **Who.** Anyone who may propose a new version of the skill, which means anyone who can see it
+  (§8 *Target visibility gate*). The two-namespace approval (§70.3) is the gate.
+- **The field.** In new-version mode the form's **Namespace** field is editable. It is pre-filled
+  with the current owner, and its searchable picker offers every namespace in the org except
+  `global`. Picking another namespace shows a banner: *"Accepting this moves ‹ns›/‹slug› to
+  ‹dest›. Both namespaces must approve."* The banner also lists the effects: the new install URL
+  (the old one keeps working), any change in who can see the skill, and the marketplace rename
+  (§70.8). Picking the current owner again cancels the move.
+- **The slug must be free at the destination.** That means no skill there with the slug in any
+  status (archived included, since `UNIQUE (namespace_id, slug)`), and no alias (§70.6) pointing at
+  a different skill. The form disables a destination where `GET /api/skills/slug-matches` shows a
+  visible same-slug skill (*"‹dest› already has a skill named ‹slug›"*). `POST /api/proposals`
+  returns **409** `slug_exists_in_destination` only when the proposer can see the conflicting
+  skill. A conflict the proposer cannot see is **not revealed at submit** (invariant #3). It
+  reaches the destination reviewers and blocks the final accept (§70.3).
+- **Who can see the skill (`namespace` visibility only).** Picking a destination edits the
+  shared-namespaces list (§42) in the form. The **current owner is added** as a grantee
+  (pre-filled, removable), and the **destination is removed** if it was a grantee, because an
+  owner is never its own grantee. Picking the current owner again restores the list as it was. If
+  the proposer removes the old owner, the banner warns: *"‹old ns› members lose access; their
+  installs stop working."* An `org` skill has no list, and its audience does not change.
+- **No-op guard.** A destination is a real change for the §8 no-op guard. A *Keep current files*
+  re-version whose only change is the namespace is valid. Its "What changed" note pre-fills with
+  *"Updated metadata"*, as for any metadata-only re-version.
+- **Payload.** The revision payload carries `destinationNamespaceId` (null means no move) and
+  `sourceNamespaceId` (the owner when that revision was written, used by the `skill_moved` check,
+  §70.7). `proposals.destination_namespace_id` mirrors the current revision.
+- **Slug-match redirect (§8).** The redirected new-version form pre-fills the namespace with the
+  existing owner and drops the proposer's earlier pick, as today. After that the field is editable
+  like on any re-version.
+- **MCP** propose tools (§29) do not take the field. A proposal filed over MCP never moves a skill.
+
+### 70.3 Two-stage review
+
+```
+Proposed ──► Under review ──(owner accept)──► Awaiting destination ──(destination accept)──► Accepted
+   │              │  ▲                                │
+   │              │  └─────── new revision ◄──────────┤   (revise → back to the owner stage)
+   └──────────────┴──► Changes requested / Rejected ◄──┘
+```
+
+- **Owner stage.** A move proposal starts in the owner's queue like any proposal
+  (`target_namespace_id` = the owner). An owner reviewer's **accept does not publish**. It records
+  `owner_accepted_by` / `_at` / `_revision`, sets the state to **`awaiting_destination`**, clears
+  the assignee and starts a fresh review turn on the destination's review target (§65). It
+  notifies the destination's reviewers (`proposal.needs_review`, with the usual assignee rule) and
+  the proposer (`proposal.owner_accepted`). This accept runs the usual gates: revision pin, scan,
+  content risk (§37.4), and policy (§47) with platform rules plus the **owner's** rules.
+- **Destination stage.** In `awaiting_destination` the proposal sits in the destination's
+  **To review** queue. A destination reviewer (an admin of the destination, a platform admin, or
+  the bootstrap admin group) may **accept**, **request changes** or **reject**. They make **no
+  reviewer edits**. Their accept is revision-pinned and re-runs the scan and content-risk gates. It
+  runs the policy gate with platform rules plus the **destination's** rules. It then runs the
+  `skill_moved` check and re-checks the slug conflict (§70.2). A conflict fails with **409**
+  `slug_exists_in_destination`, which names the skill when the reviewer can see it; an alias
+  conflict reads *"reserved by a skill that moved out of ‹dest›"*. Only then does the accept
+  materialize the version and apply the move (§70.7).
+- **Platform admins** may act at both stages. That is still two accepts, each audited.
+- **Destination reviewers see the proposal only once the owner has approved.** Before the owner
+  accepts, destination reviewers are not notified and get the uniform 404 like any outsider. From
+  the owner accept onward they can read the proposal: detail, files, file changes, discussion and
+  AI pre-review. The owner's accept is the owner's consent to show the bytes. They lose that access
+  again if a new revision returns the proposal to the owner stage, and the skill is theirs once it
+  is accepted. Owner reviewers keep read access throughout but cannot act at the destination stage.
+- **Any new revision returns the proposal to the owner stage.** The proposer (`revise` /
+  `resubmit`) and owner reviewers (a reviewer edit at the owner stage) may change or remove the
+  destination like any field. The proposer may also `revise` in `awaiting_destination`. That
+  returns the proposal to `under_review` and clears the owner approval, so the owner must accept
+  again.
+- **Accepting the version without the move.** An owner reviewer edits the destination back to the
+  current owner and accepts. That is a normal single-stage accept.
+- **Request changes / reject at either stage.** Request changes from the destination stage moves
+  the proposal to `changes_requested` and clears the owner approval. The resubmit starts at the
+  owner stage. **Reject** at either stage is terminal for the whole proposal, version included.
+  The proposer may re-propose without the move.
+- **Surfaces.** The proposals page gains an **Awaiting destination** state chip in both tabs.
+  *To review* lists owner-stage proposals to owner reviewers and `awaiting_destination` proposals
+  to destination reviewers. The proposal and review pages show a **Moves to ‹dest›** banner and a
+  two-step progress line: *‹owner› — approved by ‹name›* / *‹dest› — waiting*. Next to the field
+  diff they show who gains and loses access, the old and new install URLs, and the marketplace
+  rename.
+- **Delete** (housekeeping, §8) stays with the owner's reviewers.
+
+### 70.4 Who can see the skill after the move, and its maintainers
+
+- The grant list syncs to the submitted list at the final accept (§42.3, `via =
+  proposal_accept` / `direct_publish`). By default that keeps the old owner as a grantee and drops
+  the destination.
+- Explicit maintainers who are no longer eligible under `isSkillVisible` are pruned in the same
+  transaction, audited `skill.maintainer_removed` (the §42.4 rule).
+- Users who lose visibility are handled exactly like an unshare (§42.4). Their install tokens fail
+  at the next clone (§23 Gateway). Their watches stop firing (insert-time filter). Collections
+  evict the skill (§38.4). System installations are unaffected.
+
+### 70.5 Direct publish
+
+- `POST /api/publish` with a destination **publishes and moves at once** only when the publisher
+  may direct-publish into **each** namespace on its own: a platform admin, an admin of that
+  namespace, or a member of it with `require_review = false`. Content-risk or policy routing
+  (§37.4, §47) must also not apply.
+- **Otherwise the publish becomes a proposal (202)** with `routed_reason = 'namespace_move'`.
+  When content risk or policy also routes it, those reasons win, as today. If only the destination
+  side routed it (the publisher could direct-publish into the owner), the proposal starts in
+  **`awaiting_destination`** with the publisher recorded as the owner approval. In every other case
+  it starts at the owner stage.
+- A slug conflict at the destination returns **409** `slug_exists_in_destination`. It names the
+  skill only when the publisher can see it. Otherwise it reads *"‹slug› isn't available in
+  ‹dest›"*.
+
+### 70.6 Old addresses: aliases
+
+- **Every move records an alias** `(old namespace, slug) → skill` in `skill_path_aliases`. After
+  A → B → C, both A and B point at the skill. Moving back to a namespace that holds an alias for
+  this skill deletes that alias, because the path is canonical again.
+- **Resolution: the live skill first, then the alias**, on every surface that addresses a skill
+  by `<ns>/<slug>`:
+  - **The git gateway** (`/<ns>/<slug>.git/…`) serves the skill's repo directly, with no HTTP
+    redirect. Every git client and every pinned `#v<semver>` clone keeps working. Token,
+    visibility and audit checks run against the resolved skill, unchanged.
+  - **Skill pages** (`/skills/<ns>/<slug>[/…]`) answer **308** to the canonical path, keeping the
+    query and fragment.
+  - **Skill-addressed API routes** (`/api/skills/:ns/:slug/…`) serve the skill as if it were
+    addressed canonically. Responses carry the canonical `namespaceSlug`.
+  - **Signed share links** (§33.6) and **MCP tools** that take `<ns>/<slug>` (§29) resolve the
+    same way, including the propose tools' new-version target.
+- **Invariant #3.** An alias resolves only for a caller who can see the skill. Anyone else gets
+  exactly the 404 of a nonexistent skill (§22).
+- **An alias reserves its slug** in its namespace for as long as it exists. No new skill,
+  promotion copy or move may take `<ns>/<slug>` while it points at another skill. Enforcement
+  sits in the shared creation path under the per-slug transaction lock, plus a DB trigger. A
+  submitter who can see the moved skill is already redirected by the cross-namespace slug match
+  (§8). Anyone else gets **409** `slug_reserved` with a generic *"‹slug› isn't available in ‹ns› —
+  choose another slug"*, which names no skill.
+- **Lifecycle.** An alias lives until the skill is permanently deleted (FK cascade). Archiving
+  leaves it in place: an archived skill is not served, and a restore brings the old paths back.
+  Namespace deletion cascades (no app path, §42.4).
+- **The canonical URL is shown everywhere new:** install commands, the Installed page, the agent
+  sync API's `gitUrl` (§69) and share links minted after the move.
+
+### 70.7 Applying the move (the final accept)
+
+These steps run in one transaction, under the per-slug transaction lock:
+
+1. **`skill_moved` check.** The revision's `sourceNamespaceId` must equal the skill's current
+   namespace. Otherwise the accept fails with **409** `skill_moved`: *"‹ns›/‹slug› moved to ‹ns2›
+   since this proposal was written — request changes so the proposer can resubmit"*. The
+   owner-stage accept runs the same check. A resubmit records the new source, and a destination
+   equal to the new owner drops the move.
+2. **Slug conflict re-check** (409, §70.3).
+3. **Materialize** the version and sync the skill-level metadata (§8), as for any re-version.
+4. **Move.** Set `skills.namespace_id` to the destination. Insert the alias for the old path and
+   delete any alias at the destination that points at this skill.
+5. **Grants and maintainers** (§70.4).
+6. **Re-route the skill's other open proposals** (`proposed`, `under_review`,
+   `changes_requested`, `awaiting_destination`). Set `target_namespace_id` to the destination,
+   clear the assignee, and start a fresh review turn (§65) on the new owner's review target.
+   Revisions, history and discussion are kept. The new owner's reviewers get
+   `proposal.needs_review` for each re-routed proposal that waits on reviewers. The old owner's
+   reviewers lose access to them unless they review the new owner too. A move proposal among them
+   fails its next accept with `skill_moved` (step 1).
+7. After commit: audit (§70.10) and notifications (§70.9).
+
+### 70.8 Git repositories and marketplaces
+
+- **Repos.** Bare repos live at `<repo-root>/<ns>/<slug>.git` (`repoStore`). After a move the
+  worker's relocation sweep (it runs first in each leader sweep, before versions are published)
+  **renames** the old directory to the canonical path — atomic on one filesystem, so every tag and
+  `main` keep the **same commit SHAs** and existing clones fetch cleanly. If the canonical path
+  already holds a repo (a version was synthesized there first), the §6 self-heal sweep fills in
+  the missing tags from object storage (deterministic synthesis, the same SHAs), and the old
+  directory is removed only once the canonical one carries every tag it has. An alias path never
+  keeps a directory of its own. Until then the gateway serves the skill from whichever directory
+  is provisioned — the canonical one first — so no clone fails in between. Versions keep their
+  `git_published` flag.
+- **Marketplaces (§30).** The next sweep re-derives every member set:
+  - The skill joins the destination's namespace marketplace under its bare `<slug>`.
+  - It leaves the old owner's marketplace. If the old owner kept a grant, it stays there under
+    the shared-in name `<dest-ns>-<slug>`.
+  - In the public marketplace an `org` skill's entry is renamed from `<old-ns>-<slug>` to
+    `<dest-ns>-<slug>`.
+  - Consumers get the renamed skill at their next plugin update, and the old name disappears.
+    Consumers of the old owner's marketplace lose the skill unless a grant keeps it there. The
+    `skill.moved` notification says so.
+
+### 70.9 Notifications
+
+- **`skill.moved`** goes to the admins of the old and the new owner, plus watchers, effective
+  maintainers and current installers. *Current installer* has the §45.6 definition: a used,
+  non-expired personal `install` token, or the minting admin of an active system install. The
+  actor is excluded, with **one row per recipient**. Recipients are filtered at insert against
+  **who can see the skill after the move**: a recipient who lost access is not told where it went.
+  It goes over the same channels as `skill.new_version`, gated by `email_notifications` only, with
+  no per-type opt-out. It **replaces** `skill.new_version` / `skill.shared_new_version` for the
+  same accept, so nobody gets two rows.
+  Template: **Skill moved** — *"{oldNs}/{slug} moved to {ns}/{slug} and published version
+  {semver}. Existing installs keep working; new installs use the new address."* If the skill is in
+  an enabled marketplace, add: *"In plugin marketplaces it is now listed as {name}."* CTA: View the
+  skill → `/skills/{ns}/{slug}`.
+- **`proposal.owner_accepted`** goes to the proposer (in-app plus email, like other `proposal.*`
+  notifications): *"{ownerNs} approved your proposal for {ns}/{slug}. It now waits for
+  {destNs}."* CTA → `/proposals/{id}`.
+- At the stage change, the destination's reviewers get the ordinary `proposal.needs_review`.
+
+### 70.10 Audit
+
+- `proposal.owner_accepted`: actor, proposal, revision, destination namespace.
+- `skill.moved`: `fromNamespaceId` + slug, `toNamespaceId` + slug, `proposalId`, `via`
+  (`proposal_accept` | `direct_publish`), `reroutedProposalIds`. The actor is the destination
+  accepter, or the publisher.
+- Grant changes and maintainer pruning use the existing `skill.namespace_shared` /
+  `skill.namespace_unshared` / `skill.maintainer_removed` events (§11).
+
+### 70.11 Data model (migration 0112)
+
+- `proposal_state` gains **`awaiting_destination`**. The open-state partial indexes of migration
+  0106 include it.
+- `proposals` gains:
+  - `destination_namespace_id`: nullable FK to `namespaces`, mirrors the current revision.
+    `CHECK (destination_namespace_id <> target_namespace_id)`.
+  - `owner_accepted_by`: nullable FK to `users`, `ON DELETE SET NULL`.
+  - `owner_accepted_at`: nullable `timestamptz`.
+  - `owner_accepted_revision`: nullable int.
+
+  `routed_reason` gains `namespace_move`.
+- **`skill_path_aliases`**:
+  - `namespace_id`: FK to `namespaces`, CASCADE.
+  - `slug`: TEXT.
+  - `skill_id`: FK to `skills`, CASCADE, indexed.
+  - `created_at`: `timestamptz`.
+
+  Primary key `(namespace_id, slug)`. A trigger refuses a `skills` row whose
+  `(namespace_id, slug)` matches an alias of a different skill, and refuses an alias that matches
+  a live `skills` row.
+
+### 70.12 API
+
+- `POST /api/proposals` and `POST /api/publish`: a new-version payload gains
+  `destinationNamespaceId`. Absent, or equal to the owner, means no move.
+  - **422** `invalid_destination`: unknown namespace, or `global`.
+  - **409** `slug_exists_in_destination`.
+  - **202** routing for publish (§70.5).
+- `POST /api/proposals/:id/actions`:
+  - `accept` at the owner stage returns 200 `{ state: "awaiting_destination" }`. At the
+    destination stage it materializes.
+  - New **409** codes: `skill_moved` and `slug_exists_in_destination`.
+  - `revise` is also allowed in `awaiting_destination`.
+- `GET /api/proposals` and `GET /api/proposals/:id`:
+  - gain `destination` (`{ namespaceSlug, displayName }` | null) and `ownerApproval`
+    (`{ by, at, revision }` | null);
+  - the state filter and the review `counts` include `awaiting_destination`.
+- Skill-addressed routes resolve aliases (§70.6). `GET /api/skills/:ns/:slug` returns the
+  canonical `namespaceSlug`, so a client can detect an alias hit.
+
+### 70.13 Tests (ship with the change, §16 discipline)
+
+- **Unit (`@skilly/shared`):**
+  - destination eligibility (not `global`, not the owner);
+  - the direct-publish-in-both predicate;
+  - live-before-alias resolution order;
+  - the grant-list edit helper (add the old owner, drop the destination, restore on cancel);
+  - the no-op guard with a namespace change.
+- **DB / integration:**
+  - The owner accept leaves no version and sets `awaiting_destination`. The destination accept
+    materializes, moves, writes the alias, syncs grants, prunes maintainers and re-routes the
+    skill's other open proposals.
+  - A `revise` in `awaiting_destination` resets to the owner stage. Accepts are revision-pinned
+    at both stages.
+  - A second, stale move fails with `skill_moved`.
+  - A slug conflict is named when the proposer can see it and not revealed when they can't. An
+    alias reserves its slug with a generic 409.
+  - Moving back deletes the alias. Chained aliases resolve.
+  - A destination reviewer gets 404 before the owner accept and has access after it.
+  - A direct publish allowed in both namespaces moves at once. A routed one starts at the right
+    stage.
+  - An alias resolves to 404 for a caller who can't see the skill.
+  - A git clone through the old path works with an install token.
+  - `skill.moved` recipients are filtered against post-move visibility, and nobody also gets
+    `skill.new_version`.
+- **E2E:** propose a move from the skill page, accept as the owner, then accept as the
+  destination. The skill page lives at the new path, the old URL redirects, and the Installed
+  page shows the new install command.
+
+### 70.14 Out of scope and accepted trade-offs
+
+- **Out of scope:**
+  - moving into or out of `global`;
+  - a standalone *Move* action (a *Keep current files* re-version does it);
+  - moves over MCP;
+  - bulk moves;
+  - renaming a slug.
+- **Accepted trade-offs:**
+  - An alias reserves its slug in the old namespace until the skill is permanently deleted.
+  - Marketplace skill names change with the owner.
+  - Per-namespace analytics keep the pre-move history under the old namespace.
+  - An installer who lost access gets no notice of where the skill went (invariant #3).
+  - A platform admin approves a move in two separate accepts.

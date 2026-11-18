@@ -8,6 +8,7 @@ import { currentAccess } from "../../../../../../lib/guard";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { pool } from "../../../../../../lib/db";
 import { setSkillDeprecation, clearSkillDeprecation } from "../../../../../../lib/deprecation";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export async function PUT(req: Request, ctx: Ctx) {
   const body = (await req.json().catch(() => ({}))) as { successor?: unknown; note?: unknown };
   const successor = typeof body.successor === "string" && body.successor.trim() ? body.successor.trim() : null;
   if (body.successor != null && typeof body.successor !== "string") return Response.json({ error: "successor must be \"<ns>/<slug>\" or null" }, { status: 422 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const r = await setSkillDeprecation(pool, { access, actorUserId: access.userId, namespaceSlug: ns, skillSlug: slug, successor, note: body.note ?? null });
   if (!r.ok) return Response.json({ error: r.error, reason: r.reason ?? null }, { status: r.status });
   return Response.json({ ok: true, deprecation: r.deprecation, notified: r.changedSuccessor });
@@ -32,7 +33,7 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   if (!access?.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
   const limited = enforceRateLimit("deprecate", access.userId, 30);
   if (limited) return limited;
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const r = await clearSkillDeprecation(pool, { access, actorUserId: access.userId, namespaceSlug: ns, skillSlug: slug });
   if (!r.ok) return Response.json({ error: r.error }, { status: r.status });
   return new Response(null, { status: 204 });

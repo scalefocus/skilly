@@ -13,6 +13,7 @@ import { ToolHarnessPicker } from "../../../components/ToolHarnessPicker";
 import { FileChangeList } from "../../../components/FileChanges";
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
 import { SLUG_EXISTS_CODE, slugRejectReason, type SlugMatchView } from "@skilly/shared/slug-match";
+import { withMoveGrants } from "@skilly/shared/namespace-move";
 import { useDateFmt } from "../../../components/DateFormat";
 import { ChatBox, type ChatMessage } from "../../../components/ChatBox";
 import type { MentionMap } from "../../../components/MentionChips";
@@ -51,6 +52,8 @@ interface Meta {
   iconEmoji?: string | null;
   /** §42 grantee namespace ids; absent = not resent (keeps the skill's current grants). */
   sharedNamespaceIds?: string[];
+  /** §70: the namespace this new version moves the skill to, or absent/null (it stays). */
+  destinationNamespaceId?: string | null;
 }
 interface Revision {
   revisionNo: number;
@@ -75,6 +78,8 @@ interface TargetSkillCurrent {
   iconSha256: string | null; iconEmoji: string | null;
   /** §42: the skill's frozen visibility + its current grantee namespace ids. */
   visibility: "org" | "namespace"; sharedNamespaceIds: string[];
+  /** §70: the skill's current owner — the move diff's "from". */
+  namespaceId?: string; namespaceSlug?: string;
 }
 interface Detail {
   id: string; state: string; targetNamespaceSlug: string; targetSkillId: string | null; proposedSemver: string;
@@ -83,7 +88,12 @@ interface Detail {
   scanPendingReason?: string | null;
   /** §41.3: the rules-only quality of the latest revision, computed on read; null until the quality scanner ran. */
   quality?: { rulesScore: number; stars: number; findings: QualityFindingItem[] } | null;
-  caps: { isReviewer: boolean; isSubmitter: boolean }; allowedActions: string[];
+  /** `isReviewer` = may act at the current stage (§70.3: the destination's reviewers while it awaits
+   *  the destination); `canEdit` = may make a reviewer edit; `canDelete` = the housekeeping delete. */
+  caps: { isReviewer: boolean; isSubmitter: boolean; canEdit?: boolean; canDelete?: boolean }; allowedActions: string[];
+  /** §70: the namespace this proposal moves the skill to, and the owner's approval of the move. */
+  destination?: { id: string; slug: string; displayName: string } | null;
+  ownerApproval?: { by: string; at: string; revision: number | null } | null;
   /** §29: the MCP client that submitted this, or null for a browser submission. */
   viaMcpClient?: string | null;
   /** §37.4: 'content_risk' when a direct publish was routed here by the content check. */
@@ -125,7 +135,7 @@ const ACTION_LABEL: Record<string, string> = {
   reject: "Reject",
 };
 const SEV_TONE: Record<string, "ok" | "warn" | "danger" | "muted"> = { critical: "danger", high: "danger", medium: "warn", low: "muted", info: "muted" };
-const STATE_TONE: Record<string, "ok" | "warn" | "danger" | "muted"> = { proposed: "muted", under_review: "warn", changes_requested: "warn", accepted: "ok", rejected: "danger" };
+const STATE_TONE: Record<string, "ok" | "warn" | "danger" | "muted"> = { proposed: "muted", under_review: "warn", changes_requested: "warn", awaiting_destination: "warn", accepted: "ok", rejected: "danger" };
 
 const labelStyle = { display: "block", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 6 } as const;
 
@@ -152,6 +162,9 @@ interface EditDraft {
   iconEmoji: string | null;
   /** §42 "Share with namespaces" — grantee namespace ids (reviewer- and proposer-editable). */
   sharedNamespaceIds: string[];
+  /** §70: the move destination (new-version proposals; null = the skill stays). Editable by the
+   *  proposer and by the owner's reviewers at the owner stage. */
+  destinationNamespaceId: string | null;
 }
 
 /** §42: namespace ids → display-name chips, for the read view and the accept diff. */
@@ -243,9 +256,14 @@ function DiffRow({ label, oldNode, newNode, block = false }: { label: string; ol
  * old → new diff of every changed metadata field, plus the files line ("unchanged — reuses
  * v<x>'s bundle" for a Keep-current-files proposal). SKILLY_SPEC.md §8.
  */
-function ChangesOnAccept({ meta, cur, payload, nsNames }: { meta: Meta; cur: TargetSkillCurrent; payload: Revision["payload"]; nsNames: Map<string, NamespaceOption> }) {
+function ChangesOnAccept({ meta, cur, payload, nsNames, destination }: { meta: Meta; cur: TargetSkillCurrent; payload: Revision["payload"]; nsNames: Map<string, NamespaceOption>; destination?: { slug: string } | null }) {
   const chips = (xs: string[]) => (xs.length ? xs.map((x) => <span key={x} className="chip" style={{ marginRight: 6 }}>{x}</span>) : <span className="muted">none</span>);
   const rows: ReactNode[] = [];
+  // §70: the move itself — the skill's namespace changes on accept.
+  if (meta.destinationNamespaceId && meta.destinationNamespaceId !== cur.namespaceId) {
+    const destSlug = destination?.slug ?? nsNames.get(meta.destinationNamespaceId)?.slug ?? "another namespace";
+    rows.push(<DiffRow key="namespace" label="Namespace" oldNode={<span className="mono">@{cur.namespaceSlug ?? "?"}</span>} newNode={<span className="mono">@{destSlug}</span>} />);
+  }
   if (meta.title.trim() !== cur.title.trim()) {
     rows.push(<DiffRow key="title" label="Title" oldNode={cur.title} newNode={meta.title.trim()} />);
   }
@@ -321,6 +339,8 @@ function ProposalDetailInner() {
   // Edit mode: null = read view. Edits travel as a new revision with the decision (reviewer) or
   // the resubmit (proposer).
   const [edit, setEdit] = useState<EditDraft | null>(null);
+  // §70: while an edit moves the skill, the destination is the owner-to-be (never its own grantee).
+  const editOwnerId = edit?.destinationNamespaceId ?? ownerNsId;
   // The submitter's icon Replace… (§33.4): the propose form's source checks and crop dialog, but
   // Apply uploads at once — a failure shows inline (the flow's `error`) and the previous icon stays.
   // `iconUploadSha` is the last upload, so Adjust crop is offered only while that image is the edit's.
@@ -403,7 +423,7 @@ function ProposalDetailInner() {
   const editedShares = (prevShares: string[] | undefined): string[] | undefined => {
     if (!edit) return prevShares;
     const restricted = (data?.targetSkillId ? data.targetSkillCurrent?.visibility ?? "namespace" : edit.visibility) === "namespace";
-    const next = restricted ? edit.sharedNamespaceIds.filter((nsId) => nsId !== ownerNsId) : [];
+    const next = restricted ? edit.sharedNamespaceIds.filter((nsId) => nsId !== editOwnerId) : [];
     if (prevShares !== undefined) return next;
     const opened = (data?.targetSkillCurrent?.sharedNamespaceIds ?? []).filter((nsId) => nsId !== ownerNsId);
     return diffSameSet(diffNormSet(next), diffNormSet(restricted ? opened : [])) ? undefined : next;
@@ -432,6 +452,8 @@ function ProposalDetailInner() {
         iconEmoji: edit.iconEmoji,
         // §42: resent from the edit form; cleared when the skill is (or becomes) org-wide.
         sharedNamespaceIds: editedShares(latestRev.payload.metadata.sharedNamespaceIds),
+        // §70: the move destination (new-version proposals only; the server stamps the source).
+        ...(data?.targetSkillId ? { destinationNamespaceId: edit.destinationNamespaceId } : {}),
       },
     };
     // Proposer replaced the hosted bundle: swap in the freshly-uploaded artifact (keeps the same
@@ -513,7 +535,9 @@ function ProposalDetailInner() {
         kind: "ok",
         text: action === "revise"
           ? "Your changes were saved as a new revision — the reviewers have been notified."
-          : `Proposal is now “${j.state}”.${edit ? " Your edits were recorded as a new revision." : ""}`,
+          : j.state === "awaiting_destination"
+            ? `Approved for @${data?.targetNamespaceSlug}. The move now waits for @${data?.destination?.slug ?? "the destination"}’s reviewers.${edit ? " Your edits were recorded as a new revision." : ""}`
+            : `Proposal is now “${String(j.state).replace(/_/g, " ")}”.${edit ? " Your edits were recorded as a new revision." : ""}`,
       });
       setNote("");
       setOverride(false);
@@ -559,7 +583,7 @@ function ProposalDetailInner() {
         <Link href="/proposals" className="btn-ghost mono" style={{ fontSize: 12 }}>← review queue</Link>
         <span style={{ flex: 1 }} />
         {/* Reviewer-only housekeeping delete — any state except accepted (locked: provenance of a live version). */}
-        {data.caps.isReviewer && data.state !== "accepted" && (
+        {(data.caps.canDelete ?? data.caps.isReviewer) && data.state !== "accepted" && (
           <button type="button" className="btn btn-sm btn-danger" disabled={deleting} onClick={() => void del()} title="Permanently delete this proposal (housekeeping)">
             {deleting ? "…" : "🗑 Delete proposal"}
           </button>
@@ -569,7 +593,7 @@ function ProposalDetailInner() {
       <div className="meta" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
         <span className="ns" style={{ fontSize: 15 }}>@{data.targetNamespaceSlug}</span>
         <span className="chip chip-accent">v{data.proposedSemver}</span>
-        <Pill tone={STATE_TONE[data.state] ?? "muted"}>{data.state.replace("_", " ")}</Pill>
+        <Pill tone={STATE_TONE[data.state] ?? "muted"}>{data.state.replace(/_/g, " ")}</Pill>
         <span className="chip">{data.targetSkillId ? "new version" : "new skill"}</span>
         {/* §29 attribution — the reviewer sees, on the proposal itself, that an agent submitted it. */}
         <ViaMcp client={data.viaMcpClient} />
@@ -594,6 +618,27 @@ function ProposalDetailInner() {
           ) : null}
           .
         </p>
+      )}
+      {/* §70.3: a move — the two approvals and where it stands. */}
+      {data.destination && (
+        <div className="card card-pad" data-testid="move-banner" style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8, background: "var(--accent-soft)" }}>
+          <span style={{ fontSize: 14 }}>
+            <strong>Moves to <span className="mono">@{data.destination.slug}</span>.</strong>{" "}
+            Accepting moves <span className="mono">@{data.targetNamespaceSlug}/{latest?.payload.metadata.skillSlug}</span> to{" "}
+            <span className="mono">@{data.destination.slug}</span> — both namespaces must approve. New installs use{" "}
+            <span className="mono">@{data.destination.slug}/{latest?.payload.metadata.skillSlug}</span>; existing installs keep working through the old address.
+          </span>
+          <ol data-testid="move-progress" style={{ margin: 0, paddingLeft: 20, fontSize: 13.5, display: "flex", flexDirection: "column", gap: 3 }}>
+            <li>
+              <span className="mono">@{data.targetNamespaceSlug}</span> —{" "}
+              {data.ownerApproval ? <>approved by {data.ownerApproval.by}{data.ownerApproval.revision ? ` (revision ${data.ownerApproval.revision})` : ""}</> : data.state === "accepted" ? "approved" : "waiting"}
+            </li>
+            <li>
+              <span className="mono">@{data.destination.slug}</span> —{" "}
+              {data.state === "accepted" ? "accepted" : data.state === "awaiting_destination" ? "waiting" : "after the owner approves"}
+            </li>
+          </ol>
+        </div>
       )}
       {/* §65.6: who is assigned, and the namespace's review target while the proposal waits on reviewers. */}
       {data.assignment && (
@@ -688,7 +733,8 @@ function ProposalDetailInner() {
         // Who can open the edit form: a reviewer with available actions, or the proposer when they
         // may resubmit (changes_requested) or revise mid-review (§8). Field rules below differ by
         // actor/type/state.
-        const canEdit = data.allowedActions.length > 0 && (data.caps.isReviewer || canResubmit || canRevise);
+        // §70.3: at the destination stage reviewers decide but never edit (caps.canEdit is false).
+        const canEdit = data.allowedActions.length > 0 && ((data.caps.isReviewer && (data.caps.canEdit ?? true)) || canResubmit || canRevise);
         // Editable sets (§8): title, description, categories, and tool/harness are editable
         // on BOTH proposal types — a re-version syncs them to the skill on accept. Only VISIBILITY
         // stays locked on a new-version proposal (skill-level frozen; a skill-management action).
@@ -747,6 +793,7 @@ function ProposalDetailInner() {
                       iconSha256: m.iconSha256 ?? null,
                       iconEmoji: m.iconEmoji ?? null,
                       sharedNamespaceIds: m.sharedNamespaceIds ?? data.targetSkillCurrent?.sharedNamespaceIds ?? [],
+                      destinationNamespaceId: m.destinationNamespaceId ?? null,
                     }); }}
                   >
                     ✎ Edit
@@ -844,14 +891,44 @@ function ProposalDetailInner() {
                     </select>
                   </div>
                 </div>
+                {/* §70: move the skill to another namespace (new-version proposals; never a global skill). */}
+                {!isNewSkill && ownerNsId && data.targetNamespaceSlug !== "global" && (
+                  <div data-testid="review-move-namespace">
+                    <label style={labelStyle}>Namespace <span style={{ textTransform: "none", letterSpacing: 0 }}>· pick another to move the skill there</span></label>
+                    <select
+                      className="input input-mono"
+                      style={{ width: "100%" }}
+                      value={edit.destinationNamespaceId ?? ""}
+                      aria-label="Namespace"
+                      onChange={(e) => {
+                        const next = e.target.value || null;
+                        const restricted = data.targetSkillCurrent?.visibility === "namespace";
+                        setEdit({
+                          ...edit,
+                          destinationNamespaceId: next,
+                          // The old owner keeps access as a grantee by default; the destination becomes the owner.
+                          sharedNamespaceIds: restricted && next ? withMoveGrants(edit.sharedNamespaceIds, ownerNsId, next) : edit.sharedNamespaceIds,
+                        });
+                      }}
+                    >
+                      <option value="">{data.targetNamespaceSlug} — current namespace</option>
+                      {shareTargets.filter((o) => o.id !== ownerNsId).map((o) => (
+                        <option key={o.id} value={o.id}>{o.slug} — {o.displayName}</option>
+                      ))}
+                    </select>
+                    {edit.destinationNamespaceId && (
+                      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Both namespaces must approve the move. Any new revision sends it back to the owner’s reviewers.</p>
+                    )}
+                  </div>
+                )}
                 {(data.targetSkillId ? data.targetSkillCurrent?.visibility === "namespace" : edit.visibility === "namespace") && (
                   <div data-testid="review-share-with">
                     <label style={labelStyle}>Shared with <span style={{ textTransform: "none", letterSpacing: 0 }}>· optional</span></label>
                     <NamespaceMultiPicker
-                      value={edit.sharedNamespaceIds.filter((nsId) => nsId !== ownerNsId)}
+                      value={edit.sharedNamespaceIds.filter((nsId) => nsId !== editOwnerId)}
                       onChange={(next) => setEdit({ ...edit, sharedNamespaceIds: next })}
                       options={shareTargets}
-                      exclude={ownerNsId ? [ownerNsId] : []}
+                      exclude={editOwnerId ? [editOwnerId] : []}
                     />
                   </div>
                 )}
@@ -1007,6 +1084,9 @@ function ProposalDetailInner() {
                 </ReadRow>
                 <ReadRow label="Harness"><span className="chip">{m.toolHarness}</span></ReadRow>
                 <ReadRow label="Visibility">{m.visibility === "namespace" ? <Pill tone="warn">restricted</Pill> : <Pill tone="ok">org-wide</Pill>}</ReadRow>
+                {m.destinationNamespaceId && (
+                  <ReadRow label="Moves to"><span className="mono">@{data.destination?.slug ?? nsNames.get(m.destinationNamespaceId)?.slug ?? "?"}</span></ReadRow>
+                )}
                 {m.visibility === "namespace" && m.sharedNamespaceIds !== undefined && (
                   <ReadRow label="Shared with">{nsChips(m.sharedNamespaceIds, nsNames)}</ReadRow>
                 )}
@@ -1049,7 +1129,7 @@ function ProposalDetailInner() {
       {/* New-version proposals: explicit old → new diff of what accepting changes on the live
           skill, plus the files line ("unchanged — reuses vX" for Keep-current-files). §8. */}
       {data.targetSkillId && data.targetSkillCurrent && latest && !edit && (
-        <ChangesOnAccept meta={latest.payload.metadata} cur={data.targetSkillCurrent} payload={latest.payload} nsNames={nsNames} />
+        <ChangesOnAccept meta={latest.payload.metadata} cur={data.targetSkillCurrent} payload={latest.payload} nsNames={nsNames} destination={data.destination} />
       )}
 
       {/* File-change view (§8): what changed vs the skill's latest stable version — added /
@@ -1279,7 +1359,13 @@ function ProposalDetailInner() {
                 disabled={busy !== null || (a === "accept" && needsOverride && (!override || policyForbidden || ((policyTrips.length > 0 || scanPendingReason !== null) && !note.trim())))}
                 onClick={() => act(a)}
               >
-                {busy === a ? "…" : ACTION_LABEL[a] ?? a}
+                {busy === a
+                  ? "…"
+                  : a === "accept" && data.destination && data.state === "awaiting_destination"
+                    ? `Accept & move to @${data.destination.slug}`
+                    : a === "accept" && data.destination
+                      ? `Approve move for @${data.targetNamespaceSlug}`
+                      : ACTION_LABEL[a] ?? a}
               </button>
             ))}
           </div>

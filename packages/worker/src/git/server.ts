@@ -13,7 +13,7 @@ import {
 import type { GitRefusalCode } from "./authorize.js";
 import type { Request } from "express";
 import type { MarketplaceScope } from "@skilly/shared";
-import { repoProvisioned, defaultRepoRoot } from "./repoStore.js";
+import { pickServedRepo, rewriteRepoPathInfo, defaultRepoRoot, type RepoAddress } from "./repoStore.js";
 import { marketplaceRepoDir, marketplaceHead, changedSlugsSince } from "./marketplace.js";
 import { gitHttpBackend } from "./httpBackend.js";
 import type { GitTokenLimiter } from "../rateLimit.js";
@@ -178,10 +178,24 @@ export function gitServer(deps: GitServerDeps, opts: GitServerOptions = {}): Rou
       // synthesized, e.g. a crash mid-sweep) would otherwise serve a successful but empty clone,
       // surfacing to `npx skills add` as a misleading "No skills found". §6. The self-heal sweep
       // re-synthesizes such repos. A marketplace repo's equivalent is a born `main`.
+      // §70.8: a moved skill's repo is served from its canonical directory, or — until the relocation
+      // sweep has renamed it — from whichever of its old addresses is provisioned. No HTTP redirect:
+      // git-http-backend is simply pointed at the served directory, whatever path was requested.
+      let pathInfo = url.pathname;
       if (decision.kind === "skill") {
-        if (!(await repoProvisioned(root, parsed.namespaceSlug, parsed.skillSlug))) {
+        const requested: RepoAddress = { namespaceSlug: parsed.namespaceSlug, skillSlug: parsed.skillSlug };
+        const canonical: RepoAddress = decision.skill.canonical
+          ? { namespaceSlug: decision.skill.canonical.namespaceSlug, skillSlug: decision.skill.canonical.slug }
+          : requested;
+        const served = await pickServedRepo(root, [
+          canonical,
+          requested,
+          ...(decision.skill.aliasPaths ?? []).map((a) => ({ namespaceSlug: a.namespaceSlug, skillSlug: a.slug })),
+        ]);
+        if (!served) {
           return res.status(404).type("text/plain").send("repository not provisioned");
         }
+        pathInfo = rewriteRepoPathInfo(url.pathname, requested, served);
       }
 
       const marketplaceDir = decision.kind === "marketplace" ? marketplaceRepoDir(root, decision.marketplace.scope) : null;
@@ -192,7 +206,7 @@ export function gitServer(deps: GitServerDeps, opts: GitServerOptions = {}): Rou
 
       const ok = await gitHttpBackend(req, res, {
         projectRoot: root,
-        pathInfo: url.pathname,
+        pathInfo,
         queryString: url.searchParams.toString(),
       });
 

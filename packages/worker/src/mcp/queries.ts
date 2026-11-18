@@ -270,6 +270,22 @@ export interface SkillRef {
 }
 
 /**
+ * §70.6 the skill id an address `<ns>/<slug>` names: the live skill there, else the moved skill whose
+ * old address (alias) it is — NULL when neither. `nsParam` / `slugParam` are SQL placeholders (or
+ * expressions) for the namespace SLUG and the skill slug. A live skill and an alias never share an
+ * address (migration 0112 triggers); the order is explicit anyway.
+ */
+export function skillAddressIdSql(nsParam: string, slugParam: string): string {
+  return `(select x.id from (
+             select s0.id, 0 as pri from skills s0 join namespaces n0 on n0.id = s0.namespace_id
+              where n0.slug = ${nsParam} and s0.slug = ${slugParam}
+             union all
+             select a0.skill_id, 1 from skill_path_aliases a0 join namespaces an0 on an0.id = a0.namespace_id
+              where an0.slug = ${nsParam} and a0.slug = ${slugParam}
+           ) x order by x.pri limit 1)`;
+}
+
+/**
  * Resolve `ns/slug` to a skill the caller may SEE. Returns null both for "doesn't exist" and for
  * "exists but is invisible to you" — a restricted skill must never be distinguishable from a
  * missing one (invariant #3). Archived skills are owner-only and are not resolved here at all.
@@ -281,7 +297,10 @@ export async function findVisibleSkill(
   skillSlug: string,
 ): Promise<SkillRef | null> {
   const params: unknown[] = [namespaceSlug, skillSlug];
-  const where = ["n.slug = $1", "s.slug = $2", "s.status = 'active'"];
+  // §70.6: the live skill at <ns>/<slug> first, then a moved skill's old address (an alias). The
+  // visibility filter below runs against the RESOLVED skill, so an alias of a skill the caller can't
+  // see is the same "no such skill" as a missing one; the result carries the CANONICAL address.
+  const where = [`s.id = ${skillAddressIdSql("$1", "$2")}`, "s.status = 'active'"];
   const vis = skillVisibilityWhere(access, params);
   if (vis) where.push(vis);
   const { rows } = await pool.query<{

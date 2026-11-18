@@ -9,6 +9,7 @@ import { resolveUserAccess } from "../../../../../../../lib/access";
 import { findSkill } from "../../../../../../../lib/catalog";
 import { canManageMaintainers } from "../../../../../../../lib/maintainers";
 import { canReadSkill, markSkillDiscussionRead, markSkillDiscussionThreadsRead, type SkillDiscussionSkill } from "../../../../../../../lib/messages";
+import { canonicalSkillParams } from "../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
   const access = await resolveUserAccess(oid);
   if (!access.userId) return Response.json({ error: "unknown user" }, { status: 403 });
 
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const found = await findSkill(ns, slug);
   if (!found) return Response.json({ error: "not found" }, { status: 404 });
   const skill: SkillDiscussionSkill = {

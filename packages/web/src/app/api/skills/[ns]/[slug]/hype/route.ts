@@ -8,6 +8,7 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { getHypeSettings, placeHype } from "../../../../../../lib/hype";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ ns: string; s
 
   const settings = await getHypeSettings();
   if (!settings.enabled) return Response.json({ error: "not found" }, { status: 404 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill || skill.status === "archived" || !isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });

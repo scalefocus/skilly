@@ -11,6 +11,7 @@ import { enforceRateLimit } from "../../../../../../../lib/ratelimit";
 import { pool } from "../../../../../../../lib/db";
 import { addGrant, removeGrant, inTransaction, isExplicitMaintainer, validateGrantTargets, GRANT_TARGET_MESSAGES, listGrants } from "../../../../../../../lib/grants";
 import { canShareSkill, canUnshareSkill, isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,7 @@ async function prepare(ctx: Ctx) {
   const limited = enforceRateLimit("grants", access.userId, 60);
   if (limited) return { error: limited };
 
-  const { ns, slug, namespaceId } = await ctx.params;
+  const { ns, slug, namespaceId } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   // §49.4: visibility before the archived check — an outsider never sees the 409.
   if (!skill || !isSkillVisible(access, skill)) {

@@ -10,6 +10,8 @@ import { findDuplicateSkill, newSkillSlugClash } from "../../../lib/duplicate";
 import { verifyPointerSkill } from "../../../lib/pointerVerify";
 import { withSystemLog } from "../../../lib/apiLog";
 import { aiDraftModelFromToken } from "../../../lib/qualityDraft";
+import { destinationConflict, loadNamespaceById } from "../../../lib/skillMoves";
+import { slugInDestinationMessage, SLUG_EXISTS_IN_DESTINATION_CODE } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -107,6 +109,20 @@ export const POST = withSystemLog("/api/proposals", async function POST(req: Req
     access,
   });
   if (payloadErr) return Response.json({ error: payloadErr }, { status: 422 });
+
+  // §70.2: a move's destination must not already hold the slug. Named (409) only when the proposer
+  // can see the skill there; a conflict they can't see is not revealed at submit (invariant #3) —
+  // the destination's reviewers meet it, and it blocks their accept.
+  if (targetSkillId && body.targetSkillSlug && payload.metadata.destinationNamespaceId) {
+    const dest = await loadNamespaceById(pool, payload.metadata.destinationNamespaceId);
+    const c = dest ? await destinationConflict(pool, access, { skillId: targetSkillId, slug: body.targetSkillSlug, destinationNamespaceId: dest.id }) : null;
+    if (dest && c?.kind === "skill" && c.visible) {
+      return Response.json(
+        { error: slugInDestinationMessage(dest.slug, c.slug, { name: `${c.namespaceSlug}/${c.slug}` }), code: SLUG_EXISTS_IN_DESTINATION_CODE },
+        { status: 409 },
+      );
+    }
+  }
 
   // Keep current files (§8): snapshot the latest stable version's artifact NOW (the reviewer
   // approves exactly these bytes) + enforce the no-op guard (at least one field must differ).

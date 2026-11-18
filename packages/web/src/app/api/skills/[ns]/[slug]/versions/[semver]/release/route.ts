@@ -7,6 +7,7 @@ import { currentAccess } from "../../../../../../../../lib/guard";
 import { pool } from "../../../../../../../../lib/db";
 import { releaseQuarantinedVersion } from "../../../../../../../../lib/manage";
 import { enforceRateLimit } from "../../../../../../../../lib/ratelimit";
+import { canonicalSkillParams } from "../../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
   const limited = enforceRateLimit("release", access.userId, 30);
   if (limited) return limited;
   const body = (await req.json().catch(() => ({}))) as { reason?: unknown };
-  const { ns, slug, semver } = await ctx.params;
+  const { ns, slug, semver } = await canonicalSkillParams(ctx.params);
   const r = await releaseQuarantinedVersion(pool, {
     access,
     actorUserId: access.userId,

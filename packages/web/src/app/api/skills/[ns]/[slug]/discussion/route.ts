@@ -11,6 +11,7 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { canManageMaintainers } from "../../../../../../lib/maintainers";
 import { getSkillDiscussion, postSkillDiscussionMessage, canReadSkill, type SkillDiscussionSkill } from "../../../../../../lib/messages";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +44,7 @@ async function authorize(ns: string, slug: string) {
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
-  const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
+  const a = await authorize((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if ("error" in a) return a.error;
   const offset = Math.max(0, Number(new URL(req.url).searchParams.get("offset") ?? 0) || 0);
   const thread = await getSkillDiscussion(a.access, a.skill, { offset });
@@ -51,7 +52,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
-  const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
+  const a = await authorize((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if ("error" in a) return a.error;
   const limited = enforceRateLimit("messages", a.userId, 60);
   if (limited) return limited;

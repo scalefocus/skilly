@@ -17,6 +17,7 @@ import {
   listRemoteRefs,
   normalizeOriginUrl,
   normalizeSubdir,
+  slugReservedMessage,
   toolError,
   toolJson,
   type McpToolName,
@@ -42,11 +43,13 @@ import { listInstalls, mintInstall, reactivate, resolveExpiry, uninstall } from 
 import {
   createMcpProposal,
   createSkillRequest,
+  isProposalReviewerViewer,
   loadProposalCtx,
   postProposalMessage,
   postSkillComment,
   proposerAction,
   rateSkill,
+  stripMoveFields,
   validatePointerFields,
   type BuiltPayload,
   type ProposalMetadataInput,
@@ -505,7 +508,10 @@ function buildPointerPayload(a: Args, metadata: ProposalMetadataInput): Resolved
 function readMetadata(a: Args): Resolved<ProposalMetadataInput> {
   const m = a.metadata;
   if (typeof m !== "object" || m === null) return { ok: false, error: "metadata is required" };
-  return { ok: true, value: { ...(m as ProposalMetadataInput) } };
+  const value = { ...(m as ProposalMetadataInput) };
+  // §70: an MCP caller can't move a skill — the move fields are server-owned, never read from input.
+  stripMoveFields(value);
+  return { ok: true, value };
 }
 
 /**
@@ -729,6 +735,15 @@ export async function callTool(
         if (rows[0] && !out.slugNote) {
           out.slugNote = `${nsSlug}/${slug} already exists — propose a NEW VERSION of it rather than a new skill`;
         }
+        // §70.6: a moved skill's old address reserves the slug there. A caller who can see the skill
+        // was told about it by the slug match above; anyone else gets a note that names nothing.
+        if (!rows[0]) {
+          const reserved = (await pool.query(`select 1 from skill_path_aliases where namespace_id = $1 and slug = $2`, [ns.id, slug])).rowCount;
+          if (reserved) {
+            out.slugTaken = true;
+            if (!out.slugNote) out.slugNote = slugReservedMessage(nsSlug, slug);
+          }
+        }
       }
       if (originUrl) {
         const { rows } = await pool.query<{ ns_slug: string; slug: string; origin: string; subdir: string | null }>(
@@ -840,7 +855,8 @@ export async function callTool(
       if (!id) return toolError("proposalId is required");
       const p = await loadProposalCtx(pool, id);
       if (!p) return toolError("no such proposal, or it isn't visible to you");
-      const isReviewer = caller.access.isPlatformAdmin || caller.access.namespaceRoles.get(p.namespaceId) === "namespace_admin";
+      // §70.3: the owner's reviewers, or the destination's once the owner approved a move.
+      const isReviewer = isProposalReviewerViewer(caller.access, p);
       if (p.submittedBy !== caller.userId && !isReviewer) return toolError("no such proposal, or it isn't visible to you");
       const [rev, scan, msgs, assign] = await Promise.all([
         pool.query<{ revision_no: number; payload: unknown; note: string | null; created_at: string }>(
@@ -877,6 +893,8 @@ export async function callTool(
         proposalId: p.id,
         state: p.state,
         namespace: p.namespaceSlug,
+        // §70: the namespace this proposal moves the skill to (null = no move).
+        destinationNamespace: p.destinationSlug,
         semver: p.proposedSemver,
         isNewVersion: p.targetSkillId !== null,
         yourTurn: p.submittedBy === caller.userId && p.state === "changes_requested",
@@ -1091,9 +1109,13 @@ export async function callTool(
 }
 
 /** §65.10: the columns behind `assignee` / `reviewTarget` (aliases `p` proposals, `n` namespaces, `au` the assignee). */
-const REVIEW_ASSIGNMENT_SELECT = `au.display_name as assignee_name, n.review_target_days,
-                case when p.state in ('proposed','under_review') then p.turn_due_at end as review_due_at,
-                (p.state in ('proposed','under_review') and p.turn_due_at is not null and p.turn_due_at <= now()) as review_overdue`;
+// §70.3: `awaiting_destination` is a reviewer turn too, timed on the DESTINATION's review target.
+const REVIEW_ASSIGNMENT_SELECT = `au.display_name as assignee_name,
+                case when p.state = 'awaiting_destination' and p.destination_namespace_id is not null
+                     then (select dn.review_target_days from namespaces dn where dn.id = p.destination_namespace_id)
+                     else n.review_target_days end as review_target_days,
+                case when p.state in ('proposed','under_review','awaiting_destination') then p.turn_due_at end as review_due_at,
+                (p.state in ('proposed','under_review','awaiting_destination') and p.turn_due_at is not null and p.turn_due_at <= now()) as review_overdue`;
 
 interface ReviewAssignmentCols {
   assignee_name: string | null;

@@ -205,6 +205,36 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
     };
   }
 
+  // §70.9: a skill the recipient watches, maintains, administers or has installed moved to another
+  // namespace (and published a version) — it replaces skill.new_version for that accept.
+  if (n.type === "skill.moved" && typeof p.skillSlug === "string") {
+    const slug = p.skillSlug;
+    const to = `${p.namespaceSlug ?? ""}/${slug}`;
+    const from = `${p.oldNamespaceSlug ?? ""}/${slug}`;
+    const path = `/skills/${p.namespaceSlug}/${slug}`;
+    const listed = typeof p.marketplaceName === "string" && p.marketplaceName ? ` In plugin marketplaces it is now listed as ${p.marketplaceName}.` : "";
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${from} moved to ${to} and published version ${p.semver ?? ""}. Existing installs keep working; new installs use the new address.${listed} ${cta("View the skill", path)}`,
+      webhook: { event: n.type, title: s, skill: to, previousSkill: from, semver: p.semver ?? null, url: abs(path) },
+    };
+  }
+
+  // §70.9: the owner's reviewers approved the proposer's move; the destination decides next.
+  if (n.type === "proposal.owner_accepted" && typeof p.proposalId === "string") {
+    const path = `/proposals/${p.proposalId}`;
+    const owner = String(p.namespaceSlug ?? "The owner");
+    const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug ?? ""}`;
+    const dest = String(p.destinationSlug ?? "the destination");
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${owner} approved your proposal for ${slug}. It now waits for ${dest}. ${cta("View the proposal", path)}`,
+      webhook: { event: n.type, title: s, proposalId: p.proposalId, skill: slug, semver: p.semver ?? null, destination: dest, url: abs(path) },
+    };
+  }
+
   // Skill events — all three link to the skill page; only the sentence + CTA verb differ.
   if ((n.type === "skill.new_version" || n.type === "skill.drift" || n.type === "skill.marked_official") && typeof p.skillSlug === "string") {
     const slug = `${p.namespaceSlug ?? ""}/${p.skillSlug}`;

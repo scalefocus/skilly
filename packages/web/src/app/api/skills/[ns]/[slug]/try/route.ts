@@ -10,6 +10,7 @@ import { withSystemLog } from "../../../../../../lib/apiLog";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { tryContext, trySend } from "../../../../../../lib/aiTry";
 import type { EffectiveAccess } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]/try", async function G
   // Reads and extracts the artifact — rate-limited like the readme and download paths.
   const limited = enforceRateLimit("try-context", a.access.userId, 60);
   if (limited) return limited;
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const semver = new URL(req.url).searchParams.get("semver")?.trim() || null;
   const r = await tryContext(a.access, ns, slug, semver);
   return Response.json(r.body, { status: r.status });
@@ -45,7 +46,7 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/try", async function 
   }
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== "object") return Response.json({ error: "send JSON { semver, messages }" }, { status: 400 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const r = await trySend(a.access, ns, slug, body);
   return Response.json(r.body, { status: r.status });
 });

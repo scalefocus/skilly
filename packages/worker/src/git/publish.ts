@@ -156,6 +156,15 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
     // The per-user new_version_notifications opt-out gates ONLY the maintainer-derived half —
     // an explicit watch always wins (its off-switch is unwatch), so a maintainer who watches
     // keeps getting notified with the toggle off. Row-level: opted-out users get no row at all.
+    // §70.9: a version published by a MOVE was already announced as `skill.moved` (inserted at
+    // accept, before this sweep) — it REPLACES skill.new_version, skill.shared_new_version and the
+    // follower fan-out for that accept, so its recipients are skipped by all three.
+    const { rows: movedRows } = await pool.query<{ user_id: string }>(
+      `select distinct user_id from notifications
+        where type = 'skill.moved' and payload->>'skillId' = $1::text and payload->>'semver' = $2::text`,
+      [row.skill_id, row.semver],
+    );
+    const movedNotified = movedRows.map((r) => r.user_id);
     const { rows: notified } = await pool.query<{ user_id: string }>(
       `insert into notifications (user_id, type, payload)
        select uid, 'skill.new_version',
@@ -175,9 +184,11 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
              ) m
              join users u on u.id = m.uid and u.new_version_notifications
          ) recipients
+        where uid <> all($5::uuid[])
        returning user_id`,
-      [row.skill_id, row.ns_slug, row.skill_slug, row.semver],
+      [row.skill_id, row.ns_slug, row.skill_slug, row.semver, movedNotified],
     );
+    const alreadyTold = [...notified.map((r) => r.user_id), ...movedNotified];
 
     // §42/§12: tell the admins of every namespace this restricted skill is SHARED with — they can
     // see it but don't govern it, so this is awareness, not a review item. Deduped against anyone
@@ -199,7 +210,7 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
           where s.id = $1 and s.visibility = 'namespace'
             and gm.user_id <> all($5::uuid[])
             and ($6::uuid is null or gm.user_id <> $6::uuid)`,
-        [row.skill_id, row.ns_slug, row.skill_slug, row.semver, notified.map((r) => r.user_id), row.created_by],
+        [row.skill_id, row.ns_slug, row.skill_slug, row.semver, alreadyTold, row.created_by],
       );
     } catch (err) {
       console.error(JSON.stringify({ level: "warn", msg: "shared new-version notify failed", versionId: row.id, err: String(err) }));
@@ -215,7 +226,7 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
           actorId: row.created_by,
           payload: { namespaceSlug: row.ns_slug, skillSlug: row.skill_slug, semver: row.semver, skillId: row.skill_id },
           skill: { id: row.skill_id, namespaceId: row.namespace_id, visibility: row.visibility },
-          excludeUserIds: notified.map((r) => r.user_id),
+          excludeUserIds: alreadyTold,
         });
       } catch (err) {
         console.error(JSON.stringify({ level: "warn", msg: "follower fan-out failed (non-fatal)", versionId: row.id, err: String(err) }));

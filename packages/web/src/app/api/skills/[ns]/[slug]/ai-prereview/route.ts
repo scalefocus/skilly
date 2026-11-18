@@ -7,13 +7,14 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { canManageMaintainers } from "../../../../../../lib/maintainers";
 import { skillPrereviewDetail } from "../../../../../../lib/aiPrereview";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
   const access = await currentAccess();
   if (!access?.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
   const owner = await canManageMaintainers(access, { id: skill.id, namespaceId: skill.namespaceId, visibility: skill.visibility }, access.userId);

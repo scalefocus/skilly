@@ -506,7 +506,8 @@ export async function submitImport(
         access, actorUserId: access.userId, namespaceSlug: ns.slug, semver, payload, contentCheck, importId, routeOverrides: true,
       });
       if (!r.ok) results.push(fail(r.error, r.code));
-      else if ("routed" in r) results.push({ subdir, slug, outcome: "routed", proposalId: r.proposalId, routedReason: r.routedReason });
+      // An import only creates NEW skills, so it is never routed for a namespace move (§70.5).
+      else if ("routed" in r) results.push({ subdir, slug, outcome: "routed", proposalId: r.proposalId, routedReason: r.routedReason === "namespace_move" ? undefined : r.routedReason });
       else results.push({ subdir, slug, outcome: "published" });
     } catch {
       results.push(fail("couldn’t create this one — try again"));

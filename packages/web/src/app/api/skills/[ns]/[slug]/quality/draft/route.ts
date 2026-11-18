@@ -6,6 +6,7 @@ import { currentAccess } from "../../../../../../../lib/guard";
 import { loadDraftContext, parseRunBody, runDraft, type DraftEvent } from "../../../../../../../lib/qualityDraft";
 import { enforceRateLimit } from "../../../../../../../lib/ratelimit";
 import { DRAFT_RATE_LIMIT, DRAFT_RATE_WINDOW_MS } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 // The run may take up to the 30-minute cap; never let the platform cut it short.
@@ -14,7 +15,7 @@ export const maxDuration = 1800;
 export async function POST(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
   const access = await currentAccess();
   if (!access?.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const r = await loadDraftContext(access, ns, slug);
   if (!r.ok) return Response.json({ error: r.status === 409 ? "ai_draft_unavailable" : r.error, reason: r.reason ?? null, message: r.error }, { status: r.status });
   const body = parseRunBody(await req.json().catch(() => null), r.ctx);

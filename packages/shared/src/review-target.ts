@@ -33,10 +33,11 @@ export function normalizeReviewTarget(v: unknown): number | null {
 
 export type ReviewTurn = "reviewer" | "proposer";
 
-/** Whose turn an open proposal is: reviewers while `proposed`/`under_review`, the proposer while
- *  `changes_requested`; null once decided. Mirrors the migration-0106 trigger. */
+/** Whose turn an open proposal is: reviewers while `proposed`/`under_review` — and, for a move,
+ *  `awaiting_destination` (the destination's reviewers, §70.3) — the proposer while
+ *  `changes_requested`; null once decided. Mirrors the migration-0106/0112 trigger. */
 export function reviewTurn(state: ProposalState): ReviewTurn | null {
-  if (state === "proposed" || state === "under_review") return "reviewer";
+  if (state === "proposed" || state === "under_review" || state === "awaiting_destination") return "reviewer";
   if (state === "changes_requested") return "proposer";
   return null;
 }

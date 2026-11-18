@@ -6,6 +6,7 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { setWatch } from "../../../../../../lib/watch";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
   const limited = enforceRateLimit("watch", access.userId, 120);
   if (limited) return limited;
 
-  const skill = await findSkill((await ctx.params).ns, (await ctx.params).slug);
+  const skill = await findSkill((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if (!skill || skill.status === "archived") return Response.json({ error: "not found" }, { status: 404 });
   if (!isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });

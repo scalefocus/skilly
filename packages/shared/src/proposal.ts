@@ -7,6 +7,13 @@
 // `revise` (§8) is the one non-transitioning action: in `proposed`/`under_review` the proposer
 // may update the proposal in place (new revision, same state).
 //
+// A MOVE proposal (§70.3 — a new version that moves the skill to another namespace) has one more
+// state: the owner's `accept` lands in `awaiting_destination` (no version yet), and the
+// destination's `accept` publishes. From `awaiting_destination` the destination may request
+// changes or reject; the proposer's `revise` there returns the proposal to `under_review` (any new
+// revision clears the owner's approval). The caller computes `isReviewer` for the namespace whose
+// reviewers act at the current stage (`actingReviewNamespaceId`, namespace-move.ts).
+//
 // Terminal states: accepted, rejected. Acceptance materializes a SkillVersion (done by
 // the caller; this module only governs legality + who may act).
 import type { ProposalState } from "./types.js";
@@ -25,13 +32,21 @@ interface Rule {
 
 export const TRANSITIONS: Record<ProposalAction, Rule> = {
   start_review: { from: ["proposed", "changes_requested"], to: "under_review", actor: "reviewer" },
-  request_changes: { from: ["under_review"], to: "changes_requested", actor: "reviewer" },
+  request_changes: { from: ["under_review", "awaiting_destination"], to: "changes_requested", actor: "reviewer" },
   resubmit: { from: ["changes_requested"], to: "under_review", actor: "proposer" },
   // Proposer mid-review edit (§8): a new revision in place — no state change, review continues.
-  revise: { from: ["proposed", "under_review"], to: "same", actor: "proposer" },
-  accept: { from: ["under_review"], to: "accepted", actor: "reviewer" },
-  reject: { from: ["proposed", "under_review", "changes_requested"], to: "rejected", actor: "reviewer" },
+  // From `awaiting_destination` it returns the proposal to the owner stage (§70.3, see nextState).
+  revise: { from: ["proposed", "under_review", "awaiting_destination"], to: "same", actor: "proposer" },
+  // A move's owner-stage accept lands in `awaiting_destination` instead (§70.3, see nextState).
+  accept: { from: ["under_review", "awaiting_destination"], to: "accepted", actor: "reviewer" },
+  reject: { from: ["proposed", "under_review", "changes_requested", "awaiting_destination"], to: "rejected", actor: "reviewer" },
 };
+
+/** Context the move-aware transitions need (§70.3). */
+export interface TransitionContext {
+  /** The proposal's current revision moves the skill to another namespace. */
+  move?: boolean;
+}
 
 export const TERMINAL_STATES: ProposalState[] = ["accepted", "rejected"];
 
@@ -56,9 +71,13 @@ export function isTerminal(state: ProposalState): boolean {
 }
 
 /** The next state for an action from a given state, or null if the transition is illegal. */
-export function nextState(action: ProposalAction, from: ProposalState): ProposalState | null {
+export function nextState(action: ProposalAction, from: ProposalState, ctx: TransitionContext = {}): ProposalState | null {
   const rule = TRANSITIONS[action];
   if (!rule.from.includes(from)) return null;
+  // §70.3: a proposer's revise at the destination stage clears the owner approval.
+  if (action === "revise" && from === "awaiting_destination") return "under_review";
+  // §70.3: the owner's accept of a move publishes nothing; the destination accepts next.
+  if (action === "accept" && from === "under_review" && ctx.move) return "awaiting_destination";
   return rule.to === "same" ? from : rule.to;
 }
 
@@ -77,11 +96,11 @@ export type PerformResult =
  * Validate that `action` is legal from `from` AND that the caller is permitted to perform
  * it. Acceptance/rejection require a reviewer; resubmission requires the submitter.
  */
-export function canPerform(action: ProposalAction, from: ProposalState, caps: ActorCaps): PerformResult {
+export function canPerform(action: ProposalAction, from: ProposalState, caps: ActorCaps, ctx: TransitionContext = {}): PerformResult {
   if (isTerminal(from)) return { ok: false, reason: `proposal is in terminal state '${from}'` };
 
   const rule = TRANSITIONS[action];
-  const to = nextState(action, from);
+  const to = nextState(action, from, ctx);
   if (!to) return { ok: false, reason: `cannot '${action}' from '${from}'` };
 
   if (rule.actor === "reviewer" && !caps.isReviewer) {

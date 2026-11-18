@@ -8,6 +8,7 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { canManageMaintainers } from "../../../../../../lib/maintainers";
 import { listGrants, isExplicitMaintainer } from "../../../../../../lib/grants";
 import { canShareSkill, canUnshareSkill, isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ ns: string; sl
   const access = await resolveUserAccess(oid);
   if (!access.userId) return Response.json({ error: "unknown user" }, { status: 403 });
 
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
   const visible = skill.status === "archived" ? await canManageMaintainers(access, skill, access.userId) : isSkillVisible(access, skill);

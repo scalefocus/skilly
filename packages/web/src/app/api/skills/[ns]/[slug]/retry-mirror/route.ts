@@ -9,6 +9,7 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { pool } from "../../../../../../lib/db";
 import { appendAudit } from "../../../../../../lib/audit";
 import { withSystemLog } from "../../../../../../lib/apiLog";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/retry-mirror", async 
   // Global (platform) admin only — this re-arms background work and is a governance action.
   if (!access.isPlatformAdmin) return Response.json({ error: "platform admin required" }, { status: 403 });
 
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
 

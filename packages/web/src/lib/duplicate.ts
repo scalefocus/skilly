@@ -14,7 +14,7 @@
 // same-slug pointer hidden from the submitter, and the hosted identity catches identical content
 // under a DIFFERENT slug.
 import type { Pool, PoolClient } from "pg";
-import { normalizeOriginUrl, normalizeSubdir, skillVisibilityWhere, findSlugMatches as findSlugMatchesShared, slugExistsMessage, SLUG_EXISTS_CODE, type EffectiveAccess, type SlugMatch, type SlugMatchView } from "@skilly/shared";
+import { normalizeOriginUrl, normalizeSubdir, skillVisibilityWhere, findSlugMatches as findSlugMatchesShared, slugExistsMessage, slugReservedMessage, SLUG_EXISTS_CODE, SLUG_RESERVED_CODE, type EffectiveAccess, type SlugMatch, type SlugMatchView } from "@skilly/shared";
 import { pool } from "./db";
 
 /**
@@ -50,6 +50,14 @@ export async function newSkillSlugClash(
   const sameNs = (await db.query(`select 1 from skills where namespace_id = $1 and lower(slug) = lower($2)`, [namespaceId, slug])).rowCount;
   if (sameNs) {
     return Response.json({ error: `a skill named '${slug}' already exists in this namespace — propose a new version of it instead` }, { status: 409 });
+  }
+  // §70.6: an alias — a skill that moved OUT of this namespace — reserves its old slug here. A
+  // submitter who can see that skill was already redirected above (the slug match); anyone else
+  // gets a refusal that names no skill.
+  const reserved = (await db.query(`select 1 from skill_path_aliases where namespace_id = $1 and slug = lower($2)`, [namespaceId, slug])).rowCount;
+  if (reserved) {
+    const ns = (await db.query<{ slug: string }>(`select slug from namespaces where id = $1`, [namespaceId])).rows[0]?.slug ?? "this namespace";
+    return Response.json({ error: slugReservedMessage(ns, slug), code: SLUG_RESERVED_CODE }, { status: 409 });
   }
   return null;
 }

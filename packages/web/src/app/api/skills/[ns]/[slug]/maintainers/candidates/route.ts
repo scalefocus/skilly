@@ -7,6 +7,7 @@ import { resolveUserAccess } from "../../../../../../../lib/access";
 import { findSkill } from "../../../../../../../lib/catalog";
 import { canManageMaintainers, listCandidates } from "../../../../../../../lib/maintainers";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
   const access = await resolveUserAccess(oid);
   if (!access.userId) return Response.json({ error: "unknown user" }, { status: 403 });
 
-  const skill = await findSkill((await ctx.params).ns, (await ctx.params).slug);
+  const skill = await findSkill((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if (!skill || skill.status === "archived") return Response.json({ error: "not found" }, { status: 404 });
   if (!isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });

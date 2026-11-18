@@ -22,7 +22,7 @@ export const PREREVIEW_PROPOSAL_DAILY_CAP = 10;
 /** Attempts per run, and their spacing (§46.5). */
 export const PREREVIEW_MAX_ATTEMPTS = 3;
 export const PREREVIEW_RETRY_INTERVAL = "5 minutes";
-export const PREREVIEW_OPEN_STATES = ["proposed", "under_review", "changes_requested"] as const;
+export const PREREVIEW_OPEN_STATES = ["proposed", "under_review", "changes_requested", "awaiting_destination"] as const;
 
 /** Where a run's bytes come from. Never credentials. */
 export type PrereviewSource =

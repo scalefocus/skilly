@@ -5,13 +5,14 @@ import { currentAccess } from "../../../../../../../../lib/guard";
 import { withSystemLog } from "../../../../../../../../lib/apiLog";
 import { loadDraftContext, assembleDraft, parseAssembleChanges } from "../../../../../../../../lib/qualityDraft";
 import { enforceRateLimit } from "../../../../../../../../lib/ratelimit";
+import { canonicalSkillParams } from "../../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
 export const POST = withSystemLog("/api/skills/[ns]/[slug]/quality/draft/assemble", async function POST(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
   const access = await currentAccess();
   if (!access?.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const r = await loadDraftContext(access, ns, slug);
   if (!r.ok) return Response.json({ error: r.status === 409 ? "ai_draft_unavailable" : r.error, reason: r.reason ?? null, message: r.error }, { status: r.status });
   // Shares the uploads bucket: this is an upload.

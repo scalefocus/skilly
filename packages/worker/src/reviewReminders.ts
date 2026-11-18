@@ -20,7 +20,15 @@ import { M } from "./metrics.js";
 
 export const REVIEW_REMINDER_INTERVAL_MS = 15 * 60_000;
 
-const OPEN = `('proposed','under_review','changes_requested')`;
+const OPEN = `('proposed','under_review','changes_requested','awaiting_destination')`;
+/** The reviewer-turn states (§65): the owner's review, and the destination's for a move (§70.3). */
+const REVIEWER_TURN = `('proposed','under_review','awaiting_destination')`;
+/**
+ * §70.3: the namespace whose reviewers act on the proposal now — the DESTINATION while a move waits
+ * for it, else the owner. Its admins are the reminder / escalation / eligibility audience.
+ */
+const ACTING_NS = `(case when p.state = 'awaiting_destination' and p.destination_namespace_id is not null
+                         then p.destination_namespace_id else p.target_namespace_id end)`;
 const GLOBAL_SLUG = "global";
 const boot = (): string | null => process.env.SKILLY_BOOTSTRAP_ADMIN_GROUP?.trim() || null;
 
@@ -33,6 +41,7 @@ export interface ReviewReminderResult {
 
 interface DueRow {
   id: string;
+  /** The ACTING review namespace (§70.3 — the destination while a move waits for it). */
   target_namespace_id: string;
   namespace_slug: string;
   review_target_days: number | null;
@@ -44,12 +53,12 @@ interface DueRow {
 }
 
 const DUE_SELECT = `
-  select p.id, p.target_namespace_id, n.slug as namespace_slug, n.review_target_days, p.submitted_by,
+  select p.id, ${ACTING_NS} as target_namespace_id, n.slug as namespace_slug, n.review_target_days, p.submitted_by,
          p.assignee_id, p.proposed_semver, p.state,
          coalesce(s.slug, (select payload->'metadata'->>'skillSlug' from proposal_revisions
                             where proposal_id = p.id order by revision_no desc limit 1)) as skill_slug
     from proposals p
-    join namespaces n on n.id = p.target_namespace_id
+    join namespaces n on n.id = ${ACTING_NS}
     left join skills s on s.id = p.target_skill_id`;
 
 async function ids(db: Pool | PoolClient, sql: string, params: unknown[]): Promise<string[]> {
@@ -100,7 +109,7 @@ async function clearIneligible(pool: Pool): Promise<number> {
     `${DUE_SELECT}
       where p.assignee_id is not null and p.state in ${OPEN}
         and (p.assignee_id = p.submitted_by
-             or not exists (select 1 from (${reviewerIdsSql({ who: "all", ns: "p.target_namespace_id", boot: "$1" })}) r
+             or not exists (select 1 from (${reviewerIdsSql({ who: "all", ns: ACTING_NS, boot: "$1" })}) r
                              where r.id = p.assignee_id))`,
     [boot()],
   );
@@ -120,7 +129,7 @@ async function clearIneligible(pool: Pool): Promise<number> {
            values (null, 'proposal.unassigned', 'proposal', $1, $2, $3::jsonb, $4::jsonb, 'worker')`,
           [r.id, r.target_namespace_id, JSON.stringify({ assigneeId: r.assignee_id }), JSON.stringify({ from: r.assignee_id, reason: "ineligible" })],
         );
-        if (r.state === "proposed" || r.state === "under_review") {
+        if (r.state === "proposed" || r.state === "under_review" || r.state === "awaiting_destination") {
           await client.query(
             `insert into notifications (user_id, type, payload)
              select r.id, 'proposal.needs_review', $4::jsonb
@@ -206,14 +215,14 @@ export async function sweepReviewReminders(pool: Pool): Promise<ReviewReminderRe
 
   const overdue = await remindStep(
     pool,
-    `p.state in ('proposed','under_review') and p.turn_due_at is not null and p.turn_due_at <= now() and p.turn_reminded_at is null`,
+    `p.state in ${REVIEWER_TURN} and p.turn_due_at is not null and p.turn_due_at <= now() and p.turn_reminded_at is null`,
     "turn_reminded_at",
     REVIEW_OVERDUE,
     (r) => overdueRecipients(pool, r),
   );
   const escalated = await remindStep(
     pool,
-    `p.state in ('proposed','under_review') and p.turn_escalate_at is not null and p.turn_escalate_at <= now() and p.turn_escalated_at is null`,
+    `p.state in ${REVIEWER_TURN} and p.turn_escalate_at is not null and p.turn_escalate_at <= now() and p.turn_escalated_at is null`,
     "turn_escalated_at",
     REVIEW_ESCALATED,
     (r) => escalationRecipients(pool, r),

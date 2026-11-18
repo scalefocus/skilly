@@ -7,13 +7,14 @@ import { withSystemLog } from "../../../../../../../lib/apiLog";
 import { enforceRateLimit } from "../../../../../../../lib/ratelimit";
 import { rerunVersionPrereview } from "../../../../../../../lib/aiPrereview";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
 export const POST = withSystemLog("/api/skills/:ns/:slug/ai-prereview/rerun", async function POST(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
   const access = await currentAccess();
   if (!access?.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill || skill.status !== "active" || !isSkillVisible(access, skill)) return Response.json({ error: "not found" }, { status: 404 });
   const limited = enforceRateLimit("ai-prereview-rerun", access.userId, 5);

@@ -8,7 +8,7 @@ import { useDateFmt } from "../../components/DateFormat";
 import { AssigneePicker, type AssignableReviewer } from "../../components/AssigneePicker";
 import { DuePill } from "../../components/DuePill";
 
-type ProposalState = "proposed" | "under_review" | "changes_requested" | "accepted" | "rejected";
+type ProposalState = "proposed" | "under_review" | "changes_requested" | "awaiting_destination" | "accepted" | "rejected";
 type Tab = "review" | "mine";
 
 interface ProposalRow {
@@ -29,6 +29,8 @@ interface ProposalRow {
   assignee?: { id: string; name: string } | null;
   /** §65.5: the reviewer turn's due instant while the namespace has a review target. */
   reviewDueAt?: string | null;
+  /** §70: the namespace a move proposal moves the skill to, else null. */
+  destinationNamespaceSlug?: string | null;
 }
 // Initial GET: the caller's own submissions (whole) + whether the review tab is shown.
 interface MetaResponse { mine: ProposalRow[]; canReview: boolean }
@@ -44,6 +46,7 @@ const STATE_TONE: Record<string, "ok" | "warn" | "danger" | "muted"> = {
   proposed: "muted",
   under_review: "warn",
   changes_requested: "warn",
+  awaiting_destination: "warn",
   accepted: "ok",
   rejected: "danger",
 };
@@ -53,6 +56,8 @@ const STATE_FILTERS: { value: ProposalState; label: string }[] = [
   { value: "proposed", label: "Proposed" },
   { value: "under_review", label: "Under review" },
   { value: "changes_requested", label: "Changes requested" },
+  // §70.3: a move the owner approved, waiting for the destination's reviewers.
+  { value: "awaiting_destination", label: "Awaiting destination" },
   { value: "accepted", label: "Accepted" },
   { value: "rejected", label: "Rejected" },
 ];
@@ -92,7 +97,7 @@ function ProposalsInner() {
   // NO filter selected (all your submissions, every state).
   const [states, setStates] = useState<Set<ProposalState>>(new Set());
   const defaultStates = (t: Tab): Set<ProposalState> =>
-    new Set<ProposalState>(t === "review" ? ["proposed", "under_review", "changes_requested"] : []);
+    new Set<ProposalState>(t === "review" ? ["proposed", "under_review", "changes_requested", "awaiting_destination"] : []);
   useEffect(() => {
     if (!meta || tab !== null) return;
     const t: Tab = tabParam === "mine" || !meta.canReview ? "mine" : "review";
@@ -159,7 +164,7 @@ function ProposalsInner() {
   const [assignErr, setAssignErr] = useState<string | null>(null);
   const assignAll = useCallback(async (r: AssignableReviewer) => {
     if (!importId) return;
-    const open = reviewItems.filter((p) => p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested");
+    const open = reviewItems.filter((p) => p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested" || p.state === "awaiting_destination");
     const others = open.filter((p) => p.assignee && p.assignee.id !== r.id).length;
     if (!window.confirm(
       `Assign ${open.length} open proposal${open.length === 1 ? "" : "s"} from ${reviewItems[0]?.importRepo ?? "this import"} to ${r.name}?` +
@@ -271,7 +276,7 @@ function ProposalsInner() {
     if (overdueFilter) sp.set("overdue", "1");
     router.replace(`/proposals?${sp.toString()}`);
   };
-  const firstImportOpen = importId ? reviewItems.find((p) => p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested") : undefined;
+  const firstImportOpen = importId ? reviewItems.find((p) => p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested" || p.state === "awaiting_destination") : undefined;
 
   return (
     <div>
@@ -407,6 +412,8 @@ function ProposalsInner() {
                   <div className="ttl">{p.title ?? p.skillSlug ?? "Untitled skill"}</div>
                   <div className="sub mono" style={{ fontSize: 11 }}>
                     @{p.namespaceSlug}{p.skillSlug ? `/${p.skillSlug}` : ""} · {p.isNewSkill ? "new skill" : "new version"} · v{p.proposedSemver}
+                    {/* §70: a move proposal names where the skill goes. */}
+                    {p.destinationNamespaceSlug && <> · <span data-testid="proposal-row-move">moves to @{p.destinationNamespaceSlug}</span></>}
                   </div>
                   <div className="sub" style={{ fontSize: 11.5, color: "var(--faint)" }}>
                     {tab === "mine" ? "submitted" : `proposed by ${p.submittedBy}`} · <span className="mono">{fmt.dateTime(p.createdAt)}</span>
@@ -424,13 +431,13 @@ function ProposalsInner() {
                       >Import · {p.importRepo ?? "repository"}</button></>
                     )}
                     {/* §65.5 the assignee (or Unassigned) while the proposal is open. */}
-                    {(p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested") && (
+                    {(p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested" || p.state === "awaiting_destination") && (
                       <> · <span data-testid="proposal-row-assignee">{p.assignee ? `reviewer ${p.assignee.name}` : "unassigned"}</span></>
                     )}
                   </div>
                 </div>
                 {p.reviewDueAt && <DuePill dueAt={p.reviewDueAt} testId="proposal-row-due" />}
-                <Pill tone={STATE_TONE[p.state]}>{p.state.replace("_", " ")}</Pill>
+                <Pill tone={STATE_TONE[p.state]}>{p.state.replace(/_/g, " ")}</Pill>
                 {/* Reviewer-only housekeeping delete. Hidden for accepted (locked server-side —
                     provenance of a live version). Sibling button: isolate its click from the row link. */}
                 {tab === "review" && p.state !== "accepted" && (
