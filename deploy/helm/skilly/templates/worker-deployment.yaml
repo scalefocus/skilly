@@ -165,6 +165,14 @@ spec:
                   name: {{ include "skilly.secretName" . }}
                   key: INSTALL_TOKEN_ENC_KEY
                   optional: true # pre-0095 operator-managed Secrets lack this key
+            # §73.9 the platform signing key (worker only). Optional at the Secret level so a missing
+            # key surfaces as the worker's own clear refusal to start, not a config error.
+            - name: SKILLY_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "skilly.secretName" . }}
+                  key: SKILLY_SIGNING_KEY
+                  optional: true
           readinessProbe:
             httpGet:
               path: /readyz

@@ -115,6 +115,7 @@ export const PARALLEL: readonly string[] = [
   "overview.spec.ts", // read-only: compares the home page with the responses it received
   "quick-start.spec.ts",
   "repo-import.spec.ts", // write-free: the scan, submit and AI draft endpoints are route stubs
+  "signing.spec.ts", // read-only: the mismatch report POST is a route stub (a real one notifies every admin)
   "skill-detail.spec.ts",
   "slug-match-redirect.spec.ts",
   "smoke.spec.ts",

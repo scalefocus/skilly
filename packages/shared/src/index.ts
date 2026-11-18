@@ -11,6 +11,8 @@ export * from "./proposal.js";
 export * from "./validate.js";
 export * from "./linediff.js";
 export * from "./content-digest.js";
+export * from "./attestation.js";
+export * from "./attestation-db.js";
 export * from "./scan.js";
 export * from "./content-risk.js";
 export * from "./content-risk-status.js";

@@ -8,48 +8,37 @@ import { resolveLatest, validateBundle, versionTag, bundleContentCap, fanOutToFo
 import { getMaxBundleBytes } from "../settings.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
 import { repoPath } from "./repoStore.js";
-import { synthesizeVersion, listTags } from "./synth.js";
-import { ensureMain, loadDeprecationState } from "./mainRef.js";
-import { extractBundle } from "./bundle.js";
+import { synthesizeVersion, listTags, readCommitFiles } from "./synth.js";
+import { ensureMain, loadDeprecationState, readRefFs } from "./mainRef.js";
 import type { SkillFile } from "./synth.js";
 import { fillSearchText } from "../searchIndex.js";
 import { verifyArtifactIntegrity } from "./integrity.js";
-
-/**
- * Ensure SKILL.md frontmatter contains `name: <skillSlug>`.
- *
- * Claude Code skills only carry `description` in frontmatter — `name` comes from the directory
- * name at install time. The vercel-labs/skills CLI (and our own validateBundle) require an
- * explicit `name` field that matches the slug, so we inject it here before validation and
- * synthesis rather than rejecting every skill that omits it.
- */
-function ensureSkillName(files: SkillFile[], skillSlug: string): SkillFile[] {
-  const dec = new TextDecoder();
-  const enc = new TextEncoder();
-  return files.map((f) => {
-    if (f.path !== "SKILL.md") return f;
-    const content = dec.decode(f.bytes);
-    const fmMatch = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
-    if (!fmMatch) {
-      // No frontmatter at all: prepend a minimal one.
-      return { ...f, bytes: enc.encode(`---\nname: ${skillSlug}\n---\n${content}`) };
-    }
-    const fmBody = fmMatch[1]!;
-    const correctNameRe = new RegExp(`^name\\s*:\\s*${skillSlug}\\s*$`, "m");
-    if (correctNameRe.test(fmBody)) return f; // already correct
-    const hasName = /^name\s*:/m.test(fmBody);
-    const newFmBody = hasName
-      ? fmBody.replace(/^name\s*:.*$/m, `name: ${skillSlug}`)
-      : `name: ${skillSlug}\n${fmBody}`;
-    const before = content.slice(0, fmMatch.index);
-    const after = content.slice(fmMatch.index + fmMatch[0].length);
-    return { ...f, bytes: enc.encode(`${before}---\n${newFmBody}\n---${after}`) };
-  });
-}
+import { servedFilesFromArtifact } from "./servedFiles.js";
+import type { Signer } from "../signing/key.js";
+import { deprecationHintSigner, insertAttestation, loadVersionIdentity } from "../signing/attest.js";
 
 export interface PublishDeps {
   store: ArtifactStore;
   repoRoot: string;
+  /** The platform signer (§73): every published version is signed before it is installable. */
+  signer: Signer;
+}
+
+/** In-process memo so one unsignable version is recorded once per worker run, not every sweep. */
+const signingFailures = new Set<string>();
+
+/** §73.6: signing or the statement insert failed — the version stays unpublished and retries. */
+async function recordSigningFailure(pool: Pool, row: { id: string; semver: string; ns_slug: string; skill_slug: string }, err: unknown): Promise<void> {
+  console.error(JSON.stringify({ level: "error", msg: "signing failed; version left unpublished", versionId: row.id, err: String(err) }));
+  if (signingFailures.has(row.id)) return;
+  signingFailures.add(row.id);
+  await pool
+    .query(
+      `insert into system_event (status, method, route, path, user_id, error_code, message, source)
+       values (500, 'JOB', 'worker:publish', $1, null, 'signing_failed', $2, 'worker')`,
+      [`/${row.ns_slug}/${row.skill_slug}`.slice(0, 500), `could not sign @${row.ns_slug}/${row.skill_slug} v${row.semver}; it stays unpublished and is retried`.slice(0, 300)],
+    )
+    .catch(() => {});
 }
 
 // Cap how many versions a single sweep processes — a backlog drains over successive sweeps
@@ -78,6 +67,8 @@ interface PendingPublishRow extends PendingRow {
 }
 
 export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Promise<number> {
+  // §73.9: a revoked (or unregistered) key signs nothing, so nothing is published (fail closed).
+  if (!(await deps.signer.usable())) return 0;
   const { rows } = await pool.query<PendingPublishRow>(
     `select sv.id, sv.skill_id, sv.semver, sv.artifact_object_key, sv.artifact_sha256,
             n.slug as ns_slug, s.slug as skill_slug,
@@ -106,13 +97,14 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
     const bareRepoPath = repoPath(deps.repoRoot, row.ns_slug, row.skill_slug);
 
     let files: SkillFile[] | null = null;
+    let recovered = false;
     try {
       const targz = await deps.store.get(row.artifact_object_key);
       // §49.12: the bytes must still be the bytes the version recorded; a mismatch stays unpublished.
       if (!(await verifyArtifactIntegrity(pool, { versionId: row.id, skillId: row.skill_id, semver: row.semver, artifactKey: row.artifact_object_key, expectedSha256: row.artifact_sha256, namespaceId: row.namespace_id, nsSlug: row.ns_slug, skillSlug: row.skill_slug }, targz, "worker:publish"))) continue;
       // Inject `name: <slug>` into SKILL.md frontmatter if missing — Claude Code skills only carry
       // `description`, but the vercel-labs/skills CLI (and our own validateBundle) require `name`.
-      files = ensureSkillName(await extractBundle(targz, cap), row.skill_slug);
+      files = await servedFilesFromArtifact(targz, row.skill_slug, cap);
 
       // Security scanning happens at INGEST (hosted upload / pointer mirror) so reviewers
       // see findings pre-accept. Here we only re-run BLOCKING validation as a safety net —
@@ -125,12 +117,6 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
       }
 
       await synthesizeVersion({ bareRepoPath, semver: row.semver, files, isLatestStable });
-      // §45.4: a deprecated skill's `main` carries the deprecation-hint commit on top of the new
-      // latest-stable tag — the tag itself stays byte-identical to the artifact.
-      if (isLatestStable) {
-        const state = await loadDeprecationState(pool, row.skill_id);
-        if (state.deprecated) await ensureMain(bareRepoPath, versionTag(row.semver), state);
-      }
     } catch (err) {
       // If the tag already exists (e.g. a prior crash after synth but before flag flip),
       // treat as published and move on; otherwise re-throw to retry next sweep.
@@ -138,15 +124,52 @@ export async function publishPendingVersions(pool: Pool, deps: PublishDeps): Pro
         console.error(JSON.stringify({ level: "error", msg: "publish failed", versionId: row.id, err: String(err) }));
         continue;
       }
+      recovered = true;
     }
 
-    // §35.6: is this the skill's FIRST published version (follow.new_skill) or a later one
-    // (follow.new_version)? Read before the flag flips so this version doesn't count itself.
-    const { rows: prior } = await pool.query<{ n: number }>(
-      `select count(*)::int as n from skill_versions where skill_id = $1 and git_published and id <> $2`,
-      [row.skill_id, row.id],
-    );
-    await pool.query(`update skill_versions set git_published = true where id = $1`, [row.id]);
+    // §73.6 fail closed: the version's signed statement is inserted in the SAME transaction that
+    // flips git_published, so nothing becomes installable unsigned. The statement describes what
+    // the tag serves: the files just written, or — when the tag already existed — the tag's own.
+    let prior: { n: number }[] = [];
+    const client = await pool.connect();
+    try {
+      const tagCommit = await readRefFs(bareRepoPath, `refs/tags/${versionTag(row.semver)}`);
+      if (!tagCommit) throw new Error("tag missing after synthesis");
+      const signFiles = recovered || !files ? await readCommitFiles(bareRepoPath, tagCommit) : files;
+      const identity = await loadVersionIdentity(client, row.id);
+      if (!identity) throw new Error("version vanished");
+      await client.query("begin");
+      await insertAttestation(client, deps.signer, { identity, files: signFiles, variant: null, kind: "publish", tagCommit });
+      // §35.6: is this the skill's FIRST published version (follow.new_skill) or a later one
+      // (follow.new_version)? Read before the flag flips so this version doesn't count itself.
+      ({ rows: prior } = await client.query<{ n: number }>(
+        `select count(*)::int as n from skill_versions where skill_id = $1 and git_published and id <> $2`,
+        [row.skill_id, row.id],
+      ));
+      await client.query(`update skill_versions set git_published = true where id = $1`, [row.id]);
+      await client.query("commit");
+    } catch (err) {
+      await client.query("rollback").catch(() => {});
+      await recordSigningFailure(pool, row, err);
+      continue;
+    } finally {
+      client.release();
+    }
+
+    // §45.4: a deprecated skill's `main` carries the deprecation-hint commit on top of the new
+    // latest-stable tag — the tag itself stays byte-identical to the artifact. The hint commit is
+    // signed as a variant before `main` moves (§73.5); a failure is retried by the deprecation sync.
+    if (isLatestStable) {
+      try {
+        const state = await loadDeprecationState(pool, row.skill_id);
+        if (state.deprecated) {
+          await ensureMain(bareRepoPath, versionTag(row.semver), state, deprecationHintSigner(pool, deps.signer, { skillId: row.skill_id, semver: row.semver, bareRepoPath, state }));
+        }
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "deprecation main after publish failed (the sync retries)", versionId: row.id, err: String(err) }));
+      }
+    }
+
     // §34.3: the bytes are in hand, so index the SKILL.md text now (write-once, advisory).
     if (files) await fillSearchText(pool, row.id, files);
 
@@ -305,7 +328,9 @@ export async function reprovisionMissingRepos(pool: Pool, deps: PublishDeps): Pr
           unhealable.add(row.id); // tampered bytes are never re-synthesized; a human intervenes (§49.12)
           continue;
         }
-        const files = await extractBundle(bytes, cap);
+        // The same served files the publish sweep tagged (`name` ensured), so the re-synthesized tag
+        // is byte-identical to the original and still matches its signed statement (§73).
+        const files = await servedFilesFromArtifact(bytes, row.skill_slug, cap);
         const validation = validateBundle(files, { skillSlug: row.skill_slug, maxBytes: cap });
         if (!validation.ok) {
           unhealable.add(row.id); // a malformed stored bundle won't fix itself; stop retrying
@@ -331,7 +356,9 @@ export async function reprovisionMissingRepos(pool: Pool, deps: PublishDeps): Pr
     //    for a deprecated skill (§45.4) — never the bare tag commit for a deprecated one.
     if (latestStable) {
       try {
-        const out = await ensureMain(bareRepoPath, versionTag(latestStable), await loadDeprecationState(pool, first.skill_id));
+        const state = await loadDeprecationState(pool, first.skill_id);
+        const sign = state.deprecated ? deprecationHintSigner(pool, deps.signer, { skillId: first.skill_id, semver: latestStable, bareRepoPath, state }) : undefined;
+        const out = await ensureMain(bareRepoPath, versionTag(latestStable), state, sign);
         if (out === "updated") {
           healed++;
           console.log(JSON.stringify({ level: "warn", msg: "repointed main at its expected commit (self-heal)", ns: first.ns_slug, slug: first.skill_slug, semver: latestStable }));

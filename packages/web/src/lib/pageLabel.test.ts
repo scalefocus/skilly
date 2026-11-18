@@ -34,6 +34,9 @@ test("resolveStaticPageLabel: longest-prefix match doesn't get shadowed", () => 
   // The Marketplaces page nests under /catalog in the URL but is its own page (§30.6 Page 3).
   assert.equal(resolveStaticPageLabel("/catalog/marketplaces"), "Marketplaces");
   assert.equal(resolveStaticPageLabel("/catalog"), "Catalog");
+  // §73.8 Administration → Signing is its own page, not "Administration"; §73.7 /verify has its own label.
+  assert.equal(resolveStaticPageLabel("/admin/signing"), "Signing");
+  assert.equal(resolveStaticPageLabel("/verify"), "Verify files");
 });
 
 test("resolveStaticPageLabel: unrecognized routes resolve to null (nothing to beacon)", () => {

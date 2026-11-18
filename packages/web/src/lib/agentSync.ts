@@ -83,6 +83,13 @@ export interface AgentSkill {
   /** When `version` was published (UTC ISO). */
   updatedAt: string;
   deprecation: DeprecationLite | null;
+  /**
+   * §73: the installer-compatible hash from that version's own signed statement — sync clones the
+   * tag, which never carries a rewrite, so the cloned folder must match it. Null while pending.
+   */
+  computedHash: string | null;
+  /** `<gitUrl>/skilly/statement/<ref>` — no credentials; fetch it with the agent key as basic auth. */
+  statementUrl: string;
 }
 
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -100,7 +107,7 @@ export async function listAgentSkills(access: EffectiveAccess, registryBaseUrl: 
   const { rows } = await pool.query<{
     id: string; ns_slug: string; slug: string; title: string; description: string;
     deprecated_at: string | null; deprecation_note: string | null; successor: SuccessorJson | null;
-    versions: { semver: string; createdAt: string }[];
+    versions: { semver: string; createdAt: string; computedHash: string | null }[];
   }>(
     `select s.id, n.slug as ns_slug, s.slug, s.title, s.description,
             s.deprecated_at, s.deprecation_note, ${successorJsonSql("s")} as successor,
@@ -108,7 +115,13 @@ export async function listAgentSkills(access: EffectiveAccess, registryBaseUrl: 
        from skills s
        join namespaces n on n.id = s.namespace_id
        join lateral (
-         select jsonb_agg(jsonb_build_object('semver', sv.semver, 'createdAt', sv.created_at)) as versions
+         select jsonb_agg(jsonb_build_object('semver', sv.semver, 'createdAt', sv.created_at,
+                  -- §73: the version's current statement (a non-revoked key first, then newest).
+                  'computedHash', (select a.computed_hash
+                                     from skill_version_attestations a join signing_keys k on k.key_id = a.key_id
+                                    where a.skill_version_id = sv.id and a.variant_key = ''
+                                    order by (k.revoked_at is null) desc, a.created_at desc
+                                    limit 1))) as versions
            from skill_versions sv
           where sv.skill_id = s.id and sv.status = 'active' and sv.git_published and not sv.is_prerelease
        ) v on v.versions is not null
@@ -121,7 +134,9 @@ export async function listAgentSkills(access: EffectiveAccess, registryBaseUrl: 
     // The same resolution `main` uses (invariant #2): highest stable among the servable versions.
     const version = resolveLatest(r.versions.map((x) => x.semver));
     if (!version) continue;
-    const published = r.versions.find((x) => x.semver === version)!.createdAt;
+    const picked = r.versions.find((x) => x.semver === version)!;
+    const published = picked.createdAt;
+    const gitUrl = buildRepoUrl({ registryBaseUrl, namespaceSlug: r.ns_slug, skillSlug: r.slug });
     out.push({
       id: r.id,
       namespace: r.ns_slug,
@@ -130,9 +145,11 @@ export async function listAgentSkills(access: EffectiveAccess, registryBaseUrl: 
       description: r.description,
       version,
       ref: versionTag(version),
-      gitUrl: buildRepoUrl({ registryBaseUrl, namespaceSlug: r.ns_slug, skillSlug: r.slug }),
+      gitUrl,
       updatedAt: new Date(published).toISOString(),
       deprecation: deprecationLite(access, { deprecatedAt: r.deprecated_at, note: r.deprecation_note, successor: r.successor }),
+      computedHash: picked.computedHash ?? null,
+      statementUrl: `${gitUrl}/skilly/statement/${versionTag(version)}`,
     });
   }
   out.sort((a, b) => byCodeUnit(a.namespace, b.namespace) || byCodeUnit(a.slug, b.slug));

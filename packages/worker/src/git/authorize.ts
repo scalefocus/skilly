@@ -173,6 +173,20 @@ export function parseGitPath(pathname: string, query: URLSearchParams): ParsedGi
   return build(namespaceSlug, skillSlug, operation, isServiceRpc);
 }
 
+/**
+ * `/<ns>/<slug>.git/skilly/statement/v<semver>` — a version's signed statements over the git host
+ * (SKILLY_SPEC.md §73.10), authorized exactly like a clone of that skill. Never a marketplace path.
+ * Returns the clone-shaped request to authorize plus the semver, or null for any other path.
+ */
+export function parseStatementPath(pathname: string): { parsed: ParsedGitRequest; semver: string } | null {
+  const m = /^\/([^/]+)\/([^/]+)\.git\/skilly\/statement\/v([0-9A-Za-z.+-]{1,128})$/.exec(pathname);
+  if (!m || m[1]!.startsWith("_")) return null;
+  return {
+    parsed: { namespaceSlug: m[1]!, skillSlug: m[2]!, marketplace: null, operation: "upload-pack", isServiceRpc: false },
+    semver: m[3]!,
+  };
+}
+
 /** Extract the token (password) from an HTTP Basic `Authorization` header. */
 export function tokenFromAuthHeader(header: string | undefined): string | undefined {
   if (!header?.startsWith("Basic ")) return undefined;

@@ -35,6 +35,9 @@ import { requestInstall, type ExistingInstall, type MintedInstall, type OnExisti
 import { installedHighlightHref } from "../../../../lib/installedFilter";
 import { HypeButton, HypedPill, HypeCount, HyperStrip, type HyperChip } from "../../../../components/Hype";
 import { UpstreamNotice, type UpstreamView } from "./UpstreamNotice";
+import { SignatureBadge, SignatureDetails } from "../../../../components/Signature";
+import { VerifyFilesDialog } from "../../../../components/VerifyFilesDialog";
+import type { VersionSignature } from "../../../../lib/verifyFiles";
 
 // recharts is heavy (d3) and owner-only — code-split it out of the route's initial bundle.
 // ssr:false since the chart measures the DOM; a skeleton holds its height while it loads.
@@ -54,7 +57,11 @@ const SERIES_RANGES: { key: SeriesRange; label: string }[] = [
 const toSeriesRange = (s: string): SeriesRange => (s === "7d" || s === "90d" || s === "all" ? s : "30d");
 interface SkillSeries { range: SeriesRange; bucket: "day" | "week" | "month"; points: { date: string; views: number; installs: number }[] }
 
-interface VersionView { semver: string; channel: "stable" | "beta"; status: "active" | "yanked" | "quarantined"; quarantine?: { rules: string[]; detectedAt: string } | null; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null; quality?: QualitySummaryView | null }
+interface VersionView {
+  semver: string; channel: "stable" | "beta"; status: "active" | "yanked" | "quarantined"; quarantine?: { rules: string[]; detectedAt: string } | null; createdAt: string; gitPublished: boolean; downloadExt: string; whatChanged: string | null; quality?: QualitySummaryView | null;
+  /** §73.8 the version's own signed statement (null = Signature pending). */
+  signature?: VersionSignature | null;
+}
 interface RatingView { avg: number; count: number; distribution: number[]; mine: number | null }
 interface MaintainerView { userId: string; displayName: string; email: string; avatar: string | null; source: "admin" | "explicit"; followable?: boolean }
 
@@ -101,12 +108,16 @@ function CollapsibleMarkdown({ source, collapsedHeight = 240 }: { source: string
  *  text, §8/§10 — NOT Markdown, so it's rendered escaped with newlines kept) and, below it, the
  *  auto-computed file changes vs this version's immediate PREDECESSOR (§10): the note is the
  *  author's claim, the file list is the mechanical truth. The changes are fetched only once the
- *  row is expanded (the component mounts then), so the page load pays nothing for them. */
-function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canManage, busy, onYank, onRelease, formattedDate, pointer }: {
-  v: VersionView; base: string; predecessor: string | null; downloadHref: string; downloadTitle: string; canManage: boolean; busy: boolean; onYank: () => void; onRelease: () => void; formattedDate: string; pointer: boolean;
+ *  row is expanded (the component mounts then), so the page load pays nothing for them.
+ *  §73.8: the row also carries the signature badge, a "signature" expander (the copyable
+ *  computedHash with its keyId, Download signed statement, the variants) and Verify files. */
+function VersionRow({ v, base, ns, slug, predecessor, downloadHref, downloadTitle, canManage, busy, onYank, onRelease, onVerify, formattedDate, pointer }: {
+  v: VersionView; base: string; ns: string; slug: string; predecessor: string | null; downloadHref: string; downloadTitle: string; canManage: boolean; busy: boolean; onYank: () => void; onRelease: () => void; onVerify: () => void; formattedDate: string; pointer: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [sigOpen, setSigOpen] = useState(false);
   const expandable = !!v.whatChanged || !!predecessor;
+  const sig = v.signature ?? null;
   return (
     <div id={`version-${v.semver}`} style={{ scrollMarginTop: 80 }}>
       <div className="row version-row">
@@ -124,15 +135,25 @@ function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canMana
           ) : v.status === "active" ? (
             <span className="muted mono" style={{ fontSize: 10.5 }} title="Quality check pending">⛨ pending</span>
           ) : null}
+          {/* §73.8 the signature badge; the backfill tooltip says what a backfill attests. */}
+          <SignatureBadge sig={sig} />
           {expandable && (
             <button type="button" className="btn-ghost mono" style={{ fontSize: 11, padding: "1px 6px" }} aria-expanded={open} onClick={() => setOpen((o) => !o)} title="What changed in this version">
               {open ? "▾" : "▸"} what changed
+            </button>
+          )}
+          {sig && (
+            <button type="button" className="btn-ghost mono" style={{ fontSize: 11, padding: "1px 6px" }} aria-expanded={sigOpen} onClick={() => setSigOpen((o) => !o)} title="The signed statement: computedHash, key and downloads" data-testid="version-signature-toggle">
+              {sigOpen ? "▾" : "▸"} signature
             </button>
           )}
         </div>
         <span className="grow" />
         <span className="muted mono version-date" style={{ fontSize: 12 }}>{formattedDate}</span>
         <div className="version-actions">
+          <button className="btn btn-sm" onClick={onVerify} aria-label={`Verify files against v${v.semver}`} title={`Verify files: check a folder or a bundle against v${v.semver}'s signed statement`} data-testid="version-verify">
+            verify
+          </button>
           {v.status === "active" && (
             <a className="btn btn-sm" href={downloadHref} title={downloadTitle}>↓ .{v.downloadExt}</a>
           )}
@@ -171,6 +192,11 @@ function VersionRow({ v, base, predecessor, downloadHref, downloadTitle, canMana
               />
             </div>
           )}
+        </div>
+      )}
+      {sigOpen && sig && (
+        <div style={{ padding: "8px 12px 12px", marginTop: 6, background: "var(--surface-2)", borderRadius: "var(--radius-sm)" }}>
+          <SignatureDetails ns={ns} slug={slug} semver={v.semver} sig={sig} />
         </div>
       )}
     </div>
@@ -243,6 +269,8 @@ export default function SkillDetail() {
   const [msg, setMsg] = useState<{ kind: "err" | "ok"; text: string } | null>(null);
   // §45 deprecate / edit-deprecation dialog.
   const [depOpen, setDepOpen] = useState(false);
+  // §73.8 Verify files: the version the dialog checks against (null = closed).
+  const [verifyFor, setVerifyFor] = useState<string | null>(null);
   const undeprecate = async () => {
     if (!window.confirm("Un-deprecate this skill? The marker, the sort penalty and the SKILL.md hint are removed; nobody is notified.")) return;
     setBusy(true); setMsg(null);
@@ -680,6 +708,17 @@ export default function SkillDetail() {
           onSaved={(text) => { setDepOpen(false); setMsg({ kind: "ok", text }); reload(); }}
         />
       )}
+      {verifyFor && (
+        // §73.8 checked against the skill's CURRENT address; a statement signed before a move says so.
+        <VerifyFilesDialog
+          ns={data.namespaceSlug}
+          slug={data.skillSlug}
+          semver={verifyFor}
+          title={data.meta?.title || data.skillSlug}
+          latest={data.latest}
+          onClose={() => setVerifyFor(null)}
+        />
+      )}
 
       <div className="card card-pad" style={{ marginTop: 24 }}>
         <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, marginBottom: 4 }}>Install</h2>
@@ -761,6 +800,25 @@ export default function SkillDetail() {
                     </div>
                   </>
                 )}
+                {(() => {
+                  // §73.8 one line, for the version the card targets (the picked one, else latest).
+                  const target = selVersion ?? data.latestInstallable;
+                  const tv = target ? data.versions.find((v) => v.semver === target) : null;
+                  return tv?.signature ? (
+                    <div style={{ marginTop: 12 }}>
+                      <button
+                        type="button"
+                        className="btn-ghost mono"
+                        style={{ fontSize: 12, padding: "1px 6px" }}
+                        onClick={() => setVerifyFor(tv.semver)}
+                        title={`After installing, check your copy against v${tv.semver}'s signed statement`}
+                        data-testid="install-verify-line"
+                      >
+                        ✓ Signed · verify after install
+                      </button>
+                    </div>
+                  ) : null;
+                })()}
                 {data.tryAvailable && (
                   // §61.2 Try follows Install: same card, same version picker; hidden (no ghost) otherwise.
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
@@ -902,6 +960,9 @@ export default function SkillDetail() {
               key={v.semver}
               v={v}
               base={base}
+              ns={data.namespaceSlug}
+              slug={data.skillSlug}
+              onVerify={() => setVerifyFor(v.semver)}
               // Baseline = the immediate predecessor among ALL versions — any channel, any status
               // (§10). The list is ordered by publish date, so semver order is resolved here.
               predecessor={resolvePredecessor(v.semver, data.versions.map((x) => x.semver))}

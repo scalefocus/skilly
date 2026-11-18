@@ -4,6 +4,7 @@
 import { Router } from "express";
 import {
   parseGitPath,
+  parseStatementPath,
   tokenFromAuthHeader,
   authorizeGitRequest,
   type GitAuthDeps,
@@ -12,7 +13,8 @@ import {
 } from "./authorize.js";
 import type { GitRefusalCode } from "./authorize.js";
 import type { Request } from "express";
-import type { MarketplaceScope } from "@skilly/shared";
+import type { MarketplaceScope, VersionStatements } from "@skilly/shared";
+import { resolveSigningRegistry } from "@skilly/shared";
 import { pickServedRepo, rewriteRepoPathInfo, defaultRepoRoot, type RepoAddress } from "./repoStore.js";
 import { marketplaceRepoDir, marketplaceHead, changedSlugsSince } from "./marketplace.js";
 import { gitHttpBackend } from "./httpBackend.js";
@@ -87,6 +89,11 @@ export interface GitServerDeps extends GitAuthDeps {
    * (code, client, minute). Fire-and-forget at the call site; a failure never changes the response.
    */
   recordGitRefusal(e: GitRefusalEvent): Promise<void>;
+  /**
+   * §73.10: a version's signed statements (the REST `GET …/statement` shape), by skill id + semver.
+   * Null = no such version. Never counted as a clone, an install or adoption.
+   */
+  loadStatements(skillId: string, semver: string): Promise<VersionStatements | null>;
   repoRoot?: string;
 }
 
@@ -131,8 +138,57 @@ export function gitServer(deps: GitServerDeps, opts: GitServerOptions = {}): Rou
   const r = Router();
   const root = deps.repoRoot ?? defaultRepoRoot();
 
+  /**
+   * §73.10: `GET /<ns>/<slug>.git/skilly/statement/v<semver>` — the same credentials and checks as a
+   * clone (install token, system token, agent key), the same 401 challenge without one, the same
+   * per-installation bucket; JSON out, nothing recorded as a clone, install or adoption.
+   */
+  async function serveStatements(req: Request, res: import("express").Response, parsed: ParsedGitRequest, semver: string): Promise<void> {
+    const token = tokenFromAuthHeader(req.header("authorization"));
+    const decision = await authorizeGitRequest(parsed, token, deps);
+    if (!decision.allow) {
+      if (decision.status === 401) res.setHeader("WWW-Authenticate", 'Basic realm="skilly"');
+      res.status(decision.status).type("text/plain").send(decision.reason);
+      return;
+    }
+    if (decision.kind !== "skill") {
+      res.status(404).type("text/plain").send("not found");
+      return;
+    }
+    if (decision.principal && opts.tokenLimiter) {
+      const bucket = decision.principal.type === "agent" ? `${decision.principal.tokenId}:${decision.skill.id}` : decision.principal.tokenId;
+      if (!opts.tokenLimiter.enforce(bucket, res)) return;
+    }
+    const found = await deps.loadStatements(decision.skill.id, semver);
+    if (!found) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    if (found.statements.length === 0) {
+      res.status(409).json({ error: "statement_pending", message: "This version has no signed statement yet." });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      registry: resolveSigningRegistry(process.env),
+      semver: found.semver,
+      status: found.status,
+      statements: found.statements,
+      otherVersions: found.otherVersions,
+    });
+  }
+
   r.use(async (req, res, next) => {
     const url = new URL(req.url, "http://internal");
+    const statement = req.method === "GET" ? parseStatementPath(url.pathname) : null;
+    if (statement) {
+      try {
+        await serveStatements(req, res, statement.parsed, statement.semver);
+      } catch (err) {
+        next(err);
+      }
+      return;
+    }
     const parsed = parseGitPath(url.pathname, url.searchParams);
     if (!parsed) return next(); // not a git smart-HTTP route
 

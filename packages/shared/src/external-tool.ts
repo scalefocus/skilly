@@ -292,6 +292,107 @@ export function normalizeSubdir(raw: string | null | undefined): string {
   return s.slice(start, end).toLowerCase();
 }
 
+// ---------------------------------------------------------------------------
+// The installer's lock-file content hash (`skills-lock.json` version 2, `computedHash`).
+// SKILLY_SPEC.md §73.4. Verified against the vercel-labs/skills README "Lock File Content Hash"
+// section and its v1.8.1 source (`hashSkillFiles` / `collectFiles`). skilly signs this exact value
+// so a user can compare it with their lock and `npx skills check`. Client-safe: WebCrypto only.
+// ---------------------------------------------------------------------------
+
+/** The lock-file version whose `computedHash` algorithm is implemented here. */
+export const SKILLS_LOCK_VERSION = 2;
+
+const INSTALLER_EXCLUDED_FILES = new Set(["metadata.json"]);
+const INSTALLER_EXCLUDED_DIRS = new Set([".git", "__pycache__", "__pypackages__"]);
+
+/**
+ * True for a path the installer never copies (and leaves out of `computedHash`): any
+ * `metadata.json` file, and anything inside a `.git`, `__pycache__` or `__pypackages__` folder.
+ * Mirrors the installer's `isExcludedPath`: every segment but the last is a directory.
+ */
+export function isInstallerExcludedPath(path: string): boolean {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.some((part, i) => (i < parts.length - 1 ? INSTALLER_EXCLUDED_DIRS.has(part) : INSTALLER_EXCLUDED_FILES.has(part)));
+}
+
+/**
+ * The installer's line-ending rule: a file with no NUL byte has every CRLF replaced by LF; a file
+ * with a NUL byte (binary) or without CRLF is returned unchanged (the same array).
+ */
+export function normalizeLockLineEndings(bytes: Uint8Array): Uint8Array {
+  let hasCrlf = false;
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i]!;
+    if (b === 0) return bytes;
+    if (b === 13 && bytes[i + 1] === 10) hasCrlf = true;
+  }
+  if (!hasCrlf) return bytes;
+  const out = new Uint8Array(bytes.length);
+  let n = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 13 && bytes[i + 1] === 10) continue; // drop the CR of a CRLF
+    out[n++] = bytes[i]!;
+  }
+  return out.slice(0, n);
+}
+
+const utf8 = new TextEncoder();
+
+/** Compare two byte strings the way `Buffer.compare` does (unsigned, then by length). */
+export function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return a[i]! - b[i]!;
+  return a.length - b.length;
+}
+
+/** Sort paths by their UTF-8 bytes (never locale-aware), as the installer and the statement do. */
+export function sortByPathBytes<T extends { path: string }>(items: readonly T[]): T[] {
+  return items
+    .map((it) => ({ it, key: utf8.encode(it.path) }))
+    .sort((x, y) => compareBytes(x.key, y.key))
+    .map((x) => x.it);
+}
+
+/**
+ * The exact byte stream the installer feeds into SHA-256 for a skill folder. Excluded paths are
+ * skipped; `\` separators become `/`; each file contributes path, NUL, decimal length (after the
+ * line-ending rule), NUL, content. Exposed so tests and the offline recipe can check it.
+ */
+export function skillsLockHashInput(files: readonly { path: string; bytes: Uint8Array }[]): Uint8Array {
+  const kept = sortByPathBytes(
+    files
+      .map((f) => ({ path: f.path.split("\\").join("/"), bytes: f.bytes }))
+      .filter((f) => !isInstallerExcludedPath(f.path)),
+  );
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (const f of kept) {
+    const content = normalizeLockLineEndings(f.bytes);
+    for (const p of [utf8.encode(f.path), new Uint8Array([0]), utf8.encode(String(content.length)), new Uint8Array([0]), content]) {
+      parts.push(p);
+      total += p.length;
+    }
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+}
+
+/** Lowercase hex of a SHA-256 digest, computed with WebCrypto (browser and Node ≥ 22 alike). */
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The installer's lock-v2 `computedHash` for a skill folder's files (§73.4). */
+export async function skillsLockComputedHash(files: readonly { path: string; bytes: Uint8Array }[]): Promise<string> {
+  return sha256Hex(skillsLockHashInput(files));
+}
+
 /** Pinned contract metadata (verified from vercel-labs/skills source). */
 export const EXTERNAL_TOOL_CONTRACT = {
   toolName: "vercel-labs/skills (npx skills add)",
@@ -304,4 +405,6 @@ export const EXTERNAL_TOOL_CONTRACT = {
   auth: "git-basic-auth-in-url" as const,
   /** SKILL.md must live at the repo root (tool walks depth ~1-2; one skill per repo). */
   skillMdLocation: "repo-root",
+  /** The lock-v2 `computedHash` algorithm above was verified against this tool version (§73.4). */
+  skillsLockHashVerifiedAt: "1.8.1",
 } as const;

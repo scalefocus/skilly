@@ -228,6 +228,9 @@ pipeline {
               # Alone and before the web DB tests: the rebuild rewrites the whole related_skills table.
               SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
                 node --test "packages/worker/dist/integration/pluginDeliveries.test.js"
+              # §73 signed versions — alone: it runs the publish and deprecation sweeps catalog-wide.
+              SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
+                node --test "packages/worker/dist/integration/signing.test.js"
               SKILLY_DB_E2E=1 DATABASE_URL="${CI_DATABASE_URL}" \
                 pnpm --filter @skilly/web test:db
             '''

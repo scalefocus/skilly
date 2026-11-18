@@ -156,7 +156,14 @@ export type EnsureMainOutcome = "unchanged" | "updated" | "deleted" | "missing-t
  *   deprecated            → the hint commit on top of the tag's commit.
  * "missing-tag" = the tag isn't synthesized yet; the caller re-synthesizes and calls again.
  */
-export async function ensureMain(bareRepoPath: string, latestStableTag: string | null, state: DeprecationHintState): Promise<EnsureMainOutcome> {
+/**
+ * Signs the deprecation commit's files as a variant before `main` serves them (§73.5). Called on
+ * every reconcile of a deprecated skill — a no-op once the variant has a current statement — and
+ * throws on failure, which leaves `main` where it was (fail closed).
+ */
+export type HintSigner = (hintCommit: string, tagCommit: string) => Promise<void>;
+
+export async function ensureMain(bareRepoPath: string, latestStableTag: string | null, state: DeprecationHintState, signHint?: HintSigner): Promise<EnsureMainOutcome> {
   if (!(await exists(bareRepoPath))) return latestStableTag ? "missing-tag" : "unchanged";
   const cur = await readRefFs(bareRepoPath, "refs/heads/main");
   if (!latestStableTag) {
@@ -167,6 +174,7 @@ export async function ensureMain(bareRepoPath: string, latestStableTag: string |
   const tagCommit = (await readRefFs(bareRepoPath, `refs/tags/${latestStableTag}`)) ?? (await revParse(bareRepoPath, `refs/tags/${latestStableTag}^{commit}`));
   if (!tagCommit) return "missing-tag";
   const expected = state.deprecated ? await hintCommitFor(bareRepoPath, tagCommit, state) : tagCommit;
+  if (state.deprecated && signHint) await signHint(expected, tagCommit);
   if (!state.deprecated) await rm(join(bareRepoPath, MARKER_FILE), { force: true }).catch(() => {});
   if (cur === expected) return "unchanged";
   await runGit(["update-ref", "refs/heads/main", expected], { gitDir: bareRepoPath });
@@ -179,9 +187,14 @@ export async function ensureMain(bareRepoPath: string, latestStableTag: string |
  * self-heal batch window. Cheap: filesystem ref reads + a cached hint SHA; git runs only on change.
  * Returns the number of repos whose `main` moved. Also refreshes the deprecated-skills gauge.
  */
-export async function syncDeprecationMains(pool: Pool, repoRoot: string, onGauge?: (deprecated: number) => void): Promise<number> {
-  const { rows } = await pool.query<HintRow & { ns_slug: string; skill_slug: string; semvers: string[] | null }>(
-    `select n.slug as ns_slug, s.slug as skill_slug, s.deprecated_at, s.deprecation_note, xn.slug as succ_ns, x.slug as succ_slug,
+export async function syncDeprecationMains(
+  pool: Pool,
+  repoRoot: string,
+  onGauge?: (deprecated: number) => void,
+  hintSignerFor?: (skillId: string, semver: string, bareRepoPath: string, state: DeprecationHintState) => HintSigner,
+): Promise<number> {
+  const { rows } = await pool.query<HintRow & { skill_id: string; ns_slug: string; skill_slug: string; semvers: string[] | null }>(
+    `select s.id as skill_id, n.slug as ns_slug, s.slug as skill_slug, s.deprecated_at, s.deprecation_note, xn.slug as succ_ns, x.slug as succ_slug,
             array_remove(array_agg(sv.semver) filter (where sv.status = 'active' and sv.git_published), null) as semvers
        from skills s
        join namespaces n on n.id = s.namespace_id
@@ -199,7 +212,9 @@ export async function syncDeprecationMains(pool: Pool, repoRoot: string, onGauge
     const latest = resolveLatest(r.semvers ?? []);
     const repo = repoPath(repoRoot, r.ns_slug, r.skill_slug);
     try {
-      const out = await ensureMain(repo, latest ? versionTag(latest) : null, hintStateFromRow(r));
+      const state = hintStateFromRow(r);
+      const sign = latest && state.deprecated && hintSignerFor ? hintSignerFor(r.skill_id, latest, repo, state) : undefined;
+      const out = await ensureMain(repo, latest ? versionTag(latest) : null, state, sign);
       if (out === "updated" || out === "deleted") {
         moved++;
         console.log(JSON.stringify({ level: "info", msg: "main reconciled for deprecation state", skill: `${r.ns_slug}/${r.skill_slug}`, deprecated: !!r.deprecated_at, outcome: out }));

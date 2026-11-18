@@ -258,6 +258,9 @@ services:
       AI_ALLOW_PRIVATE_BASE_URL: ${AI_ALLOW_PRIVATE_BASE_URL:-}
       # §23 Show install URL: seals the recoverable copy of MCP-minted install tokens (web + worker).
       INSTALL_TOKEN_ENC_KEY: ${INSTALL_TOKEN_ENC_KEY:-}
+      # §73 signed skill versions: the platform's Ed25519 signing key. WORKER ONLY (web verifies with
+      # the public key). Required — the worker refuses to start without it. See .env.example.
+      SKILLY_SIGNING_KEY: ${SKILLY_SIGNING_KEY:?set SKILLY_SIGNING_KEY in .env (see .env.example, SKILLY_SPEC.md §73.9)}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       POINTER_REFRESH_INTERVAL_MS: ${POINTER_REFRESH_INTERVAL_MS:-86400000}
       # Entra Graph credentials for group membership reconciliation (§4b).

@@ -14,6 +14,7 @@ import { driftProposeUpdatePath, upstreamReleaseNotificationContent } from "@ski
 import { importNotificationContent } from "@skilly/shared/repo-import";
 import { reviewNotificationContent } from "@skilly/shared/review-target";
 import { namespaceDeletedSentence } from "@skilly/shared/namespace-delete";
+import { signatureMismatchNotificationContent } from "@skilly/shared/attestation";
 
 const PAGE = 100;
 
@@ -219,6 +220,8 @@ export default function NotificationsPage() {
             // §63.5 skill.upstream_release — the shared sentence and the pre-filled propose form; §63.6
             // the second CTA of a branch-drift row.
             const upstream = upstreamReleaseNotificationContent(n.type, n.payload);
+            // §73.11 a signature mismatch report — the shared sentence and the Signing page.
+            const mismatch = signatureMismatchNotificationContent(n.type, n.payload);
             // §64.7 a repository import's one notification — the shared sentence and the filtered queue.
             const imported = importNotificationContent(n.type, n.payload);
             // §65.8 an assignment or a review-target reminder — the shared sentence and the CTA its email uses.
@@ -280,6 +283,15 @@ export default function NotificationsPage() {
                       <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-search-gap">{gap.sentence}</p>
                       <Link href={gap.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
                         {gap.ctaLabel.toLowerCase()} →
+                      </Link>
+                    </>
+                  )}
+                  {mismatch && (
+                    <>
+                      <p style={{ fontSize: 13.5, margin: "8px 0 0" }} data-testid="notification-signature-mismatch">{mismatch.sentence}</p>
+                      {mismatch.detail && <p className="muted" style={{ fontSize: 13, margin: "4px 0 0", whiteSpace: "pre-wrap" }}>{mismatch.detail}</p>}
+                      <Link href={mismatch.path} className="btn-ghost mono" style={{ fontSize: 12, marginTop: 6, display: "inline-block" }}>
+                        {mismatch.ctaLabel.toLowerCase()} →
                       </Link>
                     </>
                   )}

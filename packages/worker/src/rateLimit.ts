@@ -12,7 +12,7 @@
 // (in-memory) only — the HA note (§14, build-plan #20) applies; a shared store is the next upgrade.
 import rateLimit, { type RateLimitInfo } from "express-rate-limit";
 import type { Request, RequestHandler, Response } from "express";
-import { parseGitPath } from "./git/authorize.js";
+import { parseGitPath, parseStatementPath } from "./git/authorize.js";
 import { M } from "./metrics.js";
 
 /** Which limiter refused a request — the `surface` label on skilly_worker_rate_limited_total. */
@@ -100,7 +100,7 @@ function ipLimiter(surface: RateSurface, cfg: RateLimitConfig, skip?: (req: Requ
 /** True for a git smart-HTTP request (skill or marketplace repo) — what the git router serves. */
 function isGitRequest(req: Request): boolean {
   const url = new URL(req.url, "http://internal");
-  return parseGitPath(url.pathname, url.searchParams) !== null;
+  return parseGitPath(url.pathname, url.searchParams) !== null || parseStatementPath(url.pathname) !== null;
 }
 
 /** Git per-IP flood guard: counts only git smart-HTTP requests, before authorization. */

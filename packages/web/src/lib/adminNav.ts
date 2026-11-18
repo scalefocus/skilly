@@ -32,6 +32,8 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
   { href: "/admin/rum", label: "Monitoring", audience: "platform", icon: "M3 17l5-6 4 4 5-8 4 5M3 21h18" },
   { href: "/admin/ideas", label: "Feature ideas", audience: "platform", icon: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z", badge: { key: "ideas", label: "pending" } },
   { href: "/admin/search-gaps", label: "Search gaps", audience: "platform", icon: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4M8 11h6", badge: { key: "searchGaps", label: "to review" } },
+  // §73.8 signing keys, revocation and mismatch reports.
+  { href: "/admin/signing", label: "Signing", audience: "platform", icon: "M7 15a4 4 0 1 1 3.87-5H21v3h-2v3h-3v-3h-5.13A4 4 0 0 1 7 15zM7 11h.01" },
 ];
 
 /**

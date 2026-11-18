@@ -13,6 +13,8 @@ import { versionTag, resolveLatest } from "@skilly/shared";
 import { sweepBatchSize } from "./publish.js";
 import { repoPath } from "./repoStore.js";
 import { ensureMain, loadDeprecationState } from "./mainRef.js";
+import type { Signer } from "../signing/key.js";
+import { deprecationHintSigner } from "../signing/attest.js";
 
 function git(args: string[], gitDir: string): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
@@ -28,7 +30,7 @@ async function exists(p: string): Promise<boolean> {
   try { await access(p); return true; } catch { return false; }
 }
 
-export async function withdrawYankedVersions(pool: Pool, repoRoot: string): Promise<number> {
+export async function withdrawYankedVersions(pool: Pool, repoRoot: string, signer?: Signer): Promise<number> {
   // Versions marked yanked whose tag is still live (git_published=true).
   const { rows } = await pool.query<{ id: string; semver: string; skill_id: string; ns_slug: string; skill_slug: string }>(
     `select sv.id, sv.semver, sv.skill_id, n.slug as ns_slug, s.slug as skill_slug
@@ -64,7 +66,10 @@ export async function withdrawYankedVersions(pool: Pool, repoRoot: string): Prom
     )).rows.map((x) => x.semver);
     const latest = resolveLatest(actives);
     try {
-      await ensureMain(repo, latest ? versionTag(latest) : null, await loadDeprecationState(pool, r.skill_id));
+      const state = await loadDeprecationState(pool, r.skill_id);
+      // §73.5: a deprecation commit on the next latest version is signed before `main` serves it.
+      const sign = signer && latest && state.deprecated ? deprecationHintSigner(pool, signer, { skillId: r.skill_id, semver: latest, bareRepoPath: repo, state }) : undefined;
+      await ensureMain(repo, latest ? versionTag(latest) : null, state, sign);
     } catch (err) {
       console.error(JSON.stringify({ level: "error", msg: "withdraw: could not reconcile main", skill: `${r.ns_slug}/${r.skill_slug}`, err: String(err) }));
     }

@@ -28,6 +28,8 @@ const ROUTES = [
   "/admin",
   "/admin/ideas",
   "/admin/search-gaps",
+  "/admin/signing",
+  "/verify",
 ];
 
 test.describe("all-routes smoke", () => {

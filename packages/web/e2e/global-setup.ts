@@ -61,6 +61,8 @@ const PAGES = [
   "/admin/rum",
   "/admin/ideas",
   "/admin/search-gaps",
+  "/admin/signing",
+  "/verify",
   "/namespaces",
   "/installed",
   "/catalog",
@@ -93,6 +95,9 @@ const PAGES = [
   // Content-addressed icon bytes (§33) — a non-hex name 404s without touching storage, but the
   // route still compiles; icon.spec otherwise paid ~18s for it mid-run.
   "/skill-icons/warm-up.png",
+  // §73.9 the public signing keys (unauthenticated route handler) — the Verify files dialog and
+  // /verify's Offline tab fetch it.
+  "/.well-known/skilly-signing-keys.json",
 ];
 
 // E2E_WARM=core: the API routes nearly every spec meets — the app shell's on-load calls (every
@@ -238,6 +243,11 @@ const CORE_API = [
   "/api/admin/search-gaps/00000000-0000-0000-0000-000000000000/redraft",
   // /profile
   "/api/users/00000000-0000-0000-0000-000000000000/achievements",
+  // §73 signed versions (signing.spec): the Verify files dialog's statement fetch, the /verify
+  // lookup (POST-only: a GET 405s and compiles all the same) and Administration → Signing.
+  "/api/skills/global/pdf-tools/versions/1.1.0/statement",
+  "/api/verify/lookup",
+  "/api/admin/signing",
 ];
 
 // API subtrees a GET must never touch: sign-in/out and cookie clearing, the email OAuth hop,

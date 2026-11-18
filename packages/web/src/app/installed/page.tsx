@@ -11,6 +11,8 @@ import { filterBehind, filterInstalls, installRef, installedHighlightHref, INSTA
 import { activeCounts, cardCountLabel, groupInstalls, lastInstalledAt, versionModes, worstFreshness, type InstallEntry } from "../../lib/installedGroups";
 import { requestInstall, type ExistingInstall, type OnExisting } from "../../lib/installMint";
 import { AlreadyInstalledDialog } from "../../components/AlreadyInstalledDialog";
+import { VerifyFilesDialog } from "../../components/VerifyFilesDialog";
+import { installVerifySemver } from "../../lib/verifyFiles";
 import type { Freshness } from "@skilly/shared/freshness";
 
 interface Install {
@@ -221,6 +223,9 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
   // The already-installed prompt for the successor (§23/§45.5): set while the dialog is open.
   const [succExisting, setSuccExisting] = useState<{ row: Install; installs: ExistingInstall[] } | null>(null);
   const [succExistingErr, setSuccExistingErr] = useState<string | null>(null);
+  // §73.8 Verify files: the install whose copy is being checked (null = closed). Rendered at the
+  // page root, not in the row, so the dialog's clicks never reach the row's navigate handler.
+  const [verifyFor, setVerifyFor] = useState<{ install: Install; semver: string } | null>(null);
 
   // Mints the SUCCESSOR at latest. Asks first (§23 "Already-installed prompt"): when the user already
   // holds the successor, the dialog re-posts with "replace" (Override — replaces only the successor's
@@ -409,6 +414,23 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
             otherwise "uninstall"/"activate" would both fire their action AND navigate away. */}
         <div className="version-actions" onClick={(e) => e.stopPropagation()}>
           {row && successorButton(i)}
+          {(() => {
+            // §73.8 pre-set to this install's version: pinned, else the version it was last served.
+            const sv = installVerifySemver(i);
+            return (
+              // Short visible label: a row already holds up to four actions on a phone.
+              <button
+                className="btn btn-sm"
+                disabled={!sv}
+                onClick={() => sv && setVerifyFor({ install: i, semver: sv })}
+                aria-label="Verify files"
+                title={sv ? `Verify files: check your installed copy against v${sv}'s signed statement` : "The installed version is unknown — re-run the install command to record it"}
+                data-testid="install-verify"
+              >
+                verify
+              </button>
+            );
+          })()}
           {i.revealable && (
             // §23 "Show install URL": re-show this install's command (rows without a stored copy have no button).
             <button
@@ -539,6 +561,10 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {/* §73.7 check any folder or skills-lock.json against what skilly signed. */}
+          <Link href="/verify" className="btn btn-sm" title="Check a folder or a skills-lock.json against the versions skilly signed" data-testid="installed-verify-link">
+            Verify files
+          </Link>
           {me?.isPlatformAdmin && (
             // Platform admins only (§23): flip between the personal view and all system installs.
             <div className="sort-toggle" role="group" aria-label="Install scope">
@@ -590,6 +616,16 @@ const InstalledList = memo(function InstalledList({ q, behindOnly, highlightPara
           />
         );
       })()}
+      {verifyFor && (
+        <VerifyFilesDialog
+          ns={verifyFor.install.namespaceSlug}
+          slug={verifyFor.install.skillSlug}
+          semver={verifyFor.semver}
+          title={verifyFor.install.title}
+          latest={verifyFor.install.latestSemver}
+          onClose={() => setVerifyFor(null)}
+        />
+      )}
 
       {error ? (
         <EmptyState icon="⚠" title="Couldn’t load your installs" hint={error} />

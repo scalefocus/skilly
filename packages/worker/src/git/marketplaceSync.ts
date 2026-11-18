@@ -23,13 +23,19 @@ import {
   namespaceMarketplaceSkillSql,
   usageKeyEnvVar,
   validateMarketplacePrefix,
+  variantFor,
+  versionTag,
   GENERAL_PLUGIN_SLUG,
   type MarketplaceScope,
+  type VariantRewrite,
 } from "@skilly/shared";
 import { getMaxBundleBytes } from "../settings.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
-import { extractBundle } from "./bundle.js";
-import { applyDeprecationHint, hintStateFromRow } from "./mainRef.js";
+import { servedFilesFromArtifact } from "./servedFiles.js";
+import { applyDeprecationHint, hintStateFromRow, readRefFs } from "./mainRef.js";
+import { repoPath } from "./repoStore.js";
+import type { Signer } from "../signing/key.js";
+import { ensureVariantAttestation } from "../signing/attest.js";
 import { runGit, type SkillFile } from "./synth.js";
 import {
   marketplaceRepoDir,
@@ -46,6 +52,11 @@ import { stampMarketplaceSynced } from "./syncStamp.js";
 export interface MarketplaceSyncDeps {
   store: ArtifactStore;
   repoRoot: string;
+  /**
+   * §73.5: member folders that differ from their version (deprecation notice, hoisted components)
+   * are signed as variants before the marketplace is committed. Absent only in unit tests.
+   */
+  signer?: Signer;
 }
 
 /** One marketplace's identity + settings, as resolved for a sweep pass. */
@@ -59,6 +70,8 @@ interface Target {
 
 interface SkillRow {
   skill_id: string;
+  /** The listed (latest-stable) version's id — what a member folder's variant statement names. */
+  version_id?: string;
   slug: string;
   title: string;
   description: string | null;
@@ -217,13 +230,13 @@ async function qualifyingSkills(pool: Pool, scope: MarketplaceScope, namespaceId
   for (const r of rows) {
     const latest = resolveLatest(r.semvers);
     if (!latest) continue; // prerelease-only skill: no stable version to publish
-    const { rows: keyRows } = await pool.query<{ artifact_object_key: string | null; content_sha256: string | null }>(
-      `select artifact_object_key, content_sha256 from skill_versions where skill_id = $1 and semver = $2`,
+    const { rows: keyRows } = await pool.query<{ id: string; artifact_object_key: string | null; content_sha256: string | null }>(
+      `select id, artifact_object_key, content_sha256 from skill_versions where skill_id = $1 and semver = $2`,
       [r.skill_id, latest],
     );
     const key = keyRows[0]?.artifact_object_key ?? null;
     if (!key) continue; // nothing to serve
-    out.push({ ...r, semver: latest, artifact_object_key: key, content_sha256: keyRows[0]?.content_sha256 ?? null });
+    out.push({ ...r, semver: latest, version_id: keyRows[0]!.id, artifact_object_key: key, content_sha256: keyRows[0]?.content_sha256 ?? null });
   }
   return out.sort((a, b) => a.ns_slug.localeCompare(b.ns_slug) || a.slug.localeCompare(b.slug));
 }
@@ -305,6 +318,35 @@ function describeComponentCollision(c: ComponentCollision): string {
 }
 
 /**
+ * §73.5: sign a member folder as a variant when it differs from its version — the deprecation
+ * notice, the plugin components hoisted out of it (§30.3), or both. A folder identical to the
+ * version needs nothing here (the version's own statement covers it). Throws on failure, so the
+ * marketplace keeps its previous commit and the next sweep retries.
+ */
+/**
+ * What a member folder holds (§30.3, §73.5): the files (deprecation notice already applied) minus
+ * the plugin components hoisted to the plugin root, and the rewrites that make it differ from its
+ * version. Pure; exported for tests.
+ */
+export function memberFolder(files: readonly SkillFile[], deprecated: boolean): { rewrites: VariantRewrite[]; member: SkillFile[] } {
+  const layout = planPluginLayout("member", files.map((f) => f.path));
+  const hoisted = new Set(layout.moves.filter((m) => isComponentPath(m.to)).map((m) => m.from));
+  const rewrites: VariantRewrite[] = [];
+  if (deprecated) rewrites.push("deprecation");
+  if (hoisted.size > 0) rewrites.push("marketplace_hoist");
+  const member = files.filter((f) => !hoisted.has(f.path)).map((f) => ({ ...f, path: f.path.replace(/^\.?\//, "") }));
+  return { rewrites, member };
+}
+
+async function signMemberVariant(pool: Pool, deps: MarketplaceSyncDeps, s: SkillRow, files: readonly SkillFile[], state: ReturnType<typeof hintStateFromRow>): Promise<void> {
+  const { rewrites, member } = memberFolder(files, state.deprecated);
+  if (rewrites.length === 0) return;
+  const variant = await variantFor(rewrites, state.deprecated ? { successor: state.successor, note: state.note, successorUrl: state.successorUrl } : null);
+  const tagCommit = await readRefFs(repoPath(deps.repoRoot, s.ns_slug, s.slug), `refs/tags/${versionTag(s.semver)}`);
+  await ensureVariantAttestation(pool, deps.signer!, { versionId: s.version_id!, variant, files: async () => member, tagCommit });
+}
+
+/**
  * One sweep pass. Rebuilds every enabled marketplace whose content changed, and removes the repo
  * of every disabled one. Returns how many were rebuilt. Never throws for one bad marketplace —
  * a failure is logged and the next pass retries it.
@@ -330,7 +372,9 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
       }
 
       const skills = await qualifyingSkills(pool, target.scope, target.namespaceId);
-      const hash = contentHash(skills, usageKey);
+      // §73.5: the active signing key joins the hash, so the first sync under a new key (the first
+      // after signing shipped, or after a rotation or revocation) rebuilds once and signs variants.
+      const hash = contentHash(skills, [usageKey, deps.signer ? `sig|${deps.signer.keyId}` : ""].filter(Boolean).join("\u001f"));
       const prevHash = await previousHash(dir);
       if (prevHash !== null && prevHash === hash) {
         // Nothing changed — no commit, no consumer churn. Still "synced": the catalog was checked
@@ -344,8 +388,13 @@ export async function syncMarketplaces(pool: Pool, deps: MarketplaceSyncDeps): P
       const bundles = new Map<string, SkillFile[]>();
       for (const s of skills) {
         const targz = await deps.store.get(s.artifact_object_key!);
+        // The tag's served files (`name` ensured, servedFiles.ts), so a member folder is the version's
+        // files plus only the rewrites below — each signed as a variant (§73.5).
+        const state = hintStateFromRow({ deprecated_at: s.deprecated_at ?? null, deprecation_note: s.deprecation_note ?? null, succ_ns: s.succ_ns ?? null, succ_slug: s.succ_slug ?? null });
         // §45.4: a deprecated member's embedded SKILL.md carries the same hint as its own repo's main.
-        bundles.set(s.skill_id, applyDeprecationHint(await extractBundle(targz, cap), hintStateFromRow({ deprecated_at: s.deprecated_at ?? null, deprecation_note: s.deprecation_note ?? null, succ_ns: s.succ_ns ?? null, succ_slug: s.succ_slug ?? null })));
+        const files = applyDeprecationHint(await servedFilesFromArtifact(targz, s.slug, cap), state);
+        bundles.set(s.skill_id, files);
+        if (deps.signer && s.version_id) await signMemberVariant(pool, deps, s, files, state);
       }
 
       const grouped = groupSkillsIntoPlugins(

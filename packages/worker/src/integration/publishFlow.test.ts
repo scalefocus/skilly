@@ -24,6 +24,7 @@ import { synthesizeVersion, writeTree } from "../git/synth.js";
 import { mirrorPointerVersion } from "../git/mirror.js";
 import { mirrorPendingVersions } from "../git/mirrorPending.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
+import { testSigner } from "../signing/key.js";
 
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
@@ -186,7 +187,15 @@ test("publish chain (hosted + pointer): seed -> sweep -> clone", { skip: !enable
 
     // Publish sweep handles hosted (tar.gz + zip) + both pointers.
     const repoRoot = join(work, "repos");
-    const n = await publishPendingVersions(pool, { store, repoRoot });
+    // §73: every published version is signed; a throwaway key registered RETIRED (never the active one).
+    const signer = await testSigner(pool);
+    const n = await publishPendingVersions(pool, { store, repoRoot, signer });
+    const signedRows = (await pool.query<{ semver: string; kind: string; key_id: string }>(
+      `select sv.semver, a.kind, a.key_id from skill_version_attestations a join skill_versions sv on sv.id = a.skill_version_id
+        where a.key_id = $1 and a.variant_key = ''`,
+      [signer.keyId],
+    )).rows;
+    assert.ok(signedRows.length >= n && signedRows.every((r) => r.kind === "publish"), "every version this sweep published carries a publish statement");
     const followRows = async (uid: string) =>
       (await pool.query<{ skill: string }>(`select payload->>'skillSlug' as skill from notifications where user_id = $1 and type = 'follow.new_skill'`, [uid])).rows.map((r) => r.skill);
     assert.ok((await followRows(fan)).includes("pdf"), "the submitter's follower hears about the new skill");

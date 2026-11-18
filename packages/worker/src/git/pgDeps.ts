@@ -1,6 +1,6 @@
 // Postgres-backed implementation of the git server's dependencies. SKILLY_SPEC.md §9.
 import type { Pool } from "pg";
-import { resolveAccess, hashToken, resolveLatest, isForwardUpdate, recordAgentClone, PUBLIC_SCOPE, sharedNamespaceIdsSql, namespaceMarketplaceSkillSql, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
+import { resolveAccess, hashToken, resolveLatest, isForwardUpdate, recordAgentClone, loadVersionStatements, PUBLIC_SCOPE, sharedNamespaceIdsSql, namespaceMarketplaceSkillSql, type RoleMapping, type EffectiveAccess } from "@skilly/shared";
 import type { GitServerDeps } from "./server.js";
 import type { MarketplaceRef, SkillRef, TokenPrincipal } from "./authorize.js";
 import { M } from "../metrics.js";
@@ -30,6 +30,9 @@ const refusalThrottle = makeRefusalThrottle();
 
 export function pgGitDeps(pool: Pool): GitServerDeps {
   return {
+    loadStatements(skillId, semver) {
+      return loadVersionStatements(pool, skillId, semver);
+    },
     async findSkill(namespaceSlug, skillSlug): Promise<SkillRef | null> {
       // §70.6: the live skill at <ns>/<slug> first, then a moved skill's old address (an alias).
       // The two never share an address (migration 0112 triggers); the order is explicit anyway.

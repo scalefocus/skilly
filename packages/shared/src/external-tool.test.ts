@@ -227,3 +227,59 @@ test("parseInstallCommand resists ReDoS on adversarial quote runs (js/polynomial
   assert.ok(Date.now() - start < 1000, "parseInstallCommand must run in linear time on adversarial quote runs");
   assert.ok(r.ok && r.url === "https://github.com/owner/repo.git" && r.ref === "v1");
 });
+
+// §73.4 — the installer's lock-v2 computedHash, checked against the three vectors the
+// vercel-labs/skills README publishes, plus the exclusion and line-ending rules.
+import {
+  skillsLockComputedHash,
+  skillsLockHashInput,
+  isInstallerExcludedPath,
+  normalizeLockLineEndings,
+  sortByPathBytes,
+} from "./external-tool.js";
+
+const enc = (s: string) => new TextEncoder().encode(s);
+
+test("lock hash: the installer README test vectors", async () => {
+  assert.equal(await skillsLockComputedHash([]), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  assert.equal(await skillsLockComputedHash([{ path: "SKILL.md", bytes: enc("# hi\n") }]), "93c36952d8843b33e68ae970ebabcc03e1687c9bb0dd1ecaf357060318952f55");
+  assert.equal(
+    await skillsLockComputedHash([{ path: "docs/b.md", bytes: enc("b\n") }, { path: "SKILL.md", bytes: enc("a\n") }]),
+    "b22c4d22aa319d2924312fa18fcbfedc88fa89c74dbd8f298c683e1caf7b7f24",
+  );
+});
+
+test("lock hash: the input stream is path NUL length NUL content, sorted by path bytes", () => {
+  const input = skillsLockHashInput([{ path: "docs/b.md", bytes: enc("b\n") }, { path: "SKILL.md", bytes: enc("a\n") }]);
+  assert.equal(new TextDecoder().decode(input), "SKILL.md\u00002\u0000a\ndocs/b.md\u00002\u0000b\n");
+});
+
+test("lock hash: CRLF in a text file hashes like LF; a binary file is untouched", async () => {
+  const lf = await skillsLockComputedHash([{ path: "SKILL.md", bytes: enc("a\nb\n") }]);
+  const crlf = await skillsLockComputedHash([{ path: "SKILL.md", bytes: enc("a\r\nb\r\n") }]);
+  assert.equal(crlf, lf);
+  const bin = new Uint8Array([0, 13, 10, 65]);
+  assert.equal(normalizeLockLineEndings(bin), bin);
+  assert.deepEqual([...normalizeLockLineEndings(enc("x\r\ny\rz"))], [...enc("x\ny\rz")]);
+});
+
+test("lock hash: installer exclusions are skipped and backslashes become slashes", async () => {
+  const base = await skillsLockComputedHash([{ path: "SKILL.md", bytes: enc("# hi\n") }]);
+  const withJunk = await skillsLockComputedHash([
+    { path: "SKILL.md", bytes: enc("# hi\n") },
+    { path: "metadata.json", bytes: enc("{}") },
+    { path: "sub/metadata.json", bytes: enc("{}") },
+    { path: ".git/config", bytes: enc("x") },
+    { path: "scripts/__pycache__/a.pyc", bytes: enc("x") },
+    { path: "__pypackages__/x/y.py", bytes: enc("x") },
+  ]);
+  assert.equal(withJunk, base);
+  assert.equal(isInstallerExcludedPath("metadata.json/inner.txt"), false, "a metadata.json FOLDER is not excluded");
+  assert.equal(isInstallerExcludedPath("docs/.git"), false, "a .git FILE is not excluded");
+  assert.equal(isInstallerExcludedPath(["a", "__pycache__", "b.pyc"].join(String.fromCharCode(92))), true, "backslash separators");
+});
+
+test("sortByPathBytes orders by UTF-8 bytes, not locale", () => {
+  const sorted = sortByPathBytes([{ path: "b" }, { path: "B" }, { path: "a" }, { path: "é" }, { path: "Z" }]).map((x) => x.path);
+  assert.deepEqual(sorted, ["B", "Z", "a", "b", "é"]);
+});
