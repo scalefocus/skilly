@@ -3,6 +3,7 @@ import { currentAccess } from "../../../../../../lib/guard";
 import { pool } from "../../../../../../lib/db";
 import { setVersionYanked } from "../../../../../../lib/manage";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -15,8 +16,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ ns: string; sl
   const r = await setVersionYanked(pool, {
     access,
     actorUserId: access.userId,
-    namespaceSlug: (await ctx.params).ns,
-    skillSlug: (await ctx.params).slug,
+    namespaceSlug: (await canonicalSkillParams(ctx.params)).ns,
+    skillSlug: (await canonicalSkillParams(ctx.params)).slug,
     semver: body.semver,
     yanked: body.yanked ?? true,
   });

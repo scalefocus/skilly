@@ -19,6 +19,7 @@ import {
 } from "./rateLimit.js";
 import { pgGitDeps } from "./git/pgDeps.js";
 import { publishPendingVersions, reprovisionMissingRepos } from "./git/publish.js";
+import { relocateMovedRepos } from "./git/relocate.js";
 import { withdrawYankedVersions } from "./git/withdraw.js";
 import { syncDeprecationMains } from "./git/mainRef.js";
 import { syncMarketplaces, marketplaceSettings } from "./git/marketplaceSync.js";
@@ -118,6 +119,10 @@ async function leaderLoops(): Promise<void> {
   const sweep = async () => {
     if (!isLeader) return;
     try {
+      // §70.8: move a moved skill's repo to its canonical address FIRST, so a version the move
+      // published is synthesized into the relocated repo rather than a fresh, tag-less one.
+      const r = await relocateMovedRepos(pool, publishDeps.repoRoot);
+      if (r > 0) console.log(JSON.stringify({ level: "info", msg: "relocated moved skill repos", count: r }));
       const m = await mirrorPendingVersions(pool, { store });
       if (m > 0) { M.pointersMirrored.add(m); console.log(JSON.stringify({ level: "info", msg: "mirrored pointer versions", count: m })); }
       const n = await publishPendingVersions(pool, publishDeps);

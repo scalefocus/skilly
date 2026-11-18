@@ -52,7 +52,30 @@ import {
   type ProposalPolicyPayload,
   scanVerdict, scanVerdictText, type ScanVerdictReason,
   repoLabel,
+  AWAITING_DESTINATION,
+  actingReviewNamespaceId,
+  canActOnProposal,
+  canViewProposalAsReviewer,
+  canDirectPublishMove,
+  skillMovedMessage,
+  slugInDestinationMessage,
+  slugReservedMessage,
+  SKILL_MOVED_CODE,
+  SLUG_EXISTS_IN_DESTINATION_CODE,
+  SLUG_RESERVED_CODE,
 } from "@skilly/shared";
+import {
+  applySkillMove,
+  destinationConflict,
+  finishSkillMove,
+  isSlugReserved,
+  loadNamespaceById,
+  notifySkillMoved,
+  validateDestination,
+  type DestinationConflict,
+  type NamespaceRef,
+  type ReroutedProposal,
+} from "./skillMoves";
 import { appendAudit } from "./audit";
 import { claimOnStartReview, proposalAssignmentView, type AssignmentView, type ReviewTargetView } from "./reviewAssign";
 import { nameSql } from "./userLabel";
@@ -103,6 +126,18 @@ export interface ProposalMetadata {
    * untouched; `[]` = explicitly no grants. Cleared to `[]` for an org-visible skill.
    */
   sharedNamespaceIds?: string[];
+  /**
+   * §70: the namespace a NEW-VERSION proposal moves the skill to. Absent / null = no move (also
+   * normalized to null when it names the current owner). Editable by the proposer (submit, revise,
+   * resubmit) and by an owner reviewer's edit at the owner stage. Never on a new skill.
+   */
+  destinationNamespaceId?: string | null;
+  /**
+   * §70.7: the skill's owner when this revision was written — SERVER-STAMPED by
+   * verifySubmissionPayload on every move revision, never trusted from the client. An accept whose
+   * revision names a source other than the skill's current owner fails `skill_moved`.
+   */
+  sourceNamespaceId?: string | null;
 }
 
 /**
@@ -175,8 +210,15 @@ export interface CreateProposalInput {
   payload: RevisionPayload;
   /** Skill request this proposal was started from (§26) — the explicit fulfilment link. */
   originRequestId?: string | null;
-  /** Set when a direct publish was routed to review by the content check (§37.4) or by enforced policy rules (§47.7). */
-  routedReason?: "content_risk" | "policy" | "scan_pending" | null;
+  /** Set when a direct publish was routed to review by the content check (§37.4), by enforced policy
+   *  rules (§47.7), or because it moves the skill somewhere the publisher can't publish directly (§70.5). */
+  routedReason?: "content_risk" | "policy" | "scan_pending" | "namespace_move" | null;
+  /**
+   * §70.5: a direct publish routed only by its destination side — the publisher could have published
+   * into the owner directly, so their publish counts as the owner's approval and the proposal starts
+   * in `awaiting_destination`.
+   */
+  ownerApprovedBy?: string | null;
   /** The content-risk rules (or policy rule titles) that caused the routing — audit context only. */
   routedRules?: string[];
   /** §44.8: the model that drafted the submitted files (from a verified aiDraftToken), else null. */
@@ -224,16 +266,17 @@ async function loadVisibleTarget(
   db: Pool | PoolClient,
   access: EffectiveAccess | undefined,
   skillId: string,
-): Promise<{ namespace_id: string; visibility: "org" | "namespace" } | null> {
+): Promise<{ namespace_id: string; ns_slug: string; visibility: "org" | "namespace" } | null> {
   if (!access) return null; // fail closed: no actor, no target
   const row = (
-    await db.query<{ namespace_id: string; visibility: "org" | "namespace"; shared_namespace_ids: string[] }>(
-      `select s.namespace_id, s.visibility, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids from skills s where s.id = $1`,
+    await db.query<{ namespace_id: string; ns_slug: string; visibility: "org" | "namespace"; shared_namespace_ids: string[] }>(
+      `select s.namespace_id, n.slug as ns_slug, s.visibility, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
+         from skills s join namespaces n on n.id = s.namespace_id where s.id = $1`,
       [skillId],
     )
   ).rows[0];
   if (!row || !isSkillVisible(access, { namespaceId: row.namespace_id, visibility: row.visibility, sharedNamespaceIds: row.shared_namespace_ids })) return null;
-  return { namespace_id: row.namespace_id, visibility: row.visibility };
+  return { namespace_id: row.namespace_id, ns_slug: row.ns_slug, visibility: row.visibility };
 }
 
 /**
@@ -282,10 +325,31 @@ export async function verifySubmissionPayload(
   } = {},
 ): Promise<string | null> {
   // §8 Target visibility gate — first, before any other work touches the target.
-  let target: { namespace_id: string; visibility: "org" | "namespace" } | null = null;
+  let target: { namespace_id: string; ns_slug: string; visibility: "org" | "namespace" } | null = null;
   if (opts.targetSkillId) {
     target = await loadVisibleTarget(db, opts.access, opts.targetSkillId);
     if (!target) return TARGET_NOT_FOUND;
+  }
+  // §70.2 the move destination: only a new version may move a skill. Normalized IN PLACE — null for
+  // no move (absent, blank, or the current owner) — and, for a move, the source is SERVER-STAMPED
+  // with the skill's current owner (the `skill_moved` check at accept, §70.7).
+  let moveDestinationId: string | null = null;
+  if (payload.metadata) {
+    if (target) {
+      const v = await validateDestination(db, {
+        destinationNamespaceId: payload.metadata.destinationNamespaceId,
+        ownerNamespaceId: target.namespace_id,
+        ownerNamespaceSlug: target.ns_slug,
+      });
+      if (!v.ok) return v.error;
+      moveDestinationId = v.destination?.id ?? null;
+      payload.metadata.destinationNamespaceId = moveDestinationId;
+      if (moveDestinationId) payload.metadata.sourceNamespaceId = target.namespace_id;
+      else delete payload.metadata.sourceNamespaceId;
+    } else {
+      delete payload.metadata.destinationNamespaceId;
+      delete payload.metadata.sourceNamespaceId;
+    }
   }
   if (
     opts.namespaceSlug !== undefined &&
@@ -311,7 +375,8 @@ export async function verifySubmissionPayload(
     let owner: string | null = null;
     let visibility: "org" | "namespace" = payload.metadata.visibility;
     if (target) {
-      owner = target.namespace_id;
+      // §70.2: a move's grants are validated against the NEW owner — the old one may be a grantee.
+      owner = moveDestinationId ?? target.namespace_id;
       visibility = target.visibility;
     } else if (opts.namespaceSlug !== undefined) {
       owner = (await db.query<{ id: string }>(`select id from namespaces where slug = $1`, [opts.namespaceSlug.trim().toLowerCase()])).rows[0]?.id ?? null;
@@ -425,9 +490,9 @@ async function reuseNoopError(
 ): Promise<string | null> {
   const { rows } = await db.query<{
     title: string; description: string; tool_harness: string; categories: string[] | null;
-    icon_sha256: string | null; icon_emoji: string | null; shared_namespace_ids: string[];
+    icon_sha256: string | null; icon_emoji: string | null; shared_namespace_ids: string[]; namespace_id: string;
   }>(
-    `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji,
+    `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji, s.namespace_id,
             coalesce((select array_agg(c.name) from skill_categories sc
                         join categories c on c.id = sc.category_id
                        where sc.skill_id = s.id), '{}') as categories,
@@ -446,10 +511,12 @@ async function reuseNoopError(
     (meta.iconSha256 !== undefined && (meta.iconSha256 ?? null) !== cur.icon_sha256) ||
     (meta.iconEmoji !== undefined && (meta.iconEmoji ?? null) !== cur.icon_emoji) ||
     // §42: a changed shared-namespaces list is a real change ("also share with team-b").
-    (meta.sharedNamespaceIds !== undefined && !sameSet(normSet(meta.sharedNamespaceIds), normSet(cur.shared_namespace_ids)));
+    (meta.sharedNamespaceIds !== undefined && !sameSet(normSet(meta.sharedNamespaceIds), normSet(cur.shared_namespace_ids))) ||
+    // §70.2: moving the skill to another namespace is a real change on its own.
+    (!!meta.destinationNamespaceId && meta.destinationNamespaceId !== cur.namespace_id);
   return changed
     ? null
-    : "nothing changed — edit at least one field (title, description, categories, tool/harness, usage, or shared namespaces), or provide a new source";
+    : "nothing changed — edit at least one field (title, description, categories, tool/harness, usage, shared namespaces or namespace), or provide a new source";
 }
 
 /** The server-resolved "Keep current files" snapshot (§8). */
@@ -623,6 +690,23 @@ export async function notifyNamespaceReviewers(
 }
 
 /**
+ * §70.7 step 6: the new owner's reviewers learn about each re-routed proposal that waits on
+ * reviewers (a `changes_requested` one waits on its proposer; an `awaiting_destination` one on its
+ * destination, which was already asked).
+ */
+async function notifyRerouted(client: PoolClient, newOwnerNamespaceId: string, rerouted: readonly ReroutedProposal[], skillSlug: string): Promise<void> {
+  for (const r of rerouted) {
+    if (r.state !== "proposed" && r.state !== "under_review") continue;
+    await notifyNamespaceReviewers(client, {
+      namespaceId: newOwnerNamespaceId,
+      submitterId: r.submittedBy,
+      type: "proposal.needs_review",
+      payload: { proposalId: r.id, skillSlug, semver: r.semver },
+    });
+  }
+}
+
+/**
  * §31.12 Glow Up: does this submission set an icon the submitter chose — one that differs from the
  * target skill's current icon (any, for a new skill)? A bundle-borne icon is in the payload too.
  */
@@ -640,12 +724,22 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
   const client = await pool.connect();
   try {
     await client.query("begin");
+    // §70: a new version may move the skill; the column mirrors the revision. A routed direct
+    // publish whose publisher stands for the owner starts at the destination stage (§70.5).
+    const destinationId = (input.targetSkillId && input.payload.metadata.destinationNamespaceId) || null;
+    const startsAtDestination = !!destinationId && !!input.ownerApprovedBy;
     const { rows } = await client.query<{ id: string }>(
       // origin_request_id: set when the proposal was started from a skill request's "Propose a
       // skill" button (§26) — the explicit fulfilment link, advisory until acceptance.
-      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, routed_reason, ai_draft_model, import_id)
-       values ($1,$2,$3,'proposed',$4,$5,$6,$7,$8) returning id`,
-      [input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null, input.routedReason ?? null, input.aiDraftModel ?? null, input.importId ?? null],
+      `insert into proposals (target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, routed_reason, ai_draft_model, import_id,
+                              destination_namespace_id, owner_accepted_by, owner_accepted_at, owner_accepted_revision)
+       values ($1,$2,$3,$9::proposal_state,$4,$5,$6,$7,$8,$10,$11,case when $11::uuid is null then null else now() end,case when $11::uuid is null then null else 1 end) returning id`,
+      [
+        input.targetNamespaceId, input.targetSkillId ?? null, input.proposedSemver, input.submittedByUserId, input.originRequestId ?? null,
+        input.routedReason ?? null, input.aiDraftModel ?? null, input.importId ?? null,
+        startsAtDestination ? AWAITING_DESTINATION : "proposed",
+        destinationId, startsAtDestination ? input.ownerApprovedBy : null,
+      ],
     );
     const proposalId = rows[0]!.id;
     await client.query(
@@ -672,11 +766,22 @@ export async function createProposal(pool: Pool, input: CreateProposalInput): Pr
         after: { reason: input.routedReason, rules: input.routedRules ?? [], semver: input.proposedSemver, skill: input.payload.metadata.skillSlug },
       });
     }
+    if (startsAtDestination) {
+      await appendAudit(client, {
+        actorUserId: input.ownerApprovedBy!,
+        action: "proposal.owner_accepted",
+        targetType: "proposal",
+        targetId: proposalId,
+        namespaceId: input.targetNamespaceId,
+        after: { revisionNo: 1, destinationNamespaceId: destinationId, via: "direct_publish" },
+      });
+    }
     // §64.7: an imported proposal is announced once per import, not one by one.
     if (!input.importId) {
       await notifyProposalCreated(client, {
         proposalId,
-        namespaceId: input.targetNamespaceId,
+        // §70.5: at the destination stage the destination's reviewers are the ones asked.
+        namespaceId: startsAtDestination ? destinationId! : input.targetNamespaceId,
         submitterId: input.submittedByUserId,
         skillSlug: input.payload.metadata.skillSlug,
         semver: input.proposedSemver,
@@ -716,15 +821,44 @@ interface ProposalRow {
   origin_request_id: string | null;
   /** §65: the advisory assignee, or null. */
   assignee_id: string | null;
+  /** §70: the move destination of the current revision, or null. */
+  destination_namespace_id: string | null;
+  /** §70.3: the owner-stage approval of a move, or null. */
+  owner_accepted_by: string | null;
 }
 
 async function loadProposal(db: Pool | PoolClient, id: string, opts: { forUpdate?: boolean } = {}): Promise<ProposalRow | null> {
   const { rows } = await db.query<ProposalRow>(
-    `select id, target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, assignee_id
+    `select id, target_namespace_id, target_skill_id, proposed_semver, state, submitted_by, origin_request_id, assignee_id,
+            destination_namespace_id, owner_accepted_by
        from proposals where id = $1${opts.forUpdate ? " for update" : ""}`,
     [id],
   );
   return rows[0] ?? null;
+}
+
+/**
+ * §70.7 step 1: a move revision names the owner it was written against; an accept is refused when
+ * the skill has moved since (a racing move). Returns the refusal, or null when the source holds.
+ */
+async function skillMovedError(db: PoolClient, skillId: string, payload: RevisionPayload): Promise<string | null> {
+  const dest = payload.metadata?.destinationNamespaceId;
+  if (!dest) return null;
+  const { rows } = await db.query<{ namespace_id: string; ns_slug: string; slug: string; src_slug: string | null }>(
+    `select s.namespace_id, n.slug as ns_slug, s.slug, (select slug from namespaces where id = $2::uuid) as src_slug
+       from skills s join namespaces n on n.id = s.namespace_id where s.id = $1`,
+    [skillId, payload.metadata.sourceNamespaceId ?? null],
+  );
+  const s = rows[0];
+  if (!s) return TARGET_NOT_FOUND;
+  if (payload.metadata.sourceNamespaceId === s.namespace_id && dest !== s.namespace_id) return null;
+  return skillMovedMessage(s.ns_slug, s.slug, s.src_slug);
+}
+
+/** The 409 text for a destination conflict, named only when the reader can see it (§70.2/§70.3). */
+function destinationConflictMessage(destinationSlug: string, slug: string, c: DestinationConflict): string {
+  if (c.kind === "alias") return slugInDestinationMessage(destinationSlug, slug, null, true);
+  return slugInDestinationMessage(destinationSlug, slug, c.visible ? { name: `${c.namespaceSlug}/${c.slug}` } : null);
 }
 
 async function latestPayload(db: Pool | PoolClient, proposalId: string): Promise<RevisionPayload> {
@@ -764,8 +898,10 @@ export type ActionResult =
       ok: false; status: number; error: string; requiresOverride?: boolean; severity?: string; policy?: { tripped: PolicyGateTripView[] };
       /** §49.2: the scan verdict is not complete — the reviewer may override explicitly (reason required). */
       scanPending?: boolean; scanPendingReason?: ScanVerdictReason;
-      /** §8 slug match: accept found a same-slug skill the PROPOSER can now see. */
-      code?: typeof SLUG_EXISTS_CODE; matches?: Omit<SlugMatch, "skillId">[];
+      /** §8 slug match: accept found a same-slug skill the PROPOSER can now see. §70: a move found
+       *  the slug taken at the destination, the skill moved since, or the new slug reserved. */
+      code?: typeof SLUG_EXISTS_CODE | typeof SLUG_EXISTS_IN_DESTINATION_CODE | typeof SKILL_MOVED_CODE | typeof SLUG_RESERVED_CODE;
+      matches?: Omit<SlugMatch, "skillId">[];
     };
 
 /** One tripped policy rule as the accept gate reports it (§47.11). */
@@ -888,6 +1024,8 @@ function payloadUnchanged(prev: RevisionPayload, next: RevisionPayload): boolean
     // §42: an omitted list (keep current grants) differs from any explicit list, even an empty one.
     (a.sharedNamespaceIds === undefined) === (b.sharedNamespaceIds === undefined) &&
     sameSet(normSet(a.sharedNamespaceIds), normSet(b.sharedNamespaceIds)) &&
+    // §70: changing or dropping the move destination is a real edit.
+    (a.destinationNamespaceId ?? null) === (b.destinationNamespaceId ?? null) &&
     (prev.artifactObjectKey ?? null) === (next.artifactObjectKey ?? null) &&
     samePointer(prev.pointer, next.pointer) &&
     (prev.reuse?.fromVersionId ?? null) === (next.reuse?.fromVersionId ?? null)
@@ -941,15 +1079,28 @@ export async function performProposalAction(
       return { ok: false, status: 404, error: "proposal not found" };
     }
 
+    // §70.3: at the destination stage the DESTINATION's reviewers act; otherwise the owner's.
+    const moveRef = { state: p.state, targetNamespaceId: p.target_namespace_id, destinationNamespaceId: p.destination_namespace_id };
+    const actingNamespaceId = actingReviewNamespaceId(moveRef);
     const caps = {
-      isReviewer: canReviewNamespace(input.access, p.target_namespace_id),
+      isReviewer: canActOnProposal(input.access, moveRef),
       isSubmitter: p.submitted_by === input.actorUserId,
     };
-    const decision = canPerform(input.action, p.state, caps);
+    // Whether the revision this action leaves current moves the skill (a same-call reviewer edit
+    // included — the route verified and normalized it).
+    const moveNow = !!p.target_skill_id && (input.newPayload ? !!input.newPayload.metadata?.destinationNamespaceId : !!p.destination_namespace_id);
+    const decision = canPerform(input.action, p.state, caps, { move: moveNow });
     if (!decision.ok) {
       await client.query("rollback");
       return { ok: false, status: 403, error: decision.reason };
     }
+    // §70.3: the destination's reviewers accept, request changes or reject — they never edit.
+    if (p.state === AWAITING_DESTINATION && input.newPayload && input.action !== "revise") {
+      await client.query("rollback");
+      return { ok: false, status: 403, error: "at the destination stage reviewers can accept, request changes or reject — not edit the proposal" };
+    }
+    const ownerStageMoveAccept = input.action === "accept" && decision.to === AWAITING_DESTINATION;
+    const destinationStageAccept = input.action === "accept" && p.state === AWAITING_DESTINATION;
 
     // Revision-pinned accept (§8 anti-swap): checked BEFORE any reviewer-edit revision is
     // appended, so the pin refers to what the reviewer actually inspected. A proposer revise
@@ -994,6 +1145,30 @@ export async function performProposalAction(
               code: SLUG_EXISTS_CODE,
               matches: shown.map(publicMatch),
             };
+          }
+          // §70.6: the slug is reserved here by a skill that moved out of this namespace.
+          if (await isSlugReserved(client, p.target_namespace_id, slug)) {
+            const nsSlug = (await client.query<{ slug: string }>(`select slug from namespaces where id = $1`, [p.target_namespace_id])).rows[0]?.slug ?? "this namespace";
+            await client.query("rollback");
+            return { ok: false, status: 409, error: slugReservedMessage(nsSlug, slug), code: SLUG_RESERVED_CODE };
+          }
+        }
+      }
+      // §70.7 step 1 + §70.3: a move accept — at either stage — needs the skill to still live where
+      // the revision says; the destination's accept also re-checks the slug at the destination.
+      if (p.target_skill_id && (ownerStageMoveAccept || destinationStageAccept)) {
+        const lp = input.newPayload ?? (await latestPayload(client, input.proposalId));
+        const moved = await skillMovedError(client, p.target_skill_id, lp);
+        if (moved) {
+          await client.query("rollback");
+          return { ok: false, status: 409, error: moved, code: SKILL_MOVED_CODE };
+        }
+        if (destinationStageAccept) {
+          const dest = await loadNamespaceById(client, lp.metadata.destinationNamespaceId);
+          const c = dest ? await destinationConflict(client, input.access, { skillId: p.target_skill_id, slug: lp.metadata.skillSlug, destinationNamespaceId: dest.id }) : null;
+          if (dest && c) {
+            await client.query("rollback");
+            return { ok: false, status: 409, error: destinationConflictMessage(dest.slug, lp.metadata.skillSlug, c), code: SLUG_EXISTS_IN_DESTINATION_CODE };
           }
         }
       }
@@ -1088,7 +1263,8 @@ export async function performProposalAction(
       // §47.7 policy gate: a violated enforced rule, or one without a current verdict, needs the
       // override (with a reason) — and platform rules can only be overridden by Platform Admins.
       // §46's own findings never reach this gate.
-      const policy = await evaluateProposalPolicyGate(client, { id: input.proposalId, namespaceId: p.target_namespace_id }, input.access);
+      // §70.3: each stage runs its own namespace's rules (plus platform rules).
+      const policy = await evaluateProposalPolicyGate(client, { id: input.proposalId, namespaceId: actingNamespaceId }, input.access);
       if (policy.trips.length > 0) {
         if (!input.override) {
           await client.query("rollback");
@@ -1126,9 +1302,25 @@ export async function performProposalAction(
           },
         });
       }
+      // §70.3: the owner's accept of a move publishes nothing — the destination accepts next. The
+      // gates above ran (and any override is audited); the state update below records the approval.
+      if (!ownerStageMoveAccept) {
       const payload = await latestPayload(client, input.proposalId);
+      // §70.7: the destination's accept moves the skill FIRST, so the materialize step syncs the
+      // submitted grants and auto-adds the maintainer against the new owner.
+      const moveTo = destinationStageAccept && p.target_skill_id ? payload.metadata.destinationNamespaceId ?? null : null;
+      const move = moveTo && p.target_skill_id
+        ? await applySkillMove(client, { skillId: p.target_skill_id, destinationNamespaceId: moveTo, actorUserId: input.actorUserId, via: "proposal_accept", proposalId: input.proposalId })
+        : null;
+      if (move && !move.ok) {
+        await client.query("rollback");
+        // A race the pre-gate check missed (it named what the reviewer can see); this one names nothing.
+        return move.kind === "conflict"
+          ? { ok: false, status: 409, error: destinationConflictMessage(move.destinationSlug, payload.metadata.skillSlug, move.conflict), code: SLUG_EXISTS_IN_DESTINATION_CODE }
+          : { ok: false, status: 422, error: move.error };
+      }
       const result = await materializeVersion(client, {
-        targetNamespaceId: p.target_namespace_id,
+        targetNamespaceId: move?.moved ? move.to.id : p.target_namespace_id,
         targetSkillId: p.target_skill_id,
         semver: p.proposed_semver,
         submittedBy: p.submitted_by,
@@ -1138,6 +1330,11 @@ export async function performProposalAction(
         proposalId: input.proposalId,
       });
       materializedVersionId = result.versionId; // undefined for pointer (worker mirrors it)
+      if (move?.moved) {
+        await finishSkillMove(client, move, { actorUserId: input.actorUserId, via: "proposal_accept", proposalId: input.proposalId, semver: p.proposed_semver });
+        await notifySkillMoved(client, { skillId: move.skillId, oldNamespaceId: move.from.id, oldNamespaceSlug: move.from.slug, semver: p.proposed_semver, actorUserId: input.actorUserId });
+        await notifyRerouted(client, move.to.id, move.rerouted, payload.metadata.skillSlug);
+      }
       // §37.6: accepting over gate-tripping content findings acknowledges them for this version.
       if (scan && input.override && contentRiskTripsGate(scan.findings)) {
         await recordAcknowledgement(client, {
@@ -1178,21 +1375,45 @@ export async function performProposalAction(
           via: "proposal",
         });
       }
+      } // end: !ownerStageMoveAccept
     }
 
     // Proposer resubmit may also revise the proposed semver (§8); only honored on resubmit —
     // a mid-review `revise` never changes the version. A revise note documents the revision
     // (stored on the revision row above), never the decision_reason.
     const newSemver = input.action === "resubmit" ? input.newSemver ?? null : null;
+    // §70: the destination column mirrors the current revision; the owner approval is SET by the
+    // owner-stage accept (assignee cleared — a new set of reviewers) and CLEARED whenever the
+    // proposal goes back to the owner stage (a revise / request-changes / resubmit).
+    const approval: "set" | "clear" | "keep" = ownerStageMoveAccept
+      ? "set"
+      : p.owner_accepted_by && (decision.to === "under_review" || decision.to === "changes_requested" || decision.to === "proposed")
+        ? "clear"
+        : "keep";
+    const { rows: curRevRows } = await client.query<{ max: number | null }>(
+      `select max(revision_no)::int as max from proposal_revisions where proposal_id = $1`,
+      [input.proposalId],
+    );
     await client.query(
       `update proposals
           set state = $2,
               decision_reason = coalesce($3, decision_reason),
               materialized_version_id = coalesce($4, materialized_version_id),
               proposed_semver = coalesce($5, proposed_semver),
+              destination_namespace_id = case when $6::boolean then $7::uuid else destination_namespace_id end,
+              owner_accepted_by = case $8::text when 'set' then $9::uuid when 'clear' then null else owner_accepted_by end,
+              owner_accepted_at = case $8::text when 'set' then now() when 'clear' then null else owner_accepted_at end,
+              owner_accepted_revision = case $8::text when 'set' then $10::int when 'clear' then null else owner_accepted_revision end,
+              assignment_changed_at = case when $8::text <> 'keep' and assignee_id is not null then now() else assignment_changed_at end,
+              assigned_by = case when $8::text <> 'keep' then null else assigned_by end,
+              assignee_id = case when $8::text <> 'keep' then null else assignee_id end,
               updated_at = now()
         where id = $1`,
-      [input.proposalId, decision.to, input.action === "revise" ? null : input.note ?? null, materializedVersionId ?? null, newSemver],
+      [
+        input.proposalId, decision.to, input.action === "revise" ? null : input.note ?? null, materializedVersionId ?? null, newSemver,
+        !!input.newPayload, (p.target_skill_id && input.newPayload?.metadata?.destinationNamespaceId) || null,
+        approval, input.actorUserId, curRevRows[0]?.max ?? null,
+      ],
     );
 
     // §65.2 the Start review claim: an unassigned proposal becomes the starting reviewer's.
@@ -1202,7 +1423,8 @@ export async function performProposalAction(
 
     await appendAudit(client, {
       actorUserId: input.actorUserId,
-      action: `proposal.${input.action}`,
+      // §70.10: the owner's approval of a move is its own act — nothing is published yet.
+      action: ownerStageMoveAccept ? "proposal.owner_accepted" : `proposal.${input.action}`,
       targetType: "proposal",
       targetId: input.proposalId,
       namespaceId: p.target_namespace_id,
@@ -1211,6 +1433,10 @@ export async function performProposalAction(
         state: decision.to,
         materializedVersionId,
         ...(newRevisionNo != null ? { revisionNo: newRevisionNo } : {}),
+        ...(ownerStageMoveAccept
+          ? { revisionNo: curRevRows[0]?.max ?? null, destinationNamespaceId: (input.newPayload?.metadata?.destinationNamespaceId ?? p.destination_namespace_id) || null }
+          : {}),
+        ...(approval === "clear" ? { ownerApprovalCleared: true } : {}),
         // §8 revise: record whether the bundle was replaced (the field diff lives in the
         // attributed revision history; the audit row pins the artifact change).
         ...(input.action === "revise"
@@ -1225,12 +1451,30 @@ export async function performProposalAction(
       const pl = await latestPayload(client, input.proposalId);
       await notifyReviewersNeedsReview(client, {
         proposalId: input.proposalId,
-        namespaceId: p.target_namespace_id,
+        // §70.3: a revise at the destination stage hands the proposal back to the OWNER's reviewers.
+        namespaceId: actingReviewNamespaceId({ state: decision.to, targetNamespaceId: p.target_namespace_id, destinationNamespaceId: p.destination_namespace_id }),
         submitterId: p.submitted_by,
         skillSlug: pl.metadata.skillSlug,
         semver: p.proposed_semver,
-        assigneeId: p.assignee_id,
+        assigneeId: approval === "clear" ? null : p.assignee_id,
       }, "proposal.revise");
+    } else if (ownerStageMoveAccept) {
+      // §70.3/§70.9: tell the proposer the owner approved, and ask the destination's reviewers.
+      const pl = await latestPayload(client, input.proposalId);
+      const { rows: nsRows } = await client.query<{ owner: string; dest: string }>(
+        `select (select slug from namespaces where id = $1) as owner, (select slug from namespaces where id = $2) as dest`,
+        [p.target_namespace_id, pl.metadata.destinationNamespaceId],
+      );
+      await client.query(
+        `insert into notifications (user_id, type, payload) values ($1, 'proposal.owner_accepted', $2::jsonb)`,
+        [p.submitted_by, JSON.stringify({ proposalId: input.proposalId, skillSlug: pl.metadata.skillSlug, semver: p.proposed_semver, namespaceSlug: nsRows[0]?.owner ?? null, destinationSlug: nsRows[0]?.dest ?? null, note: input.note ?? null })],
+      );
+      await notifyNamespaceReviewers(client, {
+        namespaceId: pl.metadata.destinationNamespaceId!,
+        submitterId: p.submitted_by,
+        type: "proposal.needs_review",
+        payload: { proposalId: input.proposalId, skillSlug: pl.metadata.skillSlug, semver: p.proposed_semver },
+      });
     } else {
       // Notify the submitter of the outcome.
       await client.query(
@@ -1561,13 +1805,14 @@ export async function materializeVersion(client: PoolClient, input: MaterializeI
  */
 export type DirectPublishResult =
   | { ok: true; skillId: string; versionId?: string; pending?: boolean }
-  | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[]; routedReason: "content_risk" | "policy" | "scan_pending" }
+  | { ok: true; routed: "review"; proposalId: string; findings: ScanFinding[]; routedReason: "content_risk" | "policy" | "scan_pending" | "namespace_move" }
   | {
       ok: false; status: number; error: string; requiresOverride?: boolean; findings?: ScanFinding[]; severity?: string;
       /** §49.2: the hosted artifact's scan verdict is not complete (e.g. no AV result yet). */
       scanPending?: boolean; scanPendingReason?: ScanVerdictReason;
-      /** §8 slug match found inside the publish transaction (a race the route's pre-check missed). */
-      code?: typeof SLUG_EXISTS_CODE; matches?: Omit<SlugMatch, "skillId">[];
+      /** §8 slug match found inside the publish transaction (a race the route's pre-check missed);
+       *  §70 the slug taken at a move's destination, or reserved by an alias. */
+      code?: typeof SLUG_EXISTS_CODE | typeof SLUG_EXISTS_IN_DESTINATION_CODE | typeof SLUG_RESERVED_CODE; matches?: Omit<SlugMatch, "skillId">[];
     };
 
 /**
@@ -1717,6 +1962,47 @@ export async function directPublish(
     });
     return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "policy" };
   }
+  // §70.5: a new version that MOVES the skill publishes at once only when the publisher could
+  // direct-publish into each namespace on its own and the destination's policy rules don't route
+  // it. Otherwise it becomes a proposal; the owner-side checks above already passed, so the
+  // publisher's own publish stands for the owner's approval and it starts at the destination stage.
+  let moveDest: NamespaceRef | null = null;
+  if (existing && input.payload.metadata.destinationNamespaceId) {
+    moveDest = await loadNamespaceById(pool, input.payload.metadata.destinationNamespaceId);
+    if (!moveDest) return { ok: false, status: 422, error: "the destination namespace doesn't exist" };
+    const conflict = await destinationConflict(pool, input.access, { skillId: existing.id, slug: input.payload.metadata.skillSlug, destinationNamespaceId: moveDest.id });
+    if (conflict) {
+      return { ok: false, status: 409, error: destinationConflictMessage(moveDest.slug, input.payload.metadata.skillSlug, conflict), code: SLUG_EXISTS_IN_DESTINATION_CODE };
+    }
+    const destRules = await applicablePolicyRules(pool, moveDest.id);
+    const destActor = { platformAdmin: input.access.isPlatformAdmin, namespaceAdmin: input.access.namespaceRoles.get(moveDest.id) === "namespace_admin" };
+    const bothAllowed = canDirectPublishMove(
+      input.access,
+      { id: ns.id, requireReview: ns.require_review },
+      { id: moveDest.id, requireReview: moveDest.requireReview },
+    );
+    if (!bothAllowed || policyPublishRoute(destRules, destActor) === "route") {
+      let originRequestId: string | null = null;
+      if (input.originRequestId && /^[0-9a-f-]{36}$/i.test(input.originRequestId)) {
+        const open = (await pool.query(`select 1 from skill_requests where id = $1 and state = 'open'`, [input.originRequestId])).rowCount;
+        if (open) originRequestId = input.originRequestId;
+      }
+      const { id } = await createProposal(pool, {
+        submittedByUserId: input.actorUserId,
+        targetNamespaceId: ns.id,
+        targetSkillId: existing.id,
+        proposedSemver: input.semver,
+        payload: input.payload,
+        originRequestId,
+        routedReason: "namespace_move",
+        routedRules: [moveDest.slug],
+        ownerApprovedBy: input.actorUserId,
+        aiDraftModel: input.aiDraftModel ?? null,
+        importId: input.importId ?? null,
+      });
+      return { ok: true, routed: "review", proposalId: id, findings: content, routedReason: "namespace_move" };
+    }
+  }
   if (trips && !input.override) {
     return {
       ok: false,
@@ -1742,11 +2028,26 @@ export async function directPublish(
         await client.query("rollback");
         return { ok: false, status: 409, error: slugExistsMessage(matches), code: SLUG_EXISTS_CODE, matches: matches.map(publicMatch) };
       }
+      // §70.6: reserved here by a skill that moved out of this namespace (named to nobody).
+      if (await isSlugReserved(client, ns.id, input.payload.metadata.skillSlug)) {
+        await client.query("rollback");
+        return { ok: false, status: 409, error: slugReservedMessage(input.namespaceSlug, input.payload.metadata.skillSlug), code: SLUG_RESERVED_CODE };
+      }
     }
     // §31.12 Glow Up compares against the icon the skill has BEFORE this version syncs it.
     const icon = !input.payload.promotedFromSkillVersionId && (await choosesIcon(client, input.payload.metadata, existing?.id ?? null));
+    // §70.5/§70.7: a permitted move happens first, so the version materializes under the new owner.
+    const move = existing && moveDest
+      ? await applySkillMove(client, { skillId: existing.id, destinationNamespaceId: moveDest.id, actorUserId: input.actorUserId, via: "direct_publish", proposalId: null })
+      : null;
+    if (move && !move.ok) {
+      await client.query("rollback");
+      return move.kind === "conflict"
+        ? { ok: false, status: 409, error: destinationConflictMessage(move.destinationSlug, input.payload.metadata.skillSlug, move.conflict), code: SLUG_EXISTS_IN_DESTINATION_CODE }
+        : { ok: false, status: 422, error: move.error };
+    }
     const result = await materializeVersion(client, {
-      targetNamespaceId: ns.id,
+      targetNamespaceId: move?.moved ? move.to.id : ns.id,
       targetSkillId: existing?.id ?? null,
       semver: input.semver,
       submittedBy: input.actorUserId,
@@ -1754,6 +2055,11 @@ export async function directPublish(
       actorUserId: input.actorUserId,
       via: "direct_publish",
     });
+    if (move?.moved) {
+      await finishSkillMove(client, move, { actorUserId: input.actorUserId, via: "direct_publish", proposalId: null, semver: input.semver });
+      await notifySkillMoved(client, { skillId: move.skillId, oldNamespaceId: move.from.id, oldNamespaceSlug: move.from.slug, semver: input.semver, actorUserId: input.actorUserId });
+      await notifyRerouted(client, move.to.id, move.rerouted, input.payload.metadata.skillSlug);
+    }
     // §31.11 Encore: a direct publish of a new version is a submission too. Awarded here, not in
     // materializeVersion(), which review acceptance also runs. A hosted version already evaluated
     // the Habits badges there (Shipped It); a pending pointer mirror did not, so evaluate them now.
@@ -1923,6 +2229,8 @@ export interface ReviewQueueItem {
   assignee: { id: string; name: string } | null;
   /** §65.5: the reviewer turn's due instant (UTC ISO) while the namespace has a target; else null. */
   reviewDueAt: string | null;
+  /** §70: the namespace a move proposal moves the skill to, else null. */
+  destinationNamespaceSlug: string | null;
 }
 
 interface QueueRow {
@@ -1943,6 +2251,7 @@ interface QueueRow {
   assignee_id: string | null;
   assignee_name: string | null;
   review_due_at: string | null;
+  destination_slug: string | null;
 }
 
 // Resolve a display name even for not-yet-materialized skills by reading the latest revision.
@@ -1957,9 +2266,11 @@ const QUEUE_BASE_SELECT = `
            p.via_mcp_client,
            p.import_id, pi.origin_url as import_origin_url,
            p.assignee_id, ${nameSql("au.display_name", "au.email")} as assignee_name,
-           case when p.state in ('proposed','under_review') then p.turn_due_at end as review_due_at
+           case when p.state in ('proposed','under_review','awaiting_destination') then p.turn_due_at end as review_due_at,
+           dn.slug as destination_slug
       from proposals p
       join namespaces n on n.id = p.target_namespace_id
+      left join namespaces dn on dn.id = p.destination_namespace_id
       join users su on su.id = p.submitted_by
       left join users au on au.id = p.assignee_id
       left join skills s on s.id = p.target_skill_id
@@ -1984,6 +2295,7 @@ function toQueueItem(r: QueueRow): ReviewQueueItem {
     importRepo: r.import_origin_url ? repoLabel(r.import_origin_url) : null,
     assignee: r.assignee_id ? { id: r.assignee_id, name: r.assignee_name ?? "Unknown user" } : null,
     reviewDueAt: r.review_due_at,
+    destinationNamespaceSlug: r.destination_slug,
   };
 }
 
@@ -1995,10 +2307,13 @@ export function hasReviewScope(access: EffectiveAccess): boolean {
 /** Batch size for the review queue's server-side pagination / infinite scroll (§8). */
 export const REVIEW_PAGE_SIZE = 100;
 
-const PROPOSAL_STATES: ProposalState[] = ["proposed", "under_review", "changes_requested", "accepted", "rejected"];
+const PROPOSAL_STATES: ProposalState[] = ["proposed", "under_review", "changes_requested", "awaiting_destination", "accepted", "rejected"];
 function emptyStateCounts(): Record<ProposalState, number> {
-  return { proposed: 0, under_review: 0, changes_requested: 0, accepted: 0, rejected: 0 };
+  return { proposed: 0, under_review: 0, changes_requested: 0, awaiting_destination: 0, accepted: 0, rejected: 0 };
 }
+
+/** §70.3: the namespace whose reviewers act on a proposal now — SQL twin of `actingReviewNamespaceId`. */
+const ACTING_NS_SQL = `(case when p.state = 'awaiting_destination' and p.destination_namespace_id is not null then p.destination_namespace_id else p.target_namespace_id end)`;
 
 export interface ReviewQueuePage {
   items: ReviewQueueItem[];
@@ -2044,7 +2359,8 @@ export async function listReviewQueue(
     const nsIds = [...access.namespaceRoles.entries()].filter(([, r]) => r === "namespace_admin").map(([id]) => id);
     if (nsIds.length === 0) return { items: [], nextCursor: null, counts: emptyStateCounts(), total: 0 };
     scopeParams.push(nsIds);
-    scopeConds.push(`p.target_namespace_id = any($${scopeParams.length})`);
+    // §70.3: owner-stage proposals to the owner's reviewers, destination-stage ones to the destination's.
+    scopeConds.push(`${ACTING_NS_SQL} = any($${scopeParams.length})`);
   }
   // §64.7: narrowed to one repository import — the counts and the tab badge follow the filter.
   if (opts.importId) {
@@ -2060,11 +2376,11 @@ export async function listReviewQueue(
     scopeConds.push(`p.assignee_id is null`);
   }
   if (opts.overdue) {
-    scopeConds.push(`p.state in ('proposed','under_review') and p.turn_due_at is not null and p.turn_due_at <= now()`);
+    scopeConds.push(`p.state in ('proposed','under_review','awaiting_destination') and p.turn_due_at is not null and p.turn_due_at <= now()`);
   }
   if (opts.namespaceSlug) {
     scopeParams.push(opts.namespaceSlug);
-    scopeConds.push(`p.target_namespace_id = (select id from namespaces where slug = $${scopeParams.length})`);
+    scopeConds.push(`${ACTING_NS_SQL} = (select id from namespaces where slug = $${scopeParams.length})`);
   }
 
   // Page query = scope + optional state filter + keyset cursor, NEWEST first.
@@ -2168,8 +2484,18 @@ export interface ProposalDetail {
    * authority over each) and `canRecheck` (the §46 re-run).
    */
   policy: (ProposalPolicyPayload & { trips: PolicyGateTripView[]; canRecheck: boolean }) | null;
-  caps: { isReviewer: boolean; isSubmitter: boolean };
+  /**
+   * `isReviewer` = may act at the CURRENT stage (§70.3: the destination's reviewers while it awaits
+   * the destination); `canEdit` = may make a reviewer edit (the owner's reviewers, owner stage only).
+   */
+  caps: { isReviewer: boolean; isSubmitter: boolean; canEdit: boolean; canDelete: boolean };
   allowedActions: ProposalAction[];
+  /** §70: the namespace this proposal moves the skill to, or null. */
+  destination: { id: string; slug: string; displayName: string } | null;
+  /** §70.3: the owner-stage approval of a move (who, when, which revision), or null. */
+  ownerApproval: { by: string; at: string; revision: number | null } | null;
+  /** The namespace whose reviewers act now (the destination at the destination stage). */
+  actingNamespaceSlug: string;
   /**
    * Set when this NEW-skill proposal duplicates an existing skill the VIEWER can see (§8) — the
    * review page warns and links to it. Evaluated at the viewer's visibility, so a reviewer may see
@@ -2212,6 +2538,9 @@ export interface TargetSkillCurrent {
   /** §42: the skill's frozen visibility and its current grantee namespace ids (the share diff). */
   visibility: "org" | "namespace";
   sharedNamespaceIds: string[];
+  /** §70: the skill's CURRENT owner — the move diff's "from", and the propose form's pre-fill. */
+  namespaceId: string;
+  namespaceSlug: string;
 }
 
 /**
@@ -2241,22 +2570,39 @@ export async function getProposalDetail(
     via_mcp_client: string | null;
     routed_reason: string | null;
     ai_draft_model: string | null;
+    destination_namespace_id: string | null;
+    dest_slug: string | null;
+    dest_name: string | null;
+    owner_accepted_by_name: string | null;
+    owner_accepted_at: string | null;
+    owner_accepted_revision: number | null;
   }>(
     `select p.id, p.state, p.target_namespace_id, n.slug as namespace_slug, p.target_skill_id,
             p.proposed_semver, p.submitted_by, p.decision_reason, p.materialized_version_id,
-            p.created_at, p.updated_at, p.via_mcp_client, p.routed_reason, p.ai_draft_model
+            p.created_at, p.updated_at, p.via_mcp_client, p.routed_reason, p.ai_draft_model,
+            p.destination_namespace_id, dn.slug as dest_slug, dn.display_name as dest_name,
+            case when p.owner_accepted_by is not null then ${nameSql("oa.display_name", "oa.email")} end as owner_accepted_by_name,
+            p.owner_accepted_at, p.owner_accepted_revision
        from proposals p join namespaces n on n.id = p.target_namespace_id
+       left join namespaces dn on dn.id = p.destination_namespace_id
+       left join users oa on oa.id = p.owner_accepted_by
       where p.id = $1`,
     [id],
   );
   const p = rows[0];
   if (!p) return null;
 
+  // §70.3: the owner's reviewers read it throughout; the destination's from the owner's accept on.
+  const moveRef = { state: p.state, targetNamespaceId: p.target_namespace_id, destinationNamespaceId: p.destination_namespace_id };
+  const actingNamespaceId = actingReviewNamespaceId(moveRef);
   const caps = {
-    isReviewer: canReviewNamespace(access, p.target_namespace_id),
+    isReviewer: canActOnProposal(access, moveRef),
     isSubmitter: p.submitted_by === actorUserId,
+    canEdit: p.state !== AWAITING_DESTINATION && canReviewNamespace(access, p.target_namespace_id),
+    // Housekeeping delete stays with the owner's reviewers (§8, §70.3).
+    canDelete: canReviewNamespace(access, p.target_namespace_id),
   };
-  if (!caps.isReviewer && !caps.isSubmitter) return null; // not authorized to view
+  if (!canViewProposalAsReviewer(access, moveRef) && !caps.isSubmitter) return null; // not authorized to view
 
   const { rows: revRows } = await pool.query<{
     revision_no: number;
@@ -2302,7 +2648,7 @@ export async function getProposalDetail(
   }
 
   const allowedActions = (Object.keys(TRANSITIONS) as ProposalAction[]).filter(
-    (a) => canPerform(a, p.state, caps).ok,
+    (a) => canPerform(a, p.state, caps, { move: !!p.destination_namespace_id }).ok,
   );
 
   // Duplicate alert (§8): only for NEW-skill proposals, evaluated at the VIEWER's visibility so a
@@ -2332,7 +2678,7 @@ export async function getProposalDetail(
   let slugMatches: Omit<SlugMatch, "skillId">[] = [];
   {
     const lp = latest?.payload;
-    const open = p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested";
+    const open = p.state === "proposed" || p.state === "under_review" || p.state === "changes_requested" || p.state === AWAITING_DESTINATION;
     if (lp && open && !p.target_skill_id && !lp.promotedFromSkillVersionId) {
       slugMatches = (await findSlugMatches(access, lp.metadata?.skillSlug, pool)).map(publicMatch);
     }
@@ -2345,8 +2691,10 @@ export async function getProposalDetail(
     const { rows: srows } = await pool.query<{
       title: string; description: string; tool_harness: string; categories: string[] | null;
       icon_sha256: string | null; icon_emoji: string | null; visibility: "org" | "namespace"; shared_namespace_ids: string[];
+      namespace_id: string; ns_slug: string;
     }>(
       `select s.title, s.description, s.tool_harness, s.icon_sha256, s.icon_emoji, s.visibility,
+              s.namespace_id, (select slug from namespaces where id = s.namespace_id) as ns_slug,
               coalesce((select array_agg(c.name order by c.name) from skill_categories sc
                           join categories c on c.id = sc.category_id
                          where sc.skill_id = s.id), '{}') as categories,
@@ -2372,6 +2720,8 @@ export async function getProposalDetail(
         iconEmoji: s.icon_emoji,
         visibility: s.visibility,
         sharedNamespaceIds: s.shared_namespace_ids ?? [],
+        namespaceId: s.namespace_id,
+        namespaceSlug: s.ns_slug,
       };
     }
   }
@@ -2403,12 +2753,19 @@ export async function getProposalDetail(
     quality: scanReport && scanReport.status !== "pending" && scanReport.status !== "unreachable" && scanReport.status !== "source_changed" ? proposalQuality(scanReport.findings) : null,
     aiPrereview: await proposalPrereview(
       pool,
-      { id: p.id, state: p.state, targetNamespaceId: p.target_namespace_id, revision: latest?.revisionNo ?? null, scanFindings: scanReport?.findings ?? [] },
+      { id: p.id, state: p.state, targetNamespaceId: actingNamespaceId, revision: latest?.revisionNo ?? null, scanFindings: scanReport?.findings ?? [] },
       access,
     ),
-    policy: await proposalPolicyView(pool, { id: p.id, namespaceId: p.target_namespace_id }, access, caps.isReviewer),
+    policy: await proposalPolicyView(pool, { id: p.id, namespaceId: actingNamespaceId }, access, caps.isReviewer),
     caps,
     allowedActions,
+    destination: p.destination_namespace_id && p.dest_slug
+      ? { id: p.destination_namespace_id, slug: p.dest_slug, displayName: p.dest_name ?? p.dest_slug }
+      : null,
+    ownerApproval: p.owner_accepted_at
+      ? { by: p.owner_accepted_by_name ?? "Unknown user", at: p.owner_accepted_at, revision: p.owner_accepted_revision }
+      : null,
+    actingNamespaceSlug: actingNamespaceId === p.destination_namespace_id && p.dest_slug ? p.dest_slug : p.namespace_slug,
     duplicate,
     slugMatches,
     targetSkillCurrent,

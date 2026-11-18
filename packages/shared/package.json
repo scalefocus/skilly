@@ -43,6 +43,10 @@
       "types": "./dist/slug-match.d.ts",
       "default": "./dist/slug-match.js"
     },
+    "./namespace-move": {
+      "types": "./dist/namespace-move.d.ts",
+      "default": "./dist/namespace-move.js"
+    },
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"

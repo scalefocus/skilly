@@ -62,6 +62,8 @@ export const DIGEST_OPTIONAL_TYPES = [
   // §65.8 the proposer's one reminder when their changes-requested turn passes the review target.
   "proposal.changes_reminder",
   "proposal.accept",
+  // §70.9 the owner approved a move proposal; it now waits for the destination.
+  "proposal.owner_accepted",
   "proposal.reject",
   "proposal.policy_violation",
   "skill.drift",
@@ -69,6 +71,8 @@ export const DIGEST_OPTIONAL_TYPES = [
   "skill.policy_flag",
   "skill.ai_prereview_flagged",
   "skill.deprecated",
+  // §70.9 a skill the recipient watches, maintains, administers or installed moved namespace.
+  "skill.moved",
   "request.fulfilled",
   // §60.7 the proposer's feature-idea lifecycle.
   "idea.published",

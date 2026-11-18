@@ -46,7 +46,16 @@ const cursors = new Map<string, string | null>([["m-pub", null], ["m-ns", null],
 const mappings: RoleMapping[] = [{ id: "m1", groupId: "g-a", namespaceId: NSID, role: "namespace_member" }];
 
 const deps: GitServerDeps = {
-  async findSkill(_ns, slug) {
+  async findSkill(ns, slug) {
+    // §70.6: `moved` moved from team-a to team-b; the old address resolves to the same skill, the
+    // canonical one is team-b/moved. Its repo still sits at the old address (relocation pending).
+    if (slug === "moved" && (ns === "team-a" || ns === "team-b")) {
+      return {
+        id: "s-moved", namespaceId: "nsid-b", visibility: "org", status: "active",
+        canonical: { namespaceSlug: "team-b", slug: "moved" },
+        aliasPaths: [{ namespaceSlug: "team-a", slug: "moved" }],
+      };
+    }
     if (slug === "pdf") return { id: "s-pdf", namespaceId: NSID, visibility: "org", status: "active" };
     if (slug === "secret") return { id: "s-secret", namespaceId: NSID, visibility: "namespace", status: "active" };
     return null;
@@ -55,6 +64,7 @@ const deps: GitServerDeps = {
     // install tokens are skill-scoped; scope must match the requested skill.
     if (raw === "good-pdf") return { userId: "u1", tokenId: "t-pdf", type: "install", scopedSkillId: "s-pdf", isSystem: false };
     if (raw === "good-secret") return { userId: "u1", tokenId: "t1", type: "install", scopedSkillId: "s-secret", isSystem: false };
+    if (raw === "good-moved") return { userId: "u1", tokenId: "t-moved", type: "install", scopedSkillId: "s-moved", isSystem: false };
     // System installation: platform-owned, no user; clones the restricted skill without ns access (§23).
     if (raw === "system-secret") return { userId: null, tokenId: "t-sys", type: "install", scopedSkillId: "s-secret", isSystem: true };
     // Owner-status gate (§5/§23): valid row, but the owning user is inactive.
@@ -116,6 +126,9 @@ before(async () => {
   const pdf = repoPath(deps.repoRoot, "team-a", "pdf");
   await synthesizeVersion({ bareRepoPath: pdf, semver: "1.0.0", isLatestStable: true, files: [{ path: "SKILL.md", bytes: enc("# pdf v1\n") }] });
   await synthesizeVersion({ bareRepoPath: pdf, semver: "2.0.0", isLatestStable: true, files: [{ path: "SKILL.md", bytes: enc("# pdf v2\n") }] });
+
+  // §70.8: a moved skill whose repo still sits at its OLD address (the relocation sweep hasn't run).
+  await synthesizeVersion({ bareRepoPath: repoPath(deps.repoRoot, "team-a", "moved"), semver: "1.0.0", isLatestStable: true, files: [{ path: "SKILL.md", bytes: enc("# moved v1\n") }] });
 
   // Restricted skill `secret`.
   const secret = repoPath(deps.repoRoot, "team-a", "secret");
@@ -187,6 +200,18 @@ test("org skill: pinned tag clones the exact version", async () => {
   await exec("git", ["clone", "--branch", "v1.0.0", `http://x-access-token:good-pdf@127.0.0.1:${port}/team-a/pdf.git`, dest], { env: cloneEnv });
   const v1 = (await exec("git", ["-C", dest, "show", "v1.0.0:SKILL.md"])).stdout;
   assert.match(v1, /pdf v1/);
+});
+
+test("moved skill (§70.6/§70.8): the old AND the new address clone it, served from the provisioned directory", async () => {
+  const viaOld = join(workDir, "c-moved-old");
+  await exec("git", ["clone", "--branch", "v1.0.0", `http://x-access-token:good-moved@127.0.0.1:${port}/team-a/moved.git`, viaOld], { env: cloneEnv });
+  assert.match((await exec("git", ["-C", viaOld, "show", "v1.0.0:SKILL.md"])).stdout, /moved v1/);
+  // The canonical address has no directory yet — the old one is served, with no redirect.
+  const viaNew = join(workDir, "c-moved-new");
+  await exec("git", ["clone", `http://x-access-token:good-moved@127.0.0.1:${port}/team-b/moved.git`, viaNew], { env: cloneEnv });
+  assert.match((await exec("git", ["-C", viaNew, "show", "refs/heads/main:SKILL.md"])).stdout, /moved v1/);
+  // Both clones were counted against the one skill.
+  assert.ok(stamped.filter((s) => s.skillId === "s-moved").length >= 2);
 });
 
 test("any skill without a token is rejected (org included)", async () => {

@@ -54,6 +54,24 @@ test("only submitter may resubmit", () => {
   assert.equal(canPerform("resubmit", "changes_requested", reviewer).ok, false);
 });
 
+test("a move's owner accept waits for the destination (§70.3)", () => {
+  assert.equal(nextState("accept", "under_review", { move: true }), "awaiting_destination");
+  assert.equal(nextState("accept", "under_review", { move: false }), "accepted");
+  assert.equal(nextState("accept", "awaiting_destination", { move: true }), "accepted");
+  assert.deepEqual(canPerform("accept", "under_review", reviewer, { move: true }), { ok: true, to: "awaiting_destination" });
+  assert.deepEqual(canPerform("accept", "awaiting_destination", reviewer, { move: true }), { ok: true, to: "accepted" });
+});
+
+test("the destination stage: request changes, reject, and a revise back to the owner (§70.3)", () => {
+  assert.equal(nextState("request_changes", "awaiting_destination"), "changes_requested");
+  assert.equal(nextState("reject", "awaiting_destination"), "rejected");
+  assert.equal(nextState("revise", "awaiting_destination"), "under_review");
+  assert.equal(nextState("start_review", "awaiting_destination"), null);
+  assert.equal(nextState("resubmit", "awaiting_destination"), null);
+  assert.deepEqual(canPerform("revise", "awaiting_destination", submitter), { ok: true, to: "under_review" });
+  assert.equal(canPerform("revise", "awaiting_destination", reviewer).ok, false);
+});
+
 test("no action from terminal", () => {
   assert.equal(canPerform("reject", "accepted", reviewer).ok, false);
   assert.equal(canPerform("start_review", "rejected", reviewer).ok, false);

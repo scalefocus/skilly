@@ -4,6 +4,7 @@ import { currentAccess } from "../../../../../../lib/guard";
 import { pool } from "../../../../../../lib/db";
 import { promoteToGlobal } from "../../../../../../lib/proposals";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +17,8 @@ export async function POST(_req: Request, ctx: { params: Promise<{ ns: string; s
   const r = await promoteToGlobal(pool, {
     access,
     actorUserId: access.userId,
-    sourceNamespaceSlug: (await ctx.params).ns,
-    sourceSkillSlug: (await ctx.params).slug,
+    sourceNamespaceSlug: (await canonicalSkillParams(ctx.params)).ns,
+    sourceSkillSlug: (await canonicalSkillParams(ctx.params)).slug,
   });
   return r.ok ? Response.json({ proposalId: r.proposalId }, { status: 201 }) : Response.json({ error: r.error }, { status: r.status });
 }

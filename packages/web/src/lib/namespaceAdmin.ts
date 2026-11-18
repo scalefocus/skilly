@@ -43,7 +43,7 @@ async function proposalCounts(namespaceId: string): Promise<{ open: number; unas
             count(*) filter (where assignee_id is null)::int as unassigned,
             count(*) filter (where state in ('proposed','under_review') and turn_due_at is not null and turn_due_at <= now())::int as overdue
        from proposals
-      where target_namespace_id = $1 and state in ('proposed','under_review','changes_requested')`,
+      where (case when state = 'awaiting_destination' and destination_namespace_id is not null then destination_namespace_id else target_namespace_id end) = $1 and state in ('proposed','under_review','changes_requested','awaiting_destination')`,
     [namespaceId],
   );
   return rows[0] ?? { open: 0, unassigned: 0, overdue: 0 };

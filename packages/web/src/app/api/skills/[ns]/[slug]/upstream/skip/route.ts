@@ -10,6 +10,7 @@ import { canManageMaintainers } from "../../../../../../../lib/maintainers";
 import { enforceRateLimit } from "../../../../../../../lib/ratelimit";
 import { skipUpstreamRelease, unskipUpstreamRelease } from "../../../../../../../lib/upstreamReleases";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ async function authorize(ctx: Ctx) {
   if (!access.userId) return { error: Response.json({ error: "unknown user" }, { status: 403 }) };
   const limited = enforceRateLimit("upstream-skip", access.userId, 30);
   if (limited) return { error: limited };
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill || skill.status === "archived" || !isSkillVisible(access, skill)) {
     return { error: Response.json({ error: "not found" }, { status: 404 }) };

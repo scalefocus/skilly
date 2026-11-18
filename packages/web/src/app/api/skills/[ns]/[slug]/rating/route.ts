@@ -7,6 +7,7 @@ import { findSkill, latestStableSemver } from "../../../../../../lib/catalog";
 import { setRating, clearRating } from "../../../../../../lib/ratings";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,7 @@ async function authorize(ns: string, slug: string) {
 }
 
 export async function PUT(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
-  const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
+  const a = await authorize((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if ("error" in a) return a.error;
 
   const limited = enforceRateLimit("rating", a.userId, 60);
@@ -45,7 +46,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ ns: string; slu
 }
 
 export async function DELETE(_req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
-  const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
+  const a = await authorize((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if ("error" in a) return a.error;
 
   const limited = enforceRateLimit("rating", a.userId, 60);

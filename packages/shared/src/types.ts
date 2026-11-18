@@ -11,6 +11,8 @@ export type ProposalState =
   | "proposed"
   | "under_review"
   | "changes_requested"
+  /** §70.3: a move proposal the owner accepted, waiting for the destination's reviewers. */
+  | "awaiting_destination"
   | "accepted"
   | "rejected";
 export type Channel = "stable" | "beta";

@@ -47,6 +47,17 @@ export interface SkillRef {
   status: "active" | "archived";
   /** §42 grantee namespaces; a member of any of them clones a restricted skill like an owner member. */
   sharedNamespaceIds?: string[];
+  /**
+   * §70.6 the skill's CANONICAL address. A moved skill may be requested through one of its old
+   * addresses (an alias); every check above still runs against the resolved skill. Absent ⇒ the
+   * request path is the canonical one.
+   */
+  canonical?: { namespaceSlug: string; slug: string };
+  /**
+   * §70.8 the skill's old addresses. Until the relocation sweep renames the repo directory, the
+   * provisioned repo may still sit at one of them, so the server considers them after the canonical one.
+   */
+  aliasPaths?: { namespaceSlug: string; slug: string }[];
 }
 
 /** A servable marketplace, as resolved from the DB. */

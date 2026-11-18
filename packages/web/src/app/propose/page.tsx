@@ -11,6 +11,7 @@ import { isUpstreamBump, suggestUpstreamVersion, upstreamWhatChanged } from "@sk
 import { WHAT_CHANGED_MAX_LEN, METADATA_ONLY_NOTE } from "@skilly/shared/proposal";
 import { titleize } from "@skilly/shared/repo-import";
 import { SLUG_EXISTS_CODE, normalizeMatchSlug, slugMatchClashes, slugClashMessage, type SlugMatchView } from "@skilly/shared/slug-match";
+import { withMoveGrants } from "@skilly/shared/namespace-move";
 import { Modal, Pill, ScrollToTop } from "../../components/ui";
 import { PolicyRulesPanel } from "../../components/PolicyRulesPanel";
 import { useDateFmt } from "../../components/DateFormat";
@@ -219,6 +220,13 @@ function ProposeForm() {
   const [sharedNs, setSharedNs] = useState<string[]>([]);
   // The existing skill's (frozen) visibility in new-version mode — decides whether sharing applies.
   const [nvVisibility, setNvVisibility] = useState<"org" | "namespace" | null>(null);
+  // §70: the namespace this new version MOVES the skill to (null = it stays). New-version mode only;
+  // both namespaces approve. `preMoveShared` is the share list before the move began, restored when
+  // the proposer picks the current owner again.
+  const [moveDest, setMoveDest] = useState<string | null>(null);
+  const preMoveShared = useRef<string[] | null>(null);
+  // Namespaces where a skill the proposer can see already uses this slug — not offered as destinations.
+  const [slugTakenNs, setSlugTakenNs] = useState<string[]>([]);
   // Pointer (external git) is the first tab and the default for a NEW proposal; new-version mode
   // overrides this from the existing skill's type once it loads.
   const [sourceType, setSourceType] = useState<"hosted" | "pointer">("pointer");
@@ -560,7 +568,9 @@ function ProposeForm() {
           const keepUsage = forcedNV?.reason === "slug" && !!prev.usageExamples.trim();
           return {
             ...prev,
-            namespaceSlug: nvNs!,
+            // §70.6: a stale link may name a moved skill's OLD address — the API answers with the
+            // canonical one, which is what the proposal must target.
+            namespaceSlug: typeof j.namespaceSlug === "string" ? j.namespaceSlug : nvNs!,
             skillSlug: nvSlug!,
             title: j.meta?.title ?? "",
             description: j.meta?.description ?? "",
@@ -585,6 +595,17 @@ function ProposeForm() {
         const currentShared: string[] = Array.isArray(j.sharedNamespaces) ? j.sharedNamespaces.map((n: { namespaceId: string }) => n.namespaceId) : [];
         setSharedNs(currentShared);
         setNvVisibility(j.visibility === "org" ? "org" : "namespace");
+        setMoveDest(null);
+        preMoveShared.current = null;
+        // §70.2: destinations that already hold this slug (as far as the proposer can see).
+        fetch(`/api/skills/slug-matches?slug=${encodeURIComponent(nvSlug!)}`)
+          .then((rr) => (rr.ok ? rr.json() : null))
+          .then((jj) => {
+            if (cancelled || !Array.isArray(jj?.matches)) return;
+            const owner = typeof j.namespaceSlug === "string" ? j.namespaceSlug : nvNs;
+            setSlugTakenNs((jj.matches as SlugMatchView[]).map((m) => m.namespaceSlug).filter((ns) => ns !== owner));
+          })
+          .catch(() => {});
         // Baseline for the §8 no-op guard (reuse mode: at least one field must differ from this).
         nvBaseline.current = {
           title: j.meta?.title ?? "",
@@ -766,7 +787,33 @@ function ProposeForm() {
   // visibility decides (a non-global namespace can hold an org skill), else the derived one.
   const shareVisibility: "org" | "namespace" = isNewVersion ? (nvVisibility ?? visibility) : visibility;
   const ownerNamespaceId = shareTargets.find((o) => o.slug === f.namespaceSlug.trim().toLowerCase())?.id ?? null;
-  const effectiveShared = shareVisibility === "namespace" ? sharedNs.filter((id) => id !== ownerNamespaceId) : [];
+  // §70: on a move the destination becomes the owner (never its own grantee) and the old owner may
+  // stay as a grantee.
+  const newOwnerId = (isNewVersion && moveDest) || ownerNamespaceId;
+  const effectiveShared = shareVisibility === "namespace" ? sharedNs.filter((id) => id !== newOwnerId) : [];
+  const moveTarget = isNewVersion && moveDest ? shareTargets.find((o) => o.id === moveDest) ?? null : null;
+  const oldOwnerKeepsAccess = shareVisibility !== "namespace" || (!!ownerNamespaceId && effectiveShared.includes(ownerNamespaceId));
+  // A global skill never moves (§70.1): promotion is the way into global, and nothing moves out of it.
+  const canMove = isNewVersion && f.namespaceSlug.trim().toLowerCase() !== "global" && !!ownerNamespaceId;
+
+  // §70.2: pick a destination (or the owner again to cancel). The share list follows — the old owner
+  // is added (removable) and the destination dropped; cancelling restores the list as it was.
+  function changeDestination(id: string | null) {
+    const next = id && id !== ownerNamespaceId ? id : null;
+    if (next === moveDest) return;
+    if (shareVisibility === "namespace" && ownerNamespaceId) {
+      if (!next) {
+        if (preMoveShared.current) setSharedNs(preMoveShared.current);
+        preMoveShared.current = null;
+      } else {
+        if (!moveDest) preMoveShared.current = sharedNs;
+        // Switching between destinations: give the previous one its grant back if it had one.
+        const base = moveDest && preMoveShared.current?.includes(moveDest) && !sharedNs.includes(moveDest) ? [...sharedNs, moveDest] : sharedNs;
+        setSharedNs(withMoveGrants(base, ownerNamespaceId, next));
+      }
+    }
+    setMoveDest(next);
+  }
 
   // Accept a dropped/chosen bundle: soft-validate the extension, then stage it.
   function acceptBundle(picked: File | null) {
@@ -974,6 +1021,8 @@ function ProposeForm() {
         visibility,
         // §42: the grantee namespaces (cleared for an org skill; the server re-validates).
         sharedNamespaceIds: effectiveShared,
+        // §70: the namespace this new version moves the skill to (null = it stays).
+        ...(isNewVersion ? { destinationNamespaceId: moveDest } : {}),
       };
 
       // The "What changed" note is required on a new version (server re-enforces with a 422).
@@ -1010,9 +1059,10 @@ function ProposeForm() {
           f.toolHarness.trim() === b.toolHarness.trim() &&
           setEq(categories, b.categories, true) &&
           f.usageExamples.trim() === b.usageExamples.trim() &&
-          setEq(effectiveShared, b.sharedNamespaceIds)
+          setEq(effectiveShared, b.sharedNamespaceIds) &&
+          !moveDest
         ) {
-          throw new Error("Nothing changed — edit at least one field (title, description, categories, tool/harness, usage, or shared namespaces), or provide a new source.");
+          throw new Error("Nothing changed — edit at least one field (title, description, categories, tool/harness, usage, shared namespaces or namespace), or provide a new source.");
         }
       } else if (sourceType === "hosted") {
         // §44.7: the AI-drafted bundle is already uploaded, validated and scanned — use it as is.
@@ -1140,7 +1190,7 @@ function ProposeForm() {
           router.push(`/proposals/${j.proposalId}`);
           return;
         }
-        router.push(`/skills/${f.namespaceSlug}/${f.skillSlug}`);
+        router.push(`/skills/${moveTarget?.slug ?? f.namespaceSlug}/${f.skillSlug}`);
       }
     } catch (e2) {
       setErr(String((e2 as Error).message));
@@ -1270,7 +1320,7 @@ function ProposeForm() {
         <h1 className="page-title">{lock ? "Propose a new version." : mode === "want" ? "Request a skill." : mode === "repo" ? "Import a repository." : "Propose a skill."}</h1>
         {lock ? (
           <p className="page-sub">
-            New version of <span className="mono">{f.namespaceSlug}/{f.skillSlug}</span>. The slug is locked — everything else (title, description, categories, tool/harness, usage) is editable, and you can keep the current files or provide a fresh source. It enters the normal review/approval flow.
+            New version of <span className="mono">{f.namespaceSlug}/{f.skillSlug}</span>. The slug is locked — everything else (namespace, title, description, categories, tool/harness, usage) is editable, and you can keep the current files or provide a fresh source. It enters the normal review/approval flow; moving it to another namespace needs both namespaces’ approval.
           </p>
         ) : mode === "want" ? (
           <p className="page-sub">Describe the skill you wish existed. Your request appears on the Requested skills page, where anyone can pick it up and build it — you’ll be notified when it’s fulfilled.</p>
@@ -1537,7 +1587,34 @@ function ProposeForm() {
             new-version flows. Hidden in "I want a skill" mode (a request has no namespace/slug). */}
         {mode === "have" && (<>
         <div>
-            <label style={label}>Namespace{!lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · pick one you can contribute to</span>}</label>
+            <label style={label}>Namespace{!lock && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · pick one you can contribute to</span>}{canMove && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--faint)" }}> · pick another to move the skill there</span>}</label>
+            {canMove ? (
+            <div className="select-wrap">
+              <select
+                className="input input-lg input-mono"
+                style={{ width: "100%", padding: "10px 38px 10px 12px" }}
+                value={moveDest ?? ""}
+                onChange={(e) => changeDestination(e.target.value || null)}
+                data-testid="move-namespace"
+                aria-label="Namespace"
+              >
+                <option value="">{f.namespaceSlug} — current namespace</option>
+                {shareTargets
+                  .filter((o) => o.id !== ownerNamespaceId)
+                  .map((o) => {
+                    const taken = slugTakenNs.includes(o.slug);
+                    return (
+                      <option key={o.id} value={o.id} disabled={taken}>
+                        {o.slug} — {o.displayName}{taken ? ` (already has a skill named ${f.skillSlug})` : ""}
+                      </option>
+                    );
+                  })}
+              </select>
+              <svg className="select-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </div>
+            ) : (
             <div className={`select-wrap${lock ? " is-disabled" : ""}`}>
               <select
                 className="input input-lg input-mono"
@@ -1558,6 +1635,23 @@ function ProposeForm() {
                 <path d="m6 9 6 6 6-6" />
               </svg>
             </div>
+            )}
+            {moveTarget && (
+              <div data-testid="move-banner" role="status" style={{ marginTop: 10, padding: "12px 14px", borderRadius: "var(--radius-sm)", background: "var(--accent-soft)", fontSize: 13.5, display: "flex", flexDirection: "column", gap: 6 }}>
+                <span>
+                  Accepting this moves <span className="mono">{f.namespaceSlug}/{f.skillSlug}</span> to <span className="mono">{moveTarget.slug}</span>. Both namespaces must approve.
+                </span>
+                <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 2 }}>
+                  <li>New installs use <span className="mono">{moveTarget.slug}/{f.skillSlug}</span>. Existing installs keep working through the old address.</li>
+                  {shareVisibility === "namespace" && (
+                    oldOwnerKeepsAccess
+                      ? <li><span className="mono">{f.namespaceSlug}</span> keeps access as a shared namespace — remove it below if it shouldn’t.</li>
+                      : <li style={{ color: "var(--danger)" }}><span className="mono">{f.namespaceSlug}</span> members lose access; their installs stop working.</li>
+                  )}
+                  <li>In plugin marketplaces the skill is listed under its new namespace.</li>
+                </ul>
+              </div>
+            )}
             <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
               {visibility === "org" ? (
                 <><span className="mono">global</span> — org-wide, visible to everyone.</>
@@ -1578,7 +1672,7 @@ function ProposeForm() {
                 value={effectiveShared}
                 onChange={setSharedNs}
                 options={shareTargets}
-                exclude={ownerNamespaceId ? [ownerNamespaceId] : []}
+                exclude={newOwnerId ? [newOwnerId] : []}
               />
               <p className="muted" style={{ fontSize: 12, marginTop: 7 }}>
                 Members of these namespaces can find, install and discuss the skill. Your namespace keeps all review and management rights.

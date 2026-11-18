@@ -60,7 +60,7 @@ export async function getNavBadges(access: EffectiveAccess & { userId: string | 
   // §65.5: a proposal assigned to SOMEONE ELSE isn't counted, and an assignment change re-arms the
   // half — being assigned re-arms the assignee's badge, an unassign re-arms everyone's.
   let review = 0;
-  const reviewableStates = `p.state in ('proposed','under_review') and (p.assignee_id is null or p.assignee_id = $2::uuid)
+  const reviewableStates = `p.state in ('proposed','under_review','awaiting_destination') and (p.assignee_id is null or p.assignee_id = $2::uuid)
     and greatest(p.updated_at, coalesce(p.assignment_changed_at, p.updated_at)) > $1`;
   if (access.isPlatformAdmin) {
     review = Number(
@@ -78,7 +78,7 @@ export async function getNavBadges(access: EffectiveAccess & { userId: string | 
         (
           await db.query<{ n: string }>(
             `select count(*)::text as n from proposals p
-              where ${reviewableStates} and p.target_namespace_id = any($3::uuid[])`,
+              where ${reviewableStates} and (case when p.state = 'awaiting_destination' and p.destination_namespace_id is not null then p.destination_namespace_id else p.target_namespace_id end) = any($3::uuid[])`,
             [seen.reviewSeenAt, access.userId, nsIds],
           )
         ).rows[0]?.n ?? 0,

@@ -247,6 +247,19 @@ export default function NotificationsPage() {
                     <span className="muted mono" style={{ fontSize: 11, marginLeft: "auto" }}>{fmt.dateTime(n.createdAt)}</span>
                   </div>
                   {note && <p className="muted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>“{note}”</p>}
+                  {/* §70.9 a skill moved namespace (and published a version). */}
+                  {n.type === "skill.moved" && typeof n.payload.oldNamespaceSlug === "string" && (
+                    <p className="muted" data-testid="notification-moved" style={{ fontSize: 13.5, margin: "8px 0 0" }}>
+                      Moved from <span className="mono">{n.payload.oldNamespaceSlug}/{skSlug}</span> to <span className="mono">{nsSlug}/{skSlug}</span>. Existing installs keep working; new installs use the new address.
+                      {typeof n.payload.marketplaceName === "string" ? ` In plugin marketplaces it is now listed as ${n.payload.marketplaceName}.` : ""}
+                    </p>
+                  )}
+                  {/* §70.9 the owner approved a move proposal; the destination decides next. */}
+                  {n.type === "proposal.owner_accepted" && typeof n.payload.destinationSlug === "string" && (
+                    <p className="muted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>
+                      {typeof n.payload.namespaceSlug === "string" ? n.payload.namespaceSlug : "The owner"} approved your proposal. It now waits for {n.payload.destinationSlug}.
+                    </p>
+                  )}
                   {follow && (
                     <>
                       <p style={{ fontSize: 13.5, margin: "8px 0 0" }}>{follow.sentence}</p>

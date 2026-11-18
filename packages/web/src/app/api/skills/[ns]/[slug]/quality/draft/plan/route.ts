@@ -4,13 +4,14 @@
 import { currentAccess } from "../../../../../../../../lib/guard";
 import { withSystemLog } from "../../../../../../../../lib/apiLog";
 import { loadDraftContext, draftPlan } from "../../../../../../../../lib/qualityDraft";
+import { canonicalSkillParams } from "../../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
 export const GET = withSystemLog("/api/skills/[ns]/[slug]/quality/draft/plan", async function GET(_req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
   const access = await currentAccess();
   if (!access?.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const r = await loadDraftContext(access, ns, slug);
   if (!r.ok) return Response.json({ error: r.status === 409 ? "ai_draft_unavailable" : r.error, reason: r.reason ?? null, message: r.error }, { status: r.status });
   try {

@@ -5,6 +5,7 @@ import { authOptions } from "../../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../../lib/access";
 import { findSkill, relatedSkills } from "../../../../../../lib/catalog";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ ns: string; sl
   if (!oid) return Response.json({ error: "unauthenticated" }, { status: 401 });
   const access = await resolveUserAccess(oid);
 
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   // No leak: an invisible (or archived, or missing) skill returns 404 exactly like the detail route.
   if (!skill || skill.status === "archived" || !isSkillVisible(access, skill)) {

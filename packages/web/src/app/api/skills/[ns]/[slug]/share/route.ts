@@ -12,6 +12,7 @@ import { withSystemLog } from "../../../../../../lib/apiLog";
 import { mintShareLink } from "../../../../../../lib/shareLinks";
 import { webBaseUrl } from "../../../../../../lib/baseUrl";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/share", async functio
   const limited = enforceRateLimit("share-link", access.userId, 20);
   if (limited) return limited;
 
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   // No leak (§33.6/invariant #3): a restricted skill the caller can't see 404s exactly like an
   // unknown slug.

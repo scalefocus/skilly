@@ -12,6 +12,7 @@ import { buildSkillDownload, DownloadFormatError, type DownloadFormat } from "..
 import { recordFirstDownload } from "../../../../../../lib/installs";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { isSkillVisible, isSameSiteFetch } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
   const limited = enforceRateLimit("download", access.userId, 60);
   if (limited) return limited;
 
-  const skill = await findSkill((await ctx.params).ns, (await ctx.params).slug);
+  const skill = await findSkill((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
 
   if (skill.status === "archived") {
@@ -48,7 +49,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
 
   let dl;
   try {
-    dl = await buildSkillDownload(skill.id, (await ctx.params).slug, semver, format);
+    dl = await buildSkillDownload(skill.id, (await canonicalSkillParams(ctx.params)).slug, semver, format);
   } catch (e) {
     if (e instanceof DownloadFormatError) return Response.json({ error: e.message }, { status: 400 });
     throw e;

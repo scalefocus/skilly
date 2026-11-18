@@ -14,7 +14,8 @@ import { WHAT_CHANGED_MAX_LEN } from "@skilly/shared/proposal";
 // other query — the note/harness("generic") paths must not hit the DB.
 const noDb = {
   query: async (sql: string) => {
-    if (/from skills s where s\.id = \$1/.test(sql)) return { rows: [{ namespace_id: "ns-1", visibility: "org", shared_namespace_ids: [] }], rowCount: 1 };
+    // (§70: the lookup also reads the owner's slug — a move is validated against it.)
+    if (/from skills s join namespaces n on n\.id = s\.namespace_id where s\.id = \$1/.test(sql)) return { rows: [{ namespace_id: "ns-1", ns_slug: "ns-one", visibility: "org", shared_namespace_ids: [] }], rowCount: 1 };
     throw new Error("DB must not be queried in these cases");
   },
 } as unknown as Pool;

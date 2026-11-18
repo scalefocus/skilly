@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.61.0",
+    date: "2026-11-18",
+    summary:
+      "When you propose a new version of a skill you can now pick another namespace to move it there. The current namespace's reviewers approve first, then the new namespace's reviewers accept, and the skill moves with all its versions, installs and history. Existing installs and links keep working through the old address.",
+  },
+  {
     version: "2.60.3",
     date: "2026-11-16",
     summary:

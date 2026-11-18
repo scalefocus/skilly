@@ -10,13 +10,14 @@ import { resolveUserAccess } from "../../../../../../../lib/access";
 import { findSkill } from "../../../../../../../lib/catalog";
 import { deleteSkillDiscussionMessage, type SkillDiscussionSkill } from "../../../../../../../lib/messages";
 import { enforceRateLimit } from "../../../../../../../lib/ratelimit";
+import { canonicalSkillParams } from "../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function DELETE(_req: Request, ctx: { params: Promise<{ ns: string; slug: string; messageId: string }> }) {
-  const { ns, slug, messageId } = await ctx.params;
+  const { ns, slug, messageId } = await canonicalSkillParams(ctx.params);
   const session = await getServerSession(authOptions);
   const oid = (session as { oid?: string } | null)?.oid;
   if (!oid) return Response.json({ error: "unauthenticated" }, { status: 401 });

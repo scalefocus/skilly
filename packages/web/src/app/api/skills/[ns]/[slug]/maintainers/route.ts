@@ -10,6 +10,7 @@ import { getEffectiveMaintainers, canManageMaintainers, canRemoveMaintainer, add
 import { followableMap } from "../../../../../../lib/follows";
 import { enforceRateLimit } from "../../../../../../lib/ratelimit";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ async function authorize(ns: string, slug: string) {
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
-  const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
+  const a = await authorize((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if ("error" in a) return a.error;
   const list = await getEffectiveMaintainers(a.skill);
   // §35.4 — viewer-independent Follow eligibility per maintainer (for the button right of Reach out).
@@ -45,7 +46,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ ns: string; sl
 }
 
 export async function PUT(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
-  const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
+  const a = await authorize((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if ("error" in a) return a.error;
   if (!(await canManageMaintainers(a.access, a.skill, a.userId))) return Response.json({ error: "not allowed to manage maintainers" }, { status: 403 });
   const limited = enforceRateLimit("maintainers", a.userId, 60);
@@ -59,7 +60,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ ns: string; slu
 }
 
 export async function DELETE(req: Request, ctx: { params: Promise<{ ns: string; slug: string }> }) {
-  const a = await authorize((await ctx.params).ns, (await ctx.params).slug);
+  const a = await authorize((await canonicalSkillParams(ctx.params)).ns, (await canonicalSkillParams(ctx.params)).slug);
   if ("error" in a) return a.error;
   const limited = enforceRateLimit("maintainers", a.userId, 60);
   if (limited) return limited;

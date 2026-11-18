@@ -16,7 +16,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   const id = (await ctx.params).id;
   if (!UUID.test(id)) return Response.json({ error: "not found" }, { status: 404 });
   const { rows } = await pool.query<{ target_namespace_id: string; submitted_by: string }>(
-    `select target_namespace_id, submitted_by from proposals where id = $1`,
+    `select (case when state = 'awaiting_destination' and destination_namespace_id is not null then destination_namespace_id else target_namespace_id end) as target_namespace_id, submitted_by from proposals where id = $1`,
     [id],
   );
   const p = rows[0];

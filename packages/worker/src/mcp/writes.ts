@@ -25,6 +25,10 @@ import {
   sharedNamespaceIdsSql,
   slugExistsMessage,
   SLUG_EXISTS_CODE,
+  SLUG_RESERVED_CODE,
+  slugReservedMessage,
+  effectiveDestination,
+  canViewProposalAsReviewer,
   userCanSeeSkillSql,
   type KnownCategory,
 } from "@skilly/shared";
@@ -442,7 +446,7 @@ export async function postProposalMessage(
 ): Promise<{ ok: true; messageId: string } | WriteFailure> {
   const p = await loadProposalCtx(pool, proposalId);
   if (!p) return fail("proposal not found");
-  const isReviewer = canReviewNamespace(access, p.namespaceId);
+  const isReviewer = isProposalReviewerViewer(access, p);
   if (p.submittedBy !== userId && !isReviewer) return fail("proposal not found");
   if (p.state === "accepted" || p.state === "rejected") return fail("this proposal is closed — the discussion is read-only");
 
@@ -488,8 +492,12 @@ export async function postProposalMessage(
 
 interface ProposalCtx {
   id: string;
+  /** The OWNER namespace (the owner stage's reviewers, §70.3). */
   namespaceId: string;
   namespaceSlug: string;
+  /** §70: set when the current revision moves the skill to another namespace. */
+  destinationNamespaceId: string | null;
+  destinationSlug: string | null;
   targetSkillId: string | null;
   proposedSemver: string;
   state: ProposalState;
@@ -502,13 +510,18 @@ export async function loadProposalCtx(pool: Pool, id: string): Promise<ProposalC
     id: string;
     target_namespace_id: string;
     ns_slug: string;
+    destination_namespace_id: string | null;
+    destination_slug: string | null;
     target_skill_id: string | null;
     proposed_semver: string;
     state: ProposalState;
     submitted_by: string;
   }>(
-    `select p.id, p.target_namespace_id, n.slug as ns_slug, p.target_skill_id, p.proposed_semver, p.state, p.submitted_by
-       from proposals p join namespaces n on n.id = p.target_namespace_id where p.id = $1`,
+    `select p.id, p.target_namespace_id, n.slug as ns_slug, p.destination_namespace_id, dn.slug as destination_slug,
+            p.target_skill_id, p.proposed_semver, p.state, p.submitted_by
+       from proposals p join namespaces n on n.id = p.target_namespace_id
+       left join namespaces dn on dn.id = p.destination_namespace_id
+      where p.id = $1`,
     [id],
   );
   const r = rows[0];
@@ -517,12 +530,29 @@ export async function loadProposalCtx(pool: Pool, id: string): Promise<ProposalC
         id: r.id,
         namespaceId: r.target_namespace_id,
         namespaceSlug: r.ns_slug,
+        destinationNamespaceId: r.destination_namespace_id,
+        destinationSlug: r.destination_slug,
         targetSkillId: r.target_skill_id,
         proposedSemver: r.proposed_semver,
         state: r.state,
         submittedBy: r.submitted_by,
       }
     : null;
+}
+
+/**
+ * May this caller read the proposal as a reviewer (§70.3)? The owner's reviewers always; the
+ * destination's only from the owner's accept on (`canViewProposalAsReviewer`).
+ */
+export function isProposalReviewerViewer(access: EffectiveAccess, p: ProposalCtx): boolean {
+  return canViewProposalAsReviewer(access, { state: p.state, targetNamespaceId: p.namespaceId, destinationNamespaceId: p.destinationNamespaceId });
+}
+
+/** §70: MCP never sets a move — the destination/source fields are server-owned. Stripped in place. */
+export function stripMoveFields(meta: object): void {
+  const m = meta as Record<string, unknown>;
+  delete m.destinationNamespaceId;
+  delete m.sourceNamespaceId;
 }
 
 // ── Skill requests (§26) ────────────────────────────────────────────────────────────────────────
@@ -694,26 +724,47 @@ function validatePointerFields(p: { url: string; ref: string; subdir?: string | 
 async function resolveTarget(
   pool: Pool,
   access: EffectiveAccess,
-  namespaceId: string,
+  namespace: { id: string; slug: string },
   skillSlug: string,
   proposedSemver: string,
-): Promise<{ ok: true; targetSkillId: string | null; isNewVersion: boolean } | WriteFailure> {
+): Promise<
+  | {
+      ok: true;
+      targetSkillId: string | null;
+      isNewVersion: boolean;
+      /** §70.6: the skill's CURRENT owner when the address was an old one (an alias); else absent. */
+      owner?: { id: string; slug: string };
+    }
+  | WriteFailure
+> {
   if (!parseSemver(proposedSemver)) return fail(`"${proposedSemver}" is not a valid semver (e.g. 1.0.0)`);
-  const { rows } = await pool.query<{ id: string; status: string; namespace_id: string; visibility: "org" | "namespace"; shared_namespace_ids: string[] }>(
-    `select s.id, s.status, s.namespace_id, s.visibility, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
-       from skills s where s.namespace_id = $1 and s.slug = $2`,
-    [namespaceId, skillSlug],
+  // §70.6: the live skill at <ns>/<slug> first, then a moved skill's old address (an alias).
+  const { rows } = await pool.query<{ id: string; status: string; namespace_id: string; ns_slug: string; visibility: "org" | "namespace"; shared_namespace_ids: string[]; via_alias: boolean }>(
+    `select s.id, s.status, s.namespace_id, n.slug as ns_slug, s.visibility, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids, h.via_alias
+       from (
+         select id, via_alias from (
+           select s2.id, false as via_alias, 0 as pri from skills s2 where s2.namespace_id = $1 and s2.slug = $2
+           union all
+           select a.skill_id, true, 1 from skill_path_aliases a where a.namespace_id = $1 and a.slug = $2
+         ) x order by pri limit 1
+       ) h
+       join skills s on s.id = h.id join namespaces n on n.id = s.namespace_id`,
+    [namespace.id, skillSlug],
   );
   const existing = rows[0];
   if (!existing || !isSkillVisible(access, { namespaceId: existing.namespace_id, visibility: existing.visibility, sharedNamespaceIds: existing.shared_namespace_ids })) {
+    // An old address of a skill the caller can't see is reserved: no new skill may take it (§70.6),
+    // and the refusal names nothing.
+    if (existing?.via_alias) return fail(`${SLUG_RESERVED_CODE}: ${slugReservedMessage(namespace.slug, skillSlug)}`);
     return { ok: true, targetSkillId: null, isNewVersion: false };
   }
+  const owner = existing.via_alias ? { id: existing.namespace_id, slug: existing.ns_slug } : undefined;
   if (existing.status === "archived") return fail("that skill is archived — restore it before proposing a new version");
   const { rows: vs } = await pool.query<{ semver: string }>(`select semver from skill_versions where skill_id = $1`, [existing.id]);
   if (vs.some((v) => v.semver === proposedSemver)) {
     return fail(`version ${proposedSemver} already exists for that skill — versions are immutable, choose a higher one`);
   }
-  return { ok: true, targetSkillId: existing.id, isNewVersion: true };
+  return { ok: true, targetSkillId: existing.id, isNewVersion: true, ...(owner ? { owner } : {}) };
 }
 
 /**
@@ -815,8 +866,12 @@ export async function createMcpProposal(
   clientName: string,
   scanSeverity?: string,
 ): Promise<ProposeResult | WriteFailure> {
-  const target = await resolveTarget(pool, access, namespace.id, payload.metadata.skillSlug, proposedSemver);
+  // §70: an MCP proposal never moves a skill — the move fields are server-owned.
+  stripMoveFields(payload.metadata);
+  const target = await resolveTarget(pool, access, namespace, payload.metadata.skillSlug, proposedSemver);
   if (!target.ok) return target;
+  // §70.6: proposed to a moved skill's old address → filed against the skill's current owner.
+  if (target.owner) namespace = target.owner;
   // §8 slug match: a NEW skill can't take a slug a visible active skill already uses in ANOTHER
   // namespace — the agent must propose to that skill's namespace, which makes it a new version.
   if (!target.isNewVersion) {
@@ -904,13 +959,6 @@ export async function proposerAction(
 ): Promise<{ ok: true; state: ProposalState; revisionNo: number } | WriteFailure> {
   const p = await loadProposalCtx(pool, proposalId);
   if (!p) return fail("proposal not found");
-  const caps = { isReviewer: canReviewNamespace(access, p.namespaceId), isSubmitter: p.submittedBy === userId };
-  if (!caps.isSubmitter) return fail("only the proposal's submitter can revise or resubmit it");
-  const decision = canPerform(action, p.state, caps);
-  if (!decision.ok) return fail(decision.reason);
-
-  const metaErr = validateMetadata(newPayload.metadata, p.namespaceSlug, p.targetSkillId !== null) ?? (await categoriesFailure(pool, newPayload.metadata.categories));
-  if (metaErr) return metaErr;
 
   const { rows: prevRows } = await pool.query<{ payload: BuiltPayload; revision_no: number }>(
     `select payload, revision_no from proposal_revisions where proposal_id = $1 order by revision_no desc limit 1`,
@@ -918,6 +966,32 @@ export async function proposerAction(
   );
   const prev = prevRows[0];
   if (!prev) return fail("proposal has no revisions");
+
+  // §70: MCP never sets a move, but a revise/resubmit must not silently drop one either. Carry the
+  // latest revision's destination forward and re-stamp the source with the skill's CURRENT owner
+  // (the `skill_moved` check at accept compares them); a destination that is now the owner (the
+  // skill moved there meanwhile) is no move at all.
+  stripMoveFields(newPayload.metadata);
+  const prevDestination = (prev.payload.metadata as { destinationNamespaceId?: string | null } | undefined)?.destinationNamespaceId ?? null;
+  let destination: string | null = null;
+  if (prevDestination && p.targetSkillId) {
+    const owner = (await pool.query<{ namespace_id: string }>(`select namespace_id from skills where id = $1`, [p.targetSkillId])).rows[0]?.namespace_id;
+    destination = owner ? effectiveDestination(prevDestination, owner) : null;
+    if (destination && owner) {
+      const meta = newPayload.metadata as ProposalMetadataInput & { destinationNamespaceId?: string | null; sourceNamespaceId?: string | null };
+      meta.destinationNamespaceId = destination;
+      meta.sourceNamespaceId = owner;
+    }
+  }
+
+  const caps = { isReviewer: canReviewNamespace(access, p.namespaceId), isSubmitter: p.submittedBy === userId };
+  if (!caps.isSubmitter) return fail("only the proposal's submitter can revise or resubmit it");
+  const decision = canPerform(action, p.state, caps, { move: destination !== null });
+  if (!decision.ok) return fail(decision.reason);
+
+  const metaErr = validateMetadata(newPayload.metadata, p.namespaceSlug, p.targetSkillId !== null) ?? (await categoriesFailure(pool, newPayload.metadata.categories));
+  if (metaErr) return metaErr;
+
   if (JSON.stringify(prev.payload) === JSON.stringify(newPayload)) {
     return fail("nothing changed — edit at least one field, or provide a new source");
   }
@@ -935,7 +1009,8 @@ export async function proposerAction(
     }
   }
 
-  const to = nextState(action, p.state);
+  // §70.3: a revise from awaiting_destination returns the proposal to the owner stage.
+  const to = nextState(action, p.state, { move: destination !== null });
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -946,8 +1021,15 @@ export async function proposerAction(
       [proposalId, JSON.stringify(newPayload), userId, note ?? (action === "revise" ? "revised via MCP" : "resubmitted via MCP")],
     );
     // `revise` keeps the state; `resubmit` moves it. Either way updated_at moves, which is what
-    // re-arms the reviewer's queue badge (§10).
-    await client.query(`update proposals set state = $2, updated_at = now() where id = $1`, [proposalId, to ?? p.state]);
+    // re-arms the reviewer's queue badge (§10). §70.3: any new revision clears the owner's approval
+    // of a move, and the destination column mirrors the new revision.
+    await client.query(
+      `update proposals
+          set state = $2, updated_at = now(), destination_namespace_id = $3,
+              owner_accepted_by = null, owner_accepted_at = null, owner_accepted_revision = null
+        where id = $1`,
+      [proposalId, to ?? p.state, destination],
+    );
     await auditMcp(client, {
       actorUserId: userId,
       action: `proposal.${action}d`,

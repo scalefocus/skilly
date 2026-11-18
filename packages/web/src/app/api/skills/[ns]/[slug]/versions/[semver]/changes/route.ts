@@ -18,6 +18,7 @@ import { pool } from "../../../../../../../../lib/db";
 import { enforceRateLimit } from "../../../../../../../../lib/ratelimit";
 import { getVersionChangeSummary, getVersionFileDiff } from "../../../../../../../../lib/versionDiff";
 import { isSkillVisible, isValidSemver } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
   const limited = enforceRateLimit("download", access.userId, 120);
   if (limited) return limited;
 
-  const { ns, slug, semver } = await ctx.params;
+  const { ns, slug, semver } = await canonicalSkillParams(ctx.params);
   if (!isValidSemver(semver)) return Response.json({ error: "not found" }, { status: 404 });
 
   const skill = await findSkill(ns, slug);

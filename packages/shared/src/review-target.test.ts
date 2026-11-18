@@ -35,6 +35,7 @@ test("reviewTargetError: empty means no target; 1–30 whole days pass; anything
 
 test("reviewTurn: reviewers while proposed/under_review, the proposer while changes_requested, none once decided", () => {
   assert.equal(reviewTurn("proposed"), "reviewer");
+  assert.equal(reviewTurn("awaiting_destination"), "reviewer"); // §70.3 the destination's reviewers
   assert.equal(reviewTurn("under_review"), "reviewer");
   assert.equal(reviewTurn("changes_requested"), "proposer");
   assert.equal(reviewTurn("accepted"), null);

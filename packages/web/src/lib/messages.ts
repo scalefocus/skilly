@@ -37,7 +37,9 @@ import {
   userCanSeeSkillSql,
   maxRawMentionLength,
   mentionCollapsedLength,
+  canViewProposalAsReviewer,
   type EffectiveAccess,
+  type ProposalState,
 } from "@skilly/shared";
 
 export const MAX_MESSAGE_LEN = 4000;
@@ -78,14 +80,16 @@ interface ProposalCtx {
   kind: "proposal";
   proposalId: string; submitterId: string; namespaceId: string; skillId: string | null;
   namespaceSlug: string; skillSlug: string | null; semver: string; state: string;
+  /** §70: the namespace a move proposal moves the skill to (its reviewers join from the owner's accept). */
+  destinationNamespaceId: string | null;
 }
 
 async function loadProposalCtx(proposalId: string): Promise<ProposalCtx | null> {
   const { rows } = await pool.query<{
     id: string; submitted_by: string; target_namespace_id: string; target_skill_id: string | null;
-    proposed_semver: string; state: string; ns_slug: string; skill_slug: string | null;
+    proposed_semver: string; state: string; ns_slug: string; skill_slug: string | null; destination_namespace_id: string | null;
   }>(
-    `select p.id, p.submitted_by, p.target_namespace_id, p.target_skill_id, p.proposed_semver, p.state,
+    `select p.id, p.submitted_by, p.target_namespace_id, p.target_skill_id, p.proposed_semver, p.state, p.destination_namespace_id,
             n.slug as ns_slug, coalesce(s.slug, rev.slug) as skill_slug
        from proposals p
        join namespaces n on n.id = p.target_namespace_id
@@ -103,7 +107,7 @@ async function loadProposalCtx(proposalId: string): Promise<ProposalCtx | null> 
     kind: "proposal",
     proposalId: r.id, submitterId: r.submitted_by, namespaceId: r.target_namespace_id,
     skillId: r.target_skill_id, namespaceSlug: r.ns_slug, skillSlug: r.skill_slug,
-    semver: r.proposed_semver, state: r.state,
+    semver: r.proposed_semver, state: r.state, destinationNamespaceId: r.destination_namespace_id,
   };
 }
 
@@ -122,6 +126,8 @@ async function canAccessProposal(access: Access, c: ProposalCtx): Promise<boolea
   if (!access.userId) return false;
   if (c.submitterId === access.userId) return true;
   if (canReviewNamespace(access, c.namespaceId)) return true;
+  // §70.3: the destination's reviewers, from the owner's accept on.
+  if (canViewProposalAsReviewer(access, { state: c.state as ProposalState, targetNamespaceId: c.namespaceId, destinationNamespaceId: c.destinationNamespaceId })) return true;
   if (c.skillId && (await isSkillMaintainer(access.userId, c.skillId))) return true;
   return false;
 }

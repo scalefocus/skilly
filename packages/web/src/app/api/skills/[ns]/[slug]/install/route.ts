@@ -22,6 +22,7 @@ import { getInstallMaxTtlMonths, installExpiryCeiling } from "../../../../../../
 import { appendAudit } from "../../../../../../lib/audit";
 import { pool } from "../../../../../../lib/db";
 import { buildInstallCommand, isSkillVisible, resolveLatest } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export const POST = withSystemLog("/api/skills/[ns]/[slug]/install", async funct
   const limited = enforceRateLimit("install", oid, 30);
   if (limited) return limited;
 
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill || skill.status === "archived") {
     return Response.json({ error: "not found" }, { status: 404 });

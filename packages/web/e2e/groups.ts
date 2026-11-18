@@ -80,6 +80,7 @@ export const GROUPS: Readonly<Record<string, { shares: string; specs: readonly s
       "card-geometry.spec.ts",
       "content-risk.spec.ts",
       "icon.spec.ts",
+      "namespace-move.spec.ts", // accepts proposals (both stages of a §70 move)
       "namespace-sharing.spec.ts", // stricter than the spec's starting table: accepts proposals
       "proposal-revise.spec.ts",
       "propose-review-publish.spec.ts",

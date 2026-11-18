@@ -41,7 +41,8 @@ export async function proposalPrereview(
 
 async function proposalCtx(id: string): Promise<{ id: string; state: string; namespaceId: string; revision: number; payload: unknown } | null> {
   const { rows } = await pool.query<{ id: string; state: string; target_namespace_id: string; revision_no: number; payload: unknown }>(
-    `select p.id, p.state, p.target_namespace_id, pr.revision_no, pr.payload
+    // §70.3: the namespace whose reviewers act now (the destination while a move awaits it).
+    `select p.id, p.state, (case when p.state = 'awaiting_destination' and p.destination_namespace_id is not null then p.destination_namespace_id else p.target_namespace_id end) as target_namespace_id, pr.revision_no, pr.payload
        from proposals p
        join lateral (select revision_no, payload from proposal_revisions where proposal_id = p.id order by revision_no desc limit 1) pr on true
       where p.id = $1`,

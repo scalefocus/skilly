@@ -8,11 +8,15 @@ import { canReviewNamespace, repoLabel, reviewTurn, reviewerIdsSql, REVIEW_ASSIG
 import { appendAudit } from "./audit";
 import { nameSql } from "./userLabel";
 
-const OPEN = `('proposed','under_review','changes_requested')`;
+const OPEN = `('proposed','under_review','changes_requested','awaiting_destination')`;
+// §70.3: the namespace whose reviewers act now — the destination while a move awaits it. Every
+// read below aliases it AS target_namespace_id, so assignment, eligibility and the review target
+// follow the stage without further changes.
+const ACTING_NS = `(case when p.state = 'awaiting_destination' and p.destination_namespace_id is not null then p.destination_namespace_id else p.target_namespace_id end)`;
 const bootstrapGroup = (): string | null => process.env.SKILLY_BOOTSTRAP_ADMIN_GROUP?.trim() || null;
 
 function isOpen(state: ProposalState): boolean {
-  return state === "proposed" || state === "under_review" || state === "changes_requested";
+  return state === "proposed" || state === "under_review" || state === "changes_requested" || state === "awaiting_destination";
 }
 
 /** An active reviewer of the namespace who isn't the proposal's submitter (§65.2). */
@@ -79,11 +83,11 @@ interface LockedProposal {
 
 async function lockProposal(client: PoolClient, id: string): Promise<LockedProposal | null> {
   const { rows } = await client.query<LockedProposal>(
-    `select p.id, p.state, p.target_namespace_id, n.slug as namespace_slug, p.submitted_by, p.assignee_id, p.proposed_semver,
+    `select p.id, p.state, ${ACTING_NS} as target_namespace_id, n.slug as namespace_slug, p.submitted_by, p.assignee_id, p.proposed_semver,
             coalesce(s.slug, (select payload->'metadata'->>'skillSlug' from proposal_revisions
                                where proposal_id = p.id order by revision_no desc limit 1)) as skill_slug
        from proposals p
-       join namespaces n on n.id = p.target_namespace_id
+       join namespaces n on n.id = ${ACTING_NS}
        left join skills s on s.id = p.target_skill_id
       where p.id = $1
       for update of p`,
@@ -278,7 +282,7 @@ export async function unassignErasedUser(client: PoolClient, userId: string, act
   const { rows } = await client.query<{ id: string; target_namespace_id: string; submitted_by: string; state: ProposalState; proposed_semver: string; skill_slug: string | null }>(
     `update proposals p set assignee_id = null, assigned_by = $2, assignment_changed_at = now()
       where p.assignee_id = $1 and p.state in ${OPEN}
-      returning p.id, p.target_namespace_id, p.submitted_by, p.state, p.proposed_semver,
+      returning p.id, ${ACTING_NS} as target_namespace_id, p.submitted_by, p.state, p.proposed_semver,
                 (select payload->'metadata'->>'skillSlug' from proposal_revisions
                   where proposal_id = p.id order by revision_no desc limit 1) as skill_slug`,
     [userId, actorUserId],
@@ -326,11 +330,11 @@ export async function proposalAssignmentView(
     state: ProposalState; target_namespace_id: string; submitted_by: string; assignee_id: string | null; assignee_name: string | null; assignee_avatar: string | null;
     assignment_changed_at: string | null; turn_due_at: string | null; review_target_days: number | null; overdue: boolean;
   }>(
-    `select p.state, p.target_namespace_id, p.submitted_by, p.assignee_id, ${nameSql("au.display_name", "au.email")} as assignee_name, au.avatar as assignee_avatar,
+    `select p.state, ${ACTING_NS} as target_namespace_id, p.submitted_by, p.assignee_id, ${nameSql("au.display_name", "au.email")} as assignee_name, au.avatar as assignee_avatar,
             p.assignment_changed_at, p.turn_due_at, n.review_target_days,
             (p.turn_due_at is not null and p.turn_due_at <= now()) as overdue
        from proposals p
-       join namespaces n on n.id = p.target_namespace_id
+       join namespaces n on n.id = ${ACTING_NS}
        left join users au on au.id = p.assignee_id
       where p.id = $1`,
     [proposalId],

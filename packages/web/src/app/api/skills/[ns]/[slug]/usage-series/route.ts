@@ -10,6 +10,7 @@ import { findSkill } from "../../../../../../lib/catalog";
 import { canManageMaintainers } from "../../../../../../lib/maintainers";
 import { getSkillSeries, SERIES_RANGES, type SeriesRange } from "../../../../../../lib/usage";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ns: string; slu
   const access = await resolveUserAccess(oid);
   if (!access.userId) return Response.json({ error: "unknown user" }, { status: 403 });
 
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });
   if (skill.status === "archived") {

@@ -17,6 +17,7 @@ import { hypeDetail } from "../../../../../lib/hype";
 import { tryAvailability } from "../../../../../lib/aiTry";
 import { upstreamDetail } from "../../../../../lib/upstreamReleases";
 import { isSkillVisible, canYankOrArchive, canInitiatePromotion, canShareSkill, seesViaGrantOnly, resolveLatest } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export const GET = withSystemLog("/api/skills/[ns]/[slug]", async function GET(_
   const session = await getServerSession(authOptions);
   const oid = (session as { oid?: string } | null)?.oid;
   if (!oid) return Response.json({ error: "unauthenticated" }, { status: 401 });
-  const { ns, slug } = await ctx.params;
+  const { ns, slug } = await canonicalSkillParams(ctx.params);
   // The viewer's access and the skill row are independent reads — fetch them together.
   const [access, skill] = await Promise.all([resolveUserAccess(oid), findSkill(ns, slug)]);
   if (!skill) return Response.json({ error: "not found" }, { status: 404 });

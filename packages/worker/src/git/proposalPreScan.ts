@@ -44,7 +44,7 @@ export async function preScanPointerProposals(pool: Pool): Promise<number> {
          select payload from proposal_revisions
           where proposal_id = p.id order by revision_no desc limit 1
        ) pr on true
-      where p.state in ('proposed','under_review','changes_requested')
+      where p.state in ('proposed','under_review','changes_requested','awaiting_destination')
         and pr.payload->'pointer' is not null
         and coalesce(pr.payload->'pointer'->>'ref', '') <> ''
         and not exists (

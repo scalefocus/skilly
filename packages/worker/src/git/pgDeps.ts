@@ -31,20 +31,49 @@ const refusalThrottle = makeRefusalThrottle();
 export function pgGitDeps(pool: Pool): GitServerDeps {
   return {
     async findSkill(namespaceSlug, skillSlug): Promise<SkillRef | null> {
+      // §70.6: the live skill at <ns>/<slug> first, then a moved skill's old address (an alias).
+      // The two never share an address (migration 0112 triggers); the order is explicit anyway.
       const { rows } = await pool.query<{
         id: string;
         namespace_id: string;
         visibility: "org" | "namespace";
         status: "active" | "archived";
         shared_namespace_ids: string[];
+        ns_slug: string;
+        slug: string;
+        alias_paths: string[];
       }>(
-        `select s.id, s.namespace_id, s.visibility, s.status, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids
-           from skills s join namespaces n on n.id = s.namespace_id
-          where n.slug = $1 and s.slug = $2`,
+        `with hit as (
+           select id from (
+             select s.id, 0 as pri from skills s join namespaces n on n.id = s.namespace_id
+              where n.slug = $1 and s.slug = $2
+             union all
+             select a.skill_id, 1 from skill_path_aliases a join namespaces an on an.id = a.namespace_id
+              where an.slug = $1 and a.slug = $2
+           ) h order by pri limit 1
+         )
+         select s.id, s.namespace_id, s.visibility, s.status, ${sharedNamespaceIdsSql("s")} as shared_namespace_ids,
+                n.slug as ns_slug, s.slug,
+                coalesce((select array_agg(an.slug || '/' || a.slug order by a.created_at desc)
+                            from skill_path_aliases a join namespaces an on an.id = a.namespace_id
+                           where a.skill_id = s.id), '{}') as alias_paths
+           from hit join skills s on s.id = hit.id join namespaces n on n.id = s.namespace_id`,
         [namespaceSlug, skillSlug],
       );
       const r = rows[0];
-      return r ? { id: r.id, namespaceId: r.namespace_id, visibility: r.visibility, status: r.status, sharedNamespaceIds: r.shared_namespace_ids ?? [] } : null;
+      if (!r) return null;
+      return {
+        id: r.id,
+        namespaceId: r.namespace_id,
+        visibility: r.visibility,
+        status: r.status,
+        sharedNamespaceIds: r.shared_namespace_ids ?? [],
+        canonical: { namespaceSlug: r.ns_slug, slug: r.slug },
+        aliasPaths: (r.alias_paths ?? []).map((p) => {
+          const i = p.indexOf("/");
+          return { namespaceSlug: p.slice(0, i), slug: p.slice(i + 1) };
+        }),
+      };
     },
 
     async findMarketplace(scope): Promise<MarketplaceRef | null> {

@@ -67,3 +67,39 @@ export async function repoProvisioned(root: string, namespaceSlug: string, skill
   }
   return hasAnyRef(dir);
 }
+
+/** A skill repo's address on disk: `<root>/<namespaceSlug>/<skillSlug>.git`. */
+export interface RepoAddress {
+  namespaceSlug: string;
+  skillSlug: string;
+}
+
+/**
+ * §70.8: the repo directory to serve for a skill — the first PROVISIONED address in `candidates`
+ * (the canonical address first, then the skill's old addresses, whose directory the relocation
+ * sweep may not have renamed yet), or null when none is. Invalid slugs are skipped, never thrown.
+ */
+export async function pickServedRepo(root: string, candidates: readonly RepoAddress[]): Promise<RepoAddress | null> {
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    const key = `${c.namespaceSlug}/${c.skillSlug}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (await repoProvisioned(root, c.namespaceSlug, c.skillSlug)) return c;
+    } catch {
+      // an unsafe slug never names a directory to serve
+    }
+  }
+  return null;
+}
+
+/**
+ * §70.8: point git-http-backend at the directory actually served. `pathname` is the request's
+ * `/<ns>/<slug>.git/<endpoint>`; its repo prefix is swapped for the served address's.
+ */
+export function rewriteRepoPathInfo(pathname: string, from: RepoAddress, to: RepoAddress): string {
+  const prefix = `/${from.namespaceSlug}/${from.skillSlug}.git`;
+  if (!pathname.startsWith(prefix)) return pathname;
+  return `/${to.namespaceSlug}/${to.skillSlug}.git${pathname.slice(prefix.length)}`;
+}

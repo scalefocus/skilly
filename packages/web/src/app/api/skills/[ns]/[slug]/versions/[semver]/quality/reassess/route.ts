@@ -6,6 +6,7 @@ import { findSkill } from "../../../../../../../../../lib/catalog";
 import { reassessQuality } from "../../../../../../../../../lib/quality";
 import { enforceRateLimit } from "../../../../../../../../../lib/ratelimit";
 import { isSkillVisible } from "@skilly/shared";
+import { canonicalSkillParams } from "../../../../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ ns: string; s
   if (!access?.userId) return Response.json({ error: "unauthenticated" }, { status: 401 });
   const limited = enforceRateLimit("quality-reassess", access.userId, 10);
   if (limited) return limited;
-  const { ns, slug, semver } = await ctx.params;
+  const { ns, slug, semver } = await canonicalSkillParams(ctx.params);
   const skill = await findSkill(ns, slug);
   if (!skill || skill.status !== "active" || !isSkillVisible(access, skill)) {
     return Response.json({ error: "not found" }, { status: 404 });

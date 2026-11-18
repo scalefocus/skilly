@@ -48,7 +48,7 @@ export async function sweepAv(pool: Pool, store: ArtifactStore, limit = AV_SWEEP
          select pr.payload->>'artifactObjectKey'
            from proposals p
            join lateral (select payload from proposal_revisions where proposal_id = p.id order by revision_no desc limit 1) pr on true
-          where p.state in ('proposed','under_review','changes_requested')
+          where p.state in ('proposed','under_review','changes_requested','awaiting_destination')
             and pr.payload->>'artifactObjectKey' is not null
        ) k
        left join lateral (
