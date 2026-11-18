@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.62.0",
+    date: "2026-11-18",
+    summary:
+      "Platform admins can now delete a namespace from the Namespaces card on the Administration page. Its live skills must be moved out or archived and its open proposals decided first; the delete then removes its archived skills, role mappings, shares, marketplace and policy rules, and tells its admins. The slug can be reused about a minute later.",
+  },
+  {
     version: "2.61.0",
     date: "2026-11-18",
     summary:

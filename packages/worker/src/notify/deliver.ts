@@ -31,6 +31,7 @@ import {
   notificationTitle,
   contentRiskRuleLabel,
   deprecationWarning,
+  namespaceDeletedSentence,
   DEFAULT_DIGEST_SETTINGS,
   effectiveDigestMode,
   isDigestDeferred,
@@ -218,6 +219,17 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: `${from} moved to ${to} and published version ${p.semver ?? ""}. Existing installs keep working; new installs use the new address.${listed} ${cta("View the skill", path)}`,
       webhook: { event: n.type, title: s, skill: to, previousSkill: from, semver: p.semver ?? null, url: abs(path) },
+    };
+  }
+
+  // §71.6: a platform admin deleted a namespace the recipient administered. No CTA — the namespace
+  // has no page any more.
+  if (n.type === "namespace.deleted") {
+    const s = subj(title);
+    return {
+      subject: s,
+      text: namespaceDeletedSentence(p),
+      webhook: { event: n.type, title: s, namespace: p.namespaceSlug ?? null, reason: p.reason ?? null },
     };
   }
 

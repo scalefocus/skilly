@@ -47,6 +47,10 @@
       "types": "./dist/namespace-move.d.ts",
       "default": "./dist/namespace-move.js"
     },
+    "./namespace-delete": {
+      "types": "./dist/namespace-delete.d.ts",
+      "default": "./dist/namespace-delete.js"
+    },
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"

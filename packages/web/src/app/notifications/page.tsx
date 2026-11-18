@@ -13,6 +13,7 @@ import { searchGapNotificationContent } from "@skilly/shared/search-gaps";
 import { driftProposeUpdatePath, upstreamReleaseNotificationContent } from "@skilly/shared/upstream-releases";
 import { importNotificationContent } from "@skilly/shared/repo-import";
 import { reviewNotificationContent } from "@skilly/shared/review-target";
+import { namespaceDeletedSentence } from "@skilly/shared/namespace-delete";
 
 const PAGE = 100;
 
@@ -252,6 +253,12 @@ export default function NotificationsPage() {
                     <p className="muted" data-testid="notification-moved" style={{ fontSize: 13.5, margin: "8px 0 0" }}>
                       Moved from <span className="mono">{n.payload.oldNamespaceSlug}/{skSlug}</span> to <span className="mono">{nsSlug}/{skSlug}</span>. Existing installs keep working; new installs use the new address.
                       {typeof n.payload.marketplaceName === "string" ? ` In plugin marketplaces it is now listed as ${n.payload.marketplaceName}.` : ""}
+                    </p>
+                  )}
+                  {/* §71.6 a namespace the recipient administered was deleted (no CTA: it has no page). */}
+                  {n.type === "namespace.deleted" && (
+                    <p className="muted" data-testid="notification-namespace-deleted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>
+                      {namespaceDeletedSentence(n.payload)}
                     </p>
                   )}
                   {/* §70.9 the owner approved a move proposal; the destination decides next. */}

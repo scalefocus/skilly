@@ -44,6 +44,8 @@ export interface AuditView {
   targetId: string | null;
   namespaceId: string | null;
   namespaceSlug: string | null;
+  /** §71.7: the namespace no longer exists; `namespaceSlug` comes from its `namespace.deleted` snapshot. */
+  namespaceDeleted: boolean;
   actorUserId: string | null;
   actorName: string | null;
   actorEmail: string | null;
@@ -132,15 +134,24 @@ async function queryAuditRows(where: string[], params: unknown[], limit: number,
   const offsetIdx = p.length;
   const { rows } = await pool.query<{
     id: string; action: string; target_type: string; target_id: string | null;
-    namespace_id: string | null; namespace_slug: string | null;
+    namespace_id: string | null; namespace_slug: string | null; namespace_deleted: boolean;
     actor_user_id: string | null; actor_name: string | null; actor_email: string | null;
     before: unknown; after: unknown; source: string; created_at: string;
   }>(
-    `select a.id, a.action, a.target_type, a.target_id, a.namespace_id, n.slug as namespace_slug,
+    `select a.id, a.action, a.target_type, a.target_id, a.namespace_id,
+            coalesce(n.slug, dn.slug) as namespace_slug, (n.id is null and dn.slug is not null) as namespace_deleted,
             a.actor_user_id, u.display_name as actor_name, u.email as actor_email,
             a.before, a.after, a.source, a.created_at
        from audit_log a
        left join namespaces n on n.id = a.namespace_id
+       -- §71.7: a deleted namespace's rows keep its id; label them from the deletion snapshot
+       -- (idx_audit_namespace_deleted; evaluated only for rows whose namespace is gone).
+       left join lateral (
+         select d.before->>'slug' as slug from audit_log d
+          where n.id is null and a.namespace_id is not null
+            and d.action = 'namespace.deleted' and d.target_id = a.namespace_id::text
+          order by d.created_at desc limit 1
+       ) dn on true
        left join users u on u.id = a.actor_user_id
       ${where.length ? `where ${where.join(" and ")}` : ""}
       order by a.created_at desc
@@ -150,7 +161,7 @@ async function queryAuditRows(where: string[], params: unknown[], limit: number,
 
   return rows.map((r) => ({
     id: r.id, action: r.action, targetType: r.target_type, targetId: r.target_id,
-    namespaceId: r.namespace_id, namespaceSlug: r.namespace_slug,
+    namespaceId: r.namespace_id, namespaceSlug: r.namespace_slug, namespaceDeleted: r.namespace_deleted === true,
     actorUserId: r.actor_user_id, actorName: r.actor_name, actorEmail: r.actor_email,
     before: r.before, after: r.after, source: r.source, createdAt: r.created_at,
   }));
