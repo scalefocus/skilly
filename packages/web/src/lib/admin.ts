@@ -150,7 +150,7 @@ export async function createNamespace(
   if (createContactError) return { error: createContactError };
   const exists = await pool.query(`select 1 from namespaces where slug = $1`, [input.slug]);
   if (exists.rowCount) return { error: `namespace '${input.slug}' already exists` };
-  // §71.4: a deleted namespace's slug is released only once the worker has removed its repositories
+  // §72.4: a deleted namespace's slug is released only once the worker has removed its repositories
   // from disk — a leftover `<slug>/<skill>.git` would otherwise serve old tags to the new namespace.
   if (await slugAwaitingPurge(pool, input.slug)) {
     return { error: `'${input.slug}' was deleted moments ago and its files are still being removed. Try again in a minute.` };

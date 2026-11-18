@@ -1,9 +1,9 @@
-// Deleting a namespace (SKILLY_SPEC.md §71). A platform admin deletes an EMPTY namespace — no live
-// skill, no open proposal against it (§71.2) — and everything else it holds is removed or re-homed in
-// one transaction (§71.3). Each step reuses the existing path for its object so its own audit events
+// Deleting a namespace (SKILLY_SPEC.md §72). A platform admin deletes an EMPTY namespace — no live
+// skill, no open proposal against it (§72.2) — and everything else it holds is removed or re-homed in
+// one transaction (§72.3). Each step reuses the existing path for its object so its own audit events
 // stay identical: the §7 permanent delete for archived skills, the §8 housekeeping delete for
 // proposals, the §42 grants module for incoming shares, the §30.6 token revocation for the
-// marketplace. The worker clears the disk afterwards (§71.4, packages/worker/src/git/namespacePurge.ts).
+// marketplace. The worker clears the disk afterwards (§72.4, packages/worker/src/git/namespacePurge.ts).
 import type { Pool, PoolClient } from "pg";
 import {
   deleteRequestError,
@@ -71,7 +71,7 @@ async function loadNamespace(db: Db, id: string, forUpdate = false): Promise<Nam
   return rows[0] ?? null;
 }
 
-/** §71.2: the live skills and open proposals that keep the namespace from being deleted. */
+/** §72.2: the live skills and open proposals that keep the namespace from being deleted. */
 export async function deletionBlockers(db: Db, namespaceId: string): Promise<DeletionBlockers> {
   const [skills, proposals] = await Promise.all([
     db.query<{ slug: string; title: string; deprecated: boolean; total: string }>(
@@ -120,7 +120,7 @@ interface ClosedProposalRow {
  * The namespace's closed proposals with the namespace that owns their skill NOW. A proposal is tied
  * to its skill by `target_skill_id`, through `materialized_version_id`, or — for an accepted
  * new-skill pointer proposal, which records neither — through the old-address alias of its slug
- * (a skill that moved out). §71.3 steps 4–5.
+ * (a skill that moved out). §72.3 steps 4–5.
  */
 async function closedProposals(db: Db, namespaceId: string): Promise<ClosedProposalRow[]> {
   const { rows } = await db.query<ClosedProposalRow>(
@@ -144,7 +144,7 @@ async function closedProposals(db: Db, namespaceId: string): Promise<ClosedPropo
   return rows;
 }
 
-/** Active users who administer the namespace through a role mapping, minus the actor (§71.6). */
+/** Active users who administer the namespace through a role mapping, minus the actor (§72.6). */
 async function namespaceAdminIds(db: Db, namespaceId: string, actorUserId: string | null): Promise<string[]> {
   const { rows } = await db.query<{ id: string }>(
     `select distinct u.id
@@ -163,7 +163,7 @@ async function countOf(db: Db, sql: string, params: unknown[]): Promise<number> 
   return Number(rows[0]?.n ?? 0);
 }
 
-/** What a delete would do right now (§71.5 Ready state, §71.9 `effects`). */
+/** What a delete would do right now (§72.5 Ready state, §72.9 `effects`). */
 async function deletionEffects(db: Db, ns: NamespaceRow, actorUserId: string | null): Promise<DeletionEffectsView> {
   const [archived, closed, usage, aliases, grants, tokens, rules, mappings, imports, admins] = await Promise.all([
     db.query<{ slug: string; total: string }>(
@@ -209,7 +209,7 @@ async function deletionEffects(db: Db, ns: NamespaceRow, actorUserId: string | n
   };
 }
 
-/** GET /api/admin/namespaces/:id/deletion — the preflight the dialog opens with (§71.5, §71.9). */
+/** GET /api/admin/namespaces/:id/deletion — the preflight the dialog opens with (§72.5, §72.9). */
 export async function namespaceDeletionPreflight(
   db: Pool,
   namespaceId: string,
@@ -231,7 +231,7 @@ export async function namespaceDeletionPreflight(
 }
 
 /**
- * DELETE /api/admin/namespaces/:id — §71.3, one transaction under a FOR UPDATE lock on the namespace
+ * DELETE /api/admin/namespaces/:id — §72.3, one transaction under a FOR UPDATE lock on the namespace
  * row. The caller has checked that the actor is a platform admin. Notifications go out after commit.
  */
 export async function deleteNamespace(
@@ -303,7 +303,7 @@ export async function deleteNamespace(
       [ns.id],
     );
 
-    // Step 6: drop the old addresses, remembering them for the worker's relocation (§71.4).
+    // Step 6: drop the old addresses, remembering them for the worker's relocation (§72.4).
     const { rows: aliases } = await client.query<{ slug: string; skill_id: string }>(
       `delete from skill_path_aliases where namespace_id = $1 returning slug, skill_id`,
       [ns.id],
@@ -459,7 +459,7 @@ export async function deleteNamespace(
   return { ok: true, effects };
 }
 
-/** §71.4: a slug whose deleted namespace still has files on disk can't be taken yet. */
+/** §72.4: a slug whose deleted namespace still has files on disk can't be taken yet. */
 export async function slugAwaitingPurge(db: Db, slug: string): Promise<boolean> {
   const { rowCount } = await db.query(`select 1 from repo_disk_purges where namespace_slug = $1`, [slug]);
   return (rowCount ?? 0) > 0;

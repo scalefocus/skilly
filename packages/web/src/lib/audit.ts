@@ -44,7 +44,7 @@ export interface AuditView {
   targetId: string | null;
   namespaceId: string | null;
   namespaceSlug: string | null;
-  /** §71.7: the namespace no longer exists; `namespaceSlug` comes from its `namespace.deleted` snapshot. */
+  /** §72.7: the namespace no longer exists; `namespaceSlug` comes from its `namespace.deleted` snapshot. */
   namespaceDeleted: boolean;
   actorUserId: string | null;
   actorName: string | null;
@@ -144,7 +144,7 @@ async function queryAuditRows(where: string[], params: unknown[], limit: number,
             a.before, a.after, a.source, a.created_at
        from audit_log a
        left join namespaces n on n.id = a.namespace_id
-       -- §71.7: a deleted namespace's rows keep its id; label them from the deletion snapshot
+       -- §72.7: a deleted namespace's rows keep its id; label them from the deletion snapshot
        -- (idx_audit_namespace_deleted; evaluated only for rows whose namespace is gone).
        left join lateral (
          select d.before->>'slug' as slug from audit_log d

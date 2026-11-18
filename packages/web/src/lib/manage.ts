@@ -238,7 +238,7 @@ export async function deleteSkill(
  * The §7 permanent delete's transactional body: detach the references that don't cascade, delete
  * the skill row (cascading the rest) and audit `skill.deleted`. The CALLER holds the transaction and
  * has already checked authority and that the skill is archived. Reused by the namespace delete,
- * which purges every archived skill inside its own transaction (SKILLY_SPEC.md §71.3 step 3).
+ * which purges every archived skill inside its own transaction (SKILLY_SPEC.md §72.3 step 3).
  */
 export async function purgeSkillInTx(
   client: PoolClient,

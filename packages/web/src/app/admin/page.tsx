@@ -583,7 +583,7 @@ export default function AdminPage() {
   const [nsQDeb, setNsQDeb] = useState("");
   const [nsReview, setNsReview] = useState<"" | "required" | "optional">("");
   const [nsTick, setNsTick] = useState(0); // bumped after mutations to re-apply the active filter
-  // §71.5: the namespace whose Delete dialog is open, and the card's "Deleted @slug." line.
+  // §72.5: the namespace whose Delete dialog is open, and the card's "Deleted @slug." line.
   const [deletingNs, setDeletingNs] = useState<Namespace | null>(null);
   const [nsNotice, setNsNotice] = useState<string | null>(null);
   // Every card is collapsible (§5): collapsed by default, remembered per browser, driven by the
@@ -989,7 +989,7 @@ export default function AdminPage() {
                         void call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ marketplaceEnabled: next }) });
                       }}
                     />
-                    {/* §71.5: permanent delete of an empty namespace — never `global`. */}
+                    {/* §72.5: permanent delete of an empty namespace — never `global`. */}
                     {ns.slug !== "global" && (
                       <button
                         type="button"

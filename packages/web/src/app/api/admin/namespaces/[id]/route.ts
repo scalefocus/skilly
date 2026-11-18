@@ -33,7 +33,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   return Response.json({ ok: true });
 }
 
-// Platform-admin: permanently delete an EMPTY namespace (SKILLY_SPEC.md §71.9). Body
+// Platform-admin: permanently delete an EMPTY namespace (SKILLY_SPEC.md §72.9). Body
 // `{ confirmSlug, reason? }`; 409 `namespace_not_empty` carries the blocker lists.
 export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const access = await currentAccess();

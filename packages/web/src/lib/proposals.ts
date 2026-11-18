@@ -1571,7 +1571,7 @@ export async function deleteProposal(
  * The housekeeping delete's transactional body (§8): the review conversation and its alerts, the
  * proposal's pointer scan, dangling proposal.* notifications, the row itself (revisions cascade) and
  * the `proposal.deleted` audit row. The CALLER holds the transaction and has checked authority.
- * Reused by the namespace delete for closed proposals tied to no surviving skill (§71.3 step 5).
+ * Reused by the namespace delete for closed proposals tied to no surviving skill (§72.3 step 5).
  */
 export async function purgeProposalInTx(
   client: PoolClient,

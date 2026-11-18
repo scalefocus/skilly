@@ -15,10 +15,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.63.0",
+    date: "2026-11-18",
+    summary:
+      "Platform admins can now delete a namespace from the Namespaces card on the Platform administration page. Its live skills must be moved out or archived and its open proposals decided first; the delete then removes its archived skills, role mappings, shares, marketplace and policy rules, and tells its admins. The slug can be reused about a minute later.",
+  },
+  {
     version: "2.62.0",
     date: "2026-11-18",
     summary:
-      "Platform admins can now delete a namespace from the Namespaces card on the Administration page. Its live skills must be moved out or archived and its open proposals decided first; the delete then removes its archived skills, role mappings, shares, marketplace and policy rules, and tells its admins. The slug can be reused about a minute later.",
+      "The admin pages now sit together in a collapsible Administration group at the bottom of the sidebar: Platform administration (formerly Administration), Namespace administration, Audit log, System log, Monitoring, Feature ideas and Search gaps. It opens by itself on those pages, remembers whether you left it open, and shows their waiting counts while closed.",
   },
   {
     version: "2.61.0",

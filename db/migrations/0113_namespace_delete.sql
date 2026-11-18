@@ -1,12 +1,12 @@
--- 0113: deleting a namespace (SKILLY_SPEC.md §71).
+-- 0113: deleting a namespace (SKILLY_SPEC.md §72).
 --
 --  * audit_log.namespace_id loses its foreign key. Every namespace has at least its
 --    `namespace.created` audit row, so the key would block every delete, and append-only rows can't be
---    set to NULL. The column and idx_audit_namespace stay; no audit row changes (§71.8, invariant #5).
+--    set to NULL. The column and idx_audit_namespace stay; no audit row changes (§72.8, invariant #5).
 --  * A partial index finds a deleted namespace's `namespace.deleted` snapshot, which the audit page
---    uses to label the old rows "@slug (deleted)" (§71.7).
+--    uses to label the old rows "@slug (deleted)" (§72.7).
 --  * repo_disk_purges: the worker's queue of deleted namespaces whose repositories are still on disk.
---    While a row exists its slug can't be reused (§71.4). Table grants come from the 0002 default
+--    While a row exists its slug can't be reused (§72.4). Table grants come from the 0002 default
 --    privileges.
 BEGIN;
 

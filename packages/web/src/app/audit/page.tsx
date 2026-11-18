@@ -12,7 +12,7 @@ interface AuditView {
   targetType: string;
   targetId: string | null;
   namespaceSlug: string | null;
-  /** §71.7: the namespace was deleted; the slug comes from its deletion snapshot. */
+  /** §72.7: the namespace was deleted; the slug comes from its deletion snapshot. */
   namespaceDeleted?: boolean;
   actorName: string | null;
   actorEmail: string | null;

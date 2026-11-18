@@ -1,4 +1,4 @@
-// Live-DB integration test for deleting a namespace (SKILLY_SPEC.md §71). Gated by SKILLY_DB_E2E=1:
+// Live-DB integration test for deleting a namespace (SKILLY_SPEC.md §72). Gated by SKILLY_DB_E2E=1:
 //
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… pnpm --filter @skilly/web test:db
 //
@@ -70,7 +70,7 @@ async function mkProposal(p: { target: string; skillId?: string | null; state: s
 }
 const exists = async (sql: string, params: unknown[]) => ((await pool.query(sql, params)).rowCount ?? 0) > 0;
 
-test("§71 refusals: global, a mismatched slug, an over-long reason, an unknown id", { skip: !enabled }, async () => {
+test("§72 refusals: global, a mismatched slug, an over-long reason, an unknown id", { skip: !enabled }, async () => {
   const actor = await fixedActor();
   const global = (await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`)).rows[0]!.id;
   const g = await deleteNamespace(pool, global, { confirmSlug: "global", reason: null }, actor);
@@ -91,7 +91,7 @@ test("§71 refusals: global, a mismatched slug, an over-long reason, an unknown 
   assert.ok(!garbage.ok && garbage.status === 404);
 });
 
-test("§71.2 blockers: a live skill, an open proposal, a move waiting for the namespace", { skip: !enabled }, async () => {
+test("§72.2 blockers: a live skill, an open proposal, a move waiting for the namespace", { skip: !enabled }, async () => {
   const actor = await fixedActor();
   const proposer = await mkUserIn(`${K}-bprop`, []);
 
@@ -130,7 +130,7 @@ test("§71.2 blockers: a live skill, an open proposal, a move waiting for the na
   assert.deepEqual(!d.ok && d.blockers?.proposals.map((p) => p.id), [moveId]);
 });
 
-test("§71.3 full delete: archived purge, history re-homed, shares/marketplace/rules/mappings removed, audit + notice", { skip: !enabled }, async () => {
+test("§72.3 full delete: archived purge, history re-homed, shares/marketplace/rules/mappings removed, audit + notice", { skip: !enabled }, async () => {
   const actor = await fixedActor();
   const D = await mkNs(`${K}-d`, "Team Doomed");
   const O = await mkNs(`${K}-o`, "Team Owner");
@@ -277,7 +277,7 @@ test("§71.3 full delete: archived purge, history re-homed, shares/marketplace/r
   assert.equal(notes[0]!.payload.actorName, "Pat Platform");
   assert.equal(notes[0]!.payload.displayName, "Team Doomed");
 
-  // §71.4: the slug is held until the worker has purged the disk, then released.
+  // §72.4: the slug is held until the worker has purged the disk, then released.
   const early = await createNamespace(pool, { slug: `${K}-d`, displayName: "Again", requireReview: true }, actor);
   assert.ok("error" in early && /still being removed/.test(early.error));
   await pool.query(`delete from repo_disk_purges where namespace_slug = $1`, [`${K}-d`]);
@@ -286,7 +286,7 @@ test("§71.3 full delete: archived purge, history re-homed, shares/marketplace/r
   assert.equal(await exists(`select 1 from skill_path_aliases where namespace_id = $1`, ["id" in again ? again.id : D]), false, "nothing of the old one carries over");
 });
 
-test("§71.3 step 1: a delete that finds a new blocker under the lock changes nothing", { skip: !enabled }, async () => {
+test("§72.3 step 1: a delete that finds a new blocker under the lock changes nothing", { skip: !enabled }, async () => {
   const actor = await fixedActor();
   const E = await mkNs(`${K}-race`);
   // An uncommitted skill insert holds a key-share lock on the namespace row (its FK check).

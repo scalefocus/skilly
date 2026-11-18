@@ -255,7 +255,7 @@ export default function NotificationsPage() {
                       {typeof n.payload.marketplaceName === "string" ? ` In plugin marketplaces it is now listed as ${n.payload.marketplaceName}.` : ""}
                     </p>
                   )}
-                  {/* §71.6 a namespace the recipient administered was deleted (no CTA: it has no page). */}
+                  {/* §72.6 a namespace the recipient administered was deleted (no CTA: it has no page). */}
                   {n.type === "namespace.deleted" && (
                     <p className="muted" data-testid="notification-namespace-deleted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>
                       {namespaceDeletedSentence(n.payload)}

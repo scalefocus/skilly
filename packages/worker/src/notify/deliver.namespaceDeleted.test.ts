@@ -1,4 +1,4 @@
-// renderNotification for §71.6: a platform admin deleted a namespace the recipient administered.
+// renderNotification for §72.6: a platform admin deleted a namespace the recipient administered.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderNotification, notificationBodySentence } from "./deliver.js";

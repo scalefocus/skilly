@@ -124,7 +124,7 @@ async function leaderLoops(): Promise<void> {
       // published is synthesized into the relocated repo rather than a fresh, tag-less one.
       const r = await relocateMovedRepos(pool, publishDeps.repoRoot);
       if (r > 0) console.log(JSON.stringify({ level: "info", msg: "relocated moved skill repos", count: r }));
-      // §71.4: clear a deleted namespace's repos from disk (relocating moved-out skills first) so
+      // §72.4: clear a deleted namespace's repos from disk (relocating moved-out skills first) so
       // its slug can be released.
       await purgeDeletedNamespaces(pool, publishDeps.repoRoot);
       const m = await mirrorPendingVersions(pool, { store });

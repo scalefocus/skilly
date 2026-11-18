@@ -153,7 +153,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 
 ### `namespaces`
 - `id`, `slug` (e.g. `team-a`, plus reserved `global`), `display_name`, `require_review` (bool), `maintainer_contact` (set by Platform Admin **or the namespace's own admins** via the Namespace administration page, §30.6 — **a validated email address**: any valid address, **not** required to be a registered user, shape-checked on write in the browser and on the server; the editor offers a shared **user-search typeahead** that fills a picked user's email, and a shared mailbox / distribution list is still allowed), `marketplace_enabled` (BOOLEAN NOT NULL DEFAULT false — publishes this namespace's `namespace`-visibility skills as a Claude Code plugin marketplace, §30), `marketplace_synced_at` (TIMESTAMPTZ, nullable — when the worker's marketplace sweep last evaluated this namespace's marketplace, stamped every sweep whether or not content changed; NULL until the first sweep after enabling and reset to NULL on disable; shown as "synced N min ago" on the Marketplaces page, §30.6), `review_target_days` (`smallint NULL`, 1–30 business days; NULL = no review target — migration 0106, §65.3), `created_at`.
-- A platform admin can **delete** an empty namespace other than `global`, as a hard delete of the row (§71).
+- A platform admin can **delete** an empty namespace other than `global`, as a hard delete of the row (§72).
 - Created explicitly by Platform Admins. `global` is special: `require_review` always true.
 
 ### `role_mappings` (the explicit Entra-group→role binding table)
@@ -210,10 +210,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - **Original submission stored immutably**; reviewer edits tracked as revisions.
 
 ### `skill_path_aliases` (migration 0112, detailed in §70.11)
-- `(namespace_id, slug) → skill_id`: the old addresses of a skill that moved to another namespace (§70.6). Resolved after the live skill on every `<ns>/<slug>` surface, and reserves its slug in that namespace. Dropped when that namespace is deleted (§71.3).
+- `(namespace_id, slug) → skill_id`: the old addresses of a skill that moved to another namespace (§70.6). Resolved after the live skill on every `<ns>/<slug>` surface, and reserves its slug in that namespace. Dropped when that namespace is deleted (§72.3).
 
-### `repo_disk_purges` (migration 0113, detailed in §71.4)
-- One row per deleted namespace whose repositories the worker has not yet removed from disk: the slug, the old namespace id (no FK) and the dropped aliases to relocate first. While a row exists its slug can't be reused (§71.4).
+### `repo_disk_purges` (migration 0113, detailed in §72.4)
+- One row per deleted namespace whose repositories the worker has not yet removed from disk: the slug, the old namespace id (no FK) and the dropped aliases to relocate first. While a row exists its slug can't be reused (§72.4).
 
 ### `proposal_imports` (migration 0105, detailed in §64.8)
 - One row per repository import: submitter, namespace, normalized origin, ref, pinned commit, scan folder, mode (`review` | `direct`) and item counts. Links the proposals one import created (`proposals.import_id`); display and notification only.
@@ -226,7 +226,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id`, `subject_type` (`skill_version` | `pointer_ref`), `subject_id`, `scanner`, `findings` (json), `severity`, `status`, `cached_for_ref` (for pointer caching), `created_at`. The ingest pipeline writes `subject_type = 'artifact'` (keyed by artifact object key), the subject the accept gate and the review page read. Findings may carry optional `line`, `excerpt` and `ruleset` fields (§37.3).
 
 ### `audit_log` (append-only)
-- `id`, `actor_user_id` (nullable — null for SCIM/system actions, §5), `action`, `target_type`, `target_id`, `namespace_id`, `before` (json), `after` (json), `source` (`web` | `api` | `scim` | `worker`), `request_id`, `created_at`. `namespace_id` has **no foreign key** since migration 0113, so it may name a deleted namespace (§71.8).
+- `id`, `actor_user_id` (nullable — null for SCIM/system actions, §5), `action`, `target_type`, `target_id`, `namespace_id`, `before` (json), `after` (json), `source` (`web` | `api` | `scim` | `worker`), `request_id`, `created_at`. `namespace_id` has **no foreign key** since migration 0113, so it may name a deleted namespace (§72.8).
 - Tamper-evidence (migration 0008): `seq` (BIGSERIAL), `prev_hash`, `entry_hash` (each row's hash covers its content + the previous hash; verified via `verify_audit_chain()` / `GET /api/audit/verify`, §11). **Seq order = chain order** (migration 0056): the append trigger assigns `seq` *inside* the advisory lock that serializes the chain — previously the BIGSERIAL default was drawn before the lock, so two concurrent appends could invert seq vs chain order, and the verifier (which walks seq order) would flag the inverted pair as tampered **permanently**. 0056 also re-baselines existing chains (via the 0024 trim helper) to repair any inversions already recorded.
 - **Append-only is grant-enforced AND trigger-enforced.** Migration 0002 revoked UPDATE/DELETE from the app role; migration 0024 re-granted them for the admin trim and let `audit_guard()` yield to a session-settable GUC — which left any SQL executed under the app connection able to delete audit rows and re-baseline the chain (October 2026 OWASP review, V12). Migration **0096** closes that: UPDATE/DELETE are **revoked from `skilly_app` again**, the trim runs inside a `SECURITY DEFINER` function `trim_audit_log(actor, older_than)` owned by the migration role, and `audit_guard()` yields **only inside that function** (§49.6). So the literal "DB role lacks UPDATE/DELETE" is true again, and the single delete path is one the app cannot forge.
 
@@ -417,7 +417,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Action | Plat. Admin | NS Admin (own) | NS Member (own) | Auth user |
 |---|---|---|---|---|
 | Create namespace / role mapping | ✅ | ❌ | ❌ | ❌ |
-| Delete an empty namespace, never `global` (§71) | ✅ | ❌ | ❌ | ❌ |
+| Delete an empty namespace, never `global` (§72) | ✅ | ❌ | ❌ | ❌ |
 | Edit namespace settings — `require_review`, `maintainer_contact`, review target (§65.3), marketplace toggle (§30.6) | ✅ (any, incl. `global`'s review target) | ✅ (own ns) | ❌ | ❌ |
 | Toggle the **public** plugin marketplace (§30.1) | ✅ | ❌ | ❌ | ❌ |
 | Mint a **namespace** marketplace token (§30.4) | ✅ | ✅ (own ns) | ✅ (own ns) | ❌ |
@@ -1294,7 +1294,7 @@ owner's accept and publication, **Awaiting destination** (§70.3).
   - **Discussion moderation** (`skill.discussion_message_deleted` — moderator, comment author id, skill, message id; **never the body** — §24 *Skill discussion*; plus `parentId`, `tombstoned`, `tombstoneRemoved` — §24 *Replies to discussion comments*). Posting a comment is not audited (the immutable message row is its own provenance).
   - **Plugin marketplaces (§30.8):** `namespace.marketplace_enabled` / `namespace.marketplace_disabled` (actor + namespace; the disable record carries the count of revoked tokens) and the platform-level `marketplace.public_enabled` / `marketplace.public_disabled`. Namespace-admin edits of `require_review` / `maintainer_contact` from the new page emit the **existing** `namespace.updated` — same action, new actor class. *(Personal `marketplace` tokens are **not** audited, consistent with personal install tokens.)*
   - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15), except the opt-in, identity-free search-gap log (§62), which the audit log never copies.
-  - Governance/identity (namespace create/delete (`namespace.created` / **`namespace.deleted`**, §71.7), role-mapping changes, SCIM sync results, **SCIM/reconcile provisioning events** (`user.provisioned`, `user.deactivated`, `user.reactivated`, `group.provisioned`, `group.deleted`, `group.membership_added`, `group.membership_removed` — source `scim`, system actor; §49.7), **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
+  - Governance/identity (namespace create/delete (`namespace.created` / **`namespace.deleted`**, §72.7), role-mapping changes, SCIM sync results, **SCIM/reconcile provisioning events** (`user.provisioned`, `user.deactivated`, `user.reactivated`, `group.provisioned`, `group.deleted`, `group.membership_added`, `group.membership_removed` — source `scim`, system actor; §49.7), **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
   - **Agent sync (§69.8):** `agent_key.minted` for every agent key the sync API mints (actor = the user, `source = 'api'`; expiry, client IP, user agent, how many older keys the cap removed; **never the key**). High-volume by design: about ten rows per agent user per working day.
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. Clones made with a §69 agent key land here with `source = 'aion'`. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
@@ -1373,7 +1373,7 @@ owner's accept and publication, **Awaiting destination** (§70.3).
   - To **watchers ∪ effective maintainers** (minus the author, minus opt-outs, visibility-filtered at insert): `skill.discussion` when someone comments on the skill's Discussion card — **coalesced per skill per recipient until read**, exactly like `message.new` (§24 *Skill discussion*). Gated by the per-user `discussion_notifications` toggle (below); unlike `skill.new_version`, an explicit watch does **not** outrank this opt-out.
   - To the **people in a discussion thread** (§24 *Replies to discussion comments*): `skill.discussion_reply` when someone replies in a skill-discussion thread. Recipients are the root comment's author ∪ earlier repliers in that thread, minus the author, minus opt-outs, visibility-filtered at insert. It is **coalesced per thread per recipient until read** and gated by the same `discussion_notifications` toggle. For one message a person gets one row: `message.mention` beats `skill.discussion_reply`, which beats `skill.discussion`.
   - To a **user @mentioned in a message** (any messaging context, §24 *Mentions*): `message.mention` — **deliberately un-coalesced**: one row **per message per mentioned user**, and **each row emails** (subject to the channel-level `email_notifications` toggle only). Recipients = the mentioned users **∩ the thread's audience**, minus the author, minus `discussion_notifications` opt-outs (the same toggle gates mentions in **every** context). A mentioned recipient's coalesced row (`message.new` / `skill.discussion`) is **not** also created/refreshed by that message — the mention supersedes it for them; everyone else keeps the coalesced behavior. `#skill` mentions notify **nobody**.
-  - To the **admins of a deleted namespace** (minus the actor, active users only): `namespace.deleted` when a platform admin deletes it (§71.6), naming the actor and the optional reason. In-app plus email, gated by `email_notifications` only; no per-type opt-out, not digestible.
+  - To the **admins of a deleted namespace** (minus the actor, active users only): `namespace.deleted` when a platform admin deletes it (§72.6), naming the actor and the optional reason. In-app plus email, gated by `email_notifications` only; no per-type opt-out, not digestible.
   - To the **earner**: `achievement.earned` when a badge is awarded (§31.4) — one row per badge, **in-app only** (never email/webhook, no per-type opt-out), CTA → `/profile#achievements`; never created by the backfill or while `achievements_enabled` is off.
   - To **effective maintainers** (minus `hype_notifications` opt-outs): `skill.hyped` when the worker's hype sweep sees their skill **enter the top N hyped skills** (§50.7, **at most once per skill per 7 days**); digestible by default (§48.3).
   - To **platform admins** and to a feature idea's **author** (§60.7): `idea.submitted` to platform admins (coalesced per recipient until read, gated by `idea_notifications`), and `idea.published`, `idea.rejected`, `idea.closed`, `idea.shipped` to the author (proposer lifecycle, no per-type opt-out).
@@ -1901,7 +1901,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Administration**
 - `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
-- `GET /api/admin/namespaces/:id/deletion` (the preflight) and `DELETE /api/admin/namespaces/:id` `{ confirmSlug, reason? }` — platform-admin; deletes an empty namespace (§71.9).
+- `GET /api/admin/namespaces/:id/deletion` (the preflight) and `DELETE /api/admin/namespaces/:id` `{ confirmSlug, reason? }` — platform-admin; deletes an empty namespace (§72.9).
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `PUT /api/admin/ai/prereview { enabled }` — the AI pre-review switch (§46.2, platform-admin); `GET /api/admin/ai` gains `prereview`.
 - `PUT /api/admin/ai/try { enabled }` — the Try skills switch (§61.8, platform-admin); `GET /api/admin/ai` gains `try`.
@@ -4204,8 +4204,8 @@ depends on the target:
 
 An operational view, for **platform admins only**, of the **user-facing HTTP errors** the platform
 returned — primarily the web tier, plus the worker's git-gateway refusal event below — the issues
-the platform encountered, with the user who hit them. Linked in the sidebar
-directly under **Audit log** (but, unlike Audit log, *not* shown to namespace admins).
+the platform encountered, with the user who hit them. Linked in the sidebar's **Administration**
+group (§71), directly under **Audit log** (but, unlike Audit log, *not* shown to namespace admins).
 
 This is **not** the audit log: it is high-volume, mutable operational telemetry, so it deliberately
 has **no** tamper-evident hash chain and **no** append-only trigger (cheap inserts, easy retention).
@@ -5793,7 +5793,7 @@ generally**, not a single-toggle page:
   (review-off and marketplace-disable) and the same read-only rendering for `global`'s
   review switch. The moderated / direct publish pill next to it stays. Each row except
   `global` also carries a destructive **Delete** button, which exists only on this card, not on
-  the Namespace administration page (§71.5).
+  the Namespace administration page (§72.5).
 - **The `Switch` control (shared, `components/ui.tsx`).** One component serves every on/off
   setting so the surfaces cannot drift: a `<button role="switch" aria-checked>` — a
   pill-shaped track (~38 × 22 px, distinct from the larger header theme toggle) whose knob
@@ -5828,8 +5828,9 @@ generally**, not a single-toggle page:
   scroll motion alone dropped (flash still plays) when the card is already fully in view. Nothing
   is expanded because nothing here collapses. Browser preference only — never in the URL, never
   server-side.
-- Nav: a **Namespace administration** entry beside **Administration**, rendered only when the
-  caller administers ≥ 1 namespace.
+- Nav: a **Namespace administration** entry in the sidebar's **Administration** group (§71),
+  directly under **Platform administration**, rendered only when the caller administers ≥ 1
+  namespace.
 
 **Leaderboard note on Pages 2 and 3.** The add-command panel (Page 3, and Page 1 after a mint,
 which share it) and Page 2's introduction carry one line: *"Adding a marketplace delivers every skill in it. Those deliveries do not
@@ -7127,7 +7128,7 @@ telemetry of the same class as the System log (§25).
 
 ### 32.7 The page — `/admin/rum`
 
-A **dedicated page**, sidebar link **"Monitoring"** directly under **System log** (same chart icon),
+A **dedicated page**, sidebar link **"Monitoring"** in the **Administration** group (§71), directly under **System log** (same chart icon),
 shown **only to platform admins** (the API is hard-gated with 403 regardless; the link is merely
 hidden for everyone else — namespace admins see nothing). **The rename is sidebar-only** (v2.7.0; the
 link read *"Real user monitoring"* before): the URL stays `/admin/rum`, the eyebrow stays
@@ -10601,11 +10602,11 @@ events, differing only in `via`:
 
 ### 42.4 Lifecycle
 
-- **Grantee namespace deleted** (§71) → before the row goes, every grant to it is revoked through
+- **Grantee namespace deleted** (§72) → before the row goes, every grant to it is revoked through
   the grants module with `via = namespace_deleted`: audited `skill.namespace_unshared`,
   maintainers pruned, nobody notified (the owning namespaces' admins included). The FK cascade
   stays only as defence in depth. An **owning** namespace can't be deleted while it holds a live
-  skill (§71.2), and its archived skills' grants go with their permanent delete.
+  skill (§72.2), and its archived skills' grants go with their permanent delete.
 - **Skill archived** → grants persist (dormant with the skill); **restore** brings the audience
   back as it was. **Permanent delete** cascades.
 - **Skill becomes `org`** (today only via a reviewer editing a new-skill proposal before accept; any
@@ -10677,7 +10678,7 @@ events, differing only in `via`:
   negative cases through `GET /api/skills` and `GET /api/skills/:ns/:slug` for an outsider;
   new-version proposal with a changed list → accept syncs grants + audit `via`; reviewer edit
   strips a grant; direct publish path; revoke prunes an explicit maintainer and audits it;
-  namespace delete (§71) revokes through the grants module and audits (`via = namespace_deleted`); namespace marketplace repo contents include/exclude the
+  namespace delete (§72) revokes through the grants module and audits (`via = namespace_deleted`); namespace marketplace repo contents include/exclude the
   shared skill across grant/revoke; gateway clone with a grantee's personal token succeeds, then
   fails after revoke; `skill.shared` / `skill.shared_new_version` recipients and dedupe.
 - **e2e:** owner-namespace admin shares a restricted skill from the detail page → a grantee-namespace
@@ -11996,7 +11997,7 @@ audited override. The model informs the decision and never takes it.
 | 1 | **Two scopes.** **Namespace rules** are written by that namespace's admins (and platform admins). **Platform rules** are written by platform admins only and apply to **every** namespace, `global` included. A submission is judged against platform ∪ target-namespace rules. | Org-wide policy without copying it into every namespace. Namespace policy without a platform admin. |
 | 2 | A rule is a **title** (what findings cite), the **rule** in plain language, and optional **context for the pre-reviewer** (allowlists, definitions, compliant and non-compliant examples). All three are plain text. | "Approved adapter" means nothing to the model unless the admin says which adapters are approved. |
 | 3 | **Three states: Shadow, Enforced, Disabled.** Shadow results are shown only to admins and never gate anything. New rules start in **Shadow**. | LLM-judged policy is fuzzy. Admins can tune the wording before it blocks anyone. |
-| 4 | **Revisioned.** Each edit of the text is a new immutable revision. A result records the revision it judged, so a citation always shows the wording that was enforced. A rule that has been cited is never hard-deleted, only disabled. The one exception is deleting its namespace, which removes the rule with its citations (§71.3). | An edited rule must not rewrite history. |
+| 4 | **Revisioned.** Each edit of the text is a new immutable revision. A result records the revision it judged, so a citation always shows the wording that was enforced. A rule that has been cited is never hard-deleted, only disabled. The one exception is deleting its namespace, which removes the rule with its citations (§72.3). | An edited rule must not rewrite history. |
 | 5 | **Rules are readable by anyone who can propose to the namespace**, which is every authenticated user. They see enforced rules: on the propose form, on the proposal page and from the catalog's namespace view. Shadow and Disabled rules are admin-only. | Authors can comply up front, and a cited rule is never a surprise. |
 | 6 | **Judged inside the §46 pre-review run.** One provider call covers §46's security review **and** every applicable rule; the input is §46's selection (§46.6), the queue, attempts, caching and pointer handling are §46's. There is no second AI task. | One call per subject; one queue; no duplicate egress. |
 | 7 | **Judged only while §46 is effective** (the `ai_prereview_enabled` switch on **and** the integration operational, §46.2). While it is not, no verdict can be produced and enforced rules **fail closed**. Writing a rule never turns the pre-review on. | The platform admin alone decides what leaves skilly; a namespace admin can't widen egress by writing a rule. |
@@ -12059,7 +12060,7 @@ audited override. The model informs the decision and never takes it.
   no-change save writes nothing. **State changes are not revisions**; they are audited separately.
 - **Deleting** is offered only for a rule no result or dismissal has cited (**409 `cited`**
   otherwise — disable it instead). Deleting the rule's namespace removes it regardless, cited or
-  not (§71.3).
+  not (§72.3).
 - **Effects of a change.** Creating a rule, editing its text, or moving it to Shadow or Enforced
   queues re-checks (§47.6). **Disabling** queues nothing and takes effect at once everywhere.
 - **Editor notices:**
@@ -13413,7 +13414,7 @@ how it behaves.
 
 ### 60.5 Review: the *Feature ideas* page (`/admin/ideas`)
 - **Access.** Platform admins only. Anyone else gets the *Platform admins only* empty state, as on
-  Monitoring (§32.7), and the APIs return **403**. Sidebar entry **"Feature ideas"** (lightbulb glyph), directly **below Monitoring**,
+  Monitoring (§32.7), and the APIs return **403**. Sidebar entry **"Feature ideas"** (lightbulb glyph) in the **Administration** group (§71), directly **below Monitoring**,
   carrying a superscript **1–9 / 9+** count of `pending` ideas from `GET /api/nav-badges` (`ideas`,
   present only for platform admins). The count is a plain count of the queue: it has no "seen"
   marker, and it drops as ideas are decided.
@@ -14193,8 +14194,8 @@ reloads. An unknown gap is **404**.
 
 ### 62.7 The page: `/admin/search-gaps`
 - **Access.** Platform admins only. Anyone else gets the *Platform admins only* empty state, and
-  the APIs return **403**. Sidebar entry **"Search gaps"** (magnifier glyph), directly **below
-  Feature ideas**, with a superscript **1–9 / 9+** count of reviewable gaps from
+  the APIs return **403**. Sidebar entry **"Search gaps"** (magnifier glyph), the last item of the
+  **Administration** group (§71), directly **below Feature ideas**, with a superscript **1–9 / 9+** count of reviewable gaps from
   `GET /api/nav-badges` (`searchGaps`, present only for platform admins).
 - **Header.** Eyebrow *"Administration"*, title **"Search gaps"**, sub-line *"Searches that found
   nothing, with no one's identity attached. Turn them into a synonym or a skill request, or dismiss
@@ -16571,7 +16572,7 @@ version **and moves the skill there**. Both namespaces must approve. Old address
   namespace (§70.2).
 - **Per-namespace aggregates are not rewritten.** Usage rows recorded before the move keep the
   namespace that owned the skill at the time. New events count for the destination. The one
-  exception is deleting the old namespace, which re-homes them (§71.3).
+  exception is deleting the old namespace, which re-homes them (§72.3).
 
 ### 70.2 Proposing a move
 
@@ -16710,7 +16711,7 @@ Proposed ──► Under review ──(owner accept)──► Awaiting destinati
   choose another slug"*, which names no skill.
 - **Lifecycle.** An alias lives until the skill is permanently deleted (FK cascade). Archiving
   leaves it in place: an archived skill is not served, and a restore brings the old paths back.
-  Deleting the old namespace drops its aliases, and the old addresses stop resolving (§71.3).
+  Deleting the old namespace drops its aliases, and the old addresses stop resolving (§72.3).
 - **The canonical URL is shown everywhere new:** install commands, the Installed page, the agent
   sync API's `gitUrl` (§69) and share links minted after the move.
 
@@ -16867,23 +16868,154 @@ These steps run in one transaction, under the per-slug transaction lock:
   - renaming a slug.
 - **Accepted trade-offs:**
   - An alias reserves its slug in the old namespace until the skill is permanently deleted or
-    the old namespace is deleted (§71.3).
+    the old namespace is deleted (§72.3).
   - Marketplace skill names change with the owner.
   - Per-namespace analytics keep the pre-move history under the old namespace, until that
-    namespace is deleted and the history moves to the current owner (§71.3).
+    namespace is deleted and the history moves to the current owner (§72.3).
   - An installer who lost access gets no notice of where the skill went (invariant #3).
   - A platform admin approves a move in two separate accepts.
 
+## 71. The Administration group in the sidebar
+
+The sidebar gathers the admin-only pages into one collapsible group, **Administration**. The group
+only lists pages the viewer can already open. It changes no access rule. A user who can open none
+of them sees no group.
+
+### 71.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | One group, **Administration**, holds every admin-only page: Platform administration (`/admin`), Namespace administration, Audit log, System log, Monitoring, Feature ideas and Search gaps. | Admin work has one place. The main nav stays about skills. |
+| 2 | **Usage stays in the main nav.** | Maintainers who are not admins see it (§21). It is not an admin-only page. |
+| 3 | The `/admin` link moves **inside** the group as its first item, labelled **"Platform administration"** (the page's eyebrow). The header is a toggle, not a link. | One row can't be both a link and a toggle. The label pairs with *Namespace administration*. |
+| 4 | Each viewer sees **only the items they can open**. The group shows when there is at least one. | A namespace admin gets the same group with their own items. |
+| 5 | **Collapsed by default.** It opens on its own pages and remembers the viewer's choice **in this browser only**. | Admins who use it daily keep it open. Nothing is stored server-side for a view preference. |
+| 6 | Collapsed, the header shows the **sum** of its items' badges. | Waiting work stays visible with the group shut. |
+| 7 | The rename to *Platform administration* is **sidebar-only**. | Same as the Monitoring rename (§32.7). Presence and RUM labels keep their history. |
+
+### 71.2 Items and order
+
+Top to bottom. Each item is shown only to its audience, which is unchanged from before the group:
+
+| # | Sidebar label | Route | Shown to | Badge |
+|---|---|---|---|---|
+| 1 | Platform administration | `/admin` | platform admins | — |
+| 2 | Namespace administration | `/namespaces` | platform admins and namespace admins (§30.6) | — |
+| 3 | Audit log | `/audit` | platform admins and namespace admins (§11) | — |
+| 4 | System log | `/system-log` | platform admins | events since the last visit (§25) |
+| 5 | Monitoring | `/admin/rum` | platform admins | — |
+| 6 | Feature ideas | `/admin/ideas` | platform admins | `pending` ideas (§60.5) |
+| 7 | Search gaps | `/admin/search-gaps` | platform admins | reviewable gaps (§62.7) |
+
+- A platform admin sees all seven. A namespace admin who is not a platform admin sees items 2 and
+  3. Everyone else sees no group.
+- **Glyphs.** The header takes the shield glyph the `/admin` link used. *Platform administration*
+  gets a settings (sliders) glyph so the two rows don't repeat one icon. Every other item keeps its
+  glyph.
+- **Access is unchanged.** Hiding a link grants and removes nothing. Every page keeps its own
+  check (the *Platform admins only* empty state) and every API its **403**.
+
+### 71.3 Placement and look
+
+- **Placement.** The group is the last part of the nav: the main links, then **Usage** (for those
+  who see it), then **Administration**. The account footer follows as before.
+- **Header row.** Styled like a nav item: the shield glyph, the label **"Administration"**, and a
+  chevron at the right edge. The chevron points right while the group is collapsed and turns to
+  point down when it opens.
+- **Items.** Ordinary nav items, indented one step so their glyphs line up under the header's
+  label.
+- **Mobile (≤ 880 px, the off-canvas drawer).** The same group. Tapping the header opens or closes
+  it and leaves the drawer open. Tapping an item navigates and closes the drawer, as today.
+- **Scroll hint.** The sidebar's *more below* chevron re-checks whenever the group opens or closes,
+  because the group changes the sidebar's scroll height.
+
+### 71.4 Open and closed
+
+- **Default.** Collapsed.
+- **The stored choice.** Opening or closing the group with its header stores the state in this
+  browser (`localStorage` key `skilly-nav-admin`, value `open` or `closed`). It is never stored
+  server-side, in the URL or per account, so it is shared by whoever signs in on that browser.
+  Every read and write is wrapped. When storage is unavailable (a private window, blocked site
+  data) the group starts collapsed and remembers nothing, and the sidebar still works.
+- **It opens on its own pages.** Every navigation that lands on a group route opens the group and
+  stores `open`. That covers a sidebar click, a link from a notification or another page, a reload
+  and a deep link. The group routes are `/admin` and every path under it, `/namespaces`, `/audit`,
+  `/system-log`, and any path under those three. A navigation to any other page leaves the state
+  as it is.
+- **Collapsing on one of its pages is allowed.** The header then takes the active highlight (the
+  style of an active nav item) so the viewer can still see where they are. The group stays shut
+  until the next navigation to a group route, which opens it again.
+- **Active item.** While the group is open, the current page's item carries the active highlight
+  and the header does not. Matching is by longest prefix: *Platform administration* lights only on
+  `/admin` itself, never on Monitoring, Feature ideas or Search gaps, which live under `/admin/…`.
+  (Before the group, both `/admin` and the page under it lit up together.)
+- **Motion.** The items slide open or shut in about 150 ms and the chevron turns with them. With
+  `prefers-reduced-motion: reduce`, both change at once. There is no slide when the group first
+  appears on a page load: it shows in its starting state at once.
+
+### 71.5 Badges
+
+- While the group is open, each item shows its own badge exactly as before (§25, §60.5, §62.7) and
+  the header shows none.
+- While it is collapsed, the header shows a superscript with the **sum** of its items' current
+  counts, **1–9 / 9+**, in the style of the other nav badges, with `aria-label` *"‹n› need
+  attention"*. A sum of zero shows no badge.
+- The sum adds the numbers the items would show. The System log count is zero while the viewer is
+  on the System log (§25). A namespace admin's items carry no badges, so their header never shows
+  one.
+- No new API. The counts come from the existing `GET /api/nav-badges` poll.
+
+### 71.6 Accessibility
+
+- The header is a `<button>` with `aria-expanded` and `aria-controls` naming the item list. Enter
+  and Space toggle it, and focus stays on the header.
+- While collapsed, the items are out of the tab order and hidden from assistive technology (once
+  the slide finishes).
+- The header's accessible name is *"Administration"*, plus the badge's label when one shows.
+
+### 71.7 What does not change
+
+- Routes, page titles, page eyebrows, page access checks and APIs.
+- The presence page labels (§4) and the RUM known-route table (§32.3) keep *"Administration"* for
+  `/admin`.
+- Usage and every item of the main nav.
+- Where other sections of this spec say *the Administration page* or *Administration → …*, they mean
+  `/admin`, whose sidebar label is now *Platform administration*.
+
+### 71.8 Tests (ship with the change, §16 discipline)
+
+- **Unit** (a pure helper in `packages/web/src/lib/`):
+  - the items for a viewer: a platform admin gets all seven in order, a namespace admin gets
+    Namespace administration and Audit log, anyone else gets none;
+  - whether a path is a group route;
+  - which item is active (longest prefix, so `/admin/rum` lights Monitoring only);
+  - the collapsed header's badge sum, including 9+ and a zero sum;
+  - the starting state: a group route opens it, any other route uses the stored value, and
+    unavailable storage means collapsed.
+- **E2E:** `access-gating.spec.ts` stops looking up the *Administration* link by exact name. As the
+  dev admin: the *Administration* button is present and collapsed on the home page, opening it
+  shows the seven items in order, and the open state survives a reload. Going to Feature ideas
+  from a page outside the group opens it. Collapsing it there gives the header the active
+  highlight.
+- **No DB or API tests.** Nothing server-side changes.
+
+### 71.9 Out of scope
+
+- Other collapsible groups, or a collapsible main nav.
+- Remembering the state per account or across devices.
+- Moving Usage into the group.
+- Changing who can open any page.
+
 ---
 
-## 71. Deleting a namespace
+## 72. Deleting a namespace
 
 A platform admin can **permanently delete** a namespace from the Administration → Namespaces card.
 Only an **empty** namespace can go: its live skills must be moved out (§70) or archived first, and
 no proposal may still be open against it. Everything else it holds is removed or re-homed in **one
 transaction**. There is no undo.
 
-### 71.1 Semantics
+### 72.1 Semantics
 
 - **Platform admins only.** A namespace admin cannot delete their own namespace. There is no MCP
   tool (§29) and no agent-key path (§69).
@@ -16892,17 +17024,17 @@ transaction**. There is no undo.
 - **A hard delete.** The `namespaces` row goes. There is no retired state and no restore, so no
   query anywhere has to filter out deleted namespaces.
 - **The slug is released.** A new namespace may take it as soon as the worker has removed the old
-  one's repositories from disk, normally within one sweep (§71.4). The new namespace has a new id.
+  one's repositories from disk, normally within one sweep (§72.4). The new namespace has a new id.
   Nothing of the old one carries over: role mappings, shares, marketplace tokens, old addresses and
-  policy rules are all gone (§71.3).
+  policy rules are all gone (§72.3).
 - **The audit trail stays.** Every audit row about the namespace is kept unchanged (invariant #5).
   The rows keep the old `namespace_id`, and the audit page labels them from the deletion snapshot
-  (§71.7).
+  (§72.7).
 
-### 71.2 What blocks a delete
+### 72.2 What blocks a delete
 
 A namespace can be deleted only when both lists below are empty. The check runs when the dialog
-opens (§71.5) and again inside the delete transaction (§71.3, step 1).
+opens (§72.5) and again inside the delete transaction (§72.3, step 1).
 
 1. **Live skills.** Every skill in the namespace that is not `archived`: active or deprecated, either
    visibility. The admin moves each one out with a move proposal (§70) or archives it (§7).
@@ -16914,19 +17046,19 @@ opens (§71.5) and again inside the delete transaction (§71.3, step 1).
 
    A reviewer accepts, rejects or deletes each one first (§8).
 
-Archived skills and closed proposals don't block: §71.3 handles them.
+Archived skills and closed proposals don't block: §72.3 handles them.
 
-### 71.3 What the delete does
+### 72.3 What the delete does
 
 One transaction, holding a `FOR UPDATE` lock on the namespace row, in this order. Each step goes
 through the existing path for its object, so its own audit events and side effects are unchanged
 unless noted here.
 
-1. **Re-check the blockers** (§71.2) under the lock. If any remain, answer **409**
+1. **Re-check the blockers** (§72.2) under the lock. If any remain, answer **409**
    `namespace_not_empty` and change nothing. The lock makes a concurrent skill insert, proposal
    submit, move or grant into the namespace wait; once the delete commits, each one fails as it
    would for an unknown namespace.
-2. **Resolve the notification recipients** (§71.6) while the role mappings still exist.
+2. **Resolve the notification recipients** (§72.6) while the role mappings still exist.
 3. **Purge archived skills.** Each archived skill goes through the §7 permanent-delete path:
    versions, proposals, discussions, scan reports, install tokens, ratings and the rest. Each writes
    its own `skill.deleted` audit row.
@@ -16952,7 +17084,7 @@ unless noted here.
    `/<ns>/<slug>.git` and `/skills/<ns>/<slug>` stop resolving for every skill that moved out and
    answer 404. An install made through an old address has to be reinstalled from the canonical
    URL, which the Installed page already shows. Nobody is notified. The worker relocates any repo
-   still at an old address (§71.4).
+   still at an old address (§72.4).
 7. **Revoke the shares into the namespace.** Each `skill_namespace_grants` row with this namespace
    as grantee is revoked through the grants module with `via = namespace_deleted`: one
    `skill.namespace_unshared` per grant. Explicit maintainers who are no longer eligible are pruned
@@ -16974,15 +17106,15 @@ unless noted here.
 11. **Remove the repository imports** (`proposal_imports`, §64.8) that targeted the namespace. A
     proposal re-homed in step 4 keeps its revisions and loses only its `import_id` link, which is
     display-only.
-12. **Queue the disk purge** (§71.4) for the namespace's slug.
+12. **Queue the disk purge** (§72.4) for the namespace's slug.
 13. **Delete the namespace row.** The FK cascades find nothing left to remove; they stay as
     defence in depth.
-14. **Audit `namespace.deleted`** (§71.7), then commit.
-15. **After commit:** create the `namespace.deleted` notifications (§71.6).
+14. **Audit `namespace.deleted`** (§72.7), then commit.
+15. **After commit:** create the `namespace.deleted` notifications (§72.6).
 
-The response carries the counts from §71.7.
+The response carries the counts from §72.7.
 
-### 71.4 Releasing the slug: the disk purge
+### 72.4 Releasing the slug: the disk purge
 
 Bare repos live at `<repo-root>/<ns>/<slug>.git` and are keyed by slug (§70.8). Synthesis reuses an
 existing directory and keeps the tags it already holds. A directory left behind would therefore
@@ -16990,7 +17122,7 @@ leak: a new namespace with the same slug, plus a skill with the same slug, would
 skill's old tags to a new audience. The slug is released only after the worker has cleared the
 disk.
 
-- **Queue.** Step 12 inserts a `repo_disk_purges` row (§71.8): the slug, the namespace id, and
+- **Queue.** Step 12 inserts a `repo_disk_purges` row (§72.8): the slug, the namespace id, and
   each dropped alias's `(slug, skill_id)`.
 - **The worker sweep.** It runs first in each leader publish sweep, beside the §70.8 relocation.
   For each queued row it:
@@ -17009,13 +17141,13 @@ disk.
 - **Out of scope here.** The §7 single-skill permanent delete leaves its repo on disk the same way.
   This section does not change that path.
 
-### 71.5 The Namespaces card and the dialog
+### 72.5 The Namespaces card and the dialog
 
 - **A Delete button** on each row of the Administration → Namespaces card (§30.6), at the end of
   the row's controls, styled as a destructive action. `global` has none.
-- **The dialog** first loads the preflight (`GET …/deletion`, §71.9) and shows one of two states:
+- **The dialog** first loads the preflight (`GET …/deletion`, §72.9) and shows one of two states:
   - **Blocked.** *"‹display name› can't be deleted yet."* It lists the live skills and the open
-    proposals (§71.2), each linking to its page (`/skills/<ns>/<slug>`, `/proposals/<id>`), up to
+    proposals (§72.2), each linking to its page (`/skills/<ns>/<slug>`, `/proposals/<id>`), up to
     50 of each with *"and N more"*. Live skills carry a hint: *"Move it to another namespace or
     archive it."* Open proposals: *"Accept, reject or delete it."* The only button is Close.
   - **Ready.** *"Deleting ‹display name› (@slug) is permanent."* It then lists what will happen,
@@ -17037,10 +17169,10 @@ disk.
   the card shows *"Deleted @slug."* If a blocker appeared since the dialog opened, the 409 swaps the
   dialog into the Blocked state with the fresh lists.
 
-### 71.6 Notifications
+### 72.6 Notifications
 
 - **`namespace.deleted`** goes to the namespace's admins as the RBAC resolution names them at
-  step 2 (§71.3), while the role mappings still exist: active users only, minus the actor, one row
+  step 2 (§72.3), while the role mappings still exist: active users only, minus the actor, one row
   per recipient. Members are not
   told, nor are the namespaces whose shares were revoked, nor installers of moved skills.
 - It goes **in-app plus email**, gated only by `email_notifications`. There is no per-type
@@ -17049,7 +17181,7 @@ disk.
   Its role mappings, shares and marketplace were removed."* When a reason was given, it adds
   *"Reason: {reason}"*. There is no CTA; the namespace has no page any more.
 
-### 71.7 Audit
+### 72.7 Audit
 
 - **`namespace.deleted`**: actor; target = the namespace id.
   - `before` holds the full row: slug, display name, `require_review`, `maintainer_contact`,
@@ -17059,7 +17191,7 @@ disk.
     re-homed, proposals deleted, usage rows re-homed, aliases dropped, grants revoked, marketplace
     tokens revoked, policy rules deleted, role mappings removed, imports removed, admins notified.
     It also lists the re-homed proposal ids.
-- The per-step events of §71.3 are written as usual: `skill.deleted`, `proposal.deleted`,
+- The per-step events of §72.3 are written as usual: `skill.deleted`, `proposal.deleted`,
   `skill.namespace_unshared` and `skill.maintainer_removed`, `namespace.marketplace_disabled`,
   `policy.rule_deleted`, `role_mapping.deleted`.
 - **Old audit rows** keep their `namespace_id`, which no longer names a row. The audit page and
@@ -17068,14 +17200,14 @@ disk.
   deleted namespace leaves the audit page's namespace filter; its rows stay in the unfiltered view.
   Only platform admins see them, since no one is that namespace's admin any more.
 
-### 71.8 Data model (migration 0113)
+### 72.8 Data model (migration 0113)
 
 - **`audit_log.namespace_id` loses its foreign key.** Every namespace has at least its
   `namespace.created` row, so the key would block every delete. Append-only rows can't be set to
   NULL, so the constraint is dropped. The column and `idx_audit_namespace` stay. No audit row
   changes.
 - **New partial index** `idx_audit_namespace_deleted` on `audit_log (target_id) WHERE action =
-  'namespace.deleted'`: the audit page's lookup of a deleted namespace's snapshot (§71.7).
+  'namespace.deleted'`: the audit page's lookup of a deleted namespace's snapshot (§72.7).
 - **New `repo_disk_purges`:**
   - `id` (uuid PK);
   - `namespace_slug` TEXT NOT NULL;
@@ -17083,17 +17215,17 @@ disk.
   - `relocations` JSONB, default `[]`: the dropped aliases as `{ slug, skillId }`;
   - `created_at` timestamptz.
 
-  Unique on `namespace_slug`. The worker deletes a row once the purge succeeds (§71.4).
+  Unique on `namespace_slug`. The worker deletes a row once the purge succeeds (§72.4).
 - **No other schema change.** The existing FK actions stay. The delete clears the RESTRICT
   references (`skills`, `proposals`, the §47 results and dismissals) explicitly before removing the
   row.
 
-### 71.9 API
+### 72.9 API
 
 - `GET /api/admin/namespaces/:id/deletion` (platform admin): the preflight.
   `{ namespace: { id, slug, displayName }, deletable, blockers: { skills: [{ slug, title,
   deprecated }], proposals: [{ id, title, state }], skillsTotal, proposalsTotal }, effects: { …the
-  §71.7 counts, archivedSkills: [slug], roleMappings: [{ groupDisplayName, role }] } }`. Each list
+  §72.7 counts, archivedSkills: [slug], roleMappings: [{ groupDisplayName, role }] } }`. Each list
   holds up to 50 items. **404** for an unknown id, **422** `global_namespace` for `global`.
 - `DELETE /api/admin/namespaces/:id` (platform admin), body `{ confirmSlug, reason? }`:
   - **200** `{ ok: true, effects }`;
@@ -17102,9 +17234,9 @@ disk.
   - **422** `global_namespace`, `confirm_mismatch` (`confirmSlug` ≠ the slug) or
     `reason_too_long` (over 500 characters).
 - `POST /api/admin/namespaces` gains the **422** *still being removed* answer for a slug still
-  queued for purge (§71.4).
+  queued for purge (§72.4).
 
-### 71.10 Tests (ship with the change, §16 discipline)
+### 72.10 Tests (ship with the change, §16 discipline)
 
 - **Unit (`@skilly/shared`):**
   - the open proposal states that block;
@@ -17145,7 +17277,7 @@ disk.
   deleted*, types the slug and deletes. The row is gone from the card. `global` shows no Delete
   button, and the API refuses it.
 
-### 71.11 Out of scope and accepted trade-offs
+### 72.11 Out of scope and accepted trade-offs
 
 - **Out of scope:**
   - undo or restore;

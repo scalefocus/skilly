@@ -1,4 +1,4 @@
-// SKILLY_SPEC.md §71 — the pure rules of deleting a namespace.
+// SKILLY_SPEC.md §72 — the pure rules of deleting a namespace.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -27,7 +27,7 @@ const NONE: NamespaceDeleteEffects = {
   adminsNotified: 0,
 };
 
-test("the open states that block a delete are exactly the four undecided ones (§71.2)", () => {
+test("the open states that block a delete are exactly the four undecided ones (§72.2)", () => {
   assert.deepEqual([...OPEN_PROPOSAL_STATES].sort(), ["awaiting_destination", "changes_requested", "proposed", "under_review"]);
   assert.ok(!(OPEN_PROPOSAL_STATES as readonly string[]).includes("accepted"));
   assert.ok(!(OPEN_PROPOSAL_STATES as readonly string[]).includes("rejected"));

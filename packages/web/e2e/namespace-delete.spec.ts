@@ -1,4 +1,4 @@
-// e2e: deleting a namespace from the Administration → Namespaces card (SKILLY_SPEC.md §71.5). Runs
+// e2e: deleting a namespace from the Administration → Namespaces card (SKILLY_SPEC.md §72.5). Runs
 // against the dev stack (SKILLY_DEV_AUTH=1) as the seeded platform admin.
 //
 // Journey: a fresh namespace with one accepted skill → Delete lists the live skill as a blocker →
@@ -37,7 +37,7 @@ async function showNamespace(page: Page, slug: string): Promise<void> {
   await expect(page.locator("section.card").filter({ hasText: `@${slug}` }).first()).toBeVisible({ timeout: 20_000 });
 }
 
-test.describe("§71 deleting a namespace", () => {
+test.describe("§72 deleting a namespace", () => {
   test.describe.configure({ mode: "serial" });
 
   test("a live skill blocks the delete; once archived it is purged with the namespace", async ({ page }) => {

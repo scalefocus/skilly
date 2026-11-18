@@ -1,21 +1,21 @@
-// Deleting a namespace (SKILLY_SPEC.md §71). Client-safe: the pure rules shared by the admin
+// Deleting a namespace (SKILLY_SPEC.md §72). Client-safe: the pure rules shared by the admin
 // dialog, the web API and the worker's notification renderer. The DB orchestration lives in
 // packages/web/src/lib/namespaceDelete.ts; the disk purge in packages/worker/src/git/namespacePurge.ts.
 
-/** The longest reason an admin may give (§71.5). */
+/** The longest reason an admin may give (§72.5). */
 export const NAMESPACE_DELETE_REASON_MAX = 500;
 
-/** Machine-readable codes on the §71.9 refusals. */
+/** Machine-readable codes on the §72.9 refusals. */
 export const NAMESPACE_NOT_EMPTY_CODE = "namespace_not_empty";
 export const GLOBAL_NAMESPACE_CODE = "global_namespace";
 export const CONFIRM_MISMATCH_CODE = "confirm_mismatch";
 export const REASON_TOO_LONG_CODE = "reason_too_long";
 
-/** How many blockers of each kind the preflight lists (§71.5 / §71.9). */
+/** How many blockers of each kind the preflight lists (§72.5 / §72.9). */
 export const NAMESPACE_DELETE_LIST_LIMIT = 50;
 
 /**
- * Proposal states that block a delete when the proposal targets the namespace (§71.2). A move
+ * Proposal states that block a delete when the proposal targets the namespace (§72.2). A move
  * proposal in `awaiting_destination` also blocks the namespace it waits for.
  */
 export const OPEN_PROPOSAL_STATES = ["proposed", "under_review", "changes_requested", "awaiting_destination"] as const;
@@ -28,7 +28,7 @@ export function normalizeDeleteReason(reason: unknown): string | null {
 }
 
 /**
- * Why a delete request can't proceed before the database is consulted (§71.9), or null. The typed
+ * Why a delete request can't proceed before the database is consulted (§72.9), or null. The typed
  * confirmation must equal the slug exactly; `global` is never deletable.
  */
 export function deleteRequestError(input: { slug: string; confirmSlug: unknown; reason: unknown }): typeof GLOBAL_NAMESPACE_CODE | typeof CONFIRM_MISMATCH_CODE | typeof REASON_TOO_LONG_CODE | null {
@@ -39,7 +39,7 @@ export function deleteRequestError(input: { slug: string; confirmSlug: unknown; 
   return null;
 }
 
-/** Human messages for the §71.9 refusal codes. */
+/** Human messages for the §72.9 refusal codes. */
 export const NAMESPACE_DELETE_MESSAGES: Record<string, string> = {
   [GLOBAL_NAMESPACE_CODE]: "the global namespace can't be deleted",
   [CONFIRM_MISMATCH_CODE]: "type the namespace's slug exactly to confirm",
@@ -48,7 +48,7 @@ export const NAMESPACE_DELETE_MESSAGES: Record<string, string> = {
 };
 
 /**
- * The destination a re-homed closed proposal keeps (§71.3 step 4). A move proposal's destination
+ * The destination a re-homed closed proposal keeps (§72.3 step 4). A move proposal's destination
  * must differ from its target (the §70.11 CHECK), so when re-homing makes them equal the
  * destination is dropped; the move itself stays in the audit log (`skill.moved`).
  */
@@ -56,7 +56,7 @@ export function rehomedDestination(destinationNamespaceId: string | null, newTar
   return destinationNamespaceId && destinationNamespaceId !== newTargetNamespaceId ? destinationNamespaceId : null;
 }
 
-/** What the delete did, or will do: the §71.7 counts (also the preflight's `effects`). */
+/** What the delete did, or will do: the §72.7 counts (also the preflight's `effects`). */
 export interface NamespaceDeleteEffects {
   archivedSkillsPurged: number;
   proposalsRehomed: number;
@@ -77,7 +77,7 @@ function plural(n: number, one: string, many: string): string {
 }
 
 /**
- * The Ready state's consequence lines (§71.5), in order, omitting any whose count is 0. Analytics
+ * The Ready state's consequence lines (§72.5), in order, omitting any whose count is 0. Analytics
  * and imports are bookkeeping and stay out of the dialog (they are in the audit record).
  */
 export function namespaceDeleteEffectLines(e: NamespaceDeleteEffects): string[] {
@@ -95,7 +95,7 @@ export function namespaceDeleteEffectLines(e: NamespaceDeleteEffects): string[] 
 }
 
 /**
- * The `namespace.deleted` notification sentence (§71.6), shared by the in-app center and the email
+ * The `namespace.deleted` notification sentence (§72.6), shared by the in-app center and the email
  * renderer. There is no CTA: the namespace has no page any more.
  */
 export function namespaceDeletedSentence(payload: Record<string, unknown>): string {

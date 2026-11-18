@@ -128,7 +128,7 @@ export async function reactivateMarketplace(userId: string, id: string, expiresA
 }
 
 /** Revoke every token for one namespace's marketplace (called when its toggle goes off, §30.6, and
- *  inside the namespace delete's transaction, §71.3 step 8 — hence the optional client). */
+ *  inside the namespace delete's transaction, §72.3 step 8 — hence the optional client). */
 export async function revokeNamespaceMarketplaceTokens(namespaceId: string, db: Pick<PoolClient, "query"> = pool): Promise<number> {
   const { rowCount } = await db.query(
     `delete from tokens where type = 'marketplace' and namespace_id = $1`,

@@ -1,5 +1,5 @@
 "use client";
-// Delete a namespace — the Administration → Namespaces card's dialog (SKILLY_SPEC.md §71.5). It opens
+// Delete a namespace — the Administration → Namespaces card's dialog (SKILLY_SPEC.md §72.5). It opens
 // on the preflight (`GET /api/admin/namespaces/:id/deletion`) and shows one of two states:
 //  - Blocked: the live skills and open proposals that must go first, each linking to its page;
 //  - Ready: what the delete will do, an optional reason, and a type-the-slug confirmation.

@@ -1,4 +1,4 @@
-// The disk purge after a namespace delete (SKILLY_SPEC.md §71.4). Bare repos live at
+// The disk purge after a namespace delete (SKILLY_SPEC.md §72.4). Bare repos live at
 // `<repo-root>/<ns>/<slug>.git`, keyed by slug, and synthesis reuses an existing directory with the
 // tags it holds — so a deleted namespace's directories must be gone before its slug can name a new
 // namespace, or a same-slug skill there would serve the deleted skill's old tags to a new audience.

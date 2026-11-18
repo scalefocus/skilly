@@ -222,7 +222,7 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
     };
   }
 
-  // §71.6: a platform admin deleted a namespace the recipient administered. No CTA — the namespace
+  // §72.6: a platform admin deleted a namespace the recipient administered. No CTA — the namespace
   // has no page any more.
   if (n.type === "namespace.deleted") {
     const s = subj(title);

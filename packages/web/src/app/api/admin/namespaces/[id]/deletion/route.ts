@@ -1,4 +1,4 @@
-// Platform-admin: the namespace-delete preflight the dialog opens with (SKILLY_SPEC.md §71.5, §71.9) —
+// Platform-admin: the namespace-delete preflight the dialog opens with (SKILLY_SPEC.md §72.5, §72.9) —
 // the blockers (live skills, open proposals) or, when there are none, what the delete will do.
 import { currentAccess } from "../../../../../../lib/guard";
 import { pool } from "../../../../../../lib/db";

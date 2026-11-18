@@ -1,4 +1,4 @@
-// §71.4 the disk purge after a namespace delete — real directories, real `git` synthesis, and a
+// §72.4 the disk purge after a namespace delete — real directories, real `git` synthesis, and a
 // stub pool standing in for repo_disk_purges + the canonical-address lookup.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
