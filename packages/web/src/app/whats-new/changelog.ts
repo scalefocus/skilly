@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.62.0",
+    date: "2026-11-18",
+    summary:
+      "The admin pages now sit together in a collapsible Administration group at the bottom of the sidebar: Platform administration (formerly Administration), Namespace administration, Audit log, System log, Monitoring, Feature ideas and Search gaps. It opens by itself on those pages, remembers whether you left it open, and shows their waiting counts while closed.",
+  },
+  {
     version: "2.61.0",
     date: "2026-11-18",
     summary:

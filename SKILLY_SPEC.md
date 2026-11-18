@@ -4197,8 +4197,8 @@ depends on the target:
 
 An operational view, for **platform admins only**, of the **user-facing HTTP errors** the platform
 returned — primarily the web tier, plus the worker's git-gateway refusal event below — the issues
-the platform encountered, with the user who hit them. Linked in the sidebar
-directly under **Audit log** (but, unlike Audit log, *not* shown to namespace admins).
+the platform encountered, with the user who hit them. Linked in the sidebar's **Administration**
+group (§71), directly under **Audit log** (but, unlike Audit log, *not* shown to namespace admins).
 
 This is **not** the audit log: it is high-volume, mutable operational telemetry, so it deliberately
 has **no** tamper-evident hash chain and **no** append-only trigger (cheap inserts, easy retention).
@@ -5819,8 +5819,9 @@ generally**, not a single-toggle page:
   scroll motion alone dropped (flash still plays) when the card is already fully in view. Nothing
   is expanded because nothing here collapses. Browser preference only — never in the URL, never
   server-side.
-- Nav: a **Namespace administration** entry beside **Administration**, rendered only when the
-  caller administers ≥ 1 namespace.
+- Nav: a **Namespace administration** entry in the sidebar's **Administration** group (§71),
+  directly under **Platform administration**, rendered only when the caller administers ≥ 1
+  namespace.
 
 **Leaderboard note on Pages 2 and 3.** The add-command panel (Page 3, and Page 1 after a mint,
 which share it) and Page 2's introduction carry one line: *"Adding a marketplace delivers every skill in it. Those deliveries do not
@@ -7118,7 +7119,7 @@ telemetry of the same class as the System log (§25).
 
 ### 32.7 The page — `/admin/rum`
 
-A **dedicated page**, sidebar link **"Monitoring"** directly under **System log** (same chart icon),
+A **dedicated page**, sidebar link **"Monitoring"** in the **Administration** group (§71), directly under **System log** (same chart icon),
 shown **only to platform admins** (the API is hard-gated with 403 regardless; the link is merely
 hidden for everyone else — namespace admins see nothing). **The rename is sidebar-only** (v2.7.0; the
 link read *"Real user monitoring"* before): the URL stays `/admin/rum`, the eyebrow stays
@@ -13401,7 +13402,7 @@ how it behaves.
 
 ### 60.5 Review: the *Feature ideas* page (`/admin/ideas`)
 - **Access.** Platform admins only. Anyone else gets the *Platform admins only* empty state, as on
-  Monitoring (§32.7), and the APIs return **403**. Sidebar entry **"Feature ideas"** (lightbulb glyph), directly **below Monitoring**,
+  Monitoring (§32.7), and the APIs return **403**. Sidebar entry **"Feature ideas"** (lightbulb glyph) in the **Administration** group (§71), directly **below Monitoring**,
   carrying a superscript **1–9 / 9+** count of `pending` ideas from `GET /api/nav-badges` (`ideas`,
   present only for platform admins). The count is a plain count of the queue: it has no "seen"
   marker, and it drops as ideas are decided.
@@ -14181,8 +14182,8 @@ reloads. An unknown gap is **404**.
 
 ### 62.7 The page: `/admin/search-gaps`
 - **Access.** Platform admins only. Anyone else gets the *Platform admins only* empty state, and
-  the APIs return **403**. Sidebar entry **"Search gaps"** (magnifier glyph), directly **below
-  Feature ideas**, with a superscript **1–9 / 9+** count of reviewable gaps from
+  the APIs return **403**. Sidebar entry **"Search gaps"** (magnifier glyph), the last item of the
+  **Administration** group (§71), directly **below Feature ideas**, with a superscript **1–9 / 9+** count of reviewable gaps from
   `GET /api/nav-badges` (`searchGaps`, present only for platform admins).
 - **Header.** Eyebrow *"Administration"*, title **"Search gaps"**, sub-line *"Searches that found
   nothing, with no one's identity attached. Turn them into a synonym or a skill request, or dismiss
@@ -16858,3 +16859,134 @@ These steps run in one transaction, under the per-slug transaction lock:
   - Per-namespace analytics keep the pre-move history under the old namespace.
   - An installer who lost access gets no notice of where the skill went (invariant #3).
   - A platform admin approves a move in two separate accepts.
+
+## 71. The Administration group in the sidebar
+
+The sidebar gathers the admin-only pages into one collapsible group, **Administration**. The group
+only lists pages the viewer can already open. It changes no access rule. A user who can open none
+of them sees no group.
+
+### 71.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | One group, **Administration**, holds every admin-only page: Platform administration (`/admin`), Namespace administration, Audit log, System log, Monitoring, Feature ideas and Search gaps. | Admin work has one place. The main nav stays about skills. |
+| 2 | **Usage stays in the main nav.** | Maintainers who are not admins see it (§21). It is not an admin-only page. |
+| 3 | The `/admin` link moves **inside** the group as its first item, labelled **"Platform administration"** (the page's eyebrow). The header is a toggle, not a link. | One row can't be both a link and a toggle. The label pairs with *Namespace administration*. |
+| 4 | Each viewer sees **only the items they can open**. The group shows when there is at least one. | A namespace admin gets the same group with their own items. |
+| 5 | **Collapsed by default.** It opens on its own pages and remembers the viewer's choice **in this browser only**. | Admins who use it daily keep it open. Nothing is stored server-side for a view preference. |
+| 6 | Collapsed, the header shows the **sum** of its items' badges. | Waiting work stays visible with the group shut. |
+| 7 | The rename to *Platform administration* is **sidebar-only**. | Same as the Monitoring rename (§32.7). Presence and RUM labels keep their history. |
+
+### 71.2 Items and order
+
+Top to bottom. Each item is shown only to its audience, which is unchanged from before the group:
+
+| # | Sidebar label | Route | Shown to | Badge |
+|---|---|---|---|---|
+| 1 | Platform administration | `/admin` | platform admins | — |
+| 2 | Namespace administration | `/namespaces` | platform admins and namespace admins (§30.6) | — |
+| 3 | Audit log | `/audit` | platform admins and namespace admins (§11) | — |
+| 4 | System log | `/system-log` | platform admins | events since the last visit (§25) |
+| 5 | Monitoring | `/admin/rum` | platform admins | — |
+| 6 | Feature ideas | `/admin/ideas` | platform admins | `pending` ideas (§60.5) |
+| 7 | Search gaps | `/admin/search-gaps` | platform admins | reviewable gaps (§62.7) |
+
+- A platform admin sees all seven. A namespace admin who is not a platform admin sees items 2 and
+  3. Everyone else sees no group.
+- **Glyphs.** The header takes the shield glyph the `/admin` link used. *Platform administration*
+  gets a settings (sliders) glyph so the two rows don't repeat one icon. Every other item keeps its
+  glyph.
+- **Access is unchanged.** Hiding a link grants and removes nothing. Every page keeps its own
+  check (the *Platform admins only* empty state) and every API its **403**.
+
+### 71.3 Placement and look
+
+- **Placement.** The group is the last part of the nav: the main links, then **Usage** (for those
+  who see it), then **Administration**. The account footer follows as before.
+- **Header row.** Styled like a nav item: the shield glyph, the label **"Administration"**, and a
+  chevron at the right edge. The chevron points right while the group is collapsed and turns to
+  point down when it opens.
+- **Items.** Ordinary nav items, indented one step so their glyphs line up under the header's
+  label.
+- **Mobile (≤ 880 px, the off-canvas drawer).** The same group. Tapping the header opens or closes
+  it and leaves the drawer open. Tapping an item navigates and closes the drawer, as today.
+- **Scroll hint.** The sidebar's *more below* chevron re-checks whenever the group opens or closes,
+  because the group changes the sidebar's scroll height.
+
+### 71.4 Open and closed
+
+- **Default.** Collapsed.
+- **The stored choice.** Opening or closing the group with its header stores the state in this
+  browser (`localStorage` key `skilly-nav-admin`, value `open` or `closed`). It is never stored
+  server-side, in the URL or per account, so it is shared by whoever signs in on that browser.
+  Every read and write is wrapped. When storage is unavailable (a private window, blocked site
+  data) the group starts collapsed and remembers nothing, and the sidebar still works.
+- **It opens on its own pages.** Every navigation that lands on a group route opens the group and
+  stores `open`. That covers a sidebar click, a link from a notification or another page, a reload
+  and a deep link. The group routes are `/admin` and every path under it, `/namespaces`, `/audit`,
+  `/system-log`, and any path under those three. A navigation to any other page leaves the state
+  as it is.
+- **Collapsing on one of its pages is allowed.** The header then takes the active highlight (the
+  style of an active nav item) so the viewer can still see where they are. The group stays shut
+  until the next navigation to a group route, which opens it again.
+- **Active item.** While the group is open, the current page's item carries the active highlight
+  and the header does not. Matching is by longest prefix: *Platform administration* lights only on
+  `/admin` itself, never on Monitoring, Feature ideas or Search gaps, which live under `/admin/…`.
+  (Before the group, both `/admin` and the page under it lit up together.)
+- **Motion.** The items slide open or shut in about 150 ms and the chevron turns with them. With
+  `prefers-reduced-motion: reduce`, both change at once. There is no slide when the group first
+  appears on a page load: it shows in its starting state at once.
+
+### 71.5 Badges
+
+- While the group is open, each item shows its own badge exactly as before (§25, §60.5, §62.7) and
+  the header shows none.
+- While it is collapsed, the header shows a superscript with the **sum** of its items' current
+  counts, **1–9 / 9+**, in the style of the other nav badges, with `aria-label` *"‹n› need
+  attention"*. A sum of zero shows no badge.
+- The sum adds the numbers the items would show. The System log count is zero while the viewer is
+  on the System log (§25). A namespace admin's items carry no badges, so their header never shows
+  one.
+- No new API. The counts come from the existing `GET /api/nav-badges` poll.
+
+### 71.6 Accessibility
+
+- The header is a `<button>` with `aria-expanded` and `aria-controls` naming the item list. Enter
+  and Space toggle it, and focus stays on the header.
+- While collapsed, the items are out of the tab order and hidden from assistive technology (once
+  the slide finishes).
+- The header's accessible name is *"Administration"*, plus the badge's label when one shows.
+
+### 71.7 What does not change
+
+- Routes, page titles, page eyebrows, page access checks and APIs.
+- The presence page labels (§4) and the RUM known-route table (§32.3) keep *"Administration"* for
+  `/admin`.
+- Usage and every item of the main nav.
+- Where other sections of this spec say *the Administration page* or *Administration → …*, they mean
+  `/admin`, whose sidebar label is now *Platform administration*.
+
+### 71.8 Tests (ship with the change, §16 discipline)
+
+- **Unit** (a pure helper in `packages/web/src/lib/`):
+  - the items for a viewer: a platform admin gets all seven in order, a namespace admin gets
+    Namespace administration and Audit log, anyone else gets none;
+  - whether a path is a group route;
+  - which item is active (longest prefix, so `/admin/rum` lights Monitoring only);
+  - the collapsed header's badge sum, including 9+ and a zero sum;
+  - the starting state: a group route opens it, any other route uses the stored value, and
+    unavailable storage means collapsed.
+- **E2E:** `access-gating.spec.ts` stops looking up the *Administration* link by exact name. As the
+  dev admin: the *Administration* button is present and collapsed on the home page, opening it
+  shows the seven items in order, and the open state survives a reload. Going to Feature ideas
+  from a page outside the group opens it. Collapsing it there gives the header the active
+  highlight.
+- **No DB or API tests.** Nothing server-side changes.
+
+### 71.9 Out of scope
+
+- Other collapsible groups, or a collapsible main nav.
+- Remembering the state per account or across devices.
+- Moving Usage into the group.
+- Changing who can open any page.

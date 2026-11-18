@@ -8,6 +8,7 @@
 // (needs DATABASE_URL in the launching shell, like whats-new-notice.spec.ts).
 import { Pool } from "pg";
 import { test, expect, devSignIn, signedInDisplayName, type Page } from "./fixtures";
+import { gotoReady } from "./helpers/ready";
 
 test.describe.configure({ mode: "serial" });
 
@@ -124,7 +125,12 @@ test.describe("real user monitoring (§32)", () => {
   });
 
   test("the sidebar links the page for the admin and the presence label resolves", async ({ page }) => {
-    await page.goto("/");
+    await gotoReady(page, "/");
+    // §71: the link sits in the Administration group, collapsed on "/" in a fresh browser.
+    const group = page.locator("aside.sidebar").getByRole("button", { name: /^Administration/ });
+    await expect(group).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
+    await group.click();
+    await expect(group).toHaveAttribute("aria-expanded", "true");
     // Sidebar-only rename (v2.7.0, §32.7): the link reads "Monitoring"; the page title is unchanged.
     const link = page.getByRole("link", { name: "Monitoring", exact: true });
     await expect(link).toBeVisible({ timeout: 20_000 });

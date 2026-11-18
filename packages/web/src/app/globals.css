@@ -320,6 +320,39 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
   text-align: center; display: inline-block;
 }
 
+/* §71 the Administration group: a nav-item-styled toggle and its indented, collapsible items. */
+.nav-group-head {
+  width: 100%; border: 0; background: none; cursor: pointer; text-align: left;
+  font: inherit; font-weight: 450;
+}
+.nav-group-head:hover { background: var(--surface-2); }
+.nav-group-chev { width: 14px; height: 14px; margin-left: auto; flex-shrink: 0; color: var(--faint); }
+/* After a badge, the row's own 11px gap is the spacing (the badge already took the auto margin). */
+.nav-group-head .nav-badge + .nav-group-chev { margin-left: 0; }
+.nav-group.open .nav-group-chev { transform: rotate(90deg); }
+/* The row height animates through a 0fr → 1fr grid track. The body bleeds into the sidebar's 18px
+   side padding so the clip doesn't cut off the active item's accent bar at left: -18px. */
+.nav-group-body { display: grid; grid-template-rows: 0fr; margin: 0 -18px; }
+.nav-group.open .nav-group-body { grid-template-rows: 1fr; }
+/* Collapsed, the items are hidden (out of the tab order, away from assistive technology). */
+.nav-group-clip { min-height: 0; overflow: hidden; padding: 0 18px; visibility: hidden; }
+.nav-group.open .nav-group-clip { visibility: visible; }
+.nav-group-list { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; }
+/* Indented by padding, not margin, so the accent bar stays on the sidebar edge: the glyphs line up
+   under the header's label (16px glyph + 11px gap). */
+.nav-group-item { padding-left: 39px; }
+/* Motion only once the starting state has painted (no slide on a page load). Closing keeps the
+   items visible until the slide ends; opening shows them at once. */
+.nav-group[data-anim] .nav-group-body { transition: grid-template-rows 0.15s ease; }
+.nav-group[data-anim] .nav-group-clip { transition: visibility 0s linear 0.15s; }
+.nav-group[data-anim].open .nav-group-clip { transition-delay: 0s; }
+.nav-group[data-anim] .nav-group-chev { transition: transform 0.15s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .nav-group[data-anim] .nav-group-body,
+  .nav-group[data-anim] .nav-group-clip,
+  .nav-group[data-anim] .nav-group-chev { transition: none; }
+}
+
 .sidebar-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); }
 
 /* Scroll affordance pinned to the bottom of the sidebar scrollport when the menu overflows.
