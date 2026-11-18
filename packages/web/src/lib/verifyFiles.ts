@@ -518,7 +518,10 @@ export function matchLabel(m: HashMatch): string {
 
 /** The §73.7 openssl recipe with this instance's registry and the active key filled in. */
 export function offlineRecipe(registry: string, keyId: string | null): string {
-  const reg = registry.replace(/\/+$/, "");
+  // Trailing slashes dropped with a linear scan (a `/\/+$/` regex is polynomial on long runs).
+  let end = registry.length;
+  while (end > 0 && registry.charCodeAt(end - 1) === 47 /* / */) end--;
+  const reg = registry.slice(0, end);
   return [
     keyId
       ? `KEYID=${keyId}   # the active key; or: KEYID=$(jq -r '.signatures[0].keyid' statement.json)`

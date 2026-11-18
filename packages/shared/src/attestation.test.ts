@@ -17,6 +17,7 @@ import {
   paeBytes,
   pemToDer,
   derToPem,
+  resolveSigningRegistry,
   variantFor,
   verifyAgainstStatement,
   DSSE_PAYLOAD_TYPE,
@@ -155,6 +156,14 @@ test("keys: keyId is the first 16 hex of sha256(DER SPKI); PEM round trip; finge
   assert.deepEqual([...pemToDer(derToPem(kp.der))!], [...kp.der]);
   assert.equal(formatFingerprint("0123456789abcdef"), "0123 4567 89ab cdef");
   assert.equal(pemToDer("not a pem"), null);
+  assert.equal(pemToDer("-----BEGIN PUBLIC KEY-----"), null, "no END line");
+  assert.equal(pemToDer("-----BEGIN X----------END X-----"), null, "empty body");
+  // CodeQL: crafted BEGIN repetitions and long slash runs stay linear (they used to be regexes).
+  const hostile = "-----BEGIN  -----a".repeat(50_000);
+  const t0 = Date.now();
+  assert.equal(pemToDer(`-----BEGIN  -----${hostile}`), null);
+  assert.equal(resolveSigningRegistry({ SKILLY_REGISTRY_URL: `https://x${"/".repeat(100_000)}` }), "https://x");
+  assert.ok(Date.now() - t0 < 1000, "linear on hostile input");
 });
 
 test("compareFiles: unchanged, line endings, modified, missing, extra (OS metadata labeled)", async () => {

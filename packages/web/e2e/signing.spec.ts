@@ -22,7 +22,8 @@ const SEMVER = "1.1.0";
 const SKILL = `/skills/${NS}/${SLUG}`;
 const DETAIL = new RegExp(`/api/skills/${NS}/${SLUG}$`);
 const STATEMENT = `/api/skills/${NS}/${SLUG}/versions/${SEMVER}/statement`;
-const versionRow = (page: Page) => page.locator(`#version-${SEMVER.replace(/\./g, "\\.")}`);
+// An attribute selector needs no CSS escaping for the dots in the semver.
+const versionRow = (page: Page) => page.locator(`[id="version-${SEMVER}"]`);
 
 interface SignedFile { path: string; sha256: string; installed: boolean }
 

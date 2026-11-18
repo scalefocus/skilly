@@ -100,12 +100,21 @@ export function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-/** DER bytes of a PEM block (the first one), or null when the text is not PEM. */
+/**
+ * DER bytes of a PEM block (the first one), or null when the text is not PEM. Parsed with indexOf,
+ * not a regex: the input can be caller-supplied, and a lazy multi-line pattern backtracks
+ * polynomially on crafted `-----BEGIN` repetitions.
+ */
 export function pemToDer(pem: string): Uint8Array | null {
-  const m = /-----BEGIN [A-Z ]+-----([\s\S]+?)-----END [A-Z ]+-----/.exec(pem);
-  if (!m) return null;
+  const begin = pem.indexOf("-----BEGIN ");
+  if (begin < 0) return null;
+  const headerEnd = pem.indexOf("-----", begin + "-----BEGIN ".length);
+  if (headerEnd < 0) return null;
+  const bodyStart = headerEnd + "-----".length;
+  const end = pem.indexOf("-----END ", bodyStart);
+  if (end < 0 || end === bodyStart) return null;
   try {
-    return base64ToBytes(m[1]!);
+    return base64ToBytes(pem.slice(bodyStart, end));
   } catch {
     return null;
   }
@@ -333,8 +342,15 @@ export async function checkEnvelopeSignature(decoded: DecodedEnvelope, keys: rea
   return "invalid";
 }
 
+/** Drop trailing `/`s with a linear scan (a `/\/+$/` regex is polynomial on long slash runs). */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* / */) end--;
+  return s.slice(0, end);
+}
+
 function normalizeRegistry(u: string): string {
-  return u.trim().replace(/\/+$/, "").toLowerCase();
+  return stripTrailingSlashes(u.trim()).toLowerCase();
 }
 
 /**
@@ -345,7 +361,7 @@ function normalizeRegistry(u: string): string {
 export function resolveSigningRegistry(env: Record<string, string | undefined>): string {
   for (const raw of [env.SKILLY_REGISTRY_URL, env.PUBLIC_BASE_URL, env.NEXTAUTH_URL]) {
     const v = raw?.trim();
-    if (v) return v.replace(/\/+$/, "");
+    if (v) return stripTrailingSlashes(v);
   }
   return "http://localhost:3000";
 }
