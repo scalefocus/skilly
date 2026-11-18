@@ -19,7 +19,7 @@ const NS_ADMIN = adminNavItems({ isPlatformAdmin: false, isNamespaceAdmin: true 
 test("adminNavItems: a platform admin gets all eight items, in the §71.2 order", () => {
   assert.deepEqual(
     PLATFORM.map((i) => i.label),
-    ["Platform administration", "Namespace administration", "Audit log", "System log", "Monitoring", "Feature ideas", "Search gaps"],
+    ["Platform administration", "Namespace administration", "Audit log", "System log", "Monitoring", "Feature ideas", "Search gaps", "Signing"],
   );
   assert.deepEqual(
     PLATFORM.map((i) => i.href),
