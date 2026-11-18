@@ -1,5 +1,5 @@
 "use client";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -16,6 +16,18 @@ import { PageLabelOverrideProvider } from "./PageLabelOverride";
 import { SkillIcon } from "./SkillIcon";
 import { RumCollector, markRumNavIntent } from "./RumCollector";
 import { resolveStaticPageLabel } from "../lib/pageLabel";
+import {
+  ADMIN_GROUP_ICON,
+  ADMIN_NAV_STORAGE_KEY,
+  activeAdminItem,
+  adminBadgeSum,
+  adminNavItems,
+  initialAdminOpen,
+  isAdminRoute,
+  navBadgeText,
+  parseAdminNavStored,
+  type AdminNavStored,
+} from "../lib/adminNav";
 import { clearTryConversations } from "../lib/tryStore";
 import { achievementDef } from "@skilly/shared/achievements";
 import { collectionPath } from "@skilly/shared/collections";
@@ -40,17 +52,16 @@ const NAV: { href: string; label: string; icon: string; badge?: "catalog" | "rev
   { href: "/leaderboard", label: "Leaderboard", icon: "M4 20h4v-7H4zM10 20h4V4h-4zM16 20h4v-10h-4z" },
 ];
 const USAGE_NAV = { href: "/usage", label: "Usage", icon: "M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3" };
-const AUDIT_NAV = { href: "/audit", label: "Audit log", icon: "M5 4h11l3 3v13H5zM8 11h8M8 15h5M8 7h4" };
-const SYSLOG_NAV = { href: "/system-log", label: "System log", icon: "M4 5h16v14H4zM7 9h2M7 13h2M7 17h2M12 9h5M12 13h5" };
-// §32.7 Monitoring (real user monitoring + the Currently online presence card, §4) — platform admins
-// only, directly under System log. Sidebar label only: the page title stays "Real user monitoring."
-const RUM_NAV = { href: "/admin/rum", label: "Monitoring", icon: "M3 17l5-6 4 4 5-8 4 5M3 21h18" };
-// §60.5 Feature ideas — platform admins only, directly under Monitoring, with the pending-queue count.
-const IDEAS_NAV = { href: "/admin/ideas", label: "Feature ideas", icon: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z" };
-// §62.7 Search gaps — platform admins only, directly under Feature ideas, with the reviewable count.
-const SEARCH_GAPS_NAV = { href: "/admin/search-gaps", label: "Search gaps", icon: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4M8 11h6" };
-const ADMIN_NAV = { href: "/admin", label: "Administration", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" };
-const NS_ADMIN_NAV = { href: "/namespaces", label: "Namespace administration", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" };
+// The admin-only pages live in the collapsible Administration group (§71): lib/adminNav.ts.
+
+// §71.4 the group's open/closed choice, this browser only. Storage can be unavailable (a private
+// window, blocked site data): reads then give "no choice" and writes are dropped.
+function readAdminNavStored(): AdminNavStored {
+  try { return parseAdminNavStored(window.localStorage.getItem(ADMIN_NAV_STORAGE_KEY)); } catch { return null; }
+}
+function writeAdminNavStored(v: "open" | "closed") {
+  try { window.localStorage.setItem(ADMIN_NAV_STORAGE_KEY, v); } catch { /* per-browser convenience only */ }
+}
 
 function Icon({ d }: { d: string }) {
   return (
@@ -70,8 +81,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   // Namespace administration (§30.6) — shown to anyone who administers at least one namespace.
+  // Also gates Audit log: both are for platform admins and namespace admins (§71.2).
   const [canAdminNamespace, setCanAdminNamespace] = useState(false);
-  const [canAudit, setCanAudit] = useState(false);
   const [canUsage, setCanUsage] = useState(false);
   // First-login onboarding: null = unknown (until /api/me resolves), false = never seen Quick
   // start (gate forces it), true = seen. Drives the redirect gate below.
@@ -305,7 +316,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         setMyUserId(j.userId ?? null);
         setIsPlatformAdmin(Boolean(j.isPlatformAdmin));
         const nsAdmin = Array.isArray(j.namespaceRoles) && j.namespaceRoles.some((r) => r.role === "namespace_admin");
-        setCanAudit(Boolean(j.isPlatformAdmin) || nsAdmin);
         setCanAdminNamespace(Boolean(j.isPlatformAdmin) || nsAdmin);
         // Usage dashboard: platform admins, namespace admins, and explicit maintainers.
         setCanUsage(Boolean(j.isPlatformAdmin) || nsAdmin || Boolean(j.maintainsSkills));
@@ -704,6 +714,55 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [status]);
 
+  // §71 the Administration group: the admin pages this viewer can open (none → no group).
+  const adminItems = useMemo(
+    () => adminNavItems({ isPlatformAdmin, isNamespaceAdmin: canAdminNamespace }),
+    [isPlatformAdmin, canAdminNamespace],
+  );
+  const hasAdminGroup = adminItems.length > 0;
+  const [adminOpen, setAdminOpen] = useState(false);
+  // True once the starting state is applied; the slide is enabled one painted frame later, so the
+  // group never slides when it first appears on a page load (§71.4).
+  const [adminReady, setAdminReady] = useState(false);
+  const [adminAnim, setAdminAnim] = useState(false);
+  const adminClipRef = useRef<HTMLDivElement>(null);
+  // A layout effect, so the group's first paint is already in its starting state. Landing on one of
+  // its pages opens it and stores "open"; any other page leaves it as it is (§71.4).
+  useLayoutEffect(() => {
+    if (!hasAdminGroup) return;
+    const onRoute = isAdminRoute(pathname, adminItems);
+    if (onRoute) writeAdminNavStored("open");
+    if (!adminReady) {
+      setAdminOpen(initialAdminOpen(pathname, readAdminNavStored(), adminItems));
+      setAdminReady(true);
+    } else if (onRoute) {
+      setAdminOpen(true);
+    }
+  }, [pathname, hasAdminGroup, adminItems, adminReady]);
+  useEffect(() => {
+    if (!adminReady) return;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setAdminAnim(true)); });
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+  }, [adminReady]);
+  const toggleAdmin = () => {
+    const next = !adminOpen;
+    setAdminOpen(next);
+    writeAdminNavStored(next ? "open" : "closed");
+  };
+  const adminActive = activeAdminItem(pathname, adminItems);
+  const adminSum = adminBadgeSum(navBadges, adminItems);
+  // Opening or closing the group changes the sidebar's scroll height without resizing the sidebar
+  // itself, so the "more below" hint watches the group's (animating) body too.
+  useEffect(() => {
+    const el = sidebarRef.current;
+    const clip = adminClipRef.current;
+    if (!el || !clip || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 4));
+    ro.observe(clip);
+    return () => ro.disconnect();
+  }, [hasAdminGroup]);
+
   // Prefix match, except the two entries that are prefixes of another entry: "/" and "/catalog"
   // (the Marketplaces page lives at /catalog/marketplaces and must light up its own item only).
   const isActive = (href: string) => (href === "/" || href === "/catalog" ? pathname === href : pathname.startsWith(href));
@@ -789,56 +848,46 @@ export function AppShell({ children }: { children: ReactNode }) {
             {USAGE_NAV.label}
           </Link>
         )}
-        {canAudit && (
-          <Link href={AUDIT_NAV.href} className={`nav-item${isActive(AUDIT_NAV.href) ? " active" : ""}`}>
-            <Icon d={AUDIT_NAV.icon} />
-            {AUDIT_NAV.label}
-          </Link>
-        )}
-        {isPlatformAdmin && (
-          <Link href={SYSLOG_NAV.href} className={`nav-item${isActive(SYSLOG_NAV.href) ? " active" : ""}`}>
-            <Icon d={SYSLOG_NAV.icon} />
-            {SYSLOG_NAV.label}
-            {navBadges.systemLog > 0 && (
-              <sup className="nav-badge" aria-label={`${navBadges.systemLog > 9 ? "9+" : navBadges.systemLog} new`}>{navBadges.systemLog > 9 ? "9+" : navBadges.systemLog}</sup>
-            )}
-          </Link>
-        )}
-        {isPlatformAdmin && (
-          <Link href={RUM_NAV.href} className={`nav-item${isActive(RUM_NAV.href) ? " active" : ""}`}>
-            <Icon d={RUM_NAV.icon} />
-            {RUM_NAV.label}
-          </Link>
-        )}
-        {isPlatformAdmin && (
-          <Link href={IDEAS_NAV.href} className={`nav-item${isActive(IDEAS_NAV.href) ? " active" : ""}`}>
-            <Icon d={IDEAS_NAV.icon} />
-            {IDEAS_NAV.label}
-            {navBadges.ideas > 0 && (
-              <sup className="nav-badge" aria-label={`${navBadges.ideas > 9 ? "9+" : navBadges.ideas} pending`}>{navBadges.ideas > 9 ? "9+" : navBadges.ideas}</sup>
-            )}
-          </Link>
-        )}
-        {isPlatformAdmin && (
-          <Link href={SEARCH_GAPS_NAV.href} className={`nav-item${isActive(SEARCH_GAPS_NAV.href) ? " active" : ""}`}>
-            <Icon d={SEARCH_GAPS_NAV.icon} />
-            {SEARCH_GAPS_NAV.label}
-            {navBadges.searchGaps > 0 && (
-              <sup className="nav-badge" aria-label={`${navBadges.searchGaps > 9 ? "9+" : navBadges.searchGaps} to review`}>{navBadges.searchGaps > 9 ? "9+" : navBadges.searchGaps}</sup>
-            )}
-          </Link>
-        )}
-        {canAdminNamespace && (
-          <Link href={NS_ADMIN_NAV.href} className={`nav-item${isActive(NS_ADMIN_NAV.href) ? " active" : ""}`}>
-            <Icon d={NS_ADMIN_NAV.icon} />
-            {NS_ADMIN_NAV.label}
-          </Link>
-        )}
-        {isPlatformAdmin && (
-          <Link href={ADMIN_NAV.href} className={`nav-item${isActive(ADMIN_NAV.href) ? " active" : ""}`}>
-            <Icon d={ADMIN_NAV.icon} />
-            {ADMIN_NAV.label}
-          </Link>
+        {hasAdminGroup && (
+          // §71 the Administration group: collapsible, last in the nav, only the viewer's own items.
+          <div className={`nav-group${adminOpen ? " open" : ""}`} data-anim={adminAnim ? "" : undefined} data-testid="nav-admin-group">
+            <button
+              type="button"
+              // Collapsed on one of its pages, the header carries the active highlight (§71.4).
+              className={`nav-item nav-group-head${!adminOpen && adminActive ? " active" : ""}`}
+              aria-expanded={adminOpen}
+              aria-controls="nav-admin-items"
+              onClick={toggleAdmin}
+            >
+              <Icon d={ADMIN_GROUP_ICON} />
+              Administration
+              {!adminOpen && adminSum > 0 && (
+                // §71.5 collapsed: the sum of the items' badges; open, each item shows its own.
+                <sup className="nav-badge" aria-label={`${navBadgeText(adminSum)} need attention`}>{navBadgeText(adminSum)}</sup>
+              )}
+              <svg className="nav-group-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="m9 6 6 6-6 6" />
+              </svg>
+            </button>
+            <div className="nav-group-body" id="nav-admin-items">
+              <div className="nav-group-clip" ref={adminClipRef}>
+                <div className="nav-group-list">
+                  {adminItems.map((item) => {
+                    const count = item.badge ? navBadges[item.badge.key] : 0;
+                    return (
+                      <Link key={item.href} href={item.href} className={`nav-item nav-group-item${adminActive === item ? " active" : ""}`}>
+                        <Icon d={item.icon} />
+                        {item.label}
+                        {item.badge && count > 0 && (
+                          <sup className="nav-badge" aria-label={`${navBadgeText(count)} ${item.badge.label}`}>{navBadgeText(count)}</sup>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         <div className="sidebar-foot">
