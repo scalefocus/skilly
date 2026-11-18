@@ -31,7 +31,7 @@ export async function GET(req: Request) {
     { header: "action", value: (r) => r.action },
     { header: "target_type", value: (r) => r.targetType },
     { header: "target_id", value: (r) => r.targetId },
-    { header: "namespace_slug", value: (r) => r.namespaceSlug },
+    { header: "namespace_slug", value: (r) => (r.namespaceSlug && r.namespaceDeleted ? `${r.namespaceSlug} (deleted)` : r.namespaceSlug) },
     { header: "actor_name", value: (r) => r.actorName },
     { header: "actor_email", value: (r) => r.actorEmail },
     { header: "source", value: (r) => r.source },

@@ -63,6 +63,7 @@ export const RUM_API_ROUTES: readonly string[] = [
   "/api/admin/mcp/clients/[id]",
   "/api/admin/namespaces",
   "/api/admin/namespaces/[id]",
+  "/api/admin/namespaces/[id]/deletion",
   "/api/admin/role-mappings",
   "/api/admin/role-mappings/[id]",
   "/api/admin/rum/errors",

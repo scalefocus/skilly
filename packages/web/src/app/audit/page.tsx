@@ -12,6 +12,8 @@ interface AuditView {
   targetType: string;
   targetId: string | null;
   namespaceSlug: string | null;
+  /** §72.7: the namespace was deleted; the slug comes from its deletion snapshot. */
+  namespaceDeleted?: boolean;
   actorName: string | null;
   actorEmail: string | null;
   before: unknown;
@@ -234,7 +236,11 @@ export default function AuditPage() {
             <div className="row audit-row" key={a.id}>
               <div className="audit-head">
                 <Pill tone={toneFor(a.action)}>{a.action}</Pill>
-                {a.namespaceSlug && <span className="ns" style={{ fontSize: 13 }}>@{a.namespaceSlug}</span>}
+                {a.namespaceSlug && (
+                  <span className="ns" style={{ fontSize: 13 }} data-testid={a.namespaceDeleted ? "audit-ns-deleted" : undefined}>
+                    @{a.namespaceSlug}{a.namespaceDeleted ? " (deleted)" : ""}
+                  </span>
+                )}
                 <span className="muted mono" style={{ fontSize: 11 }}>{a.targetType}{a.targetId ? `:${a.targetId}` : ""}</span>
               </div>
               <span className="muted mono audit-time" style={{ fontSize: 11 }}>{fmt.dateTime(a.createdAt)}</span>

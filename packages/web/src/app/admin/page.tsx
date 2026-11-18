@@ -17,6 +17,7 @@ import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
 import { QualityLine } from "./QualityLine";
 import { PlatformPolicyRulesCard, PolicyFlagsAdminCard } from "./PolicyCards";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
+import { DeleteNamespaceDialog } from "./DeleteNamespaceDialog";
 import { DEPARTMENT_POPULAR_MIN_COLLEAGUES, DEPARTMENT_POPULAR_WINDOW_DAYS } from "@skilly/shared/department-popular";
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
@@ -582,6 +583,9 @@ export default function AdminPage() {
   const [nsQDeb, setNsQDeb] = useState("");
   const [nsReview, setNsReview] = useState<"" | "required" | "optional">("");
   const [nsTick, setNsTick] = useState(0); // bumped after mutations to re-apply the active filter
+  // §72.5: the namespace whose Delete dialog is open, and the card's "Deleted @slug." line.
+  const [deletingNs, setDeletingNs] = useState<Namespace | null>(null);
+  const [nsNotice, setNsNotice] = useState<string | null>(null);
   // Every card is collapsible (§5): collapsed by default, remembered per browser, driven by the
   // Expand all / Collapse all control below.
   const cards = useAdminCards();
@@ -941,6 +945,10 @@ export default function AdminPage() {
               <span className="muted mono" style={{ fontSize: 12, marginLeft: "auto" }}>{data.namespaces.length} of {data.namespacesTotal} shown</span>
             </div>
 
+            {nsNotice && (
+              <div role="status" data-testid="ns-delete-notice" style={{ color: "var(--ok)", fontSize: 13.5, marginBottom: 12 }}>{nsNotice}</div>
+            )}
+
             <CreateNamespace
               onCreate={(b) => call(`/api/admin/namespaces`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) })}
               busy={busy}
@@ -981,6 +989,18 @@ export default function AdminPage() {
                         void call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ marketplaceEnabled: next }) });
                       }}
                     />
+                    {/* §72.5: permanent delete of an empty namespace — never `global`. */}
+                    {ns.slug !== "global" && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger"
+                        disabled={busy}
+                        onClick={() => { setNsNotice(null); setDeletingNs(ns); }}
+                        data-testid={`ns-delete-${ns.slug}`}
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
 
                   {/* §30.6: the same component /namespaces uses, in its `stacked` layout — this is a
@@ -1006,6 +1026,19 @@ export default function AdminPage() {
               ))}
             </div>
         <LoadMoreSentinel hasMore={data.namespaces.length < data.namespacesTotal} loading={nsLoading} onLoadMore={() => void loadMoreNs()} />
+        {deletingNs && (
+          <DeleteNamespaceDialog
+            ns={{ id: deletingNs.id, slug: deletingNs.slug, displayName: deletingNs.displayName }}
+            onClose={() => setDeletingNs(null)}
+            onDeleted={(slug) => {
+              setDeletingNs(null);
+              setNsNotice(`Deleted @${slug}.`);
+              void reload(Math.max(NS_PAGE, data.namespaces.length));
+              // reload() returns the unfiltered list — re-apply the active filter on top of it.
+              if (filterActive) setNsTick((t) => t + 1);
+            }}
+          />
+        )}
       </CollapsibleCard>
     </div>
     </CardWatchContext.Provider>
