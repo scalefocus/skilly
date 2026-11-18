@@ -172,7 +172,9 @@ test.describe("mentions (§24)", () => {
     let deleted = false;
     try {
       const row = rowOf(page, id);
-      await expect(row.locator(".md")).toContainText(body);
+      // `.md p`, not `.md`: the row's `.md` wrapper holds <Markdown>'s own `div.md`, so a bare `.md`
+      // matches two elements. A descendant selector matches the paragraph once.
+      await expect(row.locator(".md p")).toHaveText(body);
       await expect(row.locator(".md [data-mention], .md .mention-chip")).toHaveCount(0);
 
       await deleteRow(page, id);
