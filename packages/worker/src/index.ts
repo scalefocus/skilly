@@ -20,6 +20,7 @@ import {
 import { pgGitDeps } from "./git/pgDeps.js";
 import { publishPendingVersions, reprovisionMissingRepos } from "./git/publish.js";
 import { relocateMovedRepos } from "./git/relocate.js";
+import { purgeDeletedNamespaces } from "./git/namespacePurge.js";
 import { withdrawYankedVersions } from "./git/withdraw.js";
 import { syncDeprecationMains } from "./git/mainRef.js";
 import { syncMarketplaces, marketplaceSettings } from "./git/marketplaceSync.js";
@@ -123,6 +124,9 @@ async function leaderLoops(): Promise<void> {
       // published is synthesized into the relocated repo rather than a fresh, tag-less one.
       const r = await relocateMovedRepos(pool, publishDeps.repoRoot);
       if (r > 0) console.log(JSON.stringify({ level: "info", msg: "relocated moved skill repos", count: r }));
+      // §72.4: clear a deleted namespace's repos from disk (relocating moved-out skills first) so
+      // its slug can be released.
+      await purgeDeletedNamespaces(pool, publishDeps.repoRoot);
       const m = await mirrorPendingVersions(pool, { store });
       if (m > 0) { M.pointersMirrored.add(m); console.log(JSON.stringify({ level: "info", msg: "mirrored pointer versions", count: m })); }
       const n = await publishPendingVersions(pool, publishDeps);

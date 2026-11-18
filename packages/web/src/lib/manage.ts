@@ -2,7 +2,7 @@
 // skill, mark a skill Official. SKILLY_SPEC.md §7. Authority: Namespace Admin (own ns) or Platform
 // Admin (any) for yank/archive; PLATFORM ADMIN ONLY for permanent deletion and Official. All
 // actions audit-logged.
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { canYankOrArchive, evictFromCollections, isSkillVisible, type EffectiveAccess } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { findSkill } from "./catalog";
@@ -223,89 +223,7 @@ export async function deleteSkill(
   const client = await pool.connect();
   try {
     await client.query("begin");
-    // Open the version-immutability guard for THIS transaction only (migration 0022) so the
-    // cascade from skills → skill_versions is permitted.
-    await client.query("set local skilly.allow_version_delete = 'on'");
-
-    // Detach the references that DON'T cascade, so the skill delete can't be blocked:
-    //  - other skills whose provenance points at one of this skill's versions → drop the pointer
-    await client.query(
-      `update skills set promoted_from_skill_version_id = null
-        where promoted_from_skill_version_id in (select id from skill_versions where skill_id = $1)`,
-      [skill.id],
-    );
-    //  - access-log fetch records linked to this skill's versions → keep the log, drop the link
-    await client.query(
-      `update access_log set skill_version_id = null
-        where skill_version_id in (select id from skill_versions where skill_id = $1)`,
-      [skill.id],
-    );
-    //  - review-discussion conversations attached to those proposals (polymorphic context, no FK,
-    //    so they don't cascade): delete them (messages + participants cascade) and the dangling
-    //    message.new alerts that point at them, so a deleted skill's threads don't linger as
-    //    "@null/?" conversations in the messages UI. §24. Done BEFORE the proposals go.
-    const { rows: doomedProposals } = await client.query<{ id: string }>(
-      `select id from proposals
-        where target_skill_id = $1
-           or materialized_version_id in (select id from skill_versions where skill_id = $1)`,
-      [skill.id],
-    );
-    const proposalIds = doomedProposals.map((r) => r.id);
-    if (proposalIds.length) {
-      const { rows: doomedConvs } = await client.query<{ id: string }>(
-        `delete from conversations where subject_type = 'proposal' and subject_id = any($1::uuid[]) returning id`,
-        [proposalIds],
-      );
-      const convIds = doomedConvs.map((c) => c.id);
-      if (convIds.length) {
-        await client.query(
-          `delete from notifications where type in ('message.new', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
-          [convIds],
-        );
-      }
-    }
-    //  - the skill's OWN discussion conversation (subject_type='skill', §24 Skill discussion):
-    //    delete it (messages cascade) and its dangling skill.discussion / reply alerts. Polymorphic, no FK.
-    const { rows: skillConvs } = await client.query<{ id: string }>(
-      `delete from conversations where subject_type = 'skill' and subject_id = $1 returning id`,
-      [skill.id],
-    );
-    if (skillConvs.length) {
-      await client.query(
-        `delete from notifications where type in ('skill.discussion', 'skill.discussion_reply', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
-        [skillConvs.map((c) => c.id)],
-      );
-    }
-    //  - proposals targeting this skill or that materialized one of its versions (revisions cascade)
-    await client.query(
-      `delete from proposals
-        where target_skill_id = $1
-           or materialized_version_id in (select id from skill_versions where skill_id = $1)`,
-      [skill.id],
-    );
-    //  - scan reports cached against this skill's versions (subject_id holds the version id)
-    await client.query(
-      `delete from scan_reports
-        where subject_type = 'skill_version'
-          and subject_id in (select id::text from skill_versions where skill_id = $1)`,
-      [skill.id],
-    );
-    //  - install tokens scoped to this skill (also covered by the skill_id FK cascade; explicit
-    //    here so the cleanup is obvious and order-independent)
-    await client.query(`delete from tokens where skill_id = $1`, [skill.id]);
-
-    // The skill itself — cascades to versions/ratings/watches/categories/maintainers/usage/mirrors.
-    await client.query(`delete from skills where id = $1`, [skill.id]);
-
-    await appendAudit(client, {
-      actorUserId: input.actorUserId,
-      action: "skill.deleted",
-      targetType: "skill",
-      targetId: skill.id,
-      namespaceId: skill.namespaceId,
-      before: { namespaceSlug: input.namespaceSlug, skillSlug: input.skillSlug, visibility: skill.visibility },
-    });
-
+    await purgeSkillInTx(client, skill, input);
     await client.query("commit");
     return { ok: true };
   } catch (e) {
@@ -314,6 +232,101 @@ export async function deleteSkill(
   } finally {
     client.release();
   }
+}
+
+/**
+ * The §7 permanent delete's transactional body: detach the references that don't cascade, delete
+ * the skill row (cascading the rest) and audit `skill.deleted`. The CALLER holds the transaction and
+ * has already checked authority and that the skill is archived. Reused by the namespace delete,
+ * which purges every archived skill inside its own transaction (SKILLY_SPEC.md §72.3 step 3).
+ */
+export async function purgeSkillInTx(
+  client: PoolClient,
+  skill: { id: string; namespaceId: string; visibility: string },
+  input: { actorUserId: string; namespaceSlug: string; skillSlug: string },
+): Promise<void> {
+  // Open the version-immutability guard for THIS transaction only (migration 0022) so the
+  // cascade from skills → skill_versions is permitted.
+  await client.query("set local skilly.allow_version_delete = 'on'");
+
+  // Detach the references that DON'T cascade, so the skill delete can't be blocked:
+  //  - other skills whose provenance points at one of this skill's versions → drop the pointer
+  await client.query(
+    `update skills set promoted_from_skill_version_id = null
+      where promoted_from_skill_version_id in (select id from skill_versions where skill_id = $1)`,
+    [skill.id],
+  );
+  //  - access-log fetch records linked to this skill's versions → keep the log, drop the link
+  await client.query(
+    `update access_log set skill_version_id = null
+      where skill_version_id in (select id from skill_versions where skill_id = $1)`,
+    [skill.id],
+  );
+  //  - review-discussion conversations attached to those proposals (polymorphic context, no FK,
+  //    so they don't cascade): delete them (messages + participants cascade) and the dangling
+  //    message.new alerts that point at them, so a deleted skill's threads don't linger as
+  //    "@null/?" conversations in the messages UI. §24. Done BEFORE the proposals go.
+  const { rows: doomedProposals } = await client.query<{ id: string }>(
+    `select id from proposals
+      where target_skill_id = $1
+         or materialized_version_id in (select id from skill_versions where skill_id = $1)`,
+    [skill.id],
+  );
+  const proposalIds = doomedProposals.map((r) => r.id);
+  if (proposalIds.length) {
+    const { rows: doomedConvs } = await client.query<{ id: string }>(
+      `delete from conversations where subject_type = 'proposal' and subject_id = any($1::uuid[]) returning id`,
+      [proposalIds],
+    );
+    const convIds = doomedConvs.map((c) => c.id);
+    if (convIds.length) {
+      await client.query(
+        `delete from notifications where type in ('message.new', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
+        [convIds],
+      );
+    }
+  }
+  //  - the skill's OWN discussion conversation (subject_type='skill', §24 Skill discussion):
+  //    delete it (messages cascade) and its dangling skill.discussion / reply alerts. Polymorphic, no FK.
+  const { rows: skillConvs } = await client.query<{ id: string }>(
+    `delete from conversations where subject_type = 'skill' and subject_id = $1 returning id`,
+    [skill.id],
+  );
+  if (skillConvs.length) {
+    await client.query(
+      `delete from notifications where type in ('skill.discussion', 'skill.discussion_reply', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
+      [skillConvs.map((c) => c.id)],
+    );
+  }
+  //  - proposals targeting this skill or that materialized one of its versions (revisions cascade)
+  await client.query(
+    `delete from proposals
+      where target_skill_id = $1
+         or materialized_version_id in (select id from skill_versions where skill_id = $1)`,
+    [skill.id],
+  );
+  //  - scan reports cached against this skill's versions (subject_id holds the version id)
+  await client.query(
+    `delete from scan_reports
+      where subject_type = 'skill_version'
+        and subject_id in (select id::text from skill_versions where skill_id = $1)`,
+    [skill.id],
+  );
+  //  - install tokens scoped to this skill (also covered by the skill_id FK cascade; explicit
+  //    here so the cleanup is obvious and order-independent)
+  await client.query(`delete from tokens where skill_id = $1`, [skill.id]);
+
+  // The skill itself — cascades to versions/ratings/watches/categories/maintainers/usage/mirrors.
+  await client.query(`delete from skills where id = $1`, [skill.id]);
+
+  await appendAudit(client, {
+    actorUserId: input.actorUserId,
+    action: "skill.deleted",
+    targetType: "skill",
+    targetId: skill.id,
+    namespaceId: skill.namespaceId,
+    before: { namespaceSlug: input.namespaceSlug, skillSlug: input.skillSlug, visibility: skill.visibility },
+  });
 }
 
 /**

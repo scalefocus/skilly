@@ -10,6 +10,7 @@ import {
   type MarketplaceScope,
   namespaceMarketplaceSkillSql,
 } from "@skilly/shared";
+import type { PoolClient } from "pg";
 import { pool } from "./db";
 import { M } from "./metrics";
 
@@ -126,9 +127,10 @@ export async function reactivateMarketplace(userId: string, id: string, expiresA
   return (rowCount ?? 0) > 0;
 }
 
-/** Revoke every token for one namespace's marketplace (called when its toggle goes off, §30.6). */
-export async function revokeNamespaceMarketplaceTokens(namespaceId: string): Promise<number> {
-  const { rowCount } = await pool.query(
+/** Revoke every token for one namespace's marketplace (called when its toggle goes off, §30.6, and
+ *  inside the namespace delete's transaction, §72.3 step 8 — hence the optional client). */
+export async function revokeNamespaceMarketplaceTokens(namespaceId: string, db: Pick<PoolClient, "query"> = pool): Promise<number> {
+  const { rowCount } = await db.query(
     `delete from tokens where type = 'marketplace' and namespace_id = $1`,
     [namespaceId],
   );

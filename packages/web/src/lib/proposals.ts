@@ -1556,35 +1556,7 @@ export async function deleteProposal(
   const client = await pool.connect();
   try {
     await client.query("begin");
-    // Review-discussion conversation (polymorphic context, no FK — won't cascade): delete it
-    // (messages + participants cascade) and the dangling message.new alerts pointing at it, so no
-    // "@null/?" orphan thread lingers in the messages UI (§24, migration 0037's original bug).
-    const { rows: convs } = await client.query<{ id: string }>(
-      `delete from conversations where subject_type = 'proposal' and subject_id = $1 returning id`,
-      [input.proposalId],
-    );
-    const convIds = convs.map((c) => c.id);
-    if (convIds.length) {
-      await client.query(
-        `delete from notifications where type in ('message.new', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
-        [convIds],
-      );
-    }
-    // Pointer pre-scan reports keyed to the proposal (hosted-artifact scans are keyed to the object
-    // key and shared with any eventual version — left intact).
-    await client.query(`delete from scan_reports where subject_type = 'proposal' and subject_id = $1`, [input.proposalId]);
-    // Dangling proposal.* alerts (needs_review / submitted / accept / reject / …) — they'd 404.
-    await client.query(`delete from notifications where payload->>'proposalId' = $1`, [input.proposalId]);
-    // The proposal itself — proposal_revisions cascade (FK ON DELETE CASCADE).
-    await client.query(`delete from proposals where id = $1`, [input.proposalId]);
-    await appendAudit(client, {
-      actorUserId: input.actorUserId,
-      action: "proposal.deleted",
-      targetType: "proposal",
-      targetId: input.proposalId,
-      namespaceId: p.target_namespace_id,
-      before: { state: p.state, semver: p.proposed_semver, submittedBy: p.submitted_by },
-    });
+    await purgeProposalInTx(client, { ...p, id: input.proposalId }, input.actorUserId);
     await client.query("commit");
     return { ok: true };
   } catch (e) {
@@ -1593,6 +1565,48 @@ export async function deleteProposal(
   } finally {
     client.release();
   }
+}
+
+/**
+ * The housekeeping delete's transactional body (§8): the review conversation and its alerts, the
+ * proposal's pointer scan, dangling proposal.* notifications, the row itself (revisions cascade) and
+ * the `proposal.deleted` audit row. The CALLER holds the transaction and has checked authority.
+ * Reused by the namespace delete for closed proposals tied to no surviving skill (§72.3 step 5).
+ */
+export async function purgeProposalInTx(
+  client: PoolClient,
+  p: { id: string; state: string; target_namespace_id: string; proposed_semver: string; submitted_by: string },
+  actorUserId: string,
+): Promise<void> {
+  // Review-discussion conversation (polymorphic context, no FK — won't cascade): delete it
+  // (messages + participants cascade) and the dangling message.new alerts pointing at it, so no
+  // "@null/?" orphan thread lingers in the messages UI (§24, migration 0037's original bug).
+  const { rows: convs } = await client.query<{ id: string }>(
+    `delete from conversations where subject_type = 'proposal' and subject_id = $1 returning id`,
+    [p.id],
+  );
+  const convIds = convs.map((c) => c.id);
+  if (convIds.length) {
+    await client.query(
+      `delete from notifications where type in ('message.new', 'message.mention') and payload->>'conversationId' = any($1::text[])`,
+      [convIds],
+    );
+  }
+  // Pointer pre-scan reports keyed to the proposal (hosted-artifact scans are keyed to the object
+  // key and shared with any eventual version — left intact).
+  await client.query(`delete from scan_reports where subject_type = 'proposal' and subject_id = $1`, [p.id]);
+  // Dangling proposal.* alerts (needs_review / submitted / accept / reject / …) — they'd 404.
+  await client.query(`delete from notifications where payload->>'proposalId' = $1`, [p.id]);
+  // The proposal itself — proposal_revisions cascade (FK ON DELETE CASCADE).
+  await client.query(`delete from proposals where id = $1`, [p.id]);
+  await appendAudit(client, {
+    actorUserId,
+    action: "proposal.deleted",
+    targetType: "proposal",
+    targetId: p.id,
+    namespaceId: p.target_namespace_id,
+    before: { state: p.state, semver: p.proposed_semver, submittedBy: p.submitted_by },
+  });
 }
 
 export interface MaterializeInput {
