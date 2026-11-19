@@ -63,7 +63,7 @@ test.describe("access gating", () => {
     await expect(group).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
     await expect(items.first()).toBeHidden();
 
-    // Opening shows the seven items, settings first (§71.2). Usage stays in the main nav.
+    // Opening shows the eight items, settings first (§71.2). Usage stays in the main nav.
     await group.click();
     await expect(group).toHaveAttribute("aria-expanded", "true");
     await expect(items.first()).toBeVisible();
@@ -79,6 +79,7 @@ test.describe("access gating", () => {
       "Monitoring",
       "Feature ideas",
       "Search gaps",
+      "Signing",
     ]);
     await expect(sidebar.getByRole("link", { name: "Usage" })).toBeVisible();
     await expect(sidebar.locator("#nav-admin-items").getByRole("link", { name: "Usage" })).toHaveCount(0);

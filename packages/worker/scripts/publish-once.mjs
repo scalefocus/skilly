@@ -15,9 +15,15 @@ import { Pool } from "pg";
 import { publishPendingVersions } from "../dist/git/publish.js";
 import { s3ArtifactStore } from "../dist/storage/objectStore.js";
 import { defaultRepoRoot } from "../dist/git/repoStore.js";
+import { loadSigningKey, registerSigningKey, signerFor } from "../dist/signing/key.js";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const deps = { store: s3ArtifactStore(), repoRoot: defaultRepoRoot() };
+const repoRoot = defaultRepoRoot();
+// §73: every published version is signed. SKILLY_SIGNING_KEY when set; otherwise (outside
+// production) the dev key kept under the repo root — the same one the worker daemon would use.
+const { material, source } = await loadSigningKey({ repoRoot });
+console.log(`signing key ${material.keyId} (${source}): ${await registerSigningKey(pool, material)}`);
+const deps = { store: s3ArtifactStore(), repoRoot, signer: signerFor(pool, material) };
 
 const published = await publishPendingVersions(pool, deps);
 console.log(`publish sweep: ${published} version(s) published into ${deps.repoRoot}`);

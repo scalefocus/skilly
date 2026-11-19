@@ -53,6 +53,7 @@ Every decision below was explicitly confirmed.
 | Search gaps | **What people search for and don't find** (§62), with no identity attached: opt-in (off by default), recorded on an explicit search only, counted per day under a salt deleted after the day. A periodic sweep groups them into gaps; while the AI integration is operational it drafts a synonym or a skill request for each. Platform admins accept or dismiss every one on `/admin/search-gaps`; accepted requests are posted by *Platform*. |
 | Usage insights | **How often a skill is used, not only installed** (§68): every marketplace plugin carries a small reporting hook that tells skilly which skill, version and trigger Claude Code invoked — only for people who ticked *Share usage* and hold a usage key. Uses per skill, version, trigger and UTC day, people counted per day under a day-salted hash; the third metric of the owner-only `/usage` dashboard. Off by default; a lower bound (`npx skills add` and MCP never report) |
 | Agent sync API | **A desktop agent keeps a user's skills in step without manual keys** (§69; first client: AION). `POST /api/agent/v1/sync` takes an **Entra access token** (scope `Skills.Sync`) and returns every skill the user may see plus one **short-lived agent key** (12 h default, 24 h max) that the git gateway accepts for cloning any of them, visibility re-checked on every request. The token only authenticates: roles still come from SCIM, and the API never creates a user. Agent installs are **listed on the Installed page (client AION) but not counted** as adoption. Off by default (env) |
+| Signed versions | **Every published version carries a signed statement** (§73): skilly's Ed25519 platform key signs an in-toto statement listing every file, including the `skills` installer's own `computedHash`. Users check a folder, a bundle or a `skills-lock.json` in the browser, over REST, MCP or the git host, or offline with `openssl`. Still no CLI. |
 | Versioning | Proposer-supplied semver, validated strictly-increasing, immutable; beta/stable via semver prerelease; `latest`=highest stable |
 | Review | Moderated proposal pipeline; review is a **per-namespace policy flag**; global namespace always requires review |
 | Deployment | **docker compose** (6 core services + git-perms init + dev proxy); **Helm/K8s now shipped** (§16 #19) |
@@ -400,6 +401,10 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 ### Review assignments and targets (migration 0106, detailed in §65.9)
 - `namespaces.review_target_days` (the namespace's review target in business days, NULL = none) and, on `proposals`, the single assignee (`assignee_id`, `assigned_by`, `assignment_changed_at`) and the current turn's clock (`turn_started_at`, `turn_due_at`, `turn_escalate_at`, `turn_reminded_at`, `turn_escalated_at`). Overdue is derived on read, never stored.
 
+### `signing_keys` / `skill_version_attestations` (migration 0114, detailed in §73.13)
+- **`signing_keys`**: every platform signing key the worker has used (Ed25519 public key, keyId, fingerprint) with `retired_at` and the revocation (`revoked_at`, `revoked_by`, `revoked_reason`). At most one active key. Private keys are never stored (§73.9).
+- **`skill_version_attestations`**: one **append-only** row per signed statement: the version, the variant (its rewrites and inputs hash; empty for the version itself), `kind` (`publish` | `backfill` | `resign`), the key, the installer-compatible `computed_hash` (indexed for lookup) and the DSSE envelope. `skill_versions` is untouched.
+
 ---
 
 ## 4. RBAC model & permission matrix
@@ -446,7 +451,9 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Try a visible skill with AI before installing (§61) — while the Try switch is on and AI is operational | ✅ | ✅ | ✅ | ✅ |
 | Review search gaps, accept or dismiss them, set the search-gap settings, edit a *Platform* request (§62) | ✅ | ❌ | ❌ | ❌ |
 | Mint / manage **system installs** (§23) | ✅ | ❌ | ❌ | ❌ |
+| Revoke a platform signing key; open Administration → Signing (§73.9) | ✅ | ❌ | ❌ | ❌ |
 | Rate a visible skill (§18) | ✅ | ✅ | ✅ | ✅ |
+| Verify a visible skill's files, read or download its signed statements, report a mismatch (§73) | ✅ | ✅ | ✅ | ✅ |
 | Manage skill maintainers (§19) | ✅ (any) | ✅ (own ns) | maintainers of that skill | maintainers of that skill |
 | Create / edit / delete **own** skill collections (§38) | ✅ | ✅ | ✅ | ✅ |
 | Delete **anyone's** skill collection (§38, audited) | ✅ | ❌ | ❌ | ❌ |
@@ -737,6 +744,11 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
   ref) lives in object storage; the git smart server synthesizes a per-skill bare repo
   where each published version is an immutable tag built from that artifact. Tag rewrite
   is forbidden (immutability, §7).
+- **Every served file set is signed (§73).** The publish sweep signs each version's file list
+  with the platform key in the same step that sets `git_published`, so a version that cannot be
+  signed is not installable. Any rewrite skilly serves (the §45.4 deprecation notice on `main`
+  and in marketplace copies, the §30.3 component hoist in marketplace member folders) is signed
+  as a variant before it is served.
 - **Install is gated on `git_published`, not just an active version.** A freshly published
   version is `active` immediately, but its serving repo isn't synthesized until the next publish
   sweep (≤60s; the worker's `PUBLISH_SWEEP_INTERVAL_MS`). Offering an install command before then
@@ -1224,7 +1236,7 @@ owner's accept and publication, **Awaiting destination** (§70.3).
   - `changes_requested` is deliberately the **proposer's** signal, not the reviewer's (it's waiting on the proposer), so it counts only in the proposer half.
   - **Proposals page default filters:** the **To review** tab opens with the three open states selected (Proposed + Under review + Changes requested) — everything still in flight; **My submissions** opens with **no filter selected** (all your submissions, every state).
 - **Requested skills mirrors the Catalog's "new to you" mechanic exactly (§26):** each user has a `requests_seen_at` marker; the **Requested skills** nav item shows the same superscript **1–9 / 9+** count of **open** requests posted since they last opened the page, and the same predicate flags individual request cards/rows with the **"new" edge badge**. Keyed strictly on `created_at` — editing an already-seen request never re-flags it (matching the Catalog's "a new version isn't a new skill" rule, not the Review queue's `updated_at` re-arm rule). **No visibility filter** (requests have no namespace) and **no distinction by who posted a request** — a requester sees their own just-posted request flagged "new" too, same as anyone else. The marker advances **on leaving** `/requests` (including its detail pages, which share the surface — opening one request and navigating away marks every currently-open request seen, the same blast radius the Review queue already has for `/proposals/:id`), not on entry.
-- **Download** (`GET /api/skills/:ns/:slug/download?semver=&format=`): the detail page can download a skill version as a file — a **primary button** for the latest stable version and a **per-row** button on each active version. A **governed, visibility-checked** path (same posture as the SKILL.md `readme` route; rate-limited) — NOT a consumer install (the git gateway is that, per invariant #4). The stored artifact is served **verbatim with its original extension** (`.skill`/`.zip`/`.tar.gz`; §6), named `<slug>-<semver>.<ext>`. The optional **`format=skill|tar.gz`** param (§6 *Pointer download format choice*) lets Pointer downloads re-pack the mirrored tarball as a `.skill` zip; the detail page renders the Pointer primary Download as a **split-button dropdown** (`.skill` default, `.tar.gz` alternative). Only **active (non-yanked)** versions are downloadable; **archived** skills only by owners.
+- **Download** (`GET /api/skills/:ns/:slug/download?semver=&format=`): the detail page can download a skill version as a file — a **primary button** for the latest stable version and a **per-row** button on each active version. A **governed, visibility-checked** path (same posture as the SKILL.md `readme` route; rate-limited) — NOT a consumer install (the git gateway is that, per invariant #4). The stored artifact is served **verbatim with its original extension** (`.skill`/`.zip`/`.tar.gz`; §6), named `<slug>-<semver>.<ext>`. The optional **`format=skill|tar.gz`** param (§6 *Pointer download format choice*) lets Pointer downloads re-pack the mirrored tarball as a `.skill` zip; the detail page renders the Pointer primary Download as a **split-button dropdown** (`.skill` default, `.tar.gz` alternative). Only **active (non-yanked)** versions are downloadable; **archived** skills only by owners. Each version row also carries its **signature badge**, **Verify files** and **Download signed statement** (§73.8); the verbatim download is what the statement's `artifactSha256` covers.
 - **Discovery over MCP (§29):** the `search_skills` tool runs the **same §34 engine, facets, sorts and
   visibility filter** as this section — an agent sees exactly what its user would see in the catalog,
   no more — and adds per-hit `matchedIn` plus a plain-text `snippet`, so an agent can judge relevance
@@ -1296,6 +1308,7 @@ owner's accept and publication, **Awaiting destination** (§70.3).
   - **Search (§34):** `search.synonym_group_created` / `search.synonym_group_updated` / `search.synonym_group_deleted` (the terms before/after), `job.search_retry_requested` (Maintenance → *Retry failed*, with the row count), and `settings.updated` for `search_language`. **Searches themselves are never audited or logged** — no query text is stored anywhere (§34.15), except the opt-in, identity-free search-gap log (§62), which the audit log never copies.
   - Governance/identity (namespace create/delete (`namespace.created` / **`namespace.deleted`**, §72.7), role-mapping changes, SCIM sync results, **SCIM/reconcile provisioning events** (`user.provisioned`, `user.deactivated`, `user.reactivated`, `group.provisioned`, `group.deleted`, `group.membership_added`, `group.membership_removed` — source `scim`, system actor; §49.7), **`user.erased`** (§4/§5), **`settings.updated`**, **`audit.trimmed`**, and the §12 email channel: **`email.account_connected`** / **`email.account_disconnected`** / **`email.template_updated`** — account UPN + actor, never tokens). *(Personal install tokens are not audited; **system installations ARE** — `install.system_minted` / `install.system_uninstalled` / `install.system_reactivated` / `install.system_url_revealed` (§23), the compensating control for a shared, visibility-bypassing credential. PAT/one-time-token actions are gone with the install-token model, §23.)*
   - **Agent sync (§69.8):** `agent_key.minted` for every agent key the sync API mints (actor = the user, `source = 'api'`; expiry, client IP, user agent, how many older keys the cap removed; **never the key**). High-volume by design: about ten rows per agent user per working day.
+  - **Signed versions (§73.12):** `signing.key_registered` / `signing.key_reactivated` / `signing.key_revoked` (key lifecycle; the revoke carries the admin's reason), `signing.backfill_completed` / `signing.resign_completed` (worker counts), `skill.attestation_tree_mismatch` (the served tree no longer matches the artifact) and `skill.signature_mismatch_reported` (a user's report; paths and hashes, never contents). Signing an individual version is **not** audited; the append-only statement row is the record.
 - **Access/fetch logging** split into a separate high-volume `access_log` (restricted-skill fetches) so the provenance view stays readable. Clones made with a §69 agent key land here with `source = 'aion'`. **MCP resource reads** land here too (`source='mcp_resource'`, §29) — reads are never audited.
 - **MCP writes (§29)** reuse the **existing** action names (`proposal.*`, `skill.*`, …) — an MCP-submitted proposal is a proposal, not a new species of governance object — with the actor snapshot carrying the **MCP marker and the registered client name**. Additionally audited: **`mcp.grant_created`**, **`mcp.grant_revoked`** (by the user or an admin), **`mcp.client_blocked`** / **`mcp.client_unblocked`**, plus `settings.updated` for the `mcp_enabled` toggle. **Token mints and rotations are NOT audited** — high-volume machine traffic, telemetry not provenance (the same rule that keeps personal install-token use out of the audit log).
   - **Skill quality (§41.10):** `skill.quality_reassess_requested` (actor; skill, version) and `job.quality_rescore_requested` (actor; row count). The sweep's own writes, AI calls and notifications are telemetry, **not audited**.
@@ -1431,6 +1444,7 @@ current or future type can ever leak JSON to a user.
   | `skill.deprecated` | Skill deprecated | {ns}/{slug} is deprecated — use {succNs}/{succSlug} instead. {note} *(without a visible successor: "{ns}/{slug} is deprecated. {note}")* | **Open the successor** → `/skills/{succNs}/{succSlug}` when the recipient can see it, else View the skill → `/skills/{ns}/{slug}` |
   | `skill.moved` | Skill moved | {oldNs}/{slug} moved to {ns}/{slug} and published version {semver}. Existing installs keep working; new installs use the new address. *(+ "In plugin marketplaces it is now listed as {name}." when listed — §70.9)* | View the skill → `/skills/{ns}/{slug}` |
   | `proposal.owner_accepted` | Proposal approved by the owner | {ownerNs} approved your proposal for {ns}/{slug}. It now waits for {destNs}. | View the proposal → `/proposals/{proposalId}` |
+  | `skill.signature_mismatch` | Signature mismatch reported | {userName} reported that their copy of {ns}/{slug} v{semver} doesn't match its signed statement: {modified} modified, {missing} missing, {extra} extra. {note} *(platform admins only, §73.11)* | Open Signing → `/admin/signing` |
   | `request.fulfilled` | Skill request fulfilled | Your skill request "{requestTitle}" was fulfilled by {byName} with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
   | `search_gaps.ready` | Search gaps to review | A search gap is waiting for review. *({n} search gaps are waiting for review.)* | Review search gaps → `/admin/search-gaps` |
   | `skill.search_gap_hidden_match` | Search for a restricted skill | People searched for "{query}" and couldn't find {ns}/{slug}, because only its namespace can see it. Up to {n} people in the last {days} days. Consider sharing it with more namespaces or making it org-visible. | View the skill → `/skills/{ns}/{slug}` |
@@ -1574,6 +1588,7 @@ current or future type can ever leak JSON to a user.
 - **`AI_TOKEN_ENC_KEY`** (32-byte base64) — encrypts the §40 AI-integration provider token; shared by **web + worker** (both may call the AI helper); required only to configure or use the AI integration — without it the Administration card is disabled with a config hint. Shipped in `.env.example`, `docker-compose.yml` (web + worker) and the Helm values/secret. The integration itself (provider, URL, token, model, on/off) is **UI-only** — no env override.
 - **`INSTALL_TOKEN_ENC_KEY`** (32-byte base64) — encrypts the recoverable copy of each §23 install token (`tokens.token_enc`) behind **Show install URL**; shared by **web + worker** (the web install endpoint and the worker's MCP `install_skill` both mint and seal; only the web app reveals; the gateway validates by hash and never decrypts). **Optional:** without it installs mint exactly as before with no stored copy, and *Show install URL* never appears for them. Rotating or replacing the key makes previously stored copies unrecoverable (reveal → 409, generate a new one) — no re-encryption tooling in v1. Shipped in `.env.example`, `docker-compose.yml` (web + worker) and the Helm values/secret.
 - **§69 agent sync API — three web env vars, no new secret:** `SKILLY_AGENT_API_ENABLED` (`true` turns the endpoint on; unset = off, the route answers 404), `SKILLY_AGENT_API_AUDIENCE` (the `aud` an Entra access token must carry; defaults to the OIDC client id) and `SKILLY_AGENT_KEY_TTL_HOURS` (1–24, default 12). The tenant is the existing OIDC tenant setting. Agent keys are stored as hashes only, so there is nothing to encrypt. Shipped in `.env.example`, `docker-compose.yml` (web) and the Helm values. The Entra app registration needs the delegated scope `Skills.Sync`, v2 access tokens and the agent as an authorized client (§69.12).
+- **§73 signing key — a new required worker secret:** `SKILLY_SIGNING_KEY` (a PKCS#8 PEM Ed25519 private key) or `SKILLY_SIGNING_KEY_FILE` (a mounted file holding it). **Worker only**; web holds no private key. The worker **refuses to start** without a valid key, so an upgrade needs the deployment action: `openssl genpkey -algorithm ed25519 -out skilly-signing.pem`, then add it to `deploy/.env` or the Helm Secret. `.env.example` documents it empty; CI and the e2e stack generate a throwaway key. Rotation is a config change; old keys stay trusted until a platform admin revokes them (§73.9).
 - **Entra app prerequisites for the §12 Graph email transport** (documented deployment step): the existing skilly app registration needs delegated **`Mail.Send`** + **`offline_access`** admin-consented and the extra redirect URI **`/api/admin/email/callback`** registered. Env-SMTP remains the consent-free fallback.
 - **`CSP_MODE`** (`enforce` default | `report-only` | `off`) selects the Content-Security-Policy posture the web middleware emits (§22 *Content-Security-Policy*): ships **enforcing**; `report-only` is a no-block shakedown; `off` reverts to the legacy `unsafe-inline` policy. Production-only — development always uses the lenient dev policy.
 - **§29 MCP server — no new secret.** OAuth codes/access/refresh tokens are **opaque random values stored as sha256 hashes** (like `tokens.hashed_token`), so there is nothing to encrypt and no signing key to manage; the AS/protected-resource metadata is derived from the existing **registry base URL**, and client-IP attribution reuses **`TRUST_PROXY`** (§23). All tuning is platform settings, not env (`mcp_enabled`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`).
@@ -1861,13 +1876,14 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - **AI pre-review (§46.11):** `POST /api/proposals/:id/ai-prereview/rerun`, `POST /api/proposals/:id/ai-prereview/dispositions` (reviewers); `GET /api/skills/:ns/:slug/ai-prereview?semver=` (owners), `POST .../ai-prereview/rerun` and `.../ai-prereview/dispositions` (override holders); `GET /api/proposals/:id` gains `aiPrereview`.
 - `POST /api/publish` — direct publish (Member when `require_review=false`, or admins). Hosted or pointer. *(No `/api/skills/:ns/:slug/versions`; no scripted/PAT publish.)*
 - **Moving a skill (§70.12):** new-version payloads of `POST /api/proposals` / `POST /api/publish` gain `destinationNamespaceId`; `accept` gains the owner stage (`awaiting_destination`) and the 409s `skill_moved` / `slug_exists_in_destination`; proposals gain `destination` and `ownerApproval`; every `/api/skills/:ns/:slug/…` route, the git gateway and `/skills/:ns/:slug` resolve old addresses through `skill_path_aliases` (§70.6).
+- **Signed versions (§73.10):** `GET /api/skills/:ns/:slug/versions/:semver/statement` (the current statement and its variants; `?download=1` returns the bare DSSE envelope; **409** `statement_pending`), `POST …/versions/:semver/verify` (server-side verdict for up to 5,000 `{ path, sha256, lfSha256?, mode? }`), `POST …/versions/:semver/statement/report` (a mismatch report, 10/hour per user), `POST /api/verify/lookup` (up to 200 `computedHash` values → visibility-filtered matches), `GET /api/admin/signing` + `POST /api/admin/signing/keys/:keyId/revoke` (platform admins), and the **unauthenticated** `GET /.well-known/skilly-signing-keys.json` (public keys only). All catalog-scoped routes check visibility first (404).
 - `GET /api/propose/ai-draft` → `{ available, remainingToday, dailyCap }` (§64.5, §40.17); `POST /api/propose/ai-draft` — **Draft with AI** (§43.5): hosted bundle (multipart), pointer or reuse source → `{ description, usage, categories: [{ name, isNew }] }`; 409 `ai_unavailable`, 413/422 source errors, 429 `draft_rate_limited` (`scope`, `retryAt`, `cap`), 502 `draft_failed`. Nothing persisted.
 - **Repository import (§64):** `POST /api/propose/import/scan` — list a git repo's `SKILL.md` folders at a ref with name, description, last-changed date and importability (§64.3); `POST /api/propose/import` — submit up to 50 skills as one import, one ordinary pointer proposal (or direct publish) each, outcome per skill (§64.6). `GET /api/proposals` gains `import=`; `GET /api/proposals/:id` gains `import` (§64.7).
 - `POST /api/icons` — **skill icon upload** (§33): multipart, any signed-in user, rate-limited; PNG/JPEG/WebP by magic bytes, **413** over 512 KB, **422** for an unsupported/undersized/oversized image; normalized server-side to a 256×256 PNG and stored content-addressed → `{ sha256, url }`. The hash is then referenced from the proposal/publish payload, where `verifySubmissionPayload` enforces **ownership** (uploaded by the caller, or equal to the target skill's current icon). The web form never sends the picked file itself — it uploads its own **256×256 PNG** crop (§33.3), so the 512 KB cap binds API callers only and is independent of the form's **10 MB** source limit.
 - `POST /api/uploads` — hosted bundle upload (validate + scan + store, §6); an unparseable multipart body is a clear 400, not a 500 (§6). **Chunked variant** for bundles larger than the configured chunk size (§6): `POST /api/uploads/chunked` (start; sweeps ≥2h-old orphans, returns `{uploadId, chunkBytes}`), `PUT /api/uploads/chunked/:id/parts/:index` (raw octet-stream part), `POST /api/uploads/chunked/:id/complete` (assemble → identical validate/scan/store; same response shape as the single-shot upload), `DELETE /api/uploads/chunked/:id` (abort). `GET /api/pointer/refs` — upstream ref autocomplete. `GET /api/harnesses`, `GET /api/categories`.
 
 **Consumption (git gateway — on the worker, NOT `/api/fetch`)**
-- The authenticated **git smart server** serves `/<ns>/<slug>.git/{info/refs,git-upload-pack}` with token-in-URL basic auth; validates the token (including, for personal tokens, that the **owning user is `status='active'`** — §23 Gateway), enforces visibility, logs to `access_log` (never credentials), stamps install-token use. There is **no `/api/fetch`** route.
+- The authenticated **git smart server** serves `/<ns>/<slug>.git/{info/refs,git-upload-pack}` with token-in-URL basic auth; validates the token (including, for personal tokens, that the **owning user is `status='active'`** — §23 Gateway), enforces visibility, logs to `access_log` (never credentials), stamps install-token use. There is **no `/api/fetch`** route. It also serves `GET /<ns>/<slug>.git/skilly/statement/v<semver>` (§73.10): the version's signed statements, with the same credentials and checks as a clone, never counted as a clone, install or adoption.
 
 **Installs (§23)**
 - `GET /api/installs` (+ `?scope=system` — all system installations, **platform-admin only**), `DELETE /api/installs/:id` (uninstall), `PATCH /api/installs/:id {expiresAt}` (reactivate) — owner-checked for personal rows; on **system** rows the DELETE/PATCH check is **platform admin** instead (any admin). *(Replaces the old `POST /api/tokens` PAT path.)*
@@ -1888,7 +1904,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 
 **Usage analytics (§21)**
 - `GET /api/usage?days=<7|30|90|all>` — dashboard (entitled skills + windows + deltas + allowed aggregate + series). `GET /api/usage/:ns/:slug/breakdown?range=<7d|30d|90d|all>` — owner-only drill-down. *(Param is `range`, not `window`.)* Both gain the **uses** metric while `usage_insights_enabled` is on (§68.7): `usageInsightsEnabled`, per-row `uses` windows (`today`/`d7`/`d30`/`all` + deltas), `uses` in `series[]` / `daily[]`, `sort=uses`; the breakdown's `uses: { series, versions, triggers }`.
-- **Agent sync (§69):** `POST /api/agent/v1/sync` — a **desktop agent's** endpoint: bearer **Entra access token** only (scope `Skills.Sync`; no session, cookies ignored), no body; **200** `{ user, key, keyExpiresAt, gitBaseUrl, skills[] }` with every skill the user may see (`namespace`, `slug`, `title`, `description`, `version`, `ref`, `gitUrl`, `updatedAt`, `deprecation`) and a freshly minted agent key; **401** `invalid_token`, **403** `insufficient_scope` / `user_not_provisioned` / `user_disabled`, **404** while the API is off, **429** past 30/hour per user. Errors are `{ error, message }`. `GET /api/installs` rows gain **`source`** (`install` | `aion`), and `DELETE /api/installs/:id` also removes an agent install record (§69.7).
+- **Agent sync (§69):** `POST /api/agent/v1/sync` — a **desktop agent's** endpoint: bearer **Entra access token** only (scope `Skills.Sync`; no session, cookies ignored), no body; **200** `{ user, key, keyExpiresAt, gitBaseUrl, skills[] }` with every skill the user may see (`namespace`, `slug`, `title`, `description`, `version`, `ref`, `gitUrl`, `updatedAt`, `deprecation`, and since §73 `computedHash` + `statementUrl`) and a freshly minted agent key; **401** `invalid_token`, **403** `insufficient_scope` / `user_not_provisioned` / `user_disabled`, **404** while the API is off, **429** past 30/hour per user. Errors are `{ error, message }`. `GET /api/installs` rows gain **`source`** (`install` | `aion`), and `DELETE /api/installs/:id` also removes an agent install record (§69.7).
 - **Usage insights (§68):** `POST /api/usage/reports` — the **Claude Code hook's** endpoint: bearer **usage key** only (no session), body `{ skillId, semver, trigger, eventId }`; **401** indistinguishable for any bad key, **204** for every other outcome (recorded / duplicate / dropped / switch off), **429** past 120/min per key. `POST /api/me/usage-key` (mint; **409** `usage_key_exists`), `POST /api/me/usage-key/regenerate`, `DELETE /api/me/usage-key` (stop sharing); `POST /api/marketplaces/tokens` accepts `shareUsage` and returns `usageKey`; `GET /api/marketplaces` gains `usageSharing`; `usageInsightsEnabled` on `GET|PATCH /api/admin/settings`.
 
 **Audit & system log**
@@ -3237,7 +3253,7 @@ works for both protocol versions).
     button with `aria-expanded`); the **title link** still opens the skill page (it doesn't toggle).
   - **Children** (expanded) are the per-install rows **without** the repeated icon/title/`@ns/slug`:
     version pill, freshness line, active/inactive, client, IP, installed / expires, minted-by
-    (System view), and the **per-install actions** — *Uninstall*, *Show install URL*, *Activate* —
+    (System view), and the **per-install actions** — *Uninstall*, *Show install URL*, *Activate*, *Verify files* (§73.8) —
     each opening its panel under that child. Ordered **newest install first** (`used_at`
     descending), whatever the page sort. A child row's click opens the skill page, as a plain row's
     does today.
@@ -3266,7 +3282,9 @@ works for both protocol versions).
   `router.replace` (a reload doesn't re-flash). No matching row → nothing happens. From the §45.5 successor panel the same
   behavior runs in place on the already-open page.
 - Edge actions (styled like the detail-page version buttons): **Uninstall** always; **Show install
-  URL** on revealable rows (*Show install URL* above); **Activate**
+  URL** on revealable rows (*Show install URL* above); **Verify files** (§73.8) on every row whose
+  version has a signed statement, pre-set to the install's version (and, for a deprecated skill
+  tracking latest, its current variant); **Activate**
   (date/Never picker) only when inactive; **Install latest** (§45.5) on a row whose skill is
   **deprecated with a visible, installable successor** — it mints a personal install of the
   **successor at latest** (the same expiry picker as Activate, the same `POST
@@ -5026,7 +5044,7 @@ rate-limited, and — for writes — audited with the MCP marker (§29 *Attribut
 | `search_skills` | The §10 catalog search: the same §34 engine (FTS + synonyms + typo/substring tiers; `"phrase"` / `-exclude` / `OR` syntax), same facets (`category`, `tool`, `source`, `minQuality`), same sorts (incl. `quality`), same visibility filter. Paginated. Each hit carries `quality` (§41.11) and **`deprecation`** (`null`, or `{ note, successor: { namespaceSlug, slug, title } | null }` — the successor only when the caller can see it, §45.7). Returns `matchMode` + `synonymsApplied`, and per hit `matchedIn` + a plain-text `snippet` (§34.11). |
 | `get_skill` | §15 detail: metadata, versions, rating aggregate, **quality** (score, stars, mode — never the AI remarks, §41.11), maintainers, `latestInstallable`, `publishing`, external-source panel data, **`deprecation`** and **`replaces[]`** (§45.7). |
 | `get_skill_content` | Raw `SKILL.md` for a version (default: latest stable). The tool twin of the resource read, with identical counting (§29 *Adoption*). |
-| `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. |
+| `list_skill_files` | Paths, sizes and sha256 for a version's bundle — the §8 bundle-browser data, re-based on a published version. Since §73 also the version's **signed statements** (DSSE envelopes, keyId, key status, `computedHash`) and per-file `mode` / `lfSha256` / `installed`; an optional **`local: [{ path, sha256, lfSha256?, mode? }]`** input (≤ 5,000) adds a `verification` verdict with the signature checked by the server (§73.10). Still one tool: the 25-tool ceiling holds. |
 | `get_skill_file` | One file from a version's bundle. Text inline; binary as a base64 blob; over `mcp_max_resource_bytes` → a clear error naming the `download` route. |
 | `get_registry_metadata` | Categories (**name + slug**, the slug being the marketplace plugin name — §30.3), tool/harness enum, the namespaces the caller can see, and the platform limits an agent needs before proposing (max bundle bytes, inline upload cap, `require_review` per namespace). |
 | `get_collections` | Skill collections (§38.9), read-only: no argument → the caller's own; `id` → one collection with its eligible, visibility-filtered members; `query` → up to 10 matches (the §38.6 matcher). Members are installed one at a time with `install_skill`. |
@@ -5674,6 +5692,10 @@ panel's default tab changes — the fallback is already specced and implemented.
 - **Per-plugin fingerprints and `1.0.<n>` counters** (§30.3) are computed in the same sweep and
   written to `marketplace_plugins` in the same transaction as the commit, so a rebuilt manifest
   never advertises a version the table does not hold.
+- **Signed member folders (§73.5).** Before committing, the sync makes sure every member folder it
+  writes has a signed statement: the version's own, or a variant when the folder carries the
+  deprecation notice or lacks hoisted components. A missing variant is signed first. If signing
+  fails, the marketplace keeps its previous commit and the next sweep retries.
 - **Served-skill sidecar.** Because the manifest now lists plugins, not skills, each rebuild also
   writes a machine-readable **`.skilly/skills.json`** (`{ skills: [{ namespaceSlug, skillSlug,
   semver }] }`, sorted) at the repo root. It is what the next sweep diffs against to compute
@@ -11381,6 +11403,10 @@ notifying the people who run the skill, and leaving an in-band hint in the git-s
   tag commit. `last_served_semver` semantics are otherwise unchanged.
 - **Marketplaces (§30):** the member copy at `skills/<slug>/SKILL.md` is written through the same
   function; the deprecation inputs join the content hash so a (un)deprecation triggers a rebuild.
+- **Signing (§73.5):** the hint commit's files are a signed `deprecation` variant. `ensureMain`
+  signs it before it moves `main`, so an install of a deprecated skill that tracks latest verifies
+  as *"v1.2.0 with skilly's deprecation notice"*. A new note or successor is a new variant; the
+  older ones stay valid.
 - **Not affected:** `GET …/readme` and MCP `get_skill_content` render the **version's** `SKILL.md`
   (artifact bytes, no hint) — the UI banner and the `deprecation` field are the signal there;
   download, FTS, `skill_version_search`, `content_sha256`, duplicate detection.
@@ -16273,7 +16299,9 @@ failure is skilly's, not the caller's).
       "ref": "v1.0.1",
       "gitUrl": "https://skilly.example.com/global/case-study-creator.git",
       "updatedAt": "2026-10-01T10:00:00.000Z",
-      "deprecation": null
+      "deprecation": null,
+      "computedHash": "<64 hex>",
+      "statementUrl": "https://skilly.example.com/global/case-study-creator.git/skilly/statement/v1.0.1"
     }
   ]
 }
@@ -16303,6 +16331,11 @@ failure is skilly's, not the caller's).
   the user can see it; `null` when the skill is not deprecated. Deprecated skills **are** included.
   The response field is the client's only signal: the deprecation hint commit lives on `main`, and
   tags stay byte-identical (§45).
+- **`computedHash`** (§73) is the installer-compatible hash from the version's own signed
+  statement. Sync clones the tag, which never carries a rewrite, so the cloned folder must match it.
+  **`statementUrl`** is `<gitUrl>/skilly/statement/<ref>`, without credentials; the client adds
+  the agent key as basic auth to fetch the signed statement (§73.10). `computedHash` is `null`
+  while the statement is pending (a version the backfill has not reached yet).
 - **Order:** `namespace`, then `slug`, ascending by code unit. **No pagination**: every skill is
   returned.
 - **`(namespace, slug)` identifies a skill; `slug` alone does not.** Two namespaces may each have a
@@ -16906,8 +16939,9 @@ Top to bottom. Each item is shown only to its audience, which is unchanged from 
 | 5 | Monitoring | `/admin/rum` | platform admins | — |
 | 6 | Feature ideas | `/admin/ideas` | platform admins | `pending` ideas (§60.5) |
 | 7 | Search gaps | `/admin/search-gaps` | platform admins | reviewable gaps (§62.7) |
+| 8 | Signing | `/admin/signing` | platform admins (§73.8) | — |
 
-- A platform admin sees all seven. A namespace admin who is not a platform admin sees items 2 and
+- A platform admin sees all eight. A namespace admin who is not a platform admin sees items 2 and
   3. Everyone else sees no group.
 - **Glyphs.** The header takes the shield glyph the `/admin` link used. *Platform administration*
   gets a settings (sliders) glyph so the two rows don't repeat one icon. Every other item keeps its
@@ -17297,3 +17331,567 @@ disk.
   - A slug is reusable only after the next worker sweep, not instantly.
   - If the worker sweep hasn't relocated a moved-out skill's repo yet, clones of that skill can
     fail until it does, about one minute at most.
+---
+
+## 73. Signed skill versions
+
+Every published version carries a **signed statement**: skilly's platform key signs the exact list
+of files the version serves. Anyone who can see the skill can check an installed folder, a
+downloaded bundle or a `skills-lock.json` against it: in the browser, over REST, on the git host,
+over MCP, or offline with `openssl`. skilly still ships no CLI.
+
+### 73.1 Decisions
+
+| Question | Decision |
+|---|---|
+| Who signs | **skilly's platform key** (Ed25519), held by the worker only. Not publishers, not reviewers, not Sigstore. |
+| What it proves | "This skilly instance served exactly these files as `ns/slug@semver`." It does not prove who wrote them; the audit log (§11) records who proposed and approved them. |
+| What is signed | An **in-toto Statement v1** in a **DSSE envelope**: one subject per file, plus a skilly predicate with the identity, a per-file table, the `skills` installer's own `computedHash`, `artifact_sha256` and the tag commit. |
+| When | In the publish sweep, in the step that sets `git_published`. **Fail closed**: a version that cannot be signed is not installable. Existing versions are signed by a labeled **backfill**. |
+| Rewrites skilly serves | Any skilly-made rewrite of a version's files that reaches consumers gets its own signed **variant** statement. Today there are two: the §45.4 deprecation notice (on `main` and in marketplace copies) and the §30.3 component hoist (marketplace member folders). |
+| How users verify | A **Verify files** dialog on the detail page and the Installed page (hashing in the browser), a standalone **`/verify`** page (any folder, or a pasted `skills-lock.json`), REST, the git host with the install token, MCP `list_skill_files`, and an offline `openssl` recipe. |
+| Key | `SKILLY_SIGNING_KEY`, **required** by the worker. Rotation keeps old keys valid. Revocation invalidates every statement the key signed, and the worker re-signs them. |
+| Public keys | Unauthenticated, at `GET /.well-known/skilly-signing-keys.json`. |
+
+### 73.2 What a statement proves, and what it does not
+
+- **It proves** that these files, with these paths and bytes, are what this instance served as
+  `ns/slug@semver` (or as one of that version's variants). A changed, missing or extra file breaks
+  the match.
+- **It does not prove** who wrote the content or that it is safe. Review (§8), scanning (§6, §37,
+  §49.2) and the audit log cover that.
+- **Threats it covers:**
+  - a copy edited after install (a developer's machine, a CI image, a shared drive);
+  - bytes swapped at rest on skilly's side by someone without the key: in the object store
+    (already checked before synthesis, §49.12), on the git volume, or in a database row;
+  - a download or clone altered in transit.
+- **Not covered:** an attacker who holds the signing key. Revocation and re-signing (§73.9) are the
+  response.
+- **Integrity, not currency.** A yanked or quarantined version's statement stays valid. Verifiers
+  report the version's status beside the verdict (§73.7).
+
+### 73.3 The statement
+
+The **DSSE envelope** (also the downloadable file):
+
+```json
+{
+  "payloadType": "application/vnd.in-toto+json",
+  "payload": "<base64 of the statement JSON bytes>",
+  "signatures": [{ "keyid": "<keyId>", "sig": "<base64 Ed25519 signature over PAE>" }]
+}
+```
+
+`PAE` is DSSE v1 pre-authentication encoding: `"DSSEv1" SP len(type) SP type SP len(body) SP body`,
+where the lengths are byte counts in ASCII decimal and `body` is the decoded payload bytes.
+
+The **statement** (the decoded payload):
+
+```json
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    { "name": "SKILL.md", "digest": { "sha256": "<hex>" } },
+    { "name": "scripts/run.sh", "digest": { "sha256": "<hex>" } }
+  ],
+  "predicateType": "https://github.com/scalefocus/skilly/attestation/skill-version/v1",
+  "predicate": {
+    "registry": "https://skilly.example.com",
+    "skill": { "id": "<uuid>", "namespace": "team-a", "slug": "deploy" },
+    "version": { "id": "<uuid>", "semver": "1.2.0" },
+    "variant": null,
+    "kind": "publish",
+    "hashRecordedAtPublish": true,
+    "source": { "type": "hosted" },
+    "artifactSha256": "<hex>",
+    "tagCommit": "<git commit id>",
+    "skillsLock": { "lockVersion": 2, "computedHash": "<hex>" },
+    "files": [
+      { "path": "SKILL.md", "size": 1234, "mode": "100644", "sha256": "<hex>", "lfSha256": "<hex>", "installed": true },
+      { "path": "scripts/run.sh", "size": 210, "mode": "100755", "sha256": "<hex>", "lfSha256": "<hex>", "installed": true }
+    ],
+    "signedAt": "2026-11-18T10:00:00Z"
+  }
+}
+```
+
+- **`subject`**: one entry per file in the served tree, with the sha256 of its raw bytes.
+- **`registry`**: `SKILLY_REGISTRY_URL` (§13). A statement from another instance does not match.
+- **`skill.namespace`** is the owner **when the statement was signed**. Identity is `skill.id` +
+  `version.semver`. A later move (§70) does not re-sign, and verifiers match by skill id; the
+  dialog shows *"Signed as ‹old-ns›/‹slug› (moved since)"*.
+- **`variant`**: `null` for the version itself, otherwise
+  `{ "rewrites": ["deprecation", "marketplace_hoist"], "inputsSha256": "<hex>" }`, with the
+  rewrite names sorted (§73.5).
+- **`kind`**:
+  - `publish`: signed by the publish sweep.
+  - `backfill`: signed by the backfill sweep (§73.6). It attests what skilly held at `signedAt`,
+    not what was approved at publish.
+  - `resign`: re-signed after a key revocation (§73.9).
+- **`hashRecordedAtPublish`**: `false` when the version row has no `artifact_sha256` (legacy and
+  seeded rows), so the signed bytes could not be checked against the publish-time hash.
+- **`source`**: `{ "type": "hosted" }`, or for a pointer `{ "type": "pointer", "origin":
+  external_origin_url, "ref": external_ref, "subdir": external_subdir | null, "commit":
+  external_commit | null }`.
+- **`artifactSha256`**: the version's `artifact_sha256`, which is the bundle the detail page's
+  *Download* serves verbatim (§10). `null` for a variant, or when no hash is recorded.
+- **`tagCommit`**: the git commit id of tag `v<semver>`. `null` when the tag is not live (a yanked
+  version signed by the backfill).
+- **`skillsLock.computedHash`**: the installer's lock-v2 hash (§73.4) over the files with
+  `installed: true`.
+- **`files[]`**: every file in the served tree. `mode` is `100644` or `100755`. `sha256` is over the
+  raw bytes. `lfSha256` is over the bytes after the lock-v2 line-ending rule, so it equals `sha256`
+  for a binary file or a file without CRLF. `installed` is `false` for paths the installer never
+  copies (§73.4).
+- **`signedAt`**: UTC ISO, informational. A forged statement can carry any date, which is why
+  revocation takes no cut-off time (§73.9).
+- **Byte-exact.** `subject` and `files` are sorted by the UTF-8 bytes of the path. The payload is
+  stored and served as the exact bytes that were signed; verifiers never re-serialize it.
+
+### 73.4 The installer-compatible hash
+
+- The `skills` installer (vercel-labs/skills) writes a **lock version 2** `computedHash` per project
+  skill into `skills-lock.json`. `npx skills list`, `check` and `install --frozen-lockfile` compare
+  it with the files on disk. The algorithm, from the installer's README and verified against its
+  v1.8.1 source:
+  1. take every file in the skill folder, except `metadata.json` files and anything inside a
+     `.git`, `__pycache__` or `__pypackages__` folder (the installer never copies these);
+  2. use the path relative to the folder, `/`-separated;
+  3. in a file with no NUL byte, replace every CRLF with LF;
+  4. sort by the UTF-8 bytes of the path;
+  5. feed one SHA-256, per file: the path, NUL, the content length in ASCII decimal (counted after
+     step 3), NUL, the content;
+  6. output lowercase hex.
+- It lives in **`packages/shared/src/external-tool.ts`** with the rest of the pinned contract
+  (`skillsLockComputedHash`, `isInstallerExcludedPath`), tested against the installer's three
+  published test vectors. The rest of the contract stays pinned at v1.5.10. A future lock version
+  gets a new `lockVersion`; statements already signed keep theirs.
+- Because the hashes are the same, a user can compare the `computedHash` in their
+  `skills-lock.json` with the signed one, and `npx skills check` tells them whether the folder still
+  matches the lock. Neither needs a skilly CLI.
+- Older `skills` releases write no `computedHash`. The folder check (§73.7) does not depend on the
+  lock.
+
+### 73.5 Variants: rewrites skilly serves
+
+- **The rule.** Whenever skilly serves a version's files changed in any way, the changed set gets
+  its own signed statement **before** it is served. Two rewrites exist today:
+  - **`deprecation`**: the §45.4 notice in `SKILL.md`. It reaches consumers on `main` (an install
+    that tracks latest) and in plugin marketplace member folders, both written by the same
+    function.
+  - **`marketplace_hoist`**: a marketplace member folder (`skills/<skill-dir>/`, §30.3) lacks the
+    plugin components the sync moves to the plugin root (a root-level `hooks.json`, `mcp.json`,
+    `lsp.json`, `commands/` or `agents/`). Only a bundle that carries one of them gets this
+    variant.
+
+  A member folder of a deprecated skill can carry both rewrites, which makes one variant.
+- **Identity.** A variant is `(version, inputsSha256)`. `inputsSha256` is the sha256 over the
+  sorted rewrite names and the inputs each rewrite reads. For `deprecation` that is the successor
+  `ns/slug`, the note and the successor URL. `marketplace_hoist` has no inputs beyond the version's
+  own files.
+- **Signing.** `ensureMain` (§45.4) and the marketplace sync (§30.5) look up the variant statement
+  they are about to serve. If none exists they sign one, then move `main` or commit the
+  marketplace repo. If signing fails, `main` and the marketplace stay as they were, and the next
+  sweep retries.
+- **Lifecycle.** Changing the deprecation note or the successor makes a new variant. Older
+  variants stay valid, because they describe files skilly really served and an install made then
+  still holds them. Un-deprecating adds nothing.
+- **Kind.** A variant takes its version statement's kind (`backfill` while the version has none),
+  or `resign` when it replaces a statement by a revoked key.
+- **Marketplaces after a key change.** The active key's keyId is part of every marketplace's
+  content hash (§30.5), so the first sync after signing ships, and after a rotation or revocation,
+  rebuilds each marketplace once and signs its member variants. Plugin versions do not bump.
+- **Not covered:** the hoisted components themselves. They are merged across a plugin's members
+  (§30.3), so they belong to no single version.
+- **Verifiers** try the version's statement first, then its variants, newest first. A variant
+  match names the rewrites: *"Unchanged: v1.2.0 with skilly's deprecation notice"*, *"Unchanged:
+  v1.2.0 as delivered in a plugin marketplace"*.
+- **Tags never carry a rewrite** (§45), so a pinned install, an agent-sync clone (§69) and the
+  download always match the version's own statement.
+
+### 73.6 When statements are made
+
+- **Publish sweep (fail closed).** After it synthesizes the tag, the sweep builds the statement
+  from the same file list it passed to `writeTree`, signs it, and inserts it **in the same
+  transaction** that sets `git_published = true`. Then, when the skill is deprecated, `ensureMain`
+  signs the deprecation variant before it moves `main` onto the deprecation commit (§73.5); a
+  failure there leaves `main` on the tag and the deprecation sync retries. If signing or the insert
+  fails:
+  - the version stays unpublished, and the detail page keeps showing *Publishing…*;
+  - the sweep retries on every pass;
+  - a `system_event` is recorded once per version per worker run (`source = 'worker'`,
+    `error_code = 'signing_failed'`).
+
+  The crash-recovery path (*tag already exists*, §6) signs the files the existing tag serves
+  before it sets the flag.
+- **One definition of the served files.** The publish sweep, the self-heal re-synthesis (§6), the
+  marketplace sync (§30.5) and the signing sweeps all derive a version's files from its artifact the
+  same way: extracted, with `name: <slug>` ensured in `SKILL.md`. So a re-synthesized tag is
+  byte-identical to the one first published, and a marketplace member folder matches its version
+  apart from the rewrites in §73.5.
+- **Backfill sweep.** It is leader-only, runs in batches of 50, oldest first, and stops when nothing
+  is left. It covers every version that already left the publish sweep: `git_published = true`,
+  and yanked or quarantined ones, which may still be installed. Each version needs a statement
+  from a non-revoked key. For each version, the sweep:
+  1. reads the artifact and runs the §49.12 hash check. On a mismatch it does not sign, and the
+     existing integrity event fires;
+  2. rebuilds the file list exactly as synthesis does;
+  3. if the tag is live, compares the rebuilt tree id with the tag's tree id. If they differ, it
+     does not sign. It records a `system_event` (`error_code = 'attestation_tree_mismatch'`) and
+     audits `skill.attestation_tree_mismatch`, because the served repo no longer matches the
+     artifact. A human decides (the §49.12 discipline);
+  4. signs with `kind: backfill`.
+
+  `ensureMain` and the marketplace sync (§73.5) sign the variants they serve on their next pass.
+  When the backfill runs out of work it audits `signing.backfill_completed` with the counts.
+- **Re-sign sweep**, after a revocation (§73.9). The backfill and re-sign work is one leader-only
+  sweep, every 2 minutes (`SIGNING_SWEEP_INTERVAL_MS`), quiet once nothing is left.
+
+### 73.7 Verifying
+
+**One shared function** decides the verdict: `verifyAgainstStatement` in `@skilly/shared`. The
+browser, the REST API and MCP all use it.
+
+- **Signature:**
+  - `valid`: the key is active or retired.
+  - `revoked_key`: re-signing is pending.
+  - `invalid`: a bad signature, an unknown key, or another registry.
+- **Files.** The checked set (installer exclusions skipped, §73.4) is compared with the `files[]`
+  entries that have `installed: true`. Each file is one of:
+  - `unchanged`: the raw sha256 is equal;
+  - `line_endings`: only `lfSha256` is equal. Git's `core.autocrlf` on Windows does this, and the
+    installer's own hash ignores it too;
+  - `modified`;
+  - `missing`;
+  - `extra`. An extra file is a change, as it is for `npx skills check`. OS metadata files
+    (`.DS_Store`, `Thumbs.db`, `desktop.ini`) are labeled *Probably harmless (OS metadata)* but
+    still count.
+- **Overall:**
+  - `match`: every file is `unchanged` or `line_endings`, against the version or one of its
+    variants. The variant is named.
+  - `match_other_version`: the files don't match this version, but their `computedHash` equals
+    another version of the same skill that the viewer can see. *"These files are v1.1.0, not
+    v1.2.0."*
+  - `changed`: anything else.
+- **Status** is shown beside the verdict, never folded into it. A match on a yanked version reads
+  *"Files are unchanged from v1.2.0, but this version was yanked"*. Quarantined reads
+  *"…was quarantined after a critical scan finding"*. Both link to the latest stable version. A
+  deprecated skill shows the §45 banner.
+- **Mode** is compared only when the caller supplies it (REST, MCP, offline). A browser cannot read
+  the executable bit.
+
+**In the browser** (the *Verify files* dialog and `/verify`):
+- The user picks or drops a folder (`<input webkitdirectory>` or drag and drop). The page reads and
+  hashes every file **locally** with WebCrypto. **No file and no hash is sent to skilly**, except
+  that `/verify` sends the folder's `computedHash` to the lookup API, and a report the user
+  chooses to send (§73.11) carries paths and hashes. The page then fetches the
+  statement and the public keys, checks the DSSE signature with WebCrypto Ed25519, and shows the
+  verdict with a per-file table. In a browser without Ed25519 support it uses the server's
+  signature result and says *"Signature checked by skilly"*.
+- The user can drop a **bundle file** instead (`.zip`, `.tar.gz`/`.tgz`, `.skill`). The page hashes
+  it and compares the hash with `artifactSha256`. This checks the detail page's verbatim *Download*.
+  A re-packed archive does not match (including the pointer `.skill` re-pack, §10), so the result
+  tells the user to extract it and verify the folder.
+- The dialog says where installed skills usually live (`.agents/skills/<name>`,
+  `.claude/skills/<name>`, `~/.claude/skills/<name>`), and that a symlinked agent folder can be
+  picked directly.
+- A folder or bundle larger than the platform's bundle cap (§6) is refused before hashing.
+
+**`/verify`** (any signed-in user; linked from the *Verify files* dialog and the Installed page
+header) has three tabs:
+- **Folder.** The page computes the `computedHash` and calls `POST /api/verify/lookup`. That
+  returns zero, one or several matches among skills the viewer can see; the same files can be
+  several versions. One match goes on to the full check, and several let the user pick. With none:
+  *"No skill you can see has exactly these files. If this is an installed skill, open its page and
+  verify there to see which files changed."* A match the viewer cannot see is never revealed
+  (invariant #3).
+- **`skills-lock.json`.** The user pastes or drops the file. It is parsed in the browser, and **only
+  its `computedHash` values are sent**, because a lock's `sourceUrl` can carry an install token.
+  There is one row per lock entry: the lock's skill name, then the matching `ns/slug@semver` (or
+  variant) with its status, or *No visible match*. A lock-v1 file, and entries without a hash, show
+  *No hash in this lock: run `npx skills install` with a current `skills` release*. This tab checks
+  the lock; `npx skills check` checks the folders against the lock.
+- **Offline.** The recipe below, with the active key's fingerprint.
+
+**Offline** (OpenSSL 3, `jq`, `sha256sum`; `statement.json` is the downloaded envelope):
+
+```bash
+# 1. The public key. Compare its fingerprint with the one on /verify, and check revokedAt is null.
+curl -s https://skilly.example.com/.well-known/skilly-signing-keys.json \
+  | jq -r --arg k "$KEYID" '.keys[] | select(.keyId == $k) | .publicKeyPem' > skilly.pem
+# 2. The signature.
+jq -r .payload statement.json | base64 -d > payload.json
+jq -r '.signatures[0].sig' statement.json | base64 -d > sig.bin
+T=application/vnd.in-toto+json
+{ printf 'DSSEv1 %d %s %d ' "${#T}" "$T" "$(wc -c < payload.json)"; cat payload.json; } > pae.bin
+openssl pkeyutl -verify -pubin -inkey skilly.pem -rawin -in pae.bin -sigfile sig.bin
+# 3. The files, then the file count (an extra file is a change).
+jq -r '.predicate.files[] | select(.installed) | "\(.sha256)  \(.path)"' payload.json > "$PWD/SHA256SUMS"
+(cd path/to/skill && sha256sum -c "$OLDPWD/SHA256SUMS")
+jq '[.predicate.files[] | select(.installed)] | length' payload.json
+(cd path/to/skill && find . -type f ! -name metadata.json ! -path '*/.git/*' \
+  ! -path '*/__pycache__/*' ! -path '*/__pypackages__/*' | wc -l)
+```
+
+On Windows with `core.autocrlf`, step 3 reports text files as failed. Compare `lfSha256` there
+instead. The `/verify` page explains this.
+
+### 73.8 Surfaces
+
+- **Skill detail page, versions list (§10).** Each version shows a signature badge:
+  - *Signed*;
+  - *Signed (backfill)*, with the tooltip *"Signed on ‹date› from the files skilly held then. This
+    version was published before signing existed."*;
+  - *Signature pending*, while the backfill or a re-sign has not reached it;
+  - *Signed by a revoked key: re-signing*.
+
+  Each version also gets **Verify files** (the dialog), **Download signed statement** (named
+  `<slug>-<semver>.intoto.json`; a variant is named `<slug>-<semver>.variant-<first 8 hex of
+  inputsSha256>.intoto.json`), and a copyable `computedHash` with its keyId. A version's variants
+  are listed under it, each named by its rewrites.
+- **Install card.** One line, *"Signed · verify after install"*, which opens the dialog for the
+  version the card targets.
+- **Installed page (§23).** Each install gets a **Verify files** action, pre-set to that install's
+  version: the pinned semver, or `last_served_semver` for an install that tracks latest, plus the
+  current variant when the skill is deprecated. The page header links to `/verify`.
+- **`/verify`** (§73.7).
+- **Administration → Signing** (`/admin/signing`, platform admins; the last item of the
+  Administration group, §71.2):
+  - the active key: keyId, full fingerprint, registered at;
+  - retired keys, and revoked keys with who revoked them, when and why;
+  - **Revoke** on each key that is not yet revoked;
+  - counts of statements by kind, of versions without a valid statement, and backfill and re-sign
+    progress;
+  - the last 50 mismatch reports (§73.11).
+
+### 73.9 Keys
+
+- **Algorithm:** Ed25519. **`keyId`** is the first 16 hex characters of the sha256 of the public
+  key's DER SPKI. The **fingerprint**, shown to admins and on `/verify`, is the full 64 hex
+  characters in groups of four.
+- **Configuration.** `SKILLY_SIGNING_KEY` holds a PKCS#8 Ed25519 private key: base64 DER on one
+  line, or PEM (with real newlines, or written as `\n` so it fits one `.env` line). It can also come
+  from `SKILLY_SIGNING_KEY_FILE` (a mounted file). Only the **worker** gets it; web holds no private
+  key. In production the worker **refuses to start** when the key is missing or unparsable. To
+  generate one: `openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n'`.
+  **Deployment action:** add it to `deploy/.env` (or the Helm secret) before upgrading.
+- **Outside production** (`NODE_ENV` is not `production`) a missing key is replaced by a dev key the
+  worker generates once and keeps at `<GIT_REPO_ROOT>/_skilly/dev-signing-key.pem` (a `_` directory,
+  never a servable repo path). `scripts/publish-once.mjs`, which provisions the CI and e2e stacks,
+  uses the same key, so those stacks need no key setup.
+- **Registration and rotation.** When the worker takes leadership, it derives the public key and
+  the keyId:
+  - A **new** key goes into `signing_keys` and becomes the active key; the previously active key
+    gets `retired_at`. Audited `signing.key_registered`.
+  - A **retired** key that is configured again becomes active again, and the active key is retired.
+    Audited `signing.key_reactivated`. This keeps a restored `.env` backup from breaking the worker.
+  - A **revoked** key is never used. The worker runs but signs nothing, so publishing pauses (fail
+    closed). It records a `system_event` (`error_code = 'signing_key_revoked'`) once per run, and
+    `/admin/signing` shows a warning until a new key is configured.
+  - Retired keys stay trusted: their statements stay valid, and a routine rotation re-signs
+    nothing.
+- **Revocation.** A platform admin revokes a key on `/admin/signing` and must give a reason. It
+  cannot be undone.
+  - From then on, every statement the key signed is reported `revoked_key`, whatever its
+    `signedAt`. A forged statement can carry any date, so a cut-off time would protect nothing.
+  - The **re-sign sweep** (leader-only, batched) re-signs every affected version with the active
+    key. It re-reads the artifact, runs the §49.12 check and the tree comparison (§73.6), and inserts
+    a new statement with `kind: resign`. The old row stays (append-only) but is never served as
+    current. A version that fails the checks stays `revoked_key` and raises the §73.6 events.
+    Audited `signing.resign_completed` when done. Variants that are still served are re-signed by
+    the paths that serve them (§73.5); a variant no longer served (an older deprecation note) has no
+    files to re-read and stays `revoked_key`.
+  - Revoking the **active** key pauses signing, and so publishing, until a new key is configured.
+    The confirm dialog says so.
+- **Public keys** are at `GET /.well-known/skilly-signing-keys.json`, served by web with **no
+  authentication** and `Cache-Control: max-age=300`:
+
+  ```json
+  {
+    "registry": "https://skilly.example.com",
+    "keys": [
+      { "keyId": "…", "algorithm": "ed25519", "publicKeyPem": "-----BEGIN PUBLIC KEY-----…",
+        "fingerprint": "…", "createdAt": "…", "retiredAt": null, "revokedAt": null }
+    ]
+  }
+  ```
+
+  The document holds keys only: no skill names, counts, hashes or revocation reasons. It needs no
+  authentication for the same reason as `/skill-icons/*` (§33): it carries nothing from the
+  catalog. The proxy already sends `/.well-known/*` paths other than `oauth-*` to web.
+
+### 73.10 API
+
+- `GET /api/skills/:ns/:slug/versions/:semver/statement`: visibility 404 first (invariant #3;
+  aliases resolve, §70.6).
+  - **200** `{ registry, semver, status, statements: [ { variant, kind, keyId, keyStatus, signedAt,
+    computedHash, envelope, serverSignature } ], otherVersions: [ { semver, status, computedHash } ] }`:
+    the current statement for the version, then one per variant, newest first. `keyStatus` is
+    `active`, `retired` or `revoked`; `serverSignature` is skilly's own §73.7 signature check, which
+    a browser without WebCrypto Ed25519 shows instead of its own. `otherVersions` lists the skill's
+    other signed versions, so a browser can say *"These files are v1.1.0"* without sending a hash.
+  - **404** unknown version. **409** `statement_pending` when no statement exists yet.
+  - `?download=1` (and `&variant=<first 8 hex of inputsSha256>` for a variant) returns the bare
+    envelope as an attachment.
+- `POST /api/skills/:ns/:slug/versions/:semver/verify`: a server-side check for scripts. Body
+  `{ files: [ { path, sha256, lfSha256?, mode? } ] }` (at most 5,000 files). Returns the §73.7
+  verdict, with the signature checked by the server.
+- `POST /api/verify/lookup` `{ hashes: string[] }` (at most 200, each 64 hex) returns
+  `{ results: [ { computedHash, matches: [ { namespaceSlug, skillSlug, title, semver, variant,
+  status } ] } ] }`. Matches pass through the shared visibility predicate, so a hash of a skill the
+  caller cannot see returns no match. Rate-limited like search.
+- `POST /api/skills/:ns/:slug/versions/:semver/statement/report`: a mismatch report (§73.11).
+- `GET /api/admin/signing` and `POST /api/admin/signing/keys/:keyId/revoke` `{ reason }`, for
+  platform admins only. **409** if the key is already revoked.
+- `GET /.well-known/skilly-signing-keys.json` (§73.9).
+- `GET /api/skills/:ns/:slug` (the detail API): each version gains `signature: { kind, keyId,
+  keyStatus, computedHash, signedAt, variants } | null` for the badge (§73.8); null = pending.
+- **Git host (worker):** `GET /<ns>/<slug>.git/skilly/statement/v<semver>` returns the same JSON as
+  the REST `GET`.
+  - It accepts any credential the git server accepts for a clone of that skill (a personal or
+    system install token, a §69 agent key), with the same checks. A system token skips the
+    visibility re-check, as invariant #6 allows.
+  - Without credentials it answers with the same **401** challenge as `info/refs`. The token is
+    never logged.
+  - It never counts as a clone, an install, adoption or a freshness stamp (§21, §23, §39), and it
+    writes no access-log row. The git per-IP limit and the per-installation bucket apply.
+  - The proxy already routes every `*.git/*` path to the worker (§13).
+- **Agent sync (§69.4):** each skill gains `computedHash` (the version's own statement, since sync
+  clones the tag) and `statementUrl` (`<gitUrl>/skilly/statement/<ref>`, without credentials; the
+  client adds the agent key as basic auth). `computedHash` is `null` while the statement is pending.
+- **MCP `list_skill_files` (§29)** stays a single tool, so the 25-tool ceiling holds.
+  - Its result gains `statements` (as in the REST `GET`) and, per file, `mode`, `lfSha256` and
+    `installed`.
+  - An optional new input, `local: [ { path, sha256, lfSha256?, mode? } ]` (at most 5,000), adds
+    `verification`: the §73.7 verdict, with the signature checked by the server.
+  - Neither counts as adoption.
+
+### 73.11 Mismatch reports
+
+- A `changed` verdict in the browser shows **Report to platform admins**, with an optional note
+  (at most 2,000 characters). The report sends `ns/slug@semver`, the verdict and, per file,
+  `{ path, status, sha256 }`. It **never sends file contents**.
+- `POST …/statement/report` checks visibility first (404), allows **10 reports per hour per user**
+  (**429** beyond that), and then:
+  - records a `system_event` (§25: `source = 'web'`, `error_code = 'signature_mismatch_reported'`);
+  - audits `skill.signature_mismatch_reported` (actor, version, counts by status, note);
+  - notifies **platform admins** (`skill.signature_mismatch`, in-app and email per their
+    preferences, §12). It is always sent immediately: it is not a digest candidate (§48.3).
+- Maintainers are not notified. Most mismatches are local edits, and an admin who suspects the
+  server can bring them in.
+- Nothing is recorded unless the user reports.
+
+### 73.12 Audit
+
+- `signing.key_registered` and `signing.key_reactivated`: worker, system actor; keyId,
+  fingerprint, and the key it retired.
+- `signing.key_revoked`: the platform admin; keyId, reason, number of statements affected.
+- `signing.resign_completed` and `signing.backfill_completed`: worker; counts signed and skipped.
+- `skill.attestation_tree_mismatch`: worker; version, expected and actual tree ids.
+- `skill.signature_mismatch_reported` (§73.11).
+- Signing a version is **not** audited. The append-only statement row is the record.
+
+### 73.13 Data model (migration 0114)
+
+- **`signing_keys`**:
+  - `key_id`: TEXT, primary key.
+  - `algorithm`: TEXT, `ed25519`.
+  - `public_key_pem`, `fingerprint`: TEXT.
+  - `created_at`: `timestamptz`.
+  - `retired_at`: nullable `timestamptz`.
+  - `revoked_at`: nullable `timestamptz`; `revoked_by`: nullable FK to `users`,
+    `ON DELETE SET NULL`; `revoked_reason`: nullable TEXT.
+
+  A partial unique index allows at most one active key (`retired_at IS NULL AND revoked_at IS
+  NULL`). A trigger refuses any change to `public_key_pem` or `fingerprint`, and refuses clearing
+  `revoked_at`.
+- **`skill_version_attestations`** (one row per signed statement):
+  - `id`: uuid, primary key.
+  - `skill_version_id`: FK to `skill_versions`, CASCADE.
+  - `variant_rewrites`: TEXT[] NOT NULL DEFAULT `'{}'`, sorted (`deprecation`,
+    `marketplace_hoist`); empty for the version itself.
+  - `variant_key`: TEXT NOT NULL DEFAULT `''`. It holds `inputsSha256`, or `''` for the version
+    itself.
+  - `kind`: `publish` | `backfill` | `resign`.
+  - `key_id`: FK to `signing_keys`.
+  - `computed_hash`: TEXT, indexed (for `/api/verify/lookup`).
+  - `envelope`: JSONB, the DSSE envelope as signed.
+  - `created_at`: `timestamptz`.
+
+  Unique `(skill_version_id, variant_key, key_id)`. **Append-only**: a trigger refuses UPDATE and
+  the app role has no UPDATE grant. Rows are deleted only by the cascade when a skill is
+  permanently deleted.
+- **The current statement** for a `(version, variant_key)` is the newest row whose key is not
+  revoked. If every row's key is revoked, the newest row is served as `revoked_key`. With no row,
+  the answer is `statement_pending`.
+- `skill_versions` is untouched (its content columns are immutable, §22).
+- `notification_type` gains `skill.signature_mismatch`. The audit actions are listed in §73.12.
+
+### 73.14 Configuration and deployment
+
+- `SKILLY_SIGNING_KEY` or `SKILLY_SIGNING_KEY_FILE`: worker only, required (§73.9). Compose passes
+  it to the `worker` service only, and the Helm chart mounts it from a Secret.
+- `deploy/.env.example` documents the variable with an empty value and the `openssl genpkey`
+  command. A real key is never committed.
+- **CI and the e2e stack** need no key: outside production the worker and `publish-once.mjs` use
+  the dev key (§73.9). Worker integration tests sign with a throwaway key registered *retired*, so
+  they never displace the platform's active key.
+
+### 73.15 Tests (ship with the change, §16 discipline)
+
+- **Unit (`@skilly/shared`):**
+  - `skillsLockComputedHash` against the installer's three README vectors, plus CRLF, binary and
+    exclusion cases; `isInstallerExcludedPath`;
+  - statement building: sort order, `lfSha256`, `installed`, the variant and pointer fields;
+  - PAE bytes, and a DSSE sign/verify round trip with a fixed test key;
+  - keyId and fingerprint derivation;
+  - `verifyAgainstStatement`: unchanged, line endings, modified, missing, extra, the OS-metadata
+    label, a variant match, another-version match, a revoked key, a wrong registry, a bad signature.
+- **Worker:**
+  - The publish sweep signs before `git_published`, and leaves the version unpublished when signing
+    fails. The crash-recovery path signs.
+  - `ensureMain` and the marketplace sync sign a variant before serving it. A marketplace member
+    folder's `computedHash` equals its variant's: deprecation only, hoist only (a bundle with a
+    root `hooks.json`), and both together.
+  - The backfill signs yanked, quarantined and legacy rows with the right `kind` and
+    `hashRecordedAtPublish`. It skips integrity and tree mismatches and records their events.
+  - Key registration, rotation, re-activation, and the revoked-key behavior; the re-sign sweep
+    after a revocation; the worker refuses to start without a key.
+- **DB / integration:**
+  - The append-only trigger; at most one active key.
+  - Visibility 404s on the statement, verify, lookup and report routes. A restricted skill's hash
+    returns no match for someone outside its namespaces.
+  - The git-host route with a personal install token, a system token, an agent key, and another
+    skill's token; it never counts as a clone.
+  - The agent sync fields; MCP `list_skill_files` with and without `local`.
+  - The report rate limit and the admin notification.
+  - The offline recipe's PAE, built by a test with the same shell steps, verifies against a
+    generated statement.
+- **E2E:** publish a hosted skill, open *Verify files*, and pick a matching folder (*Unchanged*).
+  Change one file (*Modified*) and send a report. Verify the downloaded bundle.
+
+### 73.16 Out of scope and accepted trade-offs
+
+- **Out of scope:**
+  - signatures by publishers or reviewers;
+  - Sigstore and transparency logs;
+  - signed git tags or commits (the installer drops `.git`);
+  - a skilly CLI;
+  - verifying a marketplace repo as a whole, including the plugin-level components merged from
+    several members (each member folder is verified on its own);
+  - automatic mismatch reports;
+  - checking file modes in the browser.
+- **Accepted trade-offs:**
+  - Whoever holds the key can forge statements. Revocation and re-signing are the remedy, not
+    prevention.
+  - A backfilled statement attests what skilly held when the backfill ran, not what was approved
+    at publish.
+  - The installer's hash ignores line endings and file modes, so a change to only those still
+    matches by `computedHash`. The per-file table shows it.
+  - An extra OS metadata file reads as a change, consistent with `npx skills check`.
+  - The worker refuses to start without a key, so upgrading needs a deployment action.
+  - A statement names the namespace at signing time. After a move it shows the old one.
+  - After a revocation, a variant that is no longer served stays `revoked_key` (§73.9).
+  - Marketplace member folders now carry `name: <slug>` in `SKILL.md` like the tag does; installs
+    made before keep the older folder until their plugin next updates.
+  - The public keys are served without authentication.

@@ -46,6 +46,50 @@ export function runGit(args: string[], opts: { gitDir?: string; cwd?: string; en
   });
 }
 
+/** runGit for binary output (blob bytes): stdout is collected as raw bytes, never decoded. */
+export function runGitBytes(args: string[], opts: { gitDir?: string; env?: NodeJS.ProcessEnv }): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, ...opts.env };
+    if (opts.gitDir) env.GIT_DIR = opts.gitDir;
+    const child = spawn("git", args, { env });
+    const chunks: Buffer[] = [];
+    let err = "";
+    child.stdout.on("data", (d: Buffer) => chunks.push(d));
+    child.stderr.on("data", (d) => (err += d.toString()));
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(`git ${args.join(" ")} failed (${code}): ${err}`)),
+    );
+    child.stdin.end();
+  });
+}
+
+/**
+ * Every file of a commit, with bytes and mode — what a clone of that commit serves. Used to sign a
+ * served rewrite exactly as served (the §45.4 deprecation commit, SKILLY_SPEC.md §73.5).
+ */
+export async function readCommitFiles(bareRepoPath: string, commit: string): Promise<SkillFile[]> {
+  const listing = await runGit(["ls-tree", "-r", "-z", "--full-tree", commit], { gitDir: bareRepoPath });
+  const out: SkillFile[] = [];
+  for (const rec of listing.split(String.fromCharCode(0))) {
+    if (!rec) continue;
+    const tab = rec.indexOf(String.fromCharCode(9));
+    const [mode, type, sha] = rec.slice(0, tab).split(" ");
+    if (type !== "blob" || (mode !== "100644" && mode !== "100755")) continue;
+    out.push({ path: rec.slice(tab + 1), bytes: new Uint8Array(await runGitBytes(["cat-file", "blob", sha!], { gitDir: bareRepoPath })), mode });
+  }
+  return out;
+}
+
+/** The tree id of a commit or tag (`<rev>^{tree}`); null when the rev does not resolve. */
+export async function treeOf(bareRepoPath: string, rev: string): Promise<string | null> {
+  try {
+    return (await runGit(["rev-parse", "--verify", "--quiet", `${rev}^{tree}`], { gitDir: bareRepoPath })).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await access(p);

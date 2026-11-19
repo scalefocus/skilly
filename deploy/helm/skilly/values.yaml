@@ -89,6 +89,10 @@ secrets:
   # §23 Show install URL: encrypts the recoverable copy of each install token (32 bytes base64,
   # `openssl rand -base64 32`). Empty = installs mint as before and can't be re-shown later.
   installTokenEncKey: ""
+  # §73 signed skill versions — REQUIRED by the worker (it refuses to start without it): the
+  # platform's Ed25519 signing key as base64 PKCS#8 DER,
+  # `openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n'`. Worker only.
+  signingKey: ""
   # Secret key of the object-store account web + worker use. §49.12: this MUST be a
   # bucket-scoped account (s3:* on the artifact bucket only), never an object-store root/admin
   # pair. With the bundled MinIO (minio.enabled=true) the chart's evaluation-grade wiring reuses

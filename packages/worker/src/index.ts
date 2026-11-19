@@ -54,6 +54,9 @@ import { sweepUpstreamReleases, UPSTREAM_RELEASES_INTERVAL_MS } from "./upstream
 import { sweepReviewReminders, REVIEW_REMINDER_INTERVAL_MS } from "./reviewReminders.js";
 import { sweepSearchGaps, reviewableGapCount, SEARCH_GAP_TICK_MS } from "./searchGaps.js";
 import { mcpRouter } from "./mcp/server.js";
+import { loadSigningKey, registerSigningKey, signerFor, type Signer, type SigningKeyMaterial } from "./signing/key.js";
+import { deprecationHintSigner } from "./signing/attest.js";
+import { sweepSigning } from "./signing/sweep.js";
 import { mcpOAuthRouter, mcpHousekeeping } from "./mcp/oauthRouter.js";
 import { metrics, METRICS_CONTENT_TYPE, constantTimeEqual, foldSearchGapDays, foldSkillUsageDays } from "@skilly/shared";
 import { M } from "./metrics.js";
@@ -78,6 +81,10 @@ let isLeader = false;
 let leaderClient: PoolClient | null = null;
 let loopsStarted = false;
 
+// §73.9: the platform signing key, loaded at startup (production refuses to start without it).
+let signingMaterial: SigningKeyMaterial | null = null;
+let signer: Signer | null = null;
+
 async function attemptLeadership(): Promise<void> {
   if (isLeader) return;
   let client: PoolClient | null = null;
@@ -100,6 +107,16 @@ async function attemptLeadership(): Promise<void> {
       M.leader.set(0);
     });
     console.log(JSON.stringify({ level: "info", msg: "became leader" }));
+    // §73.9: the configured key becomes the active one (a new key retires the old; a revoked key is
+    // never used — the signer then reports itself unusable and nothing is signed or published).
+    if (signingMaterial) {
+      try {
+        const outcome = await registerSigningKey(pool, signingMaterial);
+        console.log(JSON.stringify({ level: outcome === "revoked" ? "error" : "info", msg: "signing key", keyId: signingMaterial.keyId, outcome }));
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "signing key registration failed", err: String(err) }));
+      }
+    }
     if (!loopsStarted) {
       loopsStarted = true; // register the interval loops exactly once; each sweep is gated on isLeader
       await leaderLoops();
@@ -116,7 +133,9 @@ async function leaderLoops(): Promise<void> {
   // Sweep: (1) mirror pending pointer skills (clone+scan+store), then (2) synthesize git
   // repos/tags for any version not yet published. Order matters — mirror creates versions.
   const store = s3ArtifactStore();
-  const publishDeps = { store, repoRoot: defaultRepoRoot() };
+  if (!signer) throw new Error("signing key not loaded");
+  const activeSigner = signer;
+  const publishDeps = { store, repoRoot: defaultRepoRoot(), signer: activeSigner };
   const sweep = async () => {
     if (!isLeader) return;
     try {
@@ -135,10 +154,11 @@ async function leaderLoops(): Promise<void> {
       const h = await reprovisionMissingRepos(pool, publishDeps);
       if (h > 0) console.log(JSON.stringify({ level: "warn", msg: "self-healed missing repos", count: h }));
       // Reflect yanks at the git layer: drop tags for yanked versions so they stop cloning.
-      const w = await withdrawYankedVersions(pool, publishDeps.repoRoot);
+      const w = await withdrawYankedVersions(pool, publishDeps.repoRoot, activeSigner);
       if (w > 0) console.log(JSON.stringify({ level: "info", msg: "withdrew yanked versions", count: w }));
       // §45.4: reconcile every served skill's `main` with its deprecation state (hint commit on/off).
-      const d = await syncDeprecationMains(pool, publishDeps.repoRoot, (n) => M.skillsDeprecated.set(n));
+      const d = await syncDeprecationMains(pool, publishDeps.repoRoot, (n) => M.skillsDeprecated.set(n), (skillId, semver, bareRepoPath, state) =>
+        deprecationHintSigner(pool, activeSigner, { skillId, semver, bareRepoPath, state }));
       if (d > 0) console.log(JSON.stringify({ level: "info", msg: "reconciled main for deprecation changes", count: d }));
     } catch (err) {
       console.error(JSON.stringify({ level: "error", msg: "publish sweep failed", err: String(err) }));
@@ -166,6 +186,24 @@ async function leaderLoops(): Promise<void> {
   };
   await syncMarketplacesTick();
   setInterval(syncMarketplacesTick, 60_000);
+
+  // §73.6 / §73.9: sign versions published before signing existed (backfill) and re-sign whatever a
+  // revoked key signed. Batched; quiet once there is nothing left. Never overlaps itself.
+  let signingRunning = false;
+  const signingSweep = async () => {
+    if (!isLeader || signingRunning) return;
+    signingRunning = true;
+    try {
+      const r = await sweepSigning(pool, publishDeps);
+      if (r.backfilled + r.resigned + r.skipped > 0) console.log(JSON.stringify({ level: "info", msg: "signing sweep", ...r }));
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", msg: "signing sweep failed", err: String(err) }));
+    } finally {
+      signingRunning = false;
+    }
+  };
+  await signingSweep();
+  setInterval(signingSweep, Number(process.env.SIGNING_SWEEP_INTERVAL_MS ?? 120_000));
 
   // Token reaper: delete expired one-time/PAT tokens + expired skill share links (§33.6).
   const reap = async () => {
@@ -797,6 +835,11 @@ function assertEnv(): void {
 
 async function main() {
   assertEnv();
+  // §73.9: no valid signing key in production → throw, and the worker refuses to start.
+  const loaded = await loadSigningKey({ repoRoot: defaultRepoRoot() });
+  signingMaterial = loaded.material;
+  signer = signerFor(pool, loaded.material);
+  console.log(JSON.stringify({ level: "info", msg: "signing key loaded", keyId: loaded.material.keyId, source: loaded.source }));
   const app = buildServer();
   app.listen(PORT, () =>
     console.log(JSON.stringify({ level: "info", msg: `worker listening on :${PORT}` })),

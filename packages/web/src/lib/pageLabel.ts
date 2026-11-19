@@ -24,6 +24,8 @@ const STATIC_ROUTES: { prefix: string; label: string; exact?: boolean }[] = [
   { prefix: "/admin/rum", label: "Real user monitoring" },
   { prefix: "/admin/ideas", label: "Feature ideas" }, // §60.5
   { prefix: "/admin/search-gaps", label: "Search gaps" }, // §62.7
+  { prefix: "/admin/signing", label: "Signing" }, // §73.8
+  { prefix: "/verify", label: "Verify files" }, // §73.7
   { prefix: "/quick-start", label: "Quick start" },
   { prefix: "/whats-new", label: "What's new" },
   { prefix: "/skills", label: "Skill" },

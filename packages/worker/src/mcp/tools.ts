@@ -7,7 +7,7 @@
 // destruction, direct messaging, the `system` install flag) has no tool here at all: not omitted
 // from a description — absent from the code.
 import type { Pool } from "pg";
-import { parseMinQuality, deprecationWarning, findSlugMatches, loadPrereviewView, proposalPolicyPayload, PREREVIEW_OPEN_STATES, maybeRecordGapHit } from "@skilly/shared";
+import { parseMinQuality, deprecationWarning, findSlugMatches, loadPrereviewView, proposalPolicyPayload, PREREVIEW_OPEN_STATES, maybeRecordGapHit, loadVersionStatements, decodeEnvelope, parseLocalFiles, verifyFilesServerSide, resolveSigningRegistry } from "@skilly/shared";
 import { aiAvailable, parseAiTokenKey } from "@skilly/shared/ai";
 import {
   MCP_TOOL_NAMES,
@@ -146,10 +146,28 @@ export function toolDefinitions(): ToolDefinition[] {
       title: "List a skill version's files",
       readOnly: true,
       description:
-        "Every file in a skill version's bundle, with size and sha256 — the scripts, references and assets SKILL.md points at. Use get_skill_file to read one.",
+        "Every file in a skill version's bundle, with size and sha256 — the scripts, references and assets SKILL.md points at. Use get_skill_file to read one. Also returns the version's signed statements (skilly's signature over the exact files it serves, with the installer-compatible computedHash). Pass `local` — the path and sha256 of each file in an installed copy — to check that copy: the result then carries a `verification` verdict (match / match_other_version / changed, per-file status, signature checked by skilly). Send hashes only, never file contents.",
       inputSchema: {
         type: "object",
-        properties: { ...SKILL_REF_PROPS, semver: str("Exact version. Omit for the latest stable version.") },
+        properties: {
+          ...SKILL_REF_PROPS,
+          semver: str("Exact version. Omit for the latest stable version."),
+          local: {
+            type: "array",
+            maxItems: 5000,
+            description: "Optional: the files of an installed copy to verify against the signed statement. Paths relative to the skill folder.",
+            items: {
+              type: "object",
+              properties: {
+                path: str("File path relative to the skill folder, `/`-separated."),
+                sha256: str("sha256 of the file's raw bytes, 64 hex characters."),
+                lfSha256: str("Optional: sha256 after replacing CRLF with LF (text files only)."),
+                mode: { type: "string", enum: ["100644", "100755"], description: "Optional: the git file mode (executable = 100755)." },
+              },
+              required: ["path", "sha256"],
+            },
+          },
+        },
         required: SKILL_REF_REQUIRED,
       },
     },
@@ -595,7 +613,28 @@ export async function callTool(
       if (!art.ok) return toolError(art.error);
       const files = await listBundleFiles(pool, art.value.key);
       if (!files) return toolError("this version's bundle couldn't be read");
-      return toolJson({ semver: art.value.version.semver, files });
+      // §73.10: the signed statements ride along, and per file the signed mode / LF digest /
+      // installed flag; `local` adds a verdict checked here. Never counted as adoption.
+      const vs = await loadVersionStatements(pool, r.value.id, art.value.version.semver);
+      const base = vs?.statements.find((x) => !x.variant);
+      const signedFiles = new Map((base ? decodeEnvelope(base.envelope)?.statement.predicate.files ?? [] : []).map((f) => [f.path, f]));
+      const out = files.map((f) => {
+        const sf = signedFiles.get(f.path);
+        return sf ? { ...f, mode: sf.mode, lfSha256: sf.lfSha256, installed: sf.installed } : f;
+      });
+      let verification: unknown;
+      if (args.local !== undefined) {
+        const local = parseLocalFiles(args.local);
+        if (typeof local === "string") return toolError(`local: ${local}`);
+        if (!vs || vs.statements.length === 0) return toolError("this version has no signed statement yet");
+        verification = await verifyFilesServerSide(pool, r.value.id, vs, local, resolveSigningRegistry(process.env));
+      }
+      return toolJson({
+        semver: art.value.version.semver,
+        files: out,
+        statements: vs?.statements ?? [],
+        ...(verification ? { verification } : {}),
+      });
     }
 
     case "get_skill_file": {

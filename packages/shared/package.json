@@ -15,6 +15,10 @@
       "types": "./dist/external-tool.d.ts",
       "default": "./dist/external-tool.js"
     },
+    "./attestation": {
+      "types": "./dist/attestation.d.ts",
+      "default": "./dist/attestation.js"
+    },
     "./harness": {
       "types": "./dist/harness.d.ts",
       "default": "./dist/harness.js"

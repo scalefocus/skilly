@@ -17,6 +17,7 @@ import { repoPath } from "./repoStore.js";
 import { synthesizeMarketplace, marketplaceRepoDir, marketplaceHead } from "./marketplace.js";
 import type { MarketplaceCredit } from "./server.js";
 import { GitTokenLimiter } from "../rateLimit.js";
+import { parseStatementPath } from "./authorize.js";
 
 const exec = promisify(execFile);
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -46,6 +47,21 @@ const cursors = new Map<string, string | null>([["m-pub", null], ["m-ns", null],
 const mappings: RoleMapping[] = [{ id: "m1", groupId: "g-a", namespaceId: NSID, role: "namespace_member" }];
 
 const deps: GitServerDeps = {
+  // §73.10: s-pdf v1.0.0 has a statement, v2.0.0 has none yet; anything else is unknown.
+  async loadStatements(skillId, semver) {
+    if (skillId !== "s-pdf") return null;
+    if (semver === "1.0.0") {
+      return {
+        versionId: "v-pdf-1",
+        semver,
+        status: "active",
+        statements: [{ variant: null, kind: "publish", keyId: "0123456789abcdef", keyStatus: "active", signedAt: "2026-11-18T00:00:00.000Z", computedHash: "a".repeat(64), envelope: { payloadType: "application/vnd.in-toto+json", payload: "e30=", signatures: [{ keyid: "0123456789abcdef", sig: "AA==" }] } }],
+        otherVersions: [],
+      };
+    }
+    if (semver === "2.0.0") return { versionId: "v-pdf-2", semver, status: "active", statements: [], otherVersions: [] };
+    return null;
+  },
   async findSkill(ns, slug) {
     // §70.6: `moved` moved from team-a to team-b; the old address resolves to the same skill, the
     // canonical one is team-b/moved. Its repo still sits at the old address (relocation pending).
@@ -515,4 +531,49 @@ test("agent key: the per-installation bucket is per (key, skill) — draining on
   } finally {
     await new Promise<void>((resolve) => limited.close(() => resolve()));
   }
+});
+
+// §73.10 — a version's signed statements over the git host: same credentials and checks as a clone,
+// JSON out, and never recorded as a clone, an install or a freshness stamp.
+const basic = (raw: string) => ({ authorization: "Basic " + Buffer.from(`x-access-token:${raw}`).toString("base64") });
+
+test("statement route: install token reads the statements; nothing is recorded as a clone", async () => {
+  used.length = 0; logged.length = 0; stamped.length = 0; agentClones.length = 0;
+  const url = `${base()}/team-a/pdf.git/skilly/statement/v1.0.0`;
+  const r = await fetch(url, { headers: basic("good-pdf") });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { semver: string; statements: { keyId: string }[]; registry: string };
+  assert.equal(body.semver, "1.0.0");
+  assert.equal(body.statements[0]!.keyId, "0123456789abcdef");
+  assert.ok(body.registry.length > 0);
+  assert.deepEqual([used.length, logged.length, stamped.length, agentClones.length], [0, 0, 0, 0], "a statement read is not a clone");
+});
+
+test("statement route: no token is the clone's 401 challenge; another skill's token the clone's 404", async () => {
+  const url = `${base()}/team-a/pdf.git/skilly/statement/v1.0.0`;
+  const anon = await fetch(url);
+  assert.equal(anon.status, 401);
+  assert.match(anon.headers.get("www-authenticate") ?? "", /Basic/);
+  assert.equal((await fetch(url, { headers: basic("good-secret") })).status, 404);
+  assert.equal((await fetch(url, { headers: basic("not-a-token") })).status, 401);
+});
+
+test("statement route: a version without a statement is 409 statement_pending; an unknown version 404", async () => {
+  const pending = await fetch(`${base()}/team-a/pdf.git/skilly/statement/v2.0.0`, { headers: basic("good-pdf") });
+  assert.equal(pending.status, 409);
+  assert.equal(((await pending.json()) as { error: string }).error, "statement_pending");
+  assert.equal((await fetch(`${base()}/team-a/pdf.git/skilly/statement/v9.9.9`, { headers: basic("good-pdf") })).status, 404);
+});
+
+test("statement route: an agent key reads a visible skill's statements; a restricted one stays the same 404", async () => {
+  assert.equal((await fetch(`${base()}/team-a/pdf.git/skilly/statement/v1.0.0`, { headers: basic("agent-u1") })).status, 200);
+  assert.equal((await fetch(`${base()}/team-a/secret.git/skilly/statement/v1.0.0`, { headers: basic("agent-u2") })).status, 404);
+});
+
+test("statement route: marketplace paths and non-GET methods are not statement routes", async () => {
+  assert.equal(parseStatementPath("/_marketplace/_public.git/skilly/statement/v1.0.0"), null);
+  assert.equal(parseStatementPath("/team-a/pdf.git/skilly/statement/1.0.0"), null);
+  assert.ok(parseStatementPath("/team-a/pdf.git/skilly/statement/v1.0.0-beta.1"));
+  const post = await fetch(`${base()}/team-a/pdf.git/skilly/statement/v1.0.0`, { method: "POST", headers: basic("good-pdf") });
+  assert.notEqual(post.status, 200);
 });

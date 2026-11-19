@@ -82,6 +82,8 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   "skill.search_gap_hidden_match": { title: "Search for a restricted skill", tone: "muted" },
   // §63.5 — the upstream a pointer skill you maintain pins has a newer stable release.
   "skill.upstream_release": { title: "Upstream release available", tone: "ok" },
+  // §73.11 — a user reported that their copy of a skill doesn't match its signed statement.
+  "skill.signature_mismatch": { title: "Signature mismatch reported", tone: "danger" },
 };
 
 /** The subject-line title for a type; a generic fallback so no unknown type ever leaks its key. */

@@ -777,9 +777,14 @@ export interface SkillVersionView {
   downloadExt: string;
   /** Per-version "What changed" note (plain text; §8/§10). Null on first versions / promotions. */
   whatChanged: string | null;
+  /**
+   * §73.8 the version's own signed statement, for the badge: its kind, key and installer-compatible
+   * hash, plus how many variants it has. Null = not signed yet ("Signature pending").
+   */
+  signature: { kind: "publish" | "backfill" | "resign"; keyId: string; keyStatus: "active" | "retired" | "revoked"; computedHash: string; signedAt: string; variants: number } | null;
 }
 
-type VersionRow = { semver: string; is_prerelease: boolean; status: "active" | "yanked" | "quarantined"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string; what_changed: string | null; usage_examples: string | null; quarantine_rules: string[] | null };
+type VersionRow = { semver: string; is_prerelease: boolean; status: "active" | "yanked" | "quarantined"; created_at: string; git_published: boolean; artifact_filename: string | null; external_ref: string | null; tool_harness: string; what_changed: string | null; usage_examples: string | null; quarantine_rules: string[] | null; signature: SkillVersionView["signature"] };
 
 // Every version of one skill ($1), newest first — shared by listVersions and skillDetailCore.
 const VERSION_ROWS_SQL = `select sv.semver, sv.is_prerelease, sv.status, sv.created_at, sv.git_published,
@@ -789,7 +794,17 @@ const VERSION_ROWS_SQL = `select sv.semver, sv.is_prerelease, sv.status, sv.crea
                 from scan_reports r, jsonb_array_elements(r.findings) f
                where r.subject_type = 'artifact' and r.subject_id = sv.artifact_object_key and f->>'severity' = 'critical'
                  and r.created_at = (select max(created_at) from scan_reports where subject_type = 'artifact' and subject_id = sv.artifact_object_key)
-            ) end as quarantine_rules
+            ) end as quarantine_rules,
+            -- §73.8 the version's current statement (a non-revoked key first, then newest) + variants.
+            (select jsonb_build_object('kind', a.kind, 'keyId', a.key_id,
+                      'keyStatus', case when k.revoked_at is not null then 'revoked' when k.retired_at is not null then 'retired' else 'active' end,
+                      'computedHash', a.computed_hash, 'signedAt', a.created_at,
+                      'variants', (select count(distinct a2.variant_key)::int from skill_version_attestations a2
+                                    where a2.skill_version_id = sv.id and a2.variant_key <> ''))
+               from skill_version_attestations a join signing_keys k on k.key_id = a.key_id
+              where a.skill_version_id = sv.id and a.variant_key = ''
+              order by (k.revoked_at is null) desc, a.created_at desc
+              limit 1) as signature
        from skill_versions sv join skills s on s.id = sv.skill_id
       where sv.skill_id = $1 order by sv.created_at desc`;
 
@@ -803,6 +818,7 @@ function versionView(r: VersionRow): SkillVersionView {
     gitPublished: r.git_published,
     downloadExt: resolveDownloadExt({ artifactFilename: r.artifact_filename, isPointer: !!r.external_ref, toolHarness: r.tool_harness }),
     whatChanged: r.what_changed,
+    signature: r.signature ?? null,
   };
 }
 

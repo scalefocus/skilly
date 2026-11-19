@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.64.0",
+    date: "2026-11-18",
+    summary:
+      "Every skill version is now signed by skilly. Use Verify files on a skill's page or on Installed skills to check an installed folder or a downloaded bundle in your browser, or use the new Verify page to check a whole skills-lock.json. Operators: add SKILLY_SIGNING_KEY to deploy/.env before upgrading (see .env.example); the worker won't start without it.",
+  },
+  {
     version: "2.63.0",
     date: "2026-11-18",
     summary:

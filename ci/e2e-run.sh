@@ -190,10 +190,16 @@ docker exec "${MINIO_CONTAINER}" mc mb -p local/skilly-artifacts >/dev/null 2>&1
 # page's "Publishing this skill…" placeholder: the Install panel never renders and every spec
 # driving it fails. publish-once exits non-zero if anything is still unpublished, so the gap fails
 # HERE rather than as a confusing suite-wide failure. SKILLY_SPEC.md §6/§9, roadmap item 18.
+# The web dev server's port is picked HERE, before provisioning: publish-once signs every version
+# (SKILLY_SPEC.md §73) with a statement that names SKILLY_REGISTRY_URL, and the web server checks
+# signatures against its own SKILLY_REGISTRY_URL — the two must be the same URL.
+E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
+E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
 export GIT_REPO_ROOT="${WORKSPACE}/.ci-e2e-git"
 rm -rf "${GIT_REPO_ROOT}" && mkdir -p "${GIT_REPO_ROOT}"
 ( cd packages/worker
   export DATABASE_URL="${CI_E2E_DATABASE_URL}"
+  export SKILLY_REGISTRY_URL="${E2E_WEB_URL}"
   export S3_ENDPOINT="${CI_E2E_S3_ENDPOINT}"
   export S3_ACCESS_KEY=skilly S3_SECRET_KEY="${CI_E2E_MINIO_PASSWORD}" S3_BUCKET=skilly-artifacts
   node scripts/seed-bundles.mjs
@@ -230,8 +236,6 @@ oom_kills() { awk '/^oom_kill / { n = $2 } END { print n + 0 }' /proc/vmstat 2>/
 # it. A free port, because a fixed :3000 collides with whatever else the agent runs. Its own build
 # folder (.next-e2e) and the env the Playwright webServer would give it (e2e/playwright.config.ts).
 # Started in a session of its own (setsid) so stopping it stops `next` and its children too.
-E2E_WEB_PORT="$(node -e "const s=require('net').createServer().listen(0,()=>{console.log(s.address().port);s.close()})")"
-E2E_WEB_URL="http://localhost:${E2E_WEB_PORT}"
 DEV_LOG="packages/web/e2e/test-results/dev-server.log"
 export SKILLY_DEV_AUTH=1 SKILLY_DEV_OID=dev-admin-oid SKILLY_E2E_DEV_SERVER=1 LEADERBOARD_CACHE_TTL_MS=0
 export INSTALL_TOKEN_ENC_KEY="${INSTALL_TOKEN_ENC_KEY:-c2tpbGx5LWUyZS1pbnN0YWxsLXRva2VuLWtleS0zMmI=}"

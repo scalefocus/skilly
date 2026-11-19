@@ -16,14 +16,14 @@ import {
 const PLATFORM = adminNavItems({ isPlatformAdmin: true, isNamespaceAdmin: false });
 const NS_ADMIN = adminNavItems({ isPlatformAdmin: false, isNamespaceAdmin: true });
 
-test("adminNavItems: a platform admin gets all seven items, in the §71.2 order", () => {
+test("adminNavItems: a platform admin gets all eight items, in the §71.2 order", () => {
   assert.deepEqual(
     PLATFORM.map((i) => i.label),
-    ["Platform administration", "Namespace administration", "Audit log", "System log", "Monitoring", "Feature ideas", "Search gaps"],
+    ["Platform administration", "Namespace administration", "Audit log", "System log", "Monitoring", "Feature ideas", "Search gaps", "Signing"],
   );
   assert.deepEqual(
     PLATFORM.map((i) => i.href),
-    ["/admin", "/namespaces", "/audit", "/system-log", "/admin/rum", "/admin/ideas", "/admin/search-gaps"],
+    ["/admin", "/namespaces", "/audit", "/system-log", "/admin/rum", "/admin/ideas", "/admin/search-gaps", "/admin/signing"],
   );
   // A platform admin who also administers a namespace sees the same list once, not twice.
   assert.deepEqual(adminNavItems({ isPlatformAdmin: true, isNamespaceAdmin: true }), PLATFORM);
@@ -70,7 +70,7 @@ test("activeAdminItem: only the viewer's own items count", () => {
 });
 
 test("isAdminRoute: the group's routes and nothing else", () => {
-  for (const p of ["/admin", "/admin/rum", "/admin/ideas", "/admin/search-gaps", "/namespaces", "/audit", "/system-log"]) {
+  for (const p of ["/admin", "/admin/rum", "/admin/ideas", "/admin/search-gaps", "/admin/signing", "/namespaces", "/audit", "/system-log"]) {
     assert.equal(isAdminRoute(p, PLATFORM), true, p);
   }
   for (const p of ["/", "/catalog", "/usage", "/proposals", "/leaderboard", "/profile"]) {

@@ -24,6 +24,7 @@ import {
   ideaNotificationContent,
   searchGapNotificationContent,
   upstreamReleaseNotificationContent,
+  signatureMismatchNotificationContent,
   importNotificationContent,
   reviewNotificationContent,
   driftProposeUpdatePath,
@@ -504,6 +505,17 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: `${idea.sentence}${idea.detail ? `\n\n${idea.detail}` : ""} ${cta(idea.ctaLabel, idea.path)}`,
       webhook: { event: n.type, title: s, ideaId: typeof p.ideaId === "string" ? p.ideaId : null, url: abs(idea.path) },
+    };
+  }
+
+  // skill.signature_mismatch (§73.11) — the shared wording; the CTA opens Administration → Signing.
+  const mismatch = signatureMismatchNotificationContent(n.type, p);
+  if (mismatch) {
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${mismatch.sentence}${mismatch.detail ? `\n\n${mismatch.detail}` : ""} ${cta(mismatch.ctaLabel, mismatch.path)}`,
+      webhook: { event: n.type, title: s, skill: `${p.namespaceSlug ?? ""}/${p.skillSlug ?? ""}`, semver: p.semver ?? null, url: abs(mismatch.path) },
     };
   }
 

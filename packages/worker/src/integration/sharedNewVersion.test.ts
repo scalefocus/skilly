@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { create } from "tar";
 import { publishPendingVersions } from "../git/publish.js";
 import type { ArtifactStore } from "../storage/objectStore.js";
+import { testSigner } from "../signing/key.js";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
 
@@ -69,7 +70,7 @@ test("§42: a shared skill's new version notifies the grantee namespace's admins
       [skill, `${K}-key`, bPublisher, createHash("sha256").update(mem.get(`${K}-key`)!).digest("hex")],
     );
 
-    await publishPendingVersions(pool, { store, repoRoot: join(work, "repos") });
+    await publishPendingVersions(pool, { store, repoRoot: join(work, "repos"), signer: await testSigner(pool) });
     assert.ok((await pool.query(`select 1 from skill_versions where skill_id = $1 and git_published`, [skill])).rowCount, "version published");
 
     const rows = (await pool.query<{ user_id: string; type: string }>(
