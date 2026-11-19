@@ -4,7 +4,7 @@
 // DOCUMENTED BOUNDARY: the token endpoint and the MCP endpoint itself live on the WORKER (§29
 // "Shape & placement"), and this suite runs against the web dev server only. So this spec covers
 // everything web owns — registration, the consent screen's contents and both of its outcomes, the
-// Connections list, and revocation — and stops at the redirect carrying the code. The worker half
+// Connections list, and revocation — and stops at the hand-off carrying the code. The worker half
 // (code exchange, PKCE verification, refresh rotation, reuse detection, every tool and resource
 // read) is covered by the worker's own integration suites (packages/worker/src/mcp/*.test.ts).
 import { test, expect, devSignIn } from "./fixtures";
@@ -38,6 +38,10 @@ const claudeCodeCmd = (scope: "user" | "local") =>
 // <code> inside it; click the box itself.
 const snippet = (page: import("@playwright/test").Page, name: string) =>
   page.getByRole("button", { name }).locator(".code-cmd");
+
+// The consent form's submit (§29): the POST the Approve / Decline buttons make.
+const isConsentSubmit = (r: import("@playwright/test").Response) =>
+  r.request().method() === "POST" && new URL(r.url()).pathname === "/oauth/consent";
 
 function authorizeUrl(clientId: string, extra: Record<string, string> = {}) {
   const p = new URLSearchParams({
@@ -155,10 +159,16 @@ test.describe("MCP connect flow (§29)", () => {
     await page.goto(authorizeUrl(client.client_id));
 
     // The loopback redirect won't resolve — that's fine, we only need the URL the browser was sent to.
-    const [nav] = await Promise.all([
+    const [nav, consent] = await Promise.all([
       page.waitForRequest((r) => r.url().startsWith(REDIRECT), { timeout: 15_000 }).catch(() => null),
+      page.waitForResponse(isConsentSubmit, { timeout: 15_000 }),
       page.getByRole("button", { name: "Approve" }).click(),
     ]);
+    // §29: the submit answers with skilly's own hand-off page — a 200, never a redirect. (Status and
+    // headers only: the body is gone the moment the page navigates on. It is read in the test below.)
+    expect(consent.status()).toBe(200);
+    expect(consent.headers().location).toBeUndefined();
+    expect(consent.headers()["content-type"]).toContain("text/html");
     const landed = nav?.url() ?? page.url();
     expect(landed).toContain("code=");
     expect(landed).toContain("state=e2e-state");
@@ -172,10 +182,11 @@ test.describe("MCP connect flow (§29)", () => {
     );
     expect(conn, JSON.stringify(list)).toBeTruthy();
 
-    // The browser really does follow the 303 now, and the loopback callback refuses the connection.
+    // The hand-off page sends the browser to the loopback callback, which refuses the connection.
     // Let that navigation finish failing before we navigate away, or this goto races it and is
-    // interrupted ("interrupted by another navigation to chrome-error://chromewebdata/").
-    await page.waitForURL((u) => !u.toString().includes("/oauth/authorize"), { timeout: 15_000 }).catch(() => {});
+    // interrupted ("interrupted by another navigation to chrome-error://chromewebdata/"). The page
+    // passes through /oauth/consent on the way, so wait until it has left /oauth/ altogether.
+    await page.waitForURL((u) => !u.toString().includes("/oauth/"), { timeout: 15_000 }).catch(() => {});
 
     await page.goto("/mcp-server");
     await expect(page.getByRole("heading", { name: "MCP server" })).toBeVisible();
@@ -207,6 +218,107 @@ test.describe("MCP connect flow (§29)", () => {
     expect(
       (list.connections as Array<{ clientName: string }>).some((c) => c.clientName === name),
     ).toBeFalsy();
+  });
+
+  // §29: every answer of the consent submit is a page. Submitted through the API context (same
+  // session cookie) so the bodies can be read — in the browser the hand-off page is replaced by the
+  // next navigation as soon as it arrives.
+  test("the consent submit answers with a hand-off page, and a replayed request with the 400 page", async ({ page }) => {
+    await devSignIn(page);
+    const name = `Hand-off ${Date.now()}`;
+    const client = await registerClient(page, name);
+    await page.goto(authorizeUrl(client.client_id));
+    const requestId = await page.locator('input[name="requestId"]').getAttribute("value");
+    expect(requestId).toBeTruthy();
+
+    // maxRedirects: 0 — a redirect answer must be seen as one, not followed to a dead loopback port.
+    const first = await page.request.post("/oauth/consent", {
+      form: { requestId: requestId!, decision: "deny" },
+      maxRedirects: 0,
+    });
+    expect(first.status(), await first.text()).toBe(200);
+    expect(first.headers().location).toBeUndefined();
+    expect(first.headers()["content-type"]).toContain("text/html");
+    expect(first.headers()["cache-control"]).toContain("no-store");
+    const handoff = await first.text();
+    // The automatic step and the Continue link go to the same place: the registered redirect URI.
+    const target = `${REDIRECT}?error=access_denied`;
+    expect(handoff).toContain(`<meta http-equiv="refresh" content="0;url=${target}`);
+    expect(handoff).toContain(`href="${target}`);
+    expect(handoff).toContain("state=e2e-state");
+    expect(handoff).toContain("You declined");
+    expect(handoff).toContain(name);
+    expect(handoff).not.toMatch(/<script/i);
+
+    // Single-use: the same id again is refused — as a page a person can read, not JSON on a blank
+    // tab — and it sends nobody anywhere.
+    const replay = await page.request.post("/oauth/consent", {
+      form: { requestId: requestId!, decision: "approve" },
+      maxRedirects: 0,
+    });
+    expect(replay.status()).toBe(400);
+    expect(replay.headers()["content-type"]).toContain("text/html");
+    const refused = await replay.text();
+    expect(refused).toContain("expired or was already answered");
+    expect(refused).not.toContain('http-equiv="refresh"');
+    expect(refused).not.toContain(REDIRECT);
+
+    // The replayed Approve authorized nothing.
+    const list = await (await page.request.get("/api/mcp/connections")).json();
+    expect(
+      (list.connections as Array<{ clientName: string }>).some((c) => c.clientName === name),
+    ).toBeFalsy();
+  });
+
+  // The regression case for the incident behind v2.66.1 (§22, §29). A deployment's edge proxy
+  // replaced skilly's CSP with its own, whose `form-action` did not name the client's origin.
+  // Browsers enforce `form-action` across redirects, so the consent form's 303 to the client was
+  // dropped: Approve did nothing, and the retry met an already-consumed request. The submit now
+  // answers with a same-origin page that navigates on, which `form-action` does not govern.
+  test("Approve still reaches the client when an edge proxy replaces the CSP with a strict one", async ({ page }) => {
+    await devSignIn(page);
+    const name = `Edge CSP ${Date.now()}`;
+    const client = await registerClient(page, name);
+
+    // What a hardening edge does: discard the app's policy and send its own. Scripts stay allowed
+    // so the dev app shell behaves as usual; `form-action 'self'` is the part under test.
+    const EDGE_CSP =
+      "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'; " +
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data:; font-src 'self'; connect-src 'self'";
+    await page.route(
+      (url) => url.pathname === "/oauth/authorize" || url.pathname === "/oauth/consent",
+      async (route) => {
+        // maxRedirects: 0 — a redirect answer has to reach the BROWSER, where form-action is enforced.
+        const response = await route.fetch({ maxRedirects: 0 });
+        const headers: Record<string, string> = { ...response.headers(), "content-security-policy": EDGE_CSP };
+        delete headers["content-security-policy-report-only"];
+        await route.fulfill({ response, headers });
+      },
+    );
+
+    const consentScreen = await page.goto(authorizeUrl(client.client_id));
+    // The edge policy is what the document was served with — otherwise this test proves nothing.
+    expect(consentScreen?.headers()["content-security-policy"]).toBe(EDGE_CSP);
+
+    // No `.catch` here: under the old redirect this request is never made, and the test must fail.
+    const [nav, consent] = await Promise.all([
+      page.waitForRequest((r) => r.url().startsWith(REDIRECT), { timeout: 15_000 }),
+      page.waitForResponse(isConsentSubmit, { timeout: 15_000 }),
+      page.getByRole("button", { name: "Approve" }).click(),
+    ]);
+    expect(consent.headers()["content-security-policy"]).toBe(EDGE_CSP);
+    expect(nav.url()).toContain("code=");
+    expect(nav.url()).toContain("state=e2e-state");
+
+    // Tidy up the grant this approval created.
+    const list = await (await page.request.get("/api/mcp/connections")).json();
+    const conn = (list.connections as Array<{ grantId: string; clientName: string }>).find(
+      (c) => c.clientName === name,
+    );
+    expect(conn, JSON.stringify(list)).toBeTruthy();
+    const del = await page.request.delete(`/api/mcp/connections/${conn!.grantId}`);
+    expect(del.ok(), await del.text()).toBeTruthy();
   });
 
   test("the MCP page shows the server URL and the connect snippets", async ({ page }) => {

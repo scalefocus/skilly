@@ -49,6 +49,23 @@ test("middleware: API paths get the resource-free CSP", () => {
   assert.equal(res.headers.get("content-security-policy"), "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
 });
 
+// §22: no document is served a wider form-action than 'self' — the §29 consent screen included.
+// It was the one path-keyed exception until v2.66.1; the consent submit now hands off through its
+// own page, so the path must make no difference at all.
+test("middleware: the consent screen and its submit carry form-action 'self' like every other page", () => {
+  const formAction = (path: string, env: { NODE_ENV?: string; CSP_MODE?: string }) =>
+    (run(path, env).headers.get("content-security-policy") ?? "").split("; ").find((d) => d.startsWith("form-action"));
+  for (const env of [
+    { NODE_ENV: "production", CSP_MODE: "enforce" },
+    { NODE_ENV: "production", CSP_MODE: "off" },
+    { NODE_ENV: "development" },
+  ]) {
+    for (const path of ["/oauth/authorize", "/oauth/authorize?client_id=x", "/oauth/consent", "/skills"]) {
+      assert.equal(formAction(path, env), "form-action 'self'", `${path} ${JSON.stringify(env)}`);
+    }
+  }
+});
+
 test("middleware: each request gets a fresh nonce", () => {
   const nonceOf = (path: string) =>
     /'nonce-([^']+)'/.exec(run(path, { NODE_ENV: "production", CSP_MODE: "enforce" }).headers.get("content-security-policy") ?? "")?.[1];

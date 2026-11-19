@@ -2876,30 +2876,38 @@ substantive tightening over the June-2026 audit CSP; the other directives are un
   carries no `blob:`** — browser-side image work never mints `blob:` image URLs: the icon crop dialog
   (§33.3–§33.4) decodes with `createImageBitmap`, draws on a `<canvas>` and previews through a `data:`
   URL, so no directive is widened for it.
-- **`form-action` is widened on exactly one document: `/oauth/authorize`** (§29 consent screen),
-  to **`form-action 'self' http://127.0.0.1:* http://localhost:* https:`**. Every other response
-  keeps `form-action 'self'`.
-  - **Why it is required, not a convenience.** The consent screen is a form POST whose handler
-    answers `303` to the MCP client's registered `redirect_uri` — a different origin by definition.
-    Browsers enforce `form-action` **across redirects**, so under `'self'` the navigation is aborted
-    before the request is made and the authorization code never reaches the client: the §29 connect
-    flow cannot complete in any enforcing browser. The failure is silent (`net::ERR_ABORTED`, no
-    CSP report on the *redirect* leg in some engines), which is why it survived review.
-  - **Why this widening is safe.** The allowed set is exactly the shapes Dynamic Client Registration
-    already accepts (§29 *Redirect URIs*): loopback with any port, or `https`. It is a **superset
-    filter, not the control** — the actual redirect target is still validated byte-for-byte against
-    that client's registered URIs before any code is minted, and an unverifiable one renders the
-    error page rather than redirecting. CSP here is defence-in-depth against a form on this page
-    being repointed, not the thing that decides where a user may be sent.
-  - **Why not widen it globally.** `form-action` is the directive that stops an injected or
-    rewritten form on any OTHER page from posting a user's input off-origin. `/oauth/authorize` is
-    the only document in the product that legitimately submits across origins, so it is the only one
-    that relaxes. A custom app scheme (native clients, §29) is **not** added: those are handled by
-    the OS handler, not a browser navigation.
-  - Emitted by the same middleware that builds the policy, keyed on the request path — no per-client
-    lookup (the middleware has no DB access), so the header is identical for every authorize request
-    regardless of which client is being consented to. That also means it leaks nothing about the
-    client's registration.
+- **`form-action 'self'` holds on every document — nothing is widened, including the §29 consent
+  screen.** The consent form posts to skilly (`POST /oauth/consent`) and skilly answers with its own
+  hand-off page (§29), so no form in the product is submitted to, or redirected to, another origin.
+  - **Why the consent flow is built that way.** Browsers enforce `form-action` **across redirects**:
+    a form POST answered with a `303` to the MCP client's `redirect_uri` is aborted under `'self'`
+    before the request is made, silently (`net::ERR_ABORTED`), and the authorization code never
+    reaches the client. v2.5.1–v2.66.0 handled that by widening the directive on `/oauth/authorize`
+    alone (`'self' http://127.0.0.1:* http://localhost:* https:`). That made the connect flow depend
+    on one document carrying a *relaxed* header, and it failed the moment a deployment's edge proxy
+    replaced skilly's policy with its own `form-action` (below): Approve did nothing, and the retry
+    met an already-consumed consent request. The hand-off page removes the dependency instead of
+    relaxing the policy — a `200` document is not a redirect, and the navigation it then starts is
+    not a form submission, so `form-action` does not apply to it.
+  - **What this buys.** `form-action` is the directive that stops an injected or rewritten form from
+    posting a user's input off-origin; it now has no exception anywhere, and the consent form in
+    particular can only ever post to skilly. The widened value, the path-keyed switch in the
+    middleware and their tests are removed.
+- **No flow may depend on a directive being wider than this policy on some document.** A relaxed
+  header on a single page is invisible to review and is the first thing an edge proxy overrides. A
+  change that seems to need one (a cross-origin form target, an external script, a framed page) is
+  redesigned so that it works under the standard policy, as the consent hand-off was.
+- **Edge proxies.** skilly's policy is the intended one, and an edge in front of it should pass
+  `Content-Security-Policy` through unchanged. An edge that **replaces** it, or adds a second policy
+  (browsers enforce every policy they receive), is the operator's responsibility; what skilly
+  guarantees is the rule above — none of its flows needs more than this policy on any document, so
+  an edge policy that allows what this one allows breaks nothing. Replacing it still costs
+  something: the per-request nonce policy gives way to whatever the edge author wrote (typically
+  `script-src 'unsafe-inline'`), and violation reports are lost unless the edge policy also reports
+  to `/api/csp-report`. The tell-tale is a response that carries skilly's `Reporting-Endpoints:
+  csp-endpoint="/api/csp-report"` header next to a `Content-Security-Policy` with no nonce in
+  `script-src`. `deployment_manual.md` carries the operator-facing version of this note and a
+  troubleshooting row.
 - **`CSP_MODE` env toggle** (§13; default **`enforce`**): `enforce` sends `Content-Security-Policy`;
   `report-only` sends the identical policy as `Content-Security-Policy-Report-Only` (nothing blocked —
   a shakedown mode so an operator can validate their own edge proxy / customizations before committing);
@@ -4905,19 +4913,86 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   consumes that id. The handler therefore trusts **nothing** from the form except the id and the
   approve/deny decision — a `redirect_uri` or `client_id` edited between render and submit is not
   merely ignored, it is never read. The row is **single-use, TTL'd (10 minutes) and bound to the
-  user it was stashed for**; an expired, foreign or already-consumed id fails closed with `400`.
+  user it was stashed for**; an expired, foreign or already-consumed id fails closed with `400`
+  and the consent error page (below).
   *(Durable rather than in-process by requirement: the render and the submit are separate server
   entry points and are not guaranteed to share a process — they do not under `next dev`'s per-route
   bundling, and they would not across web replicas. An in-memory handoff makes consent unusable in
   both cases.)*
-- **The consent screen's own CSP must permit the cross-origin submit.** Approving or declining is a
-  form POST answered with a `303` to the client's registered `redirect_uri` — necessarily a different
-  origin — and browsers enforce `form-action` across redirects. The registry's default
-  `form-action 'self'` therefore aborts the navigation and the authorization code never reaches the
-  client, silently. `/oauth/authorize` is served with a widened `form-action` covering exactly the
-  redirect shapes DCR accepts (loopback any port, or `https`); see §22 *Content-Security-Policy*.
-  The redirect target is still validated against the client's registration — the CSP is a superset
-  filter, not the control.
+- **Approve and Decline answer with a hand-off page — skilly never redirects a form submission to
+  the client.** `POST /oauth/consent` answers a valid, signed-in submit with **`200`** and a small
+  HTML document served from skilly's own origin, which then sends the browser to the client's
+  registered `redirect_uri`. The URL it sends to is the one the `303` used to carry, unchanged:
+  `code`, `state` and `iss` on approve; `error=access_denied`, `error_description` and `state` on
+  decline.
+  - **What the page says.** Approve: "Returning you to **<client name>**", with where that is
+    underneath — the host of the redirect target (`chat.example.com`; `127.0.0.1:53124` for a
+    loopback client), or the scheme (`cursor:`) for an app-scheme client. Decline: "You declined —
+    nothing was authorized. Returning you to **<client name>**." Both name where the person is
+    being sent before they get there.
+  - **How it continues.** Automatically and at once (`<meta http-equiv="refresh"
+    content="0;url=…">`), and with a visible **Continue** link to the same URL. The link is the
+    guaranteed path: it covers a browser with automatic refresh turned off, and a custom app scheme
+    (native clients), where a browser may ask before opening the app or ignore a navigation that no
+    click started. Approving stays a single click in the ordinary case.
+  - **The document is self-contained.** No scripts, no external resources (no stylesheet, font or
+    image requests), inline styles only with light/dark from `prefers-color-scheme`, and it is not
+    rendered inside the app shell. It must still work with its styles blocked. It is a proper
+    document all the same: `lang`, a `<title>`, one `<h1>`.
+  - **Handling of the code.** The target URL is built server-side from the stored request and is
+    HTML-escaped into the document; nothing in it comes from the form. The response is
+    `Cache-Control: no-store`, and the document declares `<meta name="referrer"
+    content="no-referrer">` so that holds even where an edge rewrites `Referrer-Policy`. The
+    authorization code therefore still never appears in a skilly URL — it travels in the body of a
+    non-cacheable POST response instead of in its `Location` header, to the same browser.
+  - **A target that registration would refuse is never rendered.** The page carries the target in
+    a link, where a `javascript:` or `data:` URL would be clickable as a `Location` header never
+    was. Registration already refuses those schemes (§49.5), so this cannot arise for a real client;
+    as defence in depth the submit checks the stored `redirect_uri` against the same list before any
+    code is minted, and answers with the "no longer registered" failure (below) instead.
+  - **Why not a redirect.** Browsers enforce `form-action` across redirects, so a `303` from a form
+    POST to another origin is delivered only if the consent screen's CSP names that origin. That
+    held under skilly's own header (v2.5.1–v2.66.0 widened `form-action` on `/oauth/authorize`) and
+    broke under an edge proxy that replaced it: the redirect was dropped after the consent request
+    had been consumed, so the client never got its code and a second Approve met "already used". A
+    `200` page followed by an ordinary navigation is outside `form-action` altogether, so it works
+    under skilly's standard `form-action 'self'` and under an edge's policy alike; the widening is
+    gone (§22 *Content-Security-Policy*).
+  - **What the client sees is unchanged:** one top-level `GET` on its `redirect_uri` with the same
+    parameters. It is a cross-site top-level navigation exactly as the redirect was, so the client's
+    own `SameSite=Lax` session cookie still accompanies it.
+  - **What is unchanged on skilly's side:** the consent request is consumed by the submit (above),
+    the grant row and `mcp.grant_created` are written at approve, and the code's lifetime and PKCE
+    binding are as before. A hand-off the person abandons leaves a grant with no tokens, which
+    confers nothing, is reused by the next approval of the same client, and is revocable from
+    `/mcp-server` — deliberately not changed here.
+- **Every failure of the consent submit renders a page; none answers with JSON and none sends the
+  browser to the client.** `POST /oauth/consent` is a browser form target, so a JSON body lands on a
+  blank tab. Each failure keeps its status code and renders the consent error page — the same
+  self-contained document rules as the hand-off page, `Cache-Control: no-store`, the heading "This
+  connection request can't be completed", the reason, and a link to `/mcp-server`:
+
+  | Case | Status | What the page says |
+  |---|---|---|
+  | MCP turned off (`mcp_enabled`) | `503` | A platform administrator has turned the MCP server off on this registry. |
+  | No session | `401` | You are signed out. Sign in to skilly, then start the connection again from your MCP client. |
+  | Signed in but not provisioned | `403` | Your account isn't provisioned in this registry yet — ask an administrator to check your directory sync. |
+  | Rate limit (30 submits a minute per user; `Retry-After` kept) | `429` | Too many attempts. Wait a minute, then start the connection again from your MCP client. |
+  | No request id in the form | `400` | This connection request is incomplete. Start the connection again from your MCP client. |
+  | Request id expired, foreign or already consumed | `400` | This connection request expired or was already answered. Start the connection again from your MCP client. If you had already approved it, that approval gives the client nothing until it connects, and you can remove it on the MCP page. |
+  | Client deleted since the screen rendered | `400` | This client is no longer registered. Start the connection again from your MCP client. |
+  | Client blocked since the screen rendered | `403` | This client has been blocked by an administrator. |
+
+  The expired/consumed row cannot name the client: the lookup that fails is the one that would
+  identify it, and a foreign id must not reveal whose request it was.
+- **Tests for the hand-off.** Unit: the page builder HTML-escapes the target, puts the identical
+  URL in the refresh and in the link, and emits no `<script>`; `/oauth/authorize` is planned
+  `form-action 'self'` in every CSP mode. e2e (`mcp-connect.spec.ts`): Approve answers `200` with no
+  `Location` and the browser reaches the redirect URI with `code`, `state` and `iss`; Decline
+  reaches it with `error=access_denied`; a second submit of the same request renders the `400` page
+  as HTML; and **the regression case for the incident** — the CSP of both `/oauth/authorize` and the
+  consent response is replaced in the browser with a strict edge-style policy (`default-src 'none'`,
+  `form-action 'self'`), and Approve still reaches the redirect URI.
 - **A request parameter supplied more than once is rejected.** Per OAuth 2.1 the authorization
   endpoint MUST NOT accept a repeated parameter; skilly fails closed with the non-redirecting error
   page rather than silently resolving to the first (or last) occurrence. This is checked **before**
@@ -4927,10 +5002,11 @@ Auth.js/Entra session that only `packages/web` has. So the feature straddles bot
   §49.5 a request with a registered `client_id` + exact `redirect_uri` but a bad `response_type`,
   PKCE, `resource` or `scope` was answered by redirecting to that URI with `error=…`, which made
   `/oauth/authorize` an open redirector for any self-registered client (anyone can register one,
-  and the redirect happened before sign-in). Now the only redirects the endpoint ever issues are
-  the post-consent approve/deny redirects for a request that validated completely and for a user
-  who signed in; RFC 6749 permits either answer for an invalid request, and rendering is the
-  conservative one. Clients see the same error codes on the page.
+  and the redirect happened before sign-in). Now skilly issues **no HTTP redirect to a client at
+  all**: the only way a browser leaves for a `redirect_uri` is the post-consent hand-off page
+  (above), for a request that validated completely and for a user who signed in; RFC 6749 permits
+  either answer for an invalid request, and rendering is the conservative one. Clients see the
+  same error codes on the page.
 - **Scope is a single opaque `mcp` scope**, bound to the caller's own RBAC. There are deliberately
   **no capability scopes** in v1: the boundary is the user's role, re-resolved per call, not a string
   in a token. *(Granular scopes are a future spec change, not an implementation detail.)*
@@ -12798,8 +12874,9 @@ notes, as one release. Each subsection names the finding it closes (V-numbers fr
 - **No redirect before consent.** `/oauth/authorize` validates the request fully; any failure —
   including a known client with a byte-matching `redirect_uri` but a bad `response_type`, PKCE
   challenge/method, `resource`, `scope` or `state` — renders the non-redirecting error page with
-  the OAuth error code and description. The only redirects the endpoint issues are the
-  post-consent approve/deny `303`s for a fully valid, user-approved request (§29).
+  the OAuth error code and description. The endpoint issues no redirect to a client at all: a
+  browser leaves for a `redirect_uri` only through the post-consent hand-off page, for a fully
+  valid request that a signed-in user approved or declined (§29).
 - **Redirect-URI schemes.** `validateRedirectUri` refuses `javascript:`, `data:`, `vbscript:`,
   `file:`, `blob:` and `about:` at registration (422 `invalid_redirect_uri`); every other custom
   scheme stays allowed for native clients. Existing registrations with such URIs are **deleted
