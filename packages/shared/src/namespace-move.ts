@@ -106,3 +106,74 @@ export function slugInDestinationMessage(destinationSlug: string, skillSlug: str
   if (visible) return `${destinationSlug} already has a skill named ${skillSlug} (${visible.name}) — choose another destination`;
   return `${skillSlug} isn't available in ${destinationSlug}`;
 }
+
+// ── §74: moving a NEW-SKILL proposal to another namespace (a hand-off, not a two-stage move) ─────
+
+/** Machine-readable codes on the §74 refusals (409 / 422 bodies). */
+export const NOT_A_NEW_SKILL_PROPOSAL_CODE = "not_a_new_skill_proposal";
+export const INVALID_TARGET_NAMESPACE_CODE = "invalid_target_namespace";
+export const PROPOSAL_DECIDED_CODE = "proposal_decided";
+
+/** The states a new-skill proposal may be moved in (§74.2). */
+export const RETARGETABLE_STATES: readonly ProposalState[] = ["proposed", "under_review", "changes_requested"];
+
+/** A namespace as the move-target rule reads it. */
+export interface RetargetNamespace {
+  id: string;
+  slug: string;
+}
+
+/**
+ * §74.2: the namespaces a reviewer may move a new-skill proposal to, in the order given.
+ *  1. Base set — a platform admin: every namespace; anyone else: `global` plus every namespace in
+ *     which they hold a role (the propose form's list).
+ *  2. While the contribution policy is *members only* (`proposalsOpen` false), only namespaces the
+ *     PROPOSER may propose into (any for a platform-admin proposer, else the ones they hold a role
+ *     in). An unknown proposer (`null`) qualifies for none.
+ *  3. Minus the proposal's current namespace.
+ */
+export function moveTargetIds(input: {
+  reviewer: EffectiveAccess;
+  proposer: EffectiveAccess | null;
+  proposalsOpen: boolean;
+  namespaces: readonly RetargetNamespace[];
+  currentNamespaceId: string;
+}): string[] {
+  const { reviewer, proposer } = input;
+  return input.namespaces
+    .filter((n) => n.id !== input.currentNamespaceId)
+    .filter((n) => reviewer.isPlatformAdmin || n.slug === "global" || reviewer.namespaceRoles.has(n.id))
+    .filter((n) => input.proposalsOpen || (proposer !== null && (proposer.isPlatformAdmin || proposer.namespaceRoles.has(n.id))))
+    .map((n) => n.id);
+}
+
+/**
+ * §74.3 step 3: the state after a move. Nobody in the new namespace has started a review, so a
+ * reviewer-turn proposal goes back to `proposed`; `changes_requested` stays (the proposer's turn).
+ */
+export function retargetedState(state: ProposalState): ProposalState {
+  return state === "changes_requested" ? "changes_requested" : "proposed";
+}
+
+/**
+ * §74.4: the shared-namespaces list of a restricted proposal moved from `fromId` to `toId` — the
+ * new owner leaves the list (an owner is never its own grantee) and the old namespace joins it, so
+ * the audience the proposer asked for keeps access. Order-stable, de-duplicated.
+ */
+export function withRetargetGrants(shared: readonly string[], fromId: string, toId: string): string[] {
+  return withMoveGrants(shared, fromId, toId);
+}
+
+/** §74.3 step 2: the move revision's note — "Moved from @A to @B", then the reviewer's own note. */
+export function retargetNote(fromSlug: string, toSlug: string, note?: string | null): string {
+  const base = `Moved from @${fromSlug} to @${toSlug}`;
+  const extra = (note ?? "").trim();
+  return extra ? `${base}: ${extra}` : base;
+}
+
+/** §74.5: the slug-conflict refusal at the new namespace. `visibleName` only when the reader can see it. */
+export function slugInTargetMessage(targetSlug: string, skillSlug: string, visible: { name: string } | null, alias = false): string {
+  if (alias && visible) return `${skillSlug} is reserved in ${targetSlug} by a skill that moved out of it (${visible.name})`;
+  if (visible) return `${targetSlug} already has a skill named ${skillSlug} (${visible.name})`;
+  return `${skillSlug} isn't available in ${targetSlug}`;
+}

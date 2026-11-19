@@ -83,6 +83,7 @@ export const GROUPS: Readonly<Record<string, { shares: string; specs: readonly s
       "namespace-delete.spec.ts", // accepts a proposal in its own throwaway namespace, then deletes it (§72)
       "namespace-move.spec.ts", // accepts proposals (both stages of a §70 move)
       "namespace-sharing.spec.ts", // stricter than the spec's starting table: accepts proposals
+      "proposal-move.spec.ts", // moves a team-a proposal (§74), then accepts it in the move target
       "proposal-revise.spec.ts",
       "propose-review-publish.spec.ts",
     ],

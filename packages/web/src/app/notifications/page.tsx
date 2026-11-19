@@ -264,6 +264,25 @@ export default function NotificationsPage() {
                       {namespaceDeletedSentence(n.payload)}
                     </p>
                   )}
+                  {/* §74.8 a reviewer moved the proposer's new-skill proposal to another namespace. */}
+                  {n.type === "proposal.retargeted" && typeof n.payload.namespaceSlug === "string" && (
+                    <p className="muted" data-testid="notification-retargeted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>
+                      {typeof n.payload.byName === "string" && n.payload.byName ? n.payload.byName : "A reviewer"} moved your proposal
+                      {typeof n.payload.skillSlug === "string" ? <> for <span className="mono">{n.payload.skillSlug}</span></> : null}
+                      {" "}from <span className="mono">{typeof n.payload.fromNamespaceSlug === "string" ? n.payload.fromNamespaceSlug : "its namespace"}</span> to{" "}
+                      <span className="mono">{n.payload.namespaceSlug}</span>.{" "}
+                      {n.payload.state === "changes_requested"
+                        ? `It still needs your changes. When you resubmit, ${n.payload.namespaceSlug}'s reviewers will review it.`
+                        : `${n.payload.namespaceSlug}'s reviewers will review it.`}
+                      {typeof n.payload.note === "string" && n.payload.note ? ` Reviewer note: “${n.payload.note}”` : ""}
+                    </p>
+                  )}
+                  {/* §74.8 a Move & accept published the skill in another namespace. */}
+                  {n.type === "proposal.accept" && typeof n.payload.movedToNamespaceSlug === "string" && (
+                    <p className="muted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>
+                      It was moved to <span className="mono">{n.payload.movedToNamespaceSlug}</span> and published there.
+                    </p>
+                  )}
                   {/* §70.9 the owner approved a move proposal; the destination decides next. */}
                   {n.type === "proposal.owner_accepted" && typeof n.payload.destinationSlug === "string" && (
                     <p className="muted" style={{ fontSize: 13.5, margin: "8px 0 0" }}>

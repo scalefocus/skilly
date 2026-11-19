@@ -55,6 +55,8 @@ export const NOTIFICATION_LABELS: Record<string, NotificationLabel> = {
   // approval of a move proposal that now waits for the destination.
   "skill.moved": { title: "Skill moved", tone: "warn" },
   "proposal.owner_accepted": { title: "Proposal approved by the owner", tone: "ok" },
+  // §74.8 — a reviewer moved your new-skill proposal to another namespace.
+  "proposal.retargeted": { title: "Proposal moved", tone: "warn" },
   // §72.6 — a platform admin deleted a namespace you administered.
   "namespace.deleted": { title: "Namespace deleted", tone: "danger" },
   // §50.7 — a skill you maintain entered the top N hyped skills.

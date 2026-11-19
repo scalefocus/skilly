@@ -71,6 +71,22 @@ export interface RenderedNotification {
   htmlBody?: string;
 }
 
+/**
+ * §74.8 `proposal.retargeted`: who moved the proposal, from where to where, who reviews it next,
+ * and the reviewer's note. Shared by the email body and the in-app row (no CTA here).
+ */
+export function retargetedSentence(p: Record<string, unknown>): string {
+  const by = typeof p.byName === "string" && p.byName ? p.byName : "A reviewer";
+  const slug = typeof p.skillSlug === "string" && p.skillSlug ? p.skillSlug : "your skill";
+  const from = typeof p.fromNamespaceSlug === "string" && p.fromNamespaceSlug ? p.fromNamespaceSlug : "its namespace";
+  const to = typeof p.namespaceSlug === "string" && p.namespaceSlug ? p.namespaceSlug : "another namespace";
+  const next = p.state === "changes_requested"
+    ? `It still needs your changes. When you resubmit, ${to}'s reviewers will review it.`
+    : `${to}'s reviewers will review it.`;
+  const note = typeof p.note === "string" && p.note ? ` Reviewer note: "${p.note}"` : "";
+  return `${by} moved your proposal for ${slug} from ${from} to ${to}. ${next}${note}`;
+}
+
 /** The body sentence for each proposal state-change notification (§12 Notification content). */
 const PROPOSAL_BODY: Record<string, string> = {
   "proposal.accept": "Your skill proposal was accepted.",
@@ -231,6 +247,17 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
       subject: s,
       text: namespaceDeletedSentence(p),
       webhook: { event: n.type, title: s, namespace: p.namespaceSlug ?? null, reason: p.reason ?? null },
+    };
+  }
+
+  // §74.8: a reviewer moved the proposer's new-skill proposal to another namespace.
+  if (n.type === "proposal.retargeted" && typeof p.proposalId === "string") {
+    const path = `/proposals/${p.proposalId}`;
+    const s = subj(title);
+    return {
+      subject: s,
+      text: `${retargetedSentence(p)} ${cta("View the proposal", path)}`,
+      webhook: { event: n.type, title: s, proposalId: p.proposalId, skill: p.skillSlug ?? null, from: p.fromNamespaceSlug ?? null, to: p.namespaceSlug ?? null, state: p.state ?? null, note: p.note ?? null, url: abs(path) },
     };
   }
 
@@ -449,10 +476,14 @@ export function renderNotification(n: Pick<NotificationRow, "type" | "payload">,
   if (proposalBody && typeof p.proposalId === "string") {
     const path = `/proposals/${p.proposalId}`;
     const note = typeof p.note === "string" && p.note ? ` Reviewer note: "${p.note}"` : "";
+    // §74.8: a Move & accept published the skill in another namespace than the proposer picked.
+    const moved = n.type === "proposal.accept" && typeof p.movedToNamespaceSlug === "string" && p.movedToNamespaceSlug
+      ? ` It was moved to ${p.movedToNamespaceSlug} and published there.`
+      : "";
     const s = subj(title);
     return {
       subject: s,
-      text: `${proposalBody}${note} ${cta("View it", path)}`,
+      text: `${proposalBody}${moved}${note} ${cta("View it", path)}`,
       webhook: { event: n.type, title: s, proposalId: p.proposalId, state: p.state ?? null, note: p.note ?? null, url: abs(path) },
     };
   }

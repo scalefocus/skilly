@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.65.0",
+    date: "2026-11-19",
+    summary:
+      "Reviewers can now move a new-skill proposal to another namespace. Open Edit on the proposal, pick a namespace (global or one you belong to), and click Move. That namespace's reviewers take it over and the proposer is told. If you review both namespaces, you can move and accept in one step.",
+  },
+  {
     version: "2.64.0",
     date: "2026-11-18",
     summary:
