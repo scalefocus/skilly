@@ -8,6 +8,7 @@
 // (code exchange, PKCE verification, refresh rotation, reuse detection, every tool and resource
 // read) is covered by the worker's own integration suites (packages/worker/src/mcp/*.test.ts).
 import { test, expect, devSignIn } from "./fixtures";
+import { reloadReady } from "./helpers/ready";
 
 const REDIRECT = "http://127.0.0.1:8976/callback";
 // A fixed, valid PKCE pair — S256 is mandatory (OAuth 2.1) and the challenge is checked on the
@@ -27,6 +28,10 @@ async function registerClient(page: import("@playwright/test").Page, name = "e2e
 // empty-state bubble as live regions, so a bare getByRole("status") is a strict-mode violation the
 // moment the dev user has an unearned badge waiting.
 const copyToast = (page: import("@playwright/test").Page) => page.locator(".toast");
+
+// The Claude Code command for a scope (§29): `user` = Every project (the default), `local` = This project.
+const claudeCodeCmd = (scope: "user" | "local") =>
+  new RegExp(`^claude mcp add --transport http --scope ${scope} skilly https?:\\/\\/\\S+$`);
 
 function authorizeUrl(clientId: string, extra: Record<string, string> = {}) {
   const p = new URLSearchParams({
@@ -208,30 +213,71 @@ test.describe("MCP connect flow (§29)", () => {
     await expect(code).toBeVisible({ timeout: 30_000 });
     // Asserted WITH the URL: a bare `getByText("claude mcp add …")` also matches the truncated
     // command the page used to render mid-fetch, so it proved nothing about the URL being there.
-    await expect(code).toHaveText(/^claude mcp add --transport http skilly https?:\/\/\S+$/);
+    // A fresh context has nothing stored, so the toggle starts on Every project (`--scope user`).
+    await expect(code).toHaveText(claudeCodeCmd("user"));
+    await expect(page.getByRole("button", { name: "Every project" })).toHaveAttribute("aria-pressed", "true");
 
-    const json = page.getByRole("button", { name: "Copy the mcp.json configuration" });
-    await expect(json).toBeVisible();
-    await expect(json).toContainText('"mcpServers"');
-    await expect(json).toContainText(/"url": "https?:\/\/\S+"/);
+    // VS Code reads `servers`, never `mcpServers` (the page once shipped the wrong key).
+    const vscode = page.getByRole("button", { name: "Copy the VS Code configuration" });
+    await expect(vscode).toContainText('"servers"');
+    await expect(vscode).not.toContainText("mcpServers");
+    await expect(vscode).toContainText(/"url": "https?:\/\/\S+"/);
+
+    const cursor = page.getByRole("button", { name: "Copy the Cursor configuration" });
+    await expect(cursor).toContainText('"mcpServers"');
+    await expect(cursor).toContainText(/"url": "https?:\/\/\S+"/);
+
+    // Claude Desktop / claude.ai: connector steps plus the bare URL to paste — no JSON.
+    await expect(page.getByText("Add custom connector")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy the server URL" })).toHaveText(/^https?:\/\/\S+\/mcp$/);
+  });
+
+  // §29: one toggle drives Claude Code, VS Code and Cursor, and is remembered in this browser.
+  test("the scope toggle switches the snippets and survives a reload", async ({ page }) => {
+    await devSignIn(page);
+    await page.goto("/mcp-server");
+    const code = page.getByRole("button", { name: "Copy the Claude Code command" });
+    // The command renders only after the client fetch, so the page is hydrated once it is visible.
+    await expect(code).toHaveText(claudeCodeCmd("user"), { timeout: 30_000 });
+    await expect(page.getByText("Run MCP: Open User Configuration from the Command Palette")).toBeVisible();
+    await expect(page.getByText("Save as ~/.cursor/mcp.json")).toBeVisible();
+
+    await page.getByRole("button", { name: "This project" }).click();
+    await expect(code).toHaveText(claudeCodeCmd("local"));
+    await expect(page.getByRole("button", { name: "This project" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByText("Run it inside the project folder.")).toBeVisible();
+    await expect(page.getByText("Save as .vscode/mcp.json in the workspace")).toBeVisible();
+    await expect(page.getByText("Save as .cursor/mcp.json in the project")).toBeVisible();
+
+    await reloadReady(page);
+    await expect(code).toHaveText(claudeCodeCmd("local"), { timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "This project" })).toHaveAttribute("aria-pressed", "true");
+
+    // Back to the default, so the stored choice is the one a fresh visit would make anyway.
+    await page.getByRole("button", { name: "Every project" }).click();
+    await expect(code).toHaveText(claudeCodeCmd("user"));
   });
 
   // §29: clicking anywhere in a connect snippet copies the whole thing, the same UX as §23's
   // install-command row. Clipboard permissions are Chromium-only — the suite's only project.
-  test("clicking either connect snippet copies it to the clipboard", async ({ page, context }) => {
+  test("clicking a connect snippet copies it to the clipboard", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await devSignIn(page);
     await page.goto("/mcp-server");
 
     await page.getByRole("button", { name: "Copy the Claude Code command" }).click();
     await expect(copyToast(page)).toHaveText("✓ Copied");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
-      /^claude mcp add --transport http skilly https?:\/\/\S+$/,
-    );
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(claudeCodeCmd("user"));
 
-    await page.getByRole("button", { name: "Copy the mcp.json configuration" }).click();
-    const json = await page.evaluate(() => navigator.clipboard.readText());
-    expect(JSON.parse(json)).toMatchObject({ mcpServers: { skilly: { type: "http" } } });
+    await page.getByRole("button", { name: "Copy the VS Code configuration" }).click();
+    const vscode = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+    expect(vscode).toMatchObject({ servers: { skilly: { type: "http" } } });
+    expect(vscode.servers.skilly.url).toMatch(/^https?:\/\/\S+\/mcp$/);
+
+    await page.getByRole("button", { name: "Copy the Cursor configuration" }).click();
+    const cursor = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+    expect(Object.keys(cursor.mcpServers.skilly)).toEqual(["url"]);
+    expect(cursor.mcpServers.skilly.url).toMatch(/^https?:\/\/\S+\/mcp$/);
   });
 
   // §29: the pill is a sibling of the scrolling box, not a child, so "click the field" and "click
@@ -252,14 +298,12 @@ test.describe("MCP connect flow (§29)", () => {
     });
     await page.mouse.click(pill.x, pill.y);
     await expect(copyToast(page)).toHaveText("✓ Copied");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
-      /^claude mcp add --transport http skilly https?:\/\/\S+$/,
-    );
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(claudeCodeCmd("user"));
   });
 
   // §29: a drag-select inside a snippet must NOT be hijacked into a full copy — the click event
   // that follows mouseup sees a live selection and is ignored, so a user grabbing just the URL out
-  // of the mcp.json block keeps both their selection and their clipboard. This also guards the
+  // of a JSON block keeps both their selection and their clipboard. This also guards the
   // `display:block` override: text inside a flex container is not drag-selectable in Chromium at
   // all, so a regression back to .code's flex would fail the precondition below.
   test("drag-selecting inside a snippet does not copy the whole snippet", async ({ page, context }) => {
@@ -268,7 +312,7 @@ test.describe("MCP connect flow (§29)", () => {
     await page.goto("/mcp-server");
     await page.evaluate(() => navigator.clipboard.writeText("sentinel"));
 
-    const box = page.getByRole("button", { name: "Copy the mcp.json configuration" });
+    const box = page.getByRole("button", { name: "Copy the VS Code configuration" });
     // Derive the drag from the rendered <code> rather than hard-coded pixels: the vertical middle
     // of the block lands on an inner JSON line, which is wide enough to select real characters.
     const geo = await box.evaluate((el) => {

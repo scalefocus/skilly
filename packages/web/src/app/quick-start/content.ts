@@ -101,7 +101,7 @@ export const QUICK_START: QuickStartStep[] = [
       "Installing skills one at a time isn't the only route. If you use Claude Code, add a whole slice of the catalog as a plugin marketplace with a single command — there's one public marketplace, plus one for each team you belong to. The Marketplaces page lists every marketplace you can add and gives you the add command three ways (Terminal, Claude CLI, or a Settings file entry); the key in it is personal, and everything you've added is listed under My marketplaces in the account menu.",
     points: [
       "What you add is a group, not a single skill: a marketplace publishes one plugin per category — productivity, docs, and a general plugin for anything uncategorised — so one command brings the whole group at once. A skill from it is then invoked as /<category>:<skill> (on the public marketplace, /<category>:<namespace>-<skill>).",
-      "Or connect your agent over MCP: Claude Code, Claude Desktop, and VS Code can talk to skilly directly. No credential goes into any config file — you sign in once in the browser, and from then on the agent can search the catalog, read skills, install them, and propose new ones for you. Revoke a connection any time from the MCP server page.",
+      "Or connect your agent over MCP: Claude Code, Claude Desktop, VS Code, and Cursor can talk to skilly directly. No credential goes into any config file — you sign in once in the browser, and from then on the agent can search the catalog, read skills, install them, and propose new ones for you. Revoke a connection any time from the MCP server page.",
       "Marketplaces need Claude Code; MCP needs an MCP-capable agent. Your administrator decides whether these are enabled for your registry.",
     ],
     internalLinks: [

@@ -45,7 +45,7 @@ test("quick start: step 4 copy covers both routes, the client requirement, and t
   assert.match(text, /Terminal, Claude CLI, or a Settings file/);
   assert.match(text, /My marketplaces in the account menu/);
   assert.match(text, /MCP/);
-  assert.match(text, /Claude Code, Claude Desktop, and VS Code/);
+  assert.match(text, /Claude Code, Claude Desktop, VS Code, and Cursor/);
   assert.match(text, /No credential goes into any config file/);
   assert.match(text, /Revoke a connection/);
   assert.match(text, /administrator decides whether these are enabled/);
