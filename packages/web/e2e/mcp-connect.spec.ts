@@ -31,7 +31,13 @@ const copyToast = (page: import("@playwright/test").Page) => page.locator(".toas
 
 // The Claude Code command for a scope (§29): `user` = Every project (the default), `local` = This project.
 const claudeCodeCmd = (scope: "user" | "local") =>
-  new RegExp(`^claude mcp add --transport http --scope ${scope} skilly https?:\\/\\/\\S+$`);
+  new RegExp(`^claude mcp add --transport http --scope ${scope} skilly https?:\\/\\/\\S+\\/mcp$`);
+
+// The text of a connect snippet (§29). The box named `name` is the click target, but its text also
+// holds the positioned `copy` pill, so a text assertion on the box reads "…/mcpcopy". Assert on the
+// <code> inside it; click the box itself.
+const snippet = (page: import("@playwright/test").Page, name: string) =>
+  page.getByRole("button", { name }).locator(".code-cmd");
 
 function authorizeUrl(clientId: string, extra: Record<string, string> = {}) {
   const p = new URLSearchParams({
@@ -209,7 +215,7 @@ test.describe("MCP connect flow (§29)", () => {
     // The copy affordance is the box itself, named per field (§29) — not a "Copy" button beside it.
     // Neither box renders until the server URL has loaded, and a cold `next dev` route compile can
     // outlast the default expect timeout, so the first wait is explicit.
-    const code = page.getByRole("button", { name: "Copy the Claude Code command" });
+    const code = snippet(page, "Copy the Claude Code command");
     await expect(code).toBeVisible({ timeout: 30_000 });
     // Asserted WITH the URL: a bare `getByText("claude mcp add …")` also matches the truncated
     // command the page used to render mid-fetch, so it proved nothing about the URL being there.
@@ -218,25 +224,25 @@ test.describe("MCP connect flow (§29)", () => {
     await expect(page.getByRole("button", { name: "Every project" })).toHaveAttribute("aria-pressed", "true");
 
     // VS Code reads `servers`, never `mcpServers` (the page once shipped the wrong key).
-    const vscode = page.getByRole("button", { name: "Copy the VS Code configuration" });
+    const vscode = snippet(page, "Copy the VS Code configuration");
     await expect(vscode).toContainText('"servers"');
     await expect(vscode).not.toContainText("mcpServers");
     await expect(vscode).toContainText(/"url": "https?:\/\/\S+"/);
 
-    const cursor = page.getByRole("button", { name: "Copy the Cursor configuration" });
+    const cursor = snippet(page, "Copy the Cursor configuration");
     await expect(cursor).toContainText('"mcpServers"');
     await expect(cursor).toContainText(/"url": "https?:\/\/\S+"/);
 
     // Claude Desktop / claude.ai: connector steps plus the bare URL to paste — no JSON.
     await expect(page.getByText("Add custom connector")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Copy the server URL" })).toHaveText(/^https?:\/\/\S+\/mcp$/);
+    await expect(snippet(page, "Copy the server URL")).toHaveText(/^https?:\/\/\S+\/mcp$/);
   });
 
   // §29: one toggle drives Claude Code, VS Code and Cursor, and is remembered in this browser.
   test("the scope toggle switches the snippets and survives a reload", async ({ page }) => {
     await devSignIn(page);
     await page.goto("/mcp-server");
-    const code = page.getByRole("button", { name: "Copy the Claude Code command" });
+    const code = snippet(page, "Copy the Claude Code command");
     // The command renders only after the client fetch, so the page is hydrated once it is visible.
     await expect(code).toHaveText(claudeCodeCmd("user"), { timeout: 30_000 });
     await expect(page.getByText("Run MCP: Open User Configuration from the Command Palette")).toBeVisible();
