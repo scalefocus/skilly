@@ -3454,7 +3454,7 @@ skill-scoped, reusable, TTL'd, hard-deletable — with the *user* dimension remo
       skill invocation. It was therefore not merely incomplete but **wrong about a breaking
       change**, on the one page every brand-new user is forced through. Corrected here rather than
       deferred to its own cycle.
-  - **MCP server (§29)** — connect **Claude Code, Claude Desktop, or VS Code** to skilly directly.
+  - **MCP server (§29)** — connect **Claude Code, Claude Desktop, VS Code, or Cursor** to skilly directly.
     No credential goes into any config file: the user signs in once in the browser, after which the
     agent can search the catalog, read skills, install them, and propose new ones on the user's
     behalf. A connection can be revoked at any time from the **MCP server** page.
@@ -5264,26 +5264,107 @@ since consumption is universal.
     warm-up list use `/mcp-server`; the account-menu MCP link and both Quick-start links assert
     `href="/mcp-server"`.
 
-- **Connect** — the server URL, and copy-paste configuration for **Claude Code**
-  (`claude mcp add --transport http skilly <url>`), **Claude Desktop** (JSON snippet) and
-  **VS Code**. No credential appears in any snippet: the client registers itself and the user
-  completes the browser consent leg. *(A genuine improvement on §23's token-in-URL install command,
-  which does leak into shell history and committed config.)*
+- **Connect** — the server URL, and setup for four clients, in this order: **Claude Code**,
+  **Claude Desktop / claude.ai**, **VS Code** and **Cursor**. No credential appears in any snippet:
+  the client registers itself and the user completes the browser consent leg. *(A genuine
+  improvement on §23's token-in-URL install command, which does leak into shell history and
+  committed config.)*
+  - **Scope toggle — *Every project* | *This project*.** A segmented pill (the catalog's
+    `.sort-toggle` / `.sort-opt` / `.sort-on` control, `role="group"`, `aria-label="Install scope"`,
+    each button `aria-pressed`) at the top of the Connect card decides where the file-based clients
+    put the server. **Default: *Every project*** — skilly is an org-wide registry, so most people
+    want it everywhere. The choice is remembered **per browser** in `localStorage`
+    (`skilly.mcpScope` = `user` | `local`), read after mount (no `localStorage` during SSR); any
+    other stored value, or blocked storage, falls back to *Every project*. It is a per-viewer
+    convenience and is never sent to the server. **One toggle drives all three file-based clients**
+    (Claude Code, VS Code, Cursor). It does **not** apply to Claude Desktop / claude.ai, whose
+    connectors belong to the whole Claude account — that block says so.
+  - **Claude Code** — a command; the toggle sets `--scope`:
+    - *Every project* → `claude mcp add --transport http --scope user skilly <url>`
+    - *This project* → `claude mcp add --transport http --scope local skilly <url>`, with the hint
+      "Run it inside the project folder."
+
+    *This project* passes `--scope local` explicitly rather than omitting the flag, so the command
+    says what it does and does not depend on Claude Code's default staying `local`. Claude Code's
+    third scope, **`project`** (a `.mcp.json` committed to the repo for the whole team), is
+    **deliberately not offered**: the page is one person connecting their own agent, and a team that
+    wants a shared entry commits that file itself. Under the command, for both scopes: "Then run
+    `/mcp` in Claude Code, choose **skilly** and sign in in the browser."
+  - **Claude Desktop / claude.ai** — steps, not JSON. The desktop app's `claude_desktop_config.json`
+    only launches local (stdio) servers; a remote server is added as a **custom connector**:
+    1. In Claude, open **Customize → Connectors** and choose **+ Add → Add custom connector**.
+    2. Name it `skilly`, paste the server URL (a copy field — the same `CopyCommand` component as the
+       snippets, accessible name "Copy the server URL"), click **Add**, then **Connect**, and approve
+       in the browser.
+
+    - **Team and Enterprise plans:** only an organization **Owner** (or, on Enterprise, a role with
+      *Manage access*) can add a custom connector, under **Organization settings → Connectors**;
+      members then find it under **Customize → Connectors** and click **Connect**.
+    - **Reachability, stated plainly:** Claude connects to a custom connector **from Anthropic's
+      cloud, not from the user's machine**, so it only works when the registry is reachable from the
+      public internet over **HTTPS on port 443**. A registry on a private network, behind a VPN or a
+      firewall still works from Claude Code, VS Code and Cursor, which connect from the user's
+      machine.
+    - **A URL that cannot work is flagged, not hidden.** When the server URL is not `https`, or names
+      a port other than 443, the block shows a warning — "This registry's address can't be used as a
+      Claude connector: connectors need HTTPS on port 443. Use Claude Code, VS Code or Cursor
+      instead." — decided from the URL alone, in the browser (a local `http://localhost:3000`
+      registry shows it). The steps stay visible either way. Whether the registry is reachable from
+      the internet cannot be detected and is not attempted; the note above covers it.
+    - The menu labels are Anthropic's (support article *Getting started with custom connectors using
+      remote MCP*, checked 2026-11-19). They are copy, not contract — re-check them when the article
+      changes.
+  - **VS Code** — JSON with VS Code's own top-level **`servers`** key:
+    `{ "servers": { "skilly": { "type": "http", "url": "<url>" } } }` (pretty-printed, 2-space
+    indent). The JSON is identical in both scopes; the hint above it changes:
+    - *Every project* → "Run **MCP: Open User Configuration** from the Command Palette and add the
+      `skilly` entry."
+    - *This project* → "Save as `.vscode/mcp.json` in the workspace, or add the `skilly` entry to the
+      existing file."
+
+    `code --add-mcp` is **not** offered: its JSON argument needs different quoting in PowerShell and
+    in bash, and a copy-paste command that breaks in one shell is worse than a file to edit.
+  - **Cursor** — JSON with Cursor's **`mcpServers`** key and **`url` only** (Cursor infers the remote
+    transport from `url`; `type` is for stdio servers): `{ "mcpServers": { "skilly": { "url":
+    "<url>" } } }` (pretty-printed). Identical in both scopes; the hint changes:
+    - *Every project* → "Save as `~/.cursor/mcp.json`, or add the `skilly` entry to the existing
+      file."
+    - *This project* → "Save as `.cursor/mcp.json` in the project, or add the `skilly` entry to the
+      existing file."
+  - **Why this section changed.** The page used to offer a single "Claude Desktop / VS Code
+    (mcp.json)" block, `{"mcpServers": {"skilly": {"type": "http", "url": …}}}`, which worked in
+    neither: Claude Desktop's config file only launches local servers, and VS Code reads `servers`,
+    not `mcpServers`. That shape was Cursor's (less `type`), which is why Cursor now has its own block.
+  - **Accessible names** of the copy fields: "Copy the Claude Code command", "Copy the server URL",
+    "Copy the VS Code configuration", "Copy the Cursor configuration".
+  - **Snippets are built in one pure module** (`packages/web/src/app/mcp-server/snippets.ts`) from
+    `(url, scope)`: the command, both JSON blocks, every hint, the stored-scope parser and the
+    connector-eligibility check. The page only renders them.
+  - **Tests.** *Unit* (`snippets.test.ts`): both Claude Code commands exactly; the VS Code JSON
+    parses to `servers.skilly = { type: "http", url }` with no `mcpServers`; the Cursor JSON parses to
+    `mcpServers.skilly = { url }` with no `type`; each JSON is identical across scopes while its hint
+    differs; the stored-scope parser keeps `user` / `local` and maps anything else (including `null`)
+    to `user`; connector eligibility — `https://h/mcp` and `https://h:443/mcp` eligible,
+    `http://h/mcp` and `https://h:8443/mcp` not. *e2e* (`mcp-connect.spec.ts`): the toggle starts on
+    *Every project* with `--scope user`; switching to *This project* changes the command to
+    `--scope local` and the VS Code and Cursor hints, and survives a reload; the copied VS Code and
+    Cursor JSON parse to the shapes above; the Claude Desktop block shows the steps and the URL copy
+    field.
   - **Copy is the field, not a button beside it.** Each snippet is a single click target: the label
     sits above the box and the copy affordance lives *inside* it, anchored to the top-right of the
     field's wrapper rather than placed inside the scrolling content, so it can never scroll out of
     view. A long snippet scrolls *inside its own box* — never the page. Clicking anywhere in the box — or on the pill — copies the whole snippet and confirms with a
     centered toast (**"✓ Copied"**), the same affordance and the same component as §23's
     install-command row, so the two surfaces cannot drift apart again. A click is **ignored while the
-    user has text selected**, so dragging just the URL out of the `mcp.json`
+    user has text selected**, so dragging just the URL out of a JSON
     block never silently replaces the clipboard with the whole block. Keyboard-reachable (Enter/Space)
     with a per-field accessible name rather than five lines of JSON read aloud. The box is laid out as
     a block, not a flex row: Chromium cannot drag-select text inside a flex container, and a snippet a
-    user cannot partially select would be a step back from the plain `<pre>` this replaces. Neither
-    `/mcp-server` snippet carries the `$` prompt the shell-command row shows — one of them is JSON. If the
+    user cannot partially select would be a step back from the plain `<pre>` this replaces. No
+    `/mcp-server` field carries the `$` prompt the shell-command row shows — two are JSON and one is a bare URL. If the
     clipboard write is blocked, a legacy selection-based copy is attempted and the text stays
     selectable regardless.
-    Neither snippet renders before the server URL has loaded — a mid-fetch snippet would carry an
+    No snippet or URL field renders before the server URL has loaded — a mid-fetch snippet would carry an
     empty URL, and a whole-box click target makes copying that truncated command too easy.
 - **Connections** — the §23 `/installed` pattern applied to `oauth_grants`: one row per live grant
   with the client name, when it was authorized, **last used**, and a **Revoke** button (immediate;

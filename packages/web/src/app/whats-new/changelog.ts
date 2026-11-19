@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.66.0",
+    date: "2026-11-19",
+    summary:
+      "The MCP server page now has working setup for Claude Code, Claude Desktop / claude.ai, VS Code and Cursor. A new toggle picks whether skilly is available in every project or just this one. The old Claude Desktop / VS Code snippet worked in neither app: Claude Desktop now gets connector steps and VS Code the right configuration, so re-copy it if you used it.",
+  },
+  {
     version: "2.65.0",
     date: "2026-11-19",
     summary:
