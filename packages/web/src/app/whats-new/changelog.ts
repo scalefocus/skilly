@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.66.1",
+    date: "2026-11-19",
+    summary:
+      "Connecting an MCP client (Open WebUI, Claude Code, Cursor and others) no longer fails when a proxy in front of skilly sets its own Content-Security-Policy. After Approve or Decline, skilly now shows a short \"Returning you to…\" page that sends you on, and a problem with the request shows a readable page instead of raw JSON.",
+  },
+  {
     version: "2.66.0",
     date: "2026-11-19",
     summary:

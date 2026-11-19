@@ -50,6 +50,21 @@ web** (including `/oauth/authorize`, `/oauth/register` and the `/mcp-server` pag
 same hostname so install URLs and SCIM/OIDC line up. Match `/mcp` as that path and `/mcp/*`, never
 as a string prefix: a `/mcp*` rule (or nginx `location /mcp`) also catches the `/mcp-server` page.
 
+**Security headers at your edge: pass skilly's through.** The web app sends its own
+`Content-Security-Policy` on every response (a per-request nonce policy, `SKILLY_SPEC.md` §22) along
+with the other security headers. A hardening snippet at your edge that **replaces** the CSP does not
+stop skilly working, provided your policy allows what skilly's allows — no skilly page needs more
+than its standard policy. It does cost you two things: the nonce-based `script-src` gives way to
+whatever your snippet says (usually `'unsafe-inline'`), and violation reports stop arriving unless
+your policy also sets `report-uri /api/csp-report`. To see what a browser actually receives:
+
+```bash
+curl -s -o /dev/null -D - https://<host>/ | grep -i -e content-security-policy -e reporting-endpoints
+```
+
+A `Reporting-Endpoints: csp-endpoint="/api/csp-report"` line next to a policy with no `'nonce-…'` in
+`script-src` means something in front of skilly replaced the header.
+
 ---
 
 ## 2. Prerequisites
@@ -447,6 +462,7 @@ checklist in [docs/agent-sync-api.md](docs/agent-sync-api.md#ops-checklist-entra
 | Symptom | Cause / Fix |
 |---|---|
 | A page shows `Cannot GET /<path>` (e.g. `/mcp-server`) | That is the worker's 404: the proxy sent a web page to the worker. Either the proxy is running an old Caddyfile (recreate it: `docker compose up -d --force-recreate --no-deps proxy`, see §10), or your own edge routes `/mcp` as a string prefix (match `/mcp` and `/mcp/*` only, see §1). |
+| Connecting an MCP client: **Approve does nothing**, the browser console reports a `form-action` Content Security Policy violation, and a second click says the request "expired or was already used" (skilly before v2.66.1) | An edge proxy replaced skilly's CSP with one whose `form-action` does not allow the client's redirect origin, so the browser dropped the redirect back to the client after the consent request had been used up. Upgrade to v2.66.1 or later: consent then hands the browser over through a skilly page and no longer depends on `form-action`. Stop replacing the header at the edge as well (§1). On an older version, let skilly's own CSP through on `/oauth/authorize`. |
 | `AADSTS50011: redirect URI … does not match` | The registered redirect URI ≠ `PUBLIC_BASE_URL`/`NEXTAUTH_URL` + `/api/auth/callback/azure-ad`. Make them identical (scheme, host, port, no trailing slash). Behind a proxy, use the external `https://` URL. |
 | Signed in but **no access** / `/admin` hidden | Your user/group membership isn't synced yet. Run SCIM provisioning or enable Graph reconciliation (7.4), and make sure you're in the bootstrap group. |
 | SCIM **Test Connection** fails / 401 | `SCIM_BEARER_TOKEN` mismatch, or the tenant URL isn't reachable from Azure (localhost needs a public tunnel). Confirm the proxy routes `/scim/*` → worker. |

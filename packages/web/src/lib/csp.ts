@@ -29,31 +29,20 @@ export function getCspMode(env: Record<string, string | undefined> = process.env
 }
 
 /**
- * The ONE document that legitimately submits a form across origins: the §29 MCP consent screen.
- * Approving/declining POSTs here and the handler answers 303 to the client's registered
- * `redirect_uri`, which is a different origin by definition.
+ * `form-action` is `'self'` on EVERY document — there is no carve-out (§22). v2.5.1–v2.66.0 widened
+ * it on `/oauth/authorize` so the consent form's 303 to the MCP client survived (browsers enforce
+ * `form-action` across redirects). That made the connect flow depend on one page carrying a relaxed
+ * header, and it broke when an edge proxy replaced the policy. The consent submit now answers with
+ * a same-origin hand-off page instead (§29, lib/consentPages.ts), so nothing in the product submits
+ * a form to another origin. Do not reintroduce a per-path widening: no flow may depend on a
+ * directive being wider than this policy on some document.
  */
-export const CROSS_ORIGIN_FORM_PATH = "/oauth/authorize";
-
-/**
- * `form-action` for the consent screen (§22, §29). Browsers enforce `form-action` ACROSS REDIRECTS,
- * so the default `'self'` aborts that 303 before the request is made and the authorization code
- * never reaches the client — silently (net::ERR_ABORTED). This is exactly the set of redirect
- * shapes Dynamic Client Registration accepts: loopback on any port, or https.
- *
- * It is a superset filter, NOT the control: the redirect target is still validated byte-for-byte
- * against that client's registered URIs before a code is minted. No custom app scheme is listed —
- * native clients are dispatched by the OS handler, not a browser navigation.
- */
-const CONSENT_FORM_ACTION = "form-action 'self' http://127.0.0.1:* http://localhost:* https:";
-const DEFAULT_FORM_ACTION = "form-action 'self'";
+const FORM_ACTION = "form-action 'self'";
 
 interface DocCspOpts {
   nonce?: string; // present ⇒ nonce-based script-src (production enforce/report-only)
   dev?: boolean; // `next dev`: eval-wrapped chunks need 'unsafe-eval', no nonce
   reporting?: boolean; // append report-uri/report-to directives
-  /** The §29 consent screen: widen `form-action` so its cross-origin 303 isn't blocked. */
-  crossOriginForm?: boolean;
 }
 
 /**
@@ -67,7 +56,7 @@ interface DocCspOpts {
  * self-hosted fonts (verified — no external resources).
  */
 export function buildDocumentCsp(opts: DocCspOpts = {}): string {
-  const { nonce, dev, reporting, crossOriginForm } = opts;
+  const { nonce, dev, reporting } = opts;
   const scriptSrc = nonce
     ? `script-src 'nonce-${nonce}' 'strict-dynamic' 'self'`
     : dev
@@ -83,7 +72,7 @@ export function buildDocumentCsp(opts: DocCspOpts = {}): string {
     scriptSrc,
     "connect-src 'self'",
     "font-src 'self'",
-    crossOriginForm ? CONSENT_FORM_ACTION : DEFAULT_FORM_ACTION,
+    FORM_ACTION,
   ];
   if (reporting) {
     directives.push(`report-uri ${CSP_REPORT_PATH}`, `report-to ${CSP_REPORT_GROUP}`);
@@ -119,10 +108,8 @@ export function planCsp(input: {
   isDev: boolean;
   isApi: boolean;
   nonce: string;
-  /** Request path, used only to widen `form-action` on the §29 consent screen. */
-  pathname?: string;
 }): CspPlan {
-  const { mode, isDev, isApi, nonce: candidate, pathname } = input;
+  const { mode, isDev, isApi, nonce: candidate } = input;
 
   // API responses run no scripts — a resource-free CSP in every mode; no nonce, no reporting.
   if (isApi) return { headerName: "Content-Security-Policy", value: buildApiCsp() };
@@ -130,10 +117,8 @@ export function planCsp(input: {
   const useNonce = !isDev && mode !== "off";
   const reporting = useNonce; // report only when the hardened policy is active
   const nonce = useNonce ? candidate : undefined;
-  // Path-keyed, never per-client: the middleware has no DB access, so every authorize request gets
-  // the identical header and it leaks nothing about which client is being consented to (§22).
-  const crossOriginForm = pathname === CROSS_ORIGIN_FORM_PATH;
-  const value = buildDocumentCsp({ nonce, dev: isDev, reporting, crossOriginForm });
+  // The same document policy for every path: nothing here is keyed on the route (§22).
+  const value = buildDocumentCsp({ nonce, dev: isDev, reporting });
   // Report-Only is a production posture; dev always emits an enforced (lenient) policy.
   const headerName: CspHeaderName =
     !isDev && mode === "report-only" ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy";

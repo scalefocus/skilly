@@ -4,7 +4,8 @@
 //
 // Flow: validate the request → if signed out, bounce through sign-in and come back here → show the
 // consent screen naming the client, its origin and exactly what it will be able to do → the user
-// approves or declines, and we redirect back to the client either way.
+// approves or declines, and POST /oauth/consent hands the browser back to the client either way
+// (through its own hand-off page, never a redirect — see lib/consentPages.ts).
 //
 // Security notes that matter on this page:
 //   - an unverifiable client_id / redirect_uri is NEVER redirected to (that would make skilly an
