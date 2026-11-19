@@ -11,6 +11,12 @@ import {
   slugInDestinationMessage,
   slugReservedMessage,
   withMoveGrants,
+  moveTargetIds,
+  retargetedState,
+  withRetargetGrants,
+  retargetNote,
+  slugInTargetMessage,
+  RETARGETABLE_STATES,
 } from "./namespace-move.js";
 import type { EffectiveAccess } from "./rbac.js";
 import type { Role } from "./types.js";
@@ -91,4 +97,65 @@ test("refusal messages name only what the reader may see", () => {
   assert.equal(slugInDestinationMessage("team-b", "foo", null), "foo isn't available in team-b");
   assert.match(slugInDestinationMessage("team-b", "foo", { name: "team-b/foo" }), /already has a skill named foo/);
   assert.match(slugInDestinationMessage("team-b", "foo", null, true), /reserved in team-b/);
+});
+
+// ── §74: moving a new-skill proposal ─────────────────────────────────────────
+
+const G = "44444444-4444-4444-8444-444444444444"; // global
+const NAMESPACES = [
+  { id: G, slug: "global" },
+  { id: A, slug: "team-a" },
+  { id: B, slug: "team-b" },
+  { id: C, slug: "team-c" },
+];
+
+test("moveTargetIds: a namespace admin gets global plus their own namespaces, minus the current one (§74.2)", () => {
+  const reviewer = access({ [A]: "namespace_admin", [C]: "namespace_member" });
+  assert.deepEqual(moveTargetIds({ reviewer, proposer: access(), proposalsOpen: true, namespaces: NAMESPACES, currentNamespaceId: A }), [G, C]);
+});
+
+test("moveTargetIds: a platform admin gets every namespace but the current one", () => {
+  const reviewer = access({}, true);
+  assert.deepEqual(moveTargetIds({ reviewer, proposer: access(), proposalsOpen: true, namespaces: NAMESPACES, currentNamespaceId: B }), [G, A, C]);
+});
+
+test("moveTargetIds: members only keeps the namespaces the PROPOSER could propose into, for every reviewer", () => {
+  const proposer = access({ [B]: "namespace_member" });
+  assert.deepEqual(moveTargetIds({ reviewer: access({}, true), proposer, proposalsOpen: false, namespaces: NAMESPACES, currentNamespaceId: A }), [B]);
+  assert.deepEqual(moveTargetIds({ reviewer: access({ [A]: "namespace_admin", [C]: "namespace_member" }), proposer, proposalsOpen: false, namespaces: NAMESPACES, currentNamespaceId: A }), []);
+  // global needs a role in it too while members-only is on.
+  assert.deepEqual(moveTargetIds({ reviewer: access({}, true), proposer: access(), proposalsOpen: false, namespaces: NAMESPACES, currentNamespaceId: A }), []);
+});
+
+test("moveTargetIds: a platform-admin proposer qualifies everywhere; an unknown proposer nowhere", () => {
+  const reviewer = access({}, true);
+  assert.deepEqual(moveTargetIds({ reviewer, proposer: access({}, true), proposalsOpen: false, namespaces: NAMESPACES, currentNamespaceId: A }), [G, B, C]);
+  assert.deepEqual(moveTargetIds({ reviewer, proposer: null, proposalsOpen: false, namespaces: NAMESPACES, currentNamespaceId: A }), []);
+  assert.deepEqual(moveTargetIds({ reviewer, proposer: null, proposalsOpen: true, namespaces: NAMESPACES, currentNamespaceId: A }), [G, B, C]);
+});
+
+test("retargetedState: reviewer-turn states land in proposed; changes_requested stays (§74.3)", () => {
+  assert.deepEqual([...RETARGETABLE_STATES], ["proposed", "under_review", "changes_requested"]);
+  assert.equal(retargetedState("proposed"), "proposed");
+  assert.equal(retargetedState("under_review"), "proposed");
+  assert.equal(retargetedState("changes_requested"), "changes_requested");
+});
+
+test("withRetargetGrants: the new owner leaves the list and the old namespace joins it (§74.4)", () => {
+  assert.deepEqual(withRetargetGrants([], A, B), [A]);
+  assert.deepEqual(withRetargetGrants([B, C], A, B), [C, A]);
+  assert.deepEqual(withRetargetGrants([A, C], A, B), [A, C]);
+});
+
+test("retargetNote: the move, then the reviewer's own note when given", () => {
+  assert.equal(retargetNote("team-a", "team-b"), "Moved from @team-a to @team-b");
+  assert.equal(retargetNote("team-a", "team-b", "  "), "Moved from @team-a to @team-b");
+  assert.equal(retargetNote("team-a", "team-b", "belongs to B"), "Moved from @team-a to @team-b: belongs to B");
+});
+
+test("slugInTargetMessage: names the skill only when the reader can see it (invariant #3)", () => {
+  assert.equal(slugInTargetMessage("team-b", "pdf", null), "pdf isn't available in team-b");
+  assert.equal(slugInTargetMessage("team-b", "pdf", null, true), "pdf isn't available in team-b");
+  assert.match(slugInTargetMessage("team-b", "pdf", { name: "team-b/pdf" }), /already has a skill named pdf \(team-b\/pdf\)/);
+  assert.match(slugInTargetMessage("team-b", "pdf", { name: "team-c/pdf" }, true), /reserved in team-b by a skill that moved out of it/);
 });

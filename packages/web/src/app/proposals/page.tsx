@@ -1,5 +1,6 @@
 "use client";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApi, useEnterKey, Pill, EmptyState, ScrollToTop, ViaMcp } from "../../components/ui";
@@ -79,6 +80,14 @@ function ProposalsInner() {
   // §65.5: the reminder and namespace-page links open the queue pre-filtered — `assignee=me|none`,
   // `overdue=1`, `ns=<slug>` (a removable chip) and `states=<csv>` (the proposer reminder's link).
   const nsParam = params.get("ns")?.trim() || null;
+  // §74.6: a reviewer who moved a proposal out of their reach lands here with `?moved=<ns>`.
+  const movedParam = params.get("moved");
+  const [movedTo, setMovedTo] = useState<string | null>(() => (movedParam && /^[a-z0-9][a-z0-9-]*$/.test(movedParam) ? movedParam : null));
+  useEffect(() => {
+    if (!movedTo) return;
+    const t = setTimeout(() => setMovedTo(null), 5000);
+    return () => clearTimeout(t);
+  }, [movedTo]);
   const statesParam = params.get("states");
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>(() => {
     const a = params.get("assignee");
@@ -281,6 +290,10 @@ function ProposalsInner() {
   return (
     <div>
       <ScrollToTop />
+      {movedTo && typeof document !== "undefined" && createPortal(
+        <div className="toast" role="status" data-testid="moved-toast">Moved to @{movedTo}. {movedTo}’s reviewers have it now.</div>,
+        document.body,
+      )}
       <div className="page-head reveal">
         <div className="eyebrow">Governance</div>
         <h1 className="page-title">Proposals.</h1>

@@ -206,7 +206,8 @@ export type AssignImportResult =
 
 /**
  * *Assign all open* (§65.5): every open proposal of one repository import to one reviewer, in one
- * transaction. The import shares one namespace (and one submitter), so eligibility is checked once.
+ * transaction. The import shares one namespace (and one submitter), so eligibility is checked once;
+ * a proposal moved out of that namespace (§74.6) is skipped.
  * One audit row per proposal that changed; ONE `proposal.assigned` for the whole import.
  */
 export async function assignImport(
@@ -235,12 +236,14 @@ export async function assignImport(
       `with old as (
          select id, assignee_id from proposals
           where import_id = $1 and state in ${OPEN} and assignee_id is distinct from $2 and submitted_by <> $2
+            -- §74.6: a proposal moved to another namespace left the import's bulk actions.
+            and target_namespace_id = $4
           for update
        )
        update proposals p set assignee_id = $2, assigned_by = $3, assignment_changed_at = now()
          from old where p.id = old.id
        returning p.id, old.assignee_id as from_id`,
-      [input.importId, input.assigneeId, input.actorUserId],
+      [input.importId, input.assigneeId, input.actorUserId, i.target_namespace_id],
     );
     for (const r of changed) {
       await appendAudit(client, {

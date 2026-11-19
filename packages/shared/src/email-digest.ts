@@ -64,6 +64,8 @@ export const DIGEST_OPTIONAL_TYPES = [
   "proposal.accept",
   // §70.9 the owner approved a move proposal; it now waits for the destination.
   "proposal.owner_accepted",
+  // §74.8 a reviewer moved the proposer's new-skill proposal to another namespace.
+  "proposal.retargeted",
   "proposal.reject",
   "proposal.policy_violation",
   "skill.drift",

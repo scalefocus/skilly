@@ -81,8 +81,10 @@ interface TargetSkillCurrent {
   /** §70: the skill's current owner — the move diff's "from". */
   namespaceId?: string; namespaceSlug?: string;
 }
+/** §74.11: one namespace a reviewer may move a new-skill proposal to. */
+interface MoveTarget { id: string; slug: string; displayName: string; canReview: boolean; blocked: null | "slug_exists" | "slug_reserved" }
 interface Detail {
-  id: string; state: string; targetNamespaceSlug: string; targetSkillId: string | null; proposedSemver: string;
+  id: string; state: string; targetNamespaceId?: string; targetNamespaceSlug: string; targetSkillId: string | null; proposedSemver: string;
   decisionReason: string | null; materializedVersionId: string | null; createdAt: string;
   revisions: Revision[]; scanReport: { severity: string | null; status: string; findings: Finding[]; createdAt: string } | null;
   scanPendingReason?: string | null;
@@ -115,6 +117,10 @@ interface Detail {
   /** §8 slug match: visible active skills with this new-skill proposal's slug (open proposals only). */
   slugMatches?: SlugMatchView[];
   targetSkillCurrent: TargetSkillCurrent | null;
+  /** §74.11: where this reviewer may move a new-skill proposal (empty for anyone else). */
+  moveTargets?: MoveTarget[];
+  /** §74.6: members only narrowed `moveTargets` to the proposer's namespaces. */
+  moveTargetsLimited?: boolean;
 }
 interface SubmitterCard { userId: string; displayName: string; email: string; avatar: string | null; role: string; priorSubmissions: number }
 
@@ -165,6 +171,10 @@ interface EditDraft {
   /** §70: the move destination (new-version proposals; null = the skill stays). Editable by the
    *  proposer and by the owner's reviewers at the owner stage. */
   destinationNamespaceId: string | null;
+  /** §74: a reviewer's pick of another namespace for a NEW-skill proposal (null = it stays). */
+  targetNamespaceId: string | null;
+  /** §74.4: visibility + shared list as they were before the pick, restored when it's undone. */
+  preMove: { visibility: "org" | "namespace"; sharedNamespaceIds: string[] } | null;
 }
 
 /** §42: namespace ids → display-name chips, for the read view and the accept diff. */
@@ -340,7 +350,8 @@ function ProposalDetailInner() {
   // the resubmit (proposer).
   const [edit, setEdit] = useState<EditDraft | null>(null);
   // §70: while an edit moves the skill, the destination is the owner-to-be (never its own grantee).
-  const editOwnerId = edit?.destinationNamespaceId ?? ownerNsId;
+  // §74: likewise a new-skill proposal's picked namespace.
+  const editOwnerId = edit?.destinationNamespaceId ?? edit?.targetNamespaceId ?? ownerNsId;
   // The submitter's icon Replace… (§33.4): the propose form's source checks and crop dialog, but
   // Apply uploads at once — a failure shows inline (the flow's `error`) and the previous icon stays.
   // `iconUploadSha` is the last upload, so Adjust crop is offered only while that image is the edit's.
@@ -517,6 +528,8 @@ function ProposalDetailInner() {
           revisionNo: action === "accept" ? data?.revisions.at(-1)?.revisionNo : undefined,
           override: action === "accept" ? override : undefined,
           overrideReason: override ? note || undefined : undefined,
+          // §74.3 Move & accept: move the new-skill proposal there and accept it in one step.
+          targetNamespaceId: action === "accept" ? edit?.targetNamespaceId ?? undefined : undefined,
         }),
       });
       const j = await r.json().catch(() => ({}));
@@ -535,10 +548,43 @@ function ProposalDetailInner() {
         kind: "ok",
         text: action === "revise"
           ? "Your changes were saved as a new revision — the reviewers have been notified."
+          : action === "accept" && edit?.targetNamespaceId
+            ? `Moved to @${data?.moveTargets?.find((t) => t.id === edit.targetNamespaceId)?.slug ?? "the new namespace"} and published.`
           : j.state === "awaiting_destination"
             ? `Approved for @${data?.targetNamespaceSlug}. The move now waits for @${data?.destination?.slug ?? "the destination"}’s reviewers.${edit ? " Your edits were recorded as a new revision." : ""}`
             : `Proposal is now “${String(j.state).replace(/_/g, " ")}”.${edit ? " Your edits were recorded as a new revision." : ""}`,
       });
+      setNote("");
+      setOverride(false);
+      setEdit(null);
+      reload();
+    } catch (e) {
+      setMsg({ kind: "err", text: String((e as Error).message) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // §74.3: hand a new-skill proposal to another namespace's reviewers. The edit (with the adjusted
+  // shared list) travels as the move's revision. A reviewer who can't open it afterwards goes back
+  // to the queue with a toast (§74.6).
+  const move = async () => {
+    if (!edit?.targetNamespaceId) return;
+    setBusy("move");
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/proposals/${id}/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "move", targetNamespaceId: edit.targetNamespaceId, newPayload: editedPayload(), note: note || undefined }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? `Move failed (${r.status})`);
+      if (!j.canRead) {
+        router.push(`/proposals?tab=review&moved=${encodeURIComponent(String(j.targetNamespaceSlug ?? ""))}`);
+        return;
+      }
+      setMsg({ kind: "ok", text: `Moved to @${j.targetNamespaceSlug}. Its reviewers have been notified.` });
       setNote("");
       setOverride(false);
       setEdit(null);
@@ -575,6 +621,8 @@ function ProposalDetailInner() {
   if (loading || !data) return <div className="skeleton" style={{ height: 220, borderRadius: "var(--radius)" }} />;
 
   const latest = data.revisions.at(-1);
+  // §74: the namespace a reviewer picked for this new-skill proposal, while the edit is open.
+  const retargetTo = edit?.targetNamespaceId ? data.moveTargets?.find((t) => t.id === edit.targetNamespaceId) ?? null : null;
 
   return (
     <div className="reveal" style={{ maxWidth: 860 }}>
@@ -794,6 +842,8 @@ function ProposalDetailInner() {
                       iconEmoji: m.iconEmoji ?? null,
                       sharedNamespaceIds: m.sharedNamespaceIds ?? data.targetSkillCurrent?.sharedNamespaceIds ?? [],
                       destinationNamespaceId: m.destinationNamespaceId ?? null,
+                      targetNamespaceId: null,
+                      preMove: null,
                     }); }}
                   >
                     ✎ Edit
@@ -885,7 +935,7 @@ function ProposalDetailInner() {
                   </div>
                   <div>
                     <label style={labelStyle}>Visibility</label>
-                    <select className="input" style={{ width: "100%" }} value={edit.visibility} onChange={(e) => setEdit({ ...edit, visibility: e.target.value as "org" | "namespace" })} disabled={!editVisibility}>
+                    <select className="input" style={{ width: "100%" }} value={edit.visibility} onChange={(e) => setEdit({ ...edit, visibility: e.target.value as "org" | "namespace" })} disabled={!editVisibility || retargetTo?.slug === "global"}>
                       <option value="org">org-wide</option>
                       <option value="namespace">restricted to namespace</option>
                     </select>
@@ -918,6 +968,60 @@ function ProposalDetailInner() {
                     </select>
                     {edit.destinationNamespaceId && (
                       <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Both namespaces must approve the move. Any new revision sends it back to the owner’s reviewers.</p>
+                    )}
+                  </div>
+                )}
+                {/* §74: move a NEW-skill proposal to another namespace (reviewers; open states only). */}
+                {isNewSkill && (data.moveTargets?.length ?? 0) > 0 && (
+                  <div data-testid="review-retarget-namespace">
+                    <label style={labelStyle}>Namespace <span style={{ textTransform: "none", letterSpacing: 0 }}>· pick another to hand it to that namespace’s reviewers</span></label>
+                    <select
+                      className="input input-mono"
+                      style={{ width: "100%" }}
+                      value={edit.targetNamespaceId ?? ""}
+                      aria-label="Namespace"
+                      onChange={(e) => {
+                        const next = e.target.value || null;
+                        setEdit((prev) => {
+                          if (!prev) return prev;
+                          const base = prev.preMove ?? { visibility: prev.visibility, sharedNamespaceIds: prev.sharedNamespaceIds };
+                          if (!next) return { ...prev, targetNamespaceId: null, visibility: base.visibility, sharedNamespaceIds: base.sharedNamespaceIds, preMove: null };
+                          // §74.4: global holds only org-wide skills; elsewhere the old namespace joins the
+                          // shared list (removable) and the new owner leaves it.
+                          const toGlobal = data.moveTargets?.find((t) => t.id === next)?.slug === "global";
+                          const visibility = toGlobal ? "org" : base.visibility;
+                          const from = data.targetNamespaceId ?? null;
+                          const shared = visibility !== "namespace"
+                            ? []
+                            : from
+                              ? withMoveGrants(base.sharedNamespaceIds, from, next)
+                              : base.sharedNamespaceIds.filter((nsId) => nsId !== next);
+                          return { ...prev, targetNamespaceId: next, visibility, sharedNamespaceIds: shared, preMove: base };
+                        });
+                      }}
+                    >
+                      <option value="">{data.targetNamespaceSlug} — current namespace</option>
+                      {data.moveTargets!.map((t) => (
+                        <option key={t.id} value={t.id} disabled={t.blocked !== null}>
+                          {t.slug} — {t.displayName}
+                          {t.blocked === "slug_exists"
+                            ? ` (${t.slug} already has a skill named ${m.skillSlug})`
+                            : t.blocked === "slug_reserved"
+                              ? ` (${m.skillSlug} is reserved in ${t.slug} by a skill that moved out of it)`
+                              : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {data.moveTargetsLimited && (
+                      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Only namespaces {data.submitterCard?.displayName ?? "the proposer"} can propose into.</p>
+                    )}
+                    {retargetTo && (
+                      <p className="muted" data-testid="review-retarget-banner" style={{ fontSize: 12, marginTop: 6 }}>
+                        {retargetTo.canReview
+                          ? `You also review ${retargetTo.slug}: move it there, or move and accept.`
+                          : `Moving hands this proposal to ${retargetTo.slug}’s reviewers.${data.caps.isSubmitter ? "" : " You won’t be able to open it after the move."}`}
+                        {retargetTo.slug === "global" ? " global holds only org-wide skills, so visibility is set to org-wide." : ""}
+                      </p>
                     )}
                   </div>
                 )}
@@ -1349,14 +1453,27 @@ function ProposalDetailInner() {
               {policyTrips.length > 0 && <PolicyOverrideList trips={policyTrips} />}
             </div>
           )}
-          <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
+            {/* §74.6: while another namespace is picked, the decision is the move (or Move & accept). */}
+            {retargetTo && (
+              <>
+                <button className="btn btn-primary" data-testid="move-proposal" disabled={busy !== null || uploading} onClick={() => void move()}>
+                  {busy === "move" ? "…" : `Move to @${retargetTo.slug}`}
+                </button>
+                {retargetTo.canReview && data.allowedActions.includes("accept") && (
+                  <button className="btn" data-testid="move-accept" disabled={busy !== null || uploading} onClick={() => act("accept")}>
+                    {busy === "accept" ? "…" : "Move & accept"}
+                  </button>
+                )}
+              </>
+            )}
             {/* `revise` is the proposer's in-place edit (§8), not a decision — it lives in the
                 "Update proposal" section below, never among the reviewer buttons. */}
             {data.allowedActions.filter((a) => a !== "revise").map((a) => (
               <button
                 key={a}
-                className={`btn ${a === "accept" ? "btn-primary" : a === "reject" ? "btn-danger" : ""}`}
-                disabled={busy !== null || (a === "accept" && needsOverride && (!override || policyForbidden || ((policyTrips.length > 0 || scanPendingReason !== null) && !note.trim())))}
+                className={`btn ${a === "accept" && !retargetTo ? "btn-primary" : a === "reject" ? "btn-danger" : ""}`}
+                disabled={busy !== null || retargetTo !== null || (a === "accept" && needsOverride && (!override || policyForbidden || ((policyTrips.length > 0 || scanPendingReason !== null) && !note.trim())))}
                 onClick={() => act(a)}
               >
                 {busy === a
@@ -1368,6 +1485,7 @@ function ProposalDetailInner() {
                       : ACTION_LABEL[a] ?? a}
               </button>
             ))}
+            {retargetTo && <span className="muted" style={{ fontSize: 12.5 }}>Move it first, or pick the current namespace again.</span>}
           </div>
           {msg && <div style={{ marginTop: 14, fontSize: 13.5, color: msg.kind === "err" ? "var(--danger)" : "var(--ok)" }}>{msg.text}</div>}
         </>

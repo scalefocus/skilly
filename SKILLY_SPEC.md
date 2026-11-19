@@ -207,7 +207,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - `id` (bigserial), `skill_id`, `namespace_id` (denormalized for the namespace aggregate), `actor_user_id` (always set — views are authenticated), `created_at`. Append-only analytics of **skill-detail views**. Installs are NOT duplicated here — they're read from `access_log` (the git clone). Both FKs cascade (user → SET NULL).
 
 ### `proposals`
-- `id`, `target_namespace_id`, `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `awaiting_destination` | `accepted` | `rejected` — `awaiting_destination` only for a move, §70.3), the **move columns** (`destination_namespace_id`, `owner_accepted_by`, `owner_accepted_at`, `owner_accepted_revision`; migration 0112, §70.11), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `import_id` (nullable — the repository import it came from, §64; set at creation, never changed; migration 0105), the **review-assignment columns** (`assignee_id`, `assigned_by`, `assignment_changed_at`, `turn_started_at`, `turn_due_at`, `turn_escalate_at`, `turn_reminded_at`, `turn_escalated_at`; migration 0106, §65.9), `created_at`, `updated_at`.
+- `id`, `target_namespace_id` (changes only through a §74 move of a new-skill proposal, the §70.7 re-route, or the §72 re-homing of a closed proposal), `target_skill_id` (nullable — null = new skill), `proposed_semver`, `state` (`proposed` | `under_review` | `changes_requested` | `awaiting_destination` | `accepted` | `rejected` — `awaiting_destination` only for a move, §70.3), the **move columns** (`destination_namespace_id`, `owner_accepted_by`, `owner_accepted_at`, `owner_accepted_revision`; migration 0112, §70.11), `submitted_by`, `materialized_version_id` (nullable, set on accept), `decision_reason`, `ai_draft_model` (nullable text — the model that drafted the submitted files through §44; set once at creation from a valid `aiDraftToken`, never changed or cleared; migration 0088), `import_id` (nullable — the repository import it came from, §64; set at creation, never changed; migration 0105), the **review-assignment columns** (`assignee_id`, `assigned_by`, `assignment_changed_at`, `turn_started_at`, `turn_due_at`, `turn_escalate_at`, `turn_reminded_at`, `turn_escalated_at`; migration 0106, §65.9), `created_at`, `updated_at`.
 - **Original submission stored immutably**; reviewer edits tracked as revisions.
 
 ### `skill_path_aliases` (migration 0112, detailed in §70.11)
@@ -430,6 +430,7 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
 | Approve/reject proposal | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Accept / request changes / reject the **destination stage** of a move (§70.3) | ✅ (any) | ✅ (destination ns) | ❌ | ❌ |
 | Edit proposal in review | ✅ | ✅ (own ns) | ❌ | ❌ |
+| Move a **new-skill** proposal to another namespace (§74) — to `global` or a namespace the mover holds a role in (platform admins: any); under *members only*, only one the proposer could propose into | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Assign / reassign / unassign a proposal's reviewer (§65.2) — only reviewers of the target namespace are assignable, never the proposer | ✅ (any) | ✅ (own ns) | ❌ | ❌ |
 | Direct publish/version | ✅ | ✅ (own ns) | ✅ if `require_review=false` | ❌ |
 | Propose (new skill / new version) | ✅ | ✅ | ✅ | ✅ |
@@ -1023,7 +1024,7 @@ Proposed ──► Under review ──► Changes requested ⇄ Under review ─
 A new-version proposal that **moves the skill to another namespace** adds one state between the
 owner's accept and publication, **Awaiting destination** (§70.3).
 
-- A proposal targets **a new skill OR a new version of an existing skill**, scoped to a namespace.
+- A proposal targets **a new skill OR a new version of an existing skill**, scoped to a namespace. A reviewer may move a new-skill proposal to another namespace before it is decided (§74).
 - **Closed tool/harness (coding-agent) vocabulary → install `--agent`.** The propose form's tool/harness is a **closed but searchable** picker over the curated agent list (`shared/agents.ts`; label shown, slug stored) — filter by label or slug, `Generic` first then alphabetical. The chosen agent **drives the install command**: a recognized non-generic slug appends `--agent <slug>` at the end of `npx skills add <url>` (§9); `Generic` (the default) appends nothing. Server-side, `verifySubmissionPayload` enforces **closed membership** (`generic` ∪ known agent slugs) — gating propose, direct publish, and reviewer edits/resubmits (`newPayload`). The old open vocabulary (type-a-new-value + derived suggestions) is removed; pre-existing values not in the list are **grandfathered** (shown raw, no `--agent`, **re-validated only when changed** — an unchanged value equal to the target skill's stored `tool_harness` passes even if it's a legacy slug; this carve-out is load-bearing now that new-version mode resends the field). The propose form's **paste-to-fill** preselects the agent when a pasted command carries a recognized `--agent <slug>`. **New-version mode:** the tool/harness picker stays **active** — a re-version may re-target the skill's coding agent (synced to the skill on accept, §8 below). Since `tool_harness` is skill-level, a change updates the `--agent` flag of the install command for **every** version, including already-published ones.
 - **Paste-to-fill for pointer proposals.** The propose form offers a paste box (the first field **inside the Pointer / external-git tab**, since it's pointer-specific; the Hosted/Pointer tab strip itself sits at the top of the form) that accepts a consumer-tool install command and fills the pointer fields from it — an **accelerator, not a third source type**: submission, validation, and review are unchanged, and every filled field stays editable. Parsing is a pure shared function (`parseInstallCommand`, beside the pinned wire-format adapter) covering the tool's source forms: full git URL (with optional `#ref`), GitHub `owner/repo` shorthand (normalized to `https://github.com/owner/repo.git`), GitHub `/tree/<ref>/<path>` URLs (split into URL + ref + folder), `--skill <name>` (→ the §6 skill folder; slug derived from its last segment), and the **skills-hub.ai install command** (`npx @skills-hub-ai/cli install <slug>` → the §6 API origin; the skilly slug is suggested from the registry slug and the ref must be a registry **version** — the command names none, so the form pins the registry's **latest version** via the ref pre-check, editable and quick-pickable from the published versions). Rules: for a **git** source, a command without a ref leaves the `main` default in charge (§8 below); `--all` fills nothing and offers **Import all skills from this repository** instead (one skill per proposal, §6; the repository import, §64.9); URL schemes are never rewritten (the §6 SSRF validator remains the gate). **New-version mode:** the paste fills URL/ref/folder but **never changes the locked slug** (and cannot flip the locked source type); pasting a source counts as **explicitly supplying it**, so it switches the form off *Keep current files* (§8 below). A folder whose last segment differs from the slug shows a **soft warning** — submission is allowed, and the mirror-time `name == slug` validation stays the hard gate.
 - **Propose a new version from the skill detail page.** Any authenticated user **who can see the skill** (*Target visibility gate*, below) can open the propose flow pre-filled from an existing skill (button on the detail page). In this mode only the **identity and access surface is LOCKED**: the **slug** (the install/repo identity — unique, read-only), the **visibility value** (`org`/`namespace`), and the **delivery type** (hosted vs pointer) — with **two deliberate exceptions**: on a `namespace`-visibility skill the **shared-namespaces list (§42) is editable**, pre-filled with the current grants, and lands at the same accept/publish gate as the version; and the **namespace is editable** — picking another one proposes **moving the skill** there, which both namespaces must approve (§70). **Everything else is editable**, pre-filled with the skill's current values: the skill-level metadata — **title, description, categories, and tool/harness** — and the version-level inputs — the semver (pre-filled with the next patch above the current latest stable), the usage examples, the **"What changed" note** (required in new-version mode — see the dedicated bullet below), and the **source**, which is now **optional** (default **Keep current files**, below; or a fresh hosted bundle / a new pinned ref+subdir for a pointer). Anyone who may propose may edit any of these — including retitling the skill — applied at the same accept/publish gate as the version (so in a `require_review = false` namespace, a member's direct publish retitles instantly; that is intended). It targets the existing skill and goes through the **normal review/approval** path (or direct publish where permitted). On accept, a new `skill_version` is created **and the skill's title, description, categories, and tool/harness are synced to the submitted values** (categories added/removed to match; all are skill-level metadata, not version content, so this is allowed — the sync re-fires the FTS trigger so search stays current, and it applies **on accept regardless of channel**: a prerelease re-version still updates the skill-level metadata immediately even though `latest` never moves). Only **visibility** stays frozen (a visibility change remains a skill-management action, never a re-version); the slug is immutable, period.
@@ -1089,7 +1090,7 @@ owner's accept and publication, **Awaiting destination** (§70.3).
 
 ### Admin review dashboard
 - Gated by namespace-scoped reviewer authority: **Namespace Admins review their namespace; Platform Admins review anything.**
-- Reviewers can: inspect (instructions, metadata, bundled scripts, scan report, the **AI pre-review** — §46, advisory, with per-finding Agree/Dismiss), edit (metadata, SKILL.md, target namespace, visibility, the **shared-namespaces list** — add or strip grantee namespaces, §42; on a new-version proposal the **destination namespace** of a move, owner stage only, §70.3), request changes, accept (publish), reject (notify with reason). A move proposal needs a second accept from the **destination's** reviewers, who can accept, request changes or reject but not edit (§70.3).
+- Reviewers can: inspect (instructions, metadata, bundled scripts, scan report, the **AI pre-review** — §46, advisory, with per-finding Agree/Dismiss), edit (metadata, SKILL.md, visibility, the **shared-namespaces list** — add or strip grantee namespaces, §42; on a new-version proposal the **destination namespace** of a move, owner stage only, §70.3), **move a new-skill proposal to another namespace** (a hand-off to that namespace's reviewers, or move and accept for someone who reviews both, §74), request changes, accept (publish), reject (notify with reason). A move proposal needs a second accept from the **destination's** reviewers, who can accept, request changes or reject but not edit (§70.3).
 - **Assignment and the review target (§65).** A reviewer can **assign** an open proposal to one reviewer of its namespace (themselves included). Start review claims an unassigned proposal for the reviewer who clicks it. Assignment is advisory: every reviewer can still act on the proposal. When a namespace sets a **review target** in business days, each proposal waiting on reviewers shows a due date. A worker sweep reminds the assignee (or the namespace's admins) when it passes, and escalates once at twice the target. The queue gains *Assigned to me*, *Unassigned* and *Overdue* filters.
 - **Bundle file browser (hosted uploads):** the review page shows the uploaded bundle's full directory tree (`GET /api/proposals/:id/files`); a reviewer can read any **text** file inline and **download** the rest, to inspect every file before approving. Same access gate as the proposal detail (reviewer of the namespace or the submitter). Content is served `text/plain`/attachment with `nosniff` so a stored `.html`/`.svg` can never execute, and paths must match a real extracted entry (no traversal). Pointer proposals with a **fresh** source have no skilly-stored bundle pre-accept, so they link out to the upstream repo instead; a pointer **Keep-current-files** proposal (§8) *does* have one — the reused mirror tarball — and gets the same file browser as a hosted upload.
 - **File-change view for reviewers.** For a **new-version** proposal the review surface highlights **what changed in the files** against a baseline — the skill's **latest stable active version** (the bytes `main`/"latest" serves and that *Keep current files* reuses); a version proposed *below* current latest, or a prerelease, still diffs against **latest stable**. Every path is classified **added / modified / removed / unchanged** by comparing **per-file content hash** (the same per-file sha256 that feeds `content_sha256`, §8); a **rename shows as a remove + an add** (no rename detection). A top summary reads **"+X added · ~Y modified · −Z removed"**. This is the same surface for **hosted and pointer** proposals — only the byte source differs (below).
@@ -1298,7 +1299,7 @@ owner's accept and publication, **Awaiting destination** (§70.3).
 ## 11. Audit logging
 
 - **Governance audit** (`audit_log`, append-only — enforced by the `audit_guard()` trigger **and**, again since migration 0096, by the app role lacking UPDATE/DELETE; the only delete path is the `SECURITY DEFINER` trim function, §49.6, which is itself audited):
-  - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link).
+  - Proposal lifecycle (incl. reviewer edits and proposer mid-review `revise`s with diff, decision reasons, accept→version link, and a new-skill proposal's move to another namespace, `proposal.retargeted`, §74.9).
   - Catalog mutations (publish, new version, yank, archive, **deprecate / un-deprecate** (`skill.deprecated` / `skill.undeprecated`, §45 — payload: `successorSkillId` + `successorSlug` (nullable), `note`, and on an edit `previousSuccessorSkillId`; **no actor PII beyond the standard actor columns**), **mark/unmark Official** (§7), **feature/un-feature** (`skill.featured` / `skill.unfeatured` — incl. the automatic un-feature on archive, last-version yank or **deprecation**, §7), visibility change, namespace reassignment (**`skill.moved`** and the owner-stage **`proposal.owner_accepted`**, §70.10), **`skill.namespace_shared` / `skill.namespace_unshared`** (§42 — payload: the grantee `namespace_id` + slug, and `via` = `manage` | `proposal_accept` | `direct_publish` | `visibility_org` — a reviewer's edit of the list lands at accept, so it is audited as `proposal_accept` with the accepting reviewer as actor), plus the existing `skill.maintainer_removed` for maintainers pruned by an unshare).
   - **Scan overrides** (`proposal.scan_override`).
   - **Content risk (§37.12):** `proposal.routed_to_review`, `skill.publish_scan_override`, `skill.content_risk_detected` (system actor) and `skill.content_risk_acknowledged`.
@@ -1371,9 +1372,9 @@ owner's accept and publication, **Awaiting destination** (§70.3).
   - **Remembered per browser.** The user's own open/closed choice is stored in localStorage under **`skilly.notifications.types-open`** (`"1"` = open; anything else, or absent, = collapsed, which is the default). **Only** that choice is stored, never the type selection. Blocked storage means the row is collapsed on every visit. A remembered-open row **paints open on arrival with no slide**; only a user toggle animates (the §10 rule). No auto-expand rule is needed, because the selection is never persisted and the page therefore always arrives unfiltered.
   - **A collapsed, filtered inbox always shows why.** While the row is **collapsed and at least one type is selected**, a summary **`<k> selected · ✕ clear`** sits beside the header, in the chips column. A filtered list therefore never appears without a visible cause, and the selection can be cleared without expanding. **While the row is open the summary is not shown**: the chips show the selection, and `✕ clear` stays at the end of the chips as before, so selecting a chip never shifts the chips under the pointer. Clearing from the collapsed summary leaves the row collapsed, and toggling the row never changes the selection.
 - **Events:**
-  - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) in their namespace queue. Once a proposal has an **assignee** (§65), its resubmission and revision pings go to the assignee alone.
+  - To namespace reviewers/admins: new proposal / resubmission / mid-review revision (§8 `revise`) / a new-skill proposal moved into their namespace (§74.8) in their namespace queue. Once a proposal has an **assignee** (§65), its resubmission and revision pings go to the assignee alone.
   - **Review assignments and targets (§65.8):** `proposal.assigned` to a reviewer someone else assigned (one row for a whole import); `proposal.review_overdue` to the assignee — or the namespace's admins, or platform admins — when a proposal passes its namespace's review target; `proposal.review_escalated` one level up at twice the target; `proposal.changes_reminder` to the proposer once when their *changes requested* turn passes the target. The three reminders fold into one unread row per recipient, type and namespace. No per-type opt-out.
-  - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason).
+  - To proposer: under-review started, changes requested (with note), accepted/published, rejected (with reason), moved to another namespace (`proposal.retargeted`, with the reviewer's note, §74.8).
   - To **maintainers (§19)**: they are implicit watchers of their skill — `skill.new_version` on publish (deduped against explicit watchers) and `skill.drift` when the pointer-refresh job detects upstream drift (**once per drift onset**, not per refresh pass — see *Drift notifications fire once per onset* below). Both maintainer pings honor the per-user **maintainer notification preferences** (below). No review-queue notifications (they hold no review power). When the drifted version is the skill's baseline and is pinned to a **branch**, the drift row also offers **Propose the update** (§63.6).
   - To **effective maintainers** (minus `upstream_release_notifications` opt-outs): `skill.upstream_release` when the upstream-release sweep finds a newer stable release of a pointer skill's pinned tag or registry version that changed the skill's files (§63.5, **once per release**, naming the highest; silent when an open proposal already covers it); digestible by default (§48.3).
   - To **effective maintainers**: `skill.content_risk` when the re-scan sweep first flags a published version (§37.5, **once per onset**), gated by `content_risk_notifications` (§37.9).
@@ -1444,6 +1445,7 @@ current or future type can ever leak JSON to a user.
   | `skill.deprecated` | Skill deprecated | {ns}/{slug} is deprecated — use {succNs}/{succSlug} instead. {note} *(without a visible successor: "{ns}/{slug} is deprecated. {note}")* | **Open the successor** → `/skills/{succNs}/{succSlug}` when the recipient can see it, else View the skill → `/skills/{ns}/{slug}` |
   | `skill.moved` | Skill moved | {oldNs}/{slug} moved to {ns}/{slug} and published version {semver}. Existing installs keep working; new installs use the new address. *(+ "In plugin marketplaces it is now listed as {name}." when listed — §70.9)* | View the skill → `/skills/{ns}/{slug}` |
   | `proposal.owner_accepted` | Proposal approved by the owner | {ownerNs} approved your proposal for {ns}/{slug}. It now waits for {destNs}. | View the proposal → `/proposals/{proposalId}` |
+  | `proposal.retargeted` | Proposal moved | {actorName} moved your proposal for {slug} from {fromNs} to {toNs}. {toNs}'s reviewers will review it. *(in `changes_requested`: "It still needs your changes. When you resubmit, {toNs}'s reviewers will review it."; + `Reviewer note: "{note}"` when present — §74.8)* | View the proposal → `/proposals/{proposalId}` |
   | `skill.signature_mismatch` | Signature mismatch reported | {userName} reported that their copy of {ns}/{slug} v{semver} doesn't match its signed statement: {modified} modified, {missing} missing, {extra} extra. {note} *(platform admins only, §73.11)* | Open Signing → `/admin/signing` |
   | `request.fulfilled` | Skill request fulfilled | Your skill request "{requestTitle}" was fulfilled by {byName} with {ns}/{slug}. | View the skill → `/skills/{ns}/{slug}` |
   | `search_gaps.ready` | Search gaps to review | A search gap is waiting for review. *({n} search gaps are waiting for review.)* | Review search gaps → `/admin/search-gaps` |
@@ -1457,7 +1459,7 @@ current or future type can ever leak JSON to a user.
   | `proposal.resubmit` | Proposal resubmitted | Your skill proposal was resubmitted. | View it → `/proposals/{proposalId}` |
   | `proposal.revise` | Proposal updated | A skill proposal in your review queue was updated by the proposer. | Review it → `/proposals/{proposalId}` |
   | `proposal.assigned`, `proposal.review_overdue`, `proposal.review_escalated`, `proposal.changes_reminder` | *see §65.8* | *see §65.8* | *see §65.8* |
-  | `proposal.accept` | Proposal accepted | Your skill proposal was accepted. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
+  | `proposal.accept` | Proposal accepted | Your skill proposal was accepted. *(+ "It was moved to {toNs} and published there." after a Move & accept, §74.8; + reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `proposal.reject` | Proposal rejected | Your skill proposal was rejected. *(+ reviewer note when present)* | View it → `/proposals/{proposalId}` |
   | `system.error` † | System log events | There are {count} new system log events. | View the system log → `/system-log` |
   | `follow.*` † (6 types) | *see §35.6 / §38.8* | *see §35.6 / §38.8* | *see §35.6 / §38.8* |
@@ -1866,6 +1868,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/skills/slug-matches?slug=` — the propose form's live slug lookup (§8): the **visible active** skills with that slug across all namespaces, `{ matches: [{ namespaceSlug, slug, title, type, deprecated }] }`; authenticated, visibility-filtered through the shared predicate (never a count or hint of hidden ones).
 - `POST /api/proposals/:id/actions` — start-review / request-changes / accept / reject / resubmit / **revise** (proposer mid-review edit, no state change, §8) (the lifecycle verb; *not* `PATCH /api/proposals/:id`). **`accept` carries the inspected `revisionNo`** and returns **409** if a newer revision landed (revision-pinned accept, §8).
 - **Review assignments (§65):** `POST /api/proposals/:id/assign { assigneeId | null }` (reviewers; **422** `assignee_not_eligible`, **409** `proposal_decided`), `GET /api/proposals/:id/assignable` (the picker), `POST /api/proposal-imports/:id/assign { assigneeId }` (*Assign all open*). `GET /api/proposals?tab=review` gains `assignee=me|none`, `overdue=1` and `ns=<slug>`; `GET /api/proposals/:id` gains `assignment` and `reviewTarget`; `GET /api/namespaces/administered` and `GET|PATCH /api/namespaces/:id/settings` gain `reviewTargetDays` (plus the live counts on the former).
+- **Moving a new-skill proposal (§74.11):** `POST /api/proposals/:id/actions` gains the `move` action `{ targetNamespaceId, newPayload?, note? }` (200 `{ state, targetNamespaceSlug, canRead }`), and `accept` an optional `targetNamespaceId` (Move & accept, one transaction; the caller must review both namespaces). `GET /api/proposals/:id` gains `moveTargets` (`[{ id, slug, displayName, canReview, blocked }]`) and `moveTargetsLimited`. **403** not a reviewer · **404** invisible · **409** `proposal_decided` / `slug_exists_in_destination` · **422** `not_a_new_skill_proposal` / `invalid_target_namespace`.
 - `DELETE /api/proposals/:id` — permanently delete a proposal (reviewer of its namespace; any state except `accepted`). Housekeeping, silent, audited (`proposal.deleted`); cleans the review conversation + pointer scan + dangling notifications. §8.
 - `GET /api/proposals/:id/files` (bundle browser, §8), `.../artifact`, `.../duplicate-check`, `GET|POST /api/proposals/:id/messages` (review discussion, §24).
 - **Policy rules (§47.11):**
@@ -11608,6 +11611,7 @@ submit paths:
 | *Keep current files* proposal submitted | revision 1 | the reused artifact |
 | `revise`, `resubmit`, or a reviewer `SKILL.md` edit that changes the bytes | the new revision | as above |
 | A revision that changes only metadata | — | none: the revision keeps the previous revision's run |
+| A metadata-only revision whose namespace now has a non-disabled policy rule (enforced or shadow) the previous revision's run has no result for — a §74 move, typically | the new revision | as above (§74.5) |
 | Global promotion proposal | its revision | the source version's artifact (usually a cache hit) |
 | Direct publish (published since the switch was turned on), hosted or *Keep current files* | the new version | its artifact |
 | Direct publish, pointer | the new version | its mirrored artifact, once the worker has mirrored it |
@@ -12147,6 +12151,11 @@ audited override. The model informs the decision and never takes it.
   - the **latest stable active version** of every **active** skill in scope gets a new run
     (`trigger = 'policy'`). Older versions are never re-checked. Catalog runs come **after**
     proposal runs, at most **10 per 10 minutes**.
+- **A move to another namespace** (§74.5): the move's revision is a new revision, so §46.3
+  gives it a run. It keeps the previous revision's run when that run already judged every
+  non-disabled rule of the new namespace, enforced or shadow, and gets a new run otherwise.
+  Shadow rules count here, unlike a rule change, because the new namespace's reviewers have
+  not seen the proposal before.
 - **A run that lands stale** — a rule was edited or enabled while the call was in flight — is
   re-checked by the reconcile on the sweep's next pass (about 30 s).
 - **Pointers:** §46.3's mirror rule (a new run when the mirror's digest differs from the reviewed
@@ -15042,12 +15051,14 @@ header reads *"Skill 3 of 12 · ‹path›"*, with the last-changed date.
   filter. The rows of one import sit together anyway, since they were created together and the list
   is newest first.
 - **The proposal page** says *"Imported from ‹repo› at ‹short commit›, with N others"*, linking to
-  the filtered queue. N counts the import's other proposals. They all share one namespace, so a
-  reviewer and the submitter both see all of them.
+  the filtered queue. N counts the import's other proposals that are still in the import's
+  namespace. Those share one namespace, so a reviewer and the submitter both see all of them. A
+  proposal moved to another namespace (§74.6) keeps its import chip and filter but leaves N.
 - Accept, reject, request changes, delete and every gate stay **per proposal** (decision 13).
 - **Assignment (§65.5).** Imported proposals arrive unassigned. With the queue filtered to one
-  import, **Assign all open** assigns every open proposal of the import to one reviewer in one
-  action and sends one `proposal.assigned` for the whole import.
+  import, **Assign all open** assigns every open proposal of the import that is still in the
+  import's namespace (§74.6) to one reviewer in one action and sends one `proposal.assigned`
+  for the whole import.
 
 ### 64.8 Data model (migration 0105)
 **`proposal_imports`**: one row per import, written by its first submit and updated by *Fix and
@@ -15226,9 +15237,9 @@ machine.
 - **Stamps.** Every assign, reassign and unassign sets `assigned_by` (`NULL` for the sweep) and
   `assignment_changed_at`. It does **not** bump `updated_at`, so the proposer's badge is not
   re-armed by a change in who reviews.
-- **A proposal that moves to another namespace** (a §8 reviewer edit) is re-dated by the turn
-  trigger in the same write. An assignee who isn't eligible in the new namespace is unassigned by
-  the next sweep pass (§65.4 step 1).
+- **A new-skill proposal moved to another namespace** (§74.3) has its assignee cleared in the
+  same write, and the turn trigger starts a fresh turn on the new namespace's target. A proposal
+  re-routed by a §70 move is handled the same way (§70.7).
 
 ### 65.3 The target and the clock
 - **The setting.** `namespaces.review_target_days`: empty, or a whole number of business days from
@@ -15240,7 +15251,7 @@ machine.
   `under_review`, and the **proposer turn** covers `changes_requested`. A decided proposal has no
   turn. `proposals.turn_started_at` is stamped whenever the proposal moves into a different turn: at
   creation (reviewer turn), at request changes (proposer turn), and at resubmit or a Start review out
-  of `changes_requested` (reviewer turn). Start review from `proposed`, `revise`, reviewer edits and
+  of `changes_requested` (reviewer turn), and at a move to another namespace (§74.3, §70.7). Start review from `proposed`, `revise`, reviewer edits and
   assignment changes don't touch it. A database trigger (migration 0106) keeps the turn columns
   right on every write path, the web tier and the worker's MCP tools alike.
 - **Business time.** `addBusinessDays(start, n)` in `@skilly/shared/review-target` counts only
@@ -15258,8 +15269,8 @@ machine.
   - When a turn starts. This also clears `turn_reminded_at` and `turn_escalated_at`.
   - When the namespace's target changes, for every open proposal in it, in the settings
     transaction.
-  - When a reviewer edit moves the proposal to another namespace. The new namespace's target
-    applies, and `turn_started_at` is unchanged.
+  - When a proposal moves to another namespace (§74.3, or the §70.7 re-route). That starts a
+    fresh turn on the new namespace's target (the migration 0112 trigger).
 
   A recomputation clears a reminder or escalation stamp whose instant has moved into the future,
   so it fires at the new instant. A stamp whose instant is still past is kept, so a turn never
@@ -15478,7 +15489,7 @@ count, byName }`. The three reminders carry `{ nsId, ns, days, count, proposalId
     decided proposal;
   - the Start review claim, which happens on an unassigned proposal only and never for the
     submitter;
-  - a namespace-moving reviewer edit unassigns an assignee who isn't eligible there;
+  - a §74 move clears the assignee and starts a fresh turn on the new namespace's target;
   - `revise` and resubmit notify the assignee alone when the proposal is assigned, and the pool
     when it isn't;
   - the badge's reviewer half (assigned to someone else is not counted, and assign and unassign
@@ -16898,7 +16909,9 @@ These steps run in one transaction, under the per-slug transaction lock:
   - a standalone *Move* action (a *Keep current files* re-version does it);
   - moves over MCP;
   - bulk moves;
-  - renaming a slug.
+  - renaming a slug;
+  - moving a **new-skill** proposal, which is a single-stage hand-off to the other namespace's
+    reviewers (§74).
 - **Accepted trade-offs:**
   - An alias reserves its slug in the old namespace until the skill is permanently deleted or
     the old namespace is deleted (§72.3).
@@ -17895,3 +17908,262 @@ instead. The `/verify` page explains this.
   - Marketplace member folders now carry `name: <slug>` in `SKILL.md` like the tag does; installs
     made before keep the older folder until their plugin next updates.
   - The public keys are served without authentication.
+---
+
+## 74. Moving a new-skill proposal to another namespace
+
+A reviewer of a **new-skill** proposal may move it to another namespace before it is decided. No
+skill exists yet, so this is a **hand-off**, not a two-namespace approval: the proposal leaves its
+namespace's queue and waits in the new namespace's queue, whose reviewers decide it. A reviewer who
+also reviews the new namespace may move and accept in one step. New-version proposals keep the §70
+move.
+
+Below, **A** is the proposal's namespace before the move and **B** the namespace it moves to.
+
+### 74.1 Semantics
+
+- **New-skill proposals only.** A new-version proposal's namespace is its skill's owner, and
+  changing that is the §70 move, with its two accepts. A global promotion proposal (§8 *Promotion
+  to global*, its payload carries `promotedFromSkillVersionId`) is never moved either: its
+  namespace is `global` by definition.
+- **What changes:** `proposals.target_namespace_id`, and with it the reviewers, the policy rules
+  that apply (§47.4), the review target and clock (§65), who can read the proposal (§74.7), the
+  namespace the skill is created in at accept, and, for a restricted proposal, the
+  shared-namespaces list (§74.4).
+- **What never changes:** the proposer, the files and every revision's bytes, the slug, the
+  delivery type, the earlier revisions, the review discussion, the AI pre-review runs and finding
+  dispositions, the skill-request link and the import link (§64, see §74.6).
+- **Not a decision.** A move neither accepts nor rejects. The proposal stays open.
+- **Any number of moves.** B's reviewers may move it on, or back to A, under the same rules.
+
+### 74.2 Who may move it, and where to
+
+- **Who.** A reviewer of the proposal's current namespace: an admin of it, a platform admin, or
+  the bootstrap admin group (the §8 review authority). The proposer cannot move it through
+  `revise` or `resubmit`. MCP tools cannot move it.
+- **When.** In every open state of a new-skill proposal: `proposed`, `under_review` and
+  `changes_requested`. Never once it is decided (**409** `proposal_decided`).
+- **Where to: the move targets.** The server computes them for the acting reviewer:
+  1. **Base set.** For a platform admin, every namespace. For anyone else, `global` plus every
+     namespace in which they hold a role (member or admin). That is the list the propose form
+     offers them (`listVisibleNamespaces`).
+  2. **The contribution policy.** While `proposals_open` is off (*members only*), keep only the
+     namespaces the **proposer** may propose into: every namespace for a proposer who is a platform
+     admin, otherwise those in which the proposer holds a role. It is evaluated on the proposer's
+     current access, for every reviewer, platform admins included. An inactive or erased proposer
+     holds no roles, so under *members only* no namespace qualifies.
+  3. **Minus** the current namespace.
+
+  `global` is a valid target, and its reviewers are platform admins. A target outside the set is
+  **422** `invalid_target_namespace`.
+
+### 74.3 The move
+
+One transaction, with the proposal row locked:
+
+1. **Checks.** The caller reviews the current namespace: otherwise **403**, or **404** when they
+   cannot read the proposal at all. The proposal is a new-skill proposal (**422**
+   `not_a_new_skill_proposal`) in an open state (**409** `proposal_decided`). The target is one of
+   the caller's move targets (**422** `invalid_target_namespace`). The slug is free in B (§74.5,
+   **409**).
+2. **Revision.** Append one reviewer-authored `proposal_revision`. Its payload is the latest
+   payload, plus any metadata the reviewer edited in the same form (the §8 reviewer-edit fields),
+   plus the adjusted shared-namespaces list (§74.4). The edited payload passes
+   `verifySubmissionPayload` at the reviewer's access, like any reviewer edit, and the edit is
+   last-writer-wins against a proposer's `revise` (§8). Its `note` reads *"Moved from @‹A› to
+   @‹B›"*, followed by the reviewer's note when one is given. A move is always a real change for
+   the no-op guard, even without field edits.
+3. **Re-target.** Set `target_namespace_id` to B. `proposed` and `under_review` become
+   **`proposed`**, because nobody in B has started a review. `changes_requested` stays: the
+   proposer's turn goes on, and the resubmit lands in B's queue. Clear the assignee (`assignee_id`
+   and `assigned_by` set to null, `assignment_changed_at` stamped) and bump `updated_at`. The turn
+   trigger (migration 0112) starts a **fresh turn** on B's review target (§65.3), so B is never
+   overdue on time A spent.
+4. **After commit:** audit (§74.9), notifications (§74.8) and the policy re-check (§74.5).
+
+**Move & accept.** When the caller also reviews B (an admin of B or a platform admin), they may
+move and accept in one step: `accept` with a `targetNamespaceId`. Steps 1 to 3 and the accept run
+in **one transaction**. The accept is pinned to the move's revision and runs every usual gate
+against B: the scan and content-risk gates, the policy gate with platform rules plus B's rules,
+and the slug checks. If any gate refuses, **nothing changes**: the proposal stays in A, unmoved,
+and the response says why (for example, an enforced B rule has no verdict yet and needs the
+override, §47.7). The caller can then move it without accepting.
+
+### 74.4 Who can see the skill: the shared-namespaces list
+
+This applies only to a `namespace`-visibility (restricted) proposal. An `org` proposal has no
+list.
+
+- **B leaves the list** if it was a grantee, because an owner is never its own grantee.
+- **A joins the list,** pre-filled and removable in the form, so the audience the proposer asked
+  for keeps access once the skill is published.
+- **Into `global`.** `global` holds only org-wide skills (§8, `verifySubmissionPayload`), so a
+  restricted proposal moved into `global` becomes org-wide in the same edit: the form switches
+  Visibility to org-wide and clears the list, and the server refuses a restricted payload there
+  (**422**). A proposal in `global` is already org-wide, so moving out of it leaves no list to
+  edit.
+- **Picking A again** in the form restores the list as it was.
+- The list is part of the move's revision and syncs to the skill at accept (§42.3, `via =
+  proposal_accept`).
+
+### 74.5 Gates after the move
+
+- **Slug.** The skill will be created in B, so the slug must be free there: no skill in B with
+  that slug in any status (archived included, `UNIQUE (namespace_id, slug)`), and no alias in B
+  (§70.6). The picker disables a target where the caller can see such a skill (*"‹B› already has
+  a skill named ‹slug›"*) or where an alias of a skill they can see holds the slug (*"‹slug› is
+  reserved in ‹B› by a skill that moved out of it"*). The move re-checks and fails with **409**
+  `slug_exists_in_destination`. The message names the skill only when the caller can see it, and
+  otherwise reads *"‹slug› isn't available in ‹B›"* (invariant #3). The accept re-checks as it
+  does today (the §8 slug match, the unique key and the alias trigger).
+- **Policy rules (§47).** From the move on, the applicable rules are the platform rules plus
+  **B's** (§47.4 reads `target_namespace_id`). A's rule results stop showing. When B has a
+  non-disabled rule, enforced **or shadow**, that the previous revision's run has no result for,
+  the §46 sweep gives the move's revision a new run, as for any new revision (one AI call,
+  subject to the §46.3 per-proposal cap). Otherwise the move's revision keeps that run, because
+  a move changes no bytes.
+  Unlike a rule change (§47.6), shadow rules count here: B's reviewers are new to the proposal and
+  see every result of their namespace's rules. While §46 is not effective, an enforced B rule has
+  no verdict and fails closed at accept (§47.7), as for any proposal.
+- **Scan and content risk.** Unchanged. The bytes did not change, and both gates run again at
+  accept as always.
+- **Duplicates.** Unchanged. Duplicate detection is already cross-namespace (§8).
+- **Review requirement.** A proposal moved into a namespace with `require_review = false` stays a
+  proposal. Nothing is published without an accept.
+
+### 74.6 Review page and queues
+
+- **The Namespace field.** A reviewer's edit form on a new-skill proposal in an open state shows a
+  **Namespace** select next to Visibility. The current namespace comes first (*"‹A› — current
+  namespace"*), then the move targets from `GET /api/proposals/:id` (`moveTargets`), with blocked
+  ones disabled and their reason shown. The field is not shown to the proposer (`revise` /
+  `resubmit`), and not shown when there are no move targets. Under *members only* its hint reads
+  *"Only namespaces ‹proposer› can propose into."*
+- **Banner.** Picking another namespace shows *"Moving hands this proposal to ‹B›'s reviewers.
+  You won't be able to open it after the move."* when the caller does not review B, and *"You
+  also review ‹B›: move it there, or move and accept."* when they do.
+- **The decision buttons.** While another namespace is picked, the buttons are **Move to @‹B›**
+  and, for a reviewer of B, **Move & accept**. *Start review*, *Request changes*, *Reject* and
+  plain *Accept & publish* are disabled, with the hint *"Move it first, or pick the current
+  namespace again."* The Decision note is the move's optional note.
+- **After the move.** A caller who can still read the proposal stays on the page, which reloads
+  under the new namespace. A caller who lost access lands on the *To review* queue with a toast:
+  *"Moved to @‹B›. ‹B›'s reviewers have it now."*
+- **History** lists the move's revision with its note.
+- **Queues.** The proposal leaves A's *To review* list and appears in B's, and the counts and
+  badges (§65.5) follow. The proposer's *Mine* list shows the new namespace.
+- **Imports (§64).** A moved proposal keeps its *"Import · ‹owner/repo›"* chip and the import
+  filter. *Assign all open* and the *"with N others"* count cover only the import's proposals that
+  are still in the import's namespace.
+
+### 74.7 Who can read the proposal after the move
+
+- **B's reviewers** (B's admins, platform admins and the bootstrap admin group) and **the
+  submitter** (own-proposal rule).
+- **A's reviewers lose access** unless they also review B. They get the uniform 404 of any
+  outsider, as for proposals re-routed by a §70 move (§70.7). That covers the detail, the files,
+  the file changes, the AI pre-review and the review discussion. Their earlier messages and
+  finding dispositions stay, attributed to them. Someone who lost access gets no further
+  `message.new` for the thread, and the thread's mention audience (§24 *Mentions*) is derived
+  from the new reviewers.
+
+### 74.8 Notifications
+
+- **`proposal.retargeted`** goes to the proposer, minus the actor. It is delivered in-app and by
+  email like the other `proposal.*` lifecycle notifications, gated by `email_notifications` only,
+  with no per-type opt-out. Template: **Proposal moved**. *"{actorName} moved your proposal for
+  {slug} from {fromNs} to {toNs}. {toNs}'s reviewers will review it."* In `changes_requested` the
+  second sentence reads *"It still needs your changes. When you resubmit, {toNs}'s reviewers will
+  review it."* A reviewer note is appended as `Reviewer note: "{note}"`. CTA: View the proposal →
+  `/proposals/{proposalId}`.
+- **`proposal.needs_review`** goes to B's reviewers (the usual audience, minus the actor and the
+  proposer) when the proposal lands in `proposed`. Nothing goes to them in `changes_requested`:
+  the resubmit notifies them (§8).
+- **Move & accept** sends neither of the two above. It sends the accept's usual `proposal.accept`,
+  whose body adds *"It was moved to {toNs} and published there."*, and the usual new-skill
+  notifications for B.
+
+### 74.9 Audit
+
+- **`proposal.retargeted`**: actor, proposal, the new revision number, `fromNamespaceId` and
+  slug, `toNamespaceId` and slug, the note, `via` (`move` | `move_accept`), and the
+  shared-namespaces list before and after when it changed. The row is written under **A**, the
+  namespace the proposal left, so A's admins can trace where it went after they lose access to it.
+  B's reviewers see the move in the proposal's History.
+- A Move & accept also writes the accept's usual audit rows after it.
+
+### 74.10 Data model (no migration)
+
+- `target_namespace_id` changes in place. The source namespace survives in the move's revision
+  note and in the audit row.
+- The policy re-check is §46.3's ordinary run for a new revision (`trigger = 'revision'`). No new
+  trigger value.
+- `notifications.type` gains the value `proposal.retargeted`, and the shared `NOTIFICATION_LABELS`
+  map gains *Proposal moved*.
+- The turn trigger of migration 0112 already starts a fresh turn when `target_namespace_id`
+  changes, in the reviewer turn and the proposer turn alike.
+
+### 74.11 API
+
+- `GET /api/proposals/:id` gains `moveTargets`: for a reviewer of a new-skill proposal in an open
+  state, `[{ id, slug, displayName, canReview, blocked }]`, where `blocked` is `null`,
+  `"slug_exists"` or `"slug_reserved"`, worked out at the caller's visibility. Anyone else gets
+  `[]`. It also gains `moveTargetsLimited` (boolean): true while *members only* narrowed the list.
+- `POST /api/proposals/:id/actions`:
+  - New action **`move`**: `{ targetNamespaceId, newPayload?, note? }` returns 200 `{ state,
+    targetNamespaceSlug, canRead }`.
+  - `accept` gains an optional `targetNamespaceId` (Move & accept, §74.3). The caller must also
+    review the target, otherwise **403**.
+  - Errors: **403** when the caller does not review the current namespace (or, on Move & accept,
+    the target); **404** when they cannot read the proposal; **409** `proposal_decided`; **409**
+    `slug_exists_in_destination`; **422** `not_a_new_skill_proposal`; **422**
+    `invalid_target_namespace` (unknown, the current namespace, or not one of the caller's move
+    targets).
+- MCP tools take no namespace change, and `update_proposal` ignores one.
+
+### 74.12 Tests (ship with the change, §16 discipline)
+
+- **Unit (`@skilly/shared`):**
+  - the move-target set: a platform admin and a namespace admin, `global` included, the current
+    namespace excluded, the *members only* intersection (a platform-admin proposer, an inactive
+    proposer);
+  - the shared-list edit: B dropped, A added, the list restored when A is picked again.
+- **DB / integration:**
+  - A move from `proposed` or `under_review` lands in `proposed`; one from `changes_requested`
+    stays there. The assignee is cleared, a fresh turn starts on B's target, and one revision is
+    written with the note.
+  - 403 for a member or a reviewer of another namespace, 404 for an outsider. 422 for a
+    new-version proposal, a promotion, the current namespace and a target outside the set. 409
+    once decided.
+  - Under *members only* the server refuses a target the proposer could not propose into.
+  - A slug conflict is named when the caller can see it and not revealed when they can't. An
+    alias in B blocks the move.
+  - Afterwards A's reviewer gets 404, B's reviewer can read it, and the proposer still can.
+  - `proposal.retargeted` goes to the proposer only. `proposal.needs_review` goes to B's
+    reviewers in `proposed` and to nobody in `changes_requested`.
+  - Move & accept publishes the skill in B in one transaction, and a refused gate leaves the
+    proposal unmoved in A.
+  - A restricted proposal moved from A is shared with A after the accept. A restricted proposal
+    can't move into `global` (422).
+  - *Assign all open* skips a moved proposal, and *"with N others"* excludes it.
+  - **Worker:** a moved proposal whose new namespace has rules gets a new pre-review run, and one
+    without rules keeps its run.
+- **E2E:** as A's admin, move a new-skill proposal to B. As B's admin, find it in *To review* and
+  accept it. The skill lives at `B/<slug>`.
+
+### 74.13 Out of scope and accepted trade-offs
+
+- **Out of scope:**
+  - moving a new-version proposal (that is the §70 move);
+  - a move started by the proposer;
+  - moves over MCP;
+  - bulk moves, such as a whole import;
+  - changing the slug during a move.
+- **Accepted trade-offs:**
+  - A's reviewers lose sight of a proposal they handed off, its discussion included.
+  - B's reviewers inherit A's review discussion and A's AI finding dispositions.
+  - A move into a namespace with policy rules costs one AI pre-review call.
+  - Under *members only* a reviewer cannot route a proposal to a namespace the proposer does not
+    belong to, even when that is the right home.
+  - The audit row lives under A, so B's admins don't find the move in their namespace's audit
+    view. The proposal's History shows it to them.

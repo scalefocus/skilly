@@ -631,8 +631,10 @@ export async function settleVersionPolicyRun(db: PolicyDb, runId: string): Promi
 
 // ── Reconcile: rule-change re-checks (§47.6) ───────────────────────────────────────────────────
 
-/** True when a done run has a result for every given rule at its current revision. */
-async function runCovers(db: PolicyDb, runId: string, rules: readonly PolicyRuleRow[]): Promise<boolean> {
+/** True when a done run has a result for every given rule at its current revision. Also read by
+ *  §46.3's enqueue: a metadata-only revision keeps a run that already judged every rule now in scope
+ *  (a §74 move into a namespace without new rules). */
+export async function policyRunCovers(db: PolicyDb, runId: string, rules: readonly PolicyRuleRow[]): Promise<boolean> {
   if (rules.length === 0) return true;
   const { rows } = await db.query(`select rule_id, revision_id from ai_prereview_policy_results where run_id = $1`, [runId]);
   const have = new Set(rows.map((r) => `${r.rule_id}|${r.revision_id}`));
@@ -684,7 +686,7 @@ export async function policyReconcile(
   for (const p of props) {
     if (proposals >= limit) break;
     const rules = await rulesOf(p.target_namespace_id);
-    if (await runCovers(db, p.run_id, rules.filter((r) => r.state === "enforced"))) continue;
+    if (await policyRunCovers(db, p.run_id, rules.filter((r) => r.state === "enforced"))) continue;
     const src = prereviewSourceOfPayload(p.payload);
     if (!src) continue;
     await makeRun({ kind: "proposal", proposalId: p.id, revision: Number(p.revision_no) }, src, rules);
@@ -720,7 +722,7 @@ export async function policyReconcile(
     if (v.run_id) {
       const { rows: st } = await db.query(`select status from ai_prereviews where id = $1`, [v.run_id]);
       if (st[0]?.status !== "done") continue; // pending: wait; failed: an owner re-runs
-      if (await runCovers(db, v.run_id, rules)) continue;
+      if (await policyRunCovers(db, v.run_id, rules)) continue;
     }
     await makeRun({ kind: "version", versionId: v.id }, { source: { kind: "artifact", objectKey: v.artifact_object_key }, contentSha256: v.content_sha256 ?? null }, rules);
     versions++;

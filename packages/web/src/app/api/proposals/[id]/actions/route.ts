@@ -1,21 +1,25 @@
-// Perform a proposal lifecycle action (start_review/request_changes/resubmit/revise/accept/reject).
-// Legality + actor permissions enforced by the shared state machine. SKILLY_SPEC.md §8.
+// Perform a proposal lifecycle action (start_review/request_changes/resubmit/revise/accept/reject),
+// or move a new-skill proposal to another namespace (`move`, and Move & accept — §74).
+// Legality + actor permissions enforced by the shared state machine. SKILLY_SPEC.md §8, §74.
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../../lib/auth";
 import { resolveUserAccess } from "../../../../../lib/access";
 import { pool } from "../../../../../lib/db";
-import { performProposalAction, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, reviseFileFreezeError, type RevisionPayload } from "../../../../../lib/proposals";
+import { moveProposal, performProposalAction, verifySubmissionPayload, resolveReuseSource, applyReuseToPayload, reviseFileFreezeError, type RevisionPayload } from "../../../../../lib/proposals";
 import { enforceRateLimit } from "../../../../../lib/ratelimit";
 import { withSystemLog } from "../../../../../lib/apiLog";
 import { findDuplicateSkill } from "../../../../../lib/duplicate";
 import { verifyPointerSkill } from "../../../../../lib/pointerVerify";
 import { getDuplicateEnforcement } from "../../../../../lib/settings";
-import { isValidSemver, type ProposalAction } from "@skilly/shared";
+import { isValidSemver, INVALID_TARGET_NAMESPACE_CODE, type ProposalAction } from "@skilly/shared";
 
 export const dynamic = "force-dynamic";
 
 interface ActionBody {
-  action: ProposalAction;
+  /** `move` is not a state transition: it hands a new-skill proposal to another namespace (§74). */
+  action: ProposalAction | "move";
+  /** §74: the namespace a `move` (or a Move & accept) takes a new-skill proposal to. */
+  targetNamespaceId?: string;
   note?: string;
   newPayload?: RevisionPayload;
   /** proposer resubmit: revised proposed semver (§8; a mid-review `revise` never changes it) */
@@ -54,6 +58,20 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
   }
 
   const isRevise = body.action === "revise";
+
+  // §74: a move (or Move & accept) is judged against the NEW namespace — the edited payload's shared
+  // list and the global/restricted rule are validated there, not in the namespace it leaves.
+  const moving = body.action === "move" || (body.action === "accept" && typeof body.targetNamespaceId === "string" && body.targetNamespaceId.trim() !== "");
+  let targetNsSlug: string | undefined;
+  if (moving) {
+    const raw = typeof body.targetNamespaceId === "string" ? body.targetNamespaceId.trim() : "";
+    const ns = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)
+      ? (await pool.query<{ slug: string }>(`select slug from namespaces where id = $1`, [raw])).rows[0]
+      : undefined;
+    if (!ns) return Response.json({ error: "that namespace doesn't exist", code: INVALID_TARGET_NAMESPACE_CODE }, { status: 422 });
+    body.targetNamespaceId = raw;
+    targetNsSlug = ns.slug;
+  }
 
   // Reviewer edits / resubmits / mid-review revises carry a fresh payload — gate it like an
   // original submission (SSRF allowlist, harness normalization; previously unchecked here). The
@@ -100,7 +118,7 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     // reviewer edit) — a submitter whose grant lapsed mid-review can't switch to Keep current files.
     const payloadErr = await verifySubmissionPayload(pool, access.userId, body.newPayload, {
       preapprovedArtifactKey: existingKey,
-      namespaceSlug: prev?.ns_slug,
+      namespaceSlug: targetNsSlug ?? prev?.ns_slug,
       targetSkillId: prev?.target_skill_id ?? null,
       access,
     });
@@ -153,6 +171,19 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     return Response.json({ error: "revisionNo must be an integer" }, { status: 422 });
   }
 
+  if (body.action === "move") {
+    const moved = await moveProposal(pool, {
+      proposalId,
+      actorUserId: access.userId,
+      access,
+      targetNamespaceId: body.targetNamespaceId!,
+      newPayload: body.newPayload,
+      note: body.note ?? null,
+    });
+    if (!moved.ok) return Response.json({ error: moved.error, ...(moved.code ? { code: moved.code } : {}) }, { status: moved.status });
+    return Response.json(moved);
+  }
+
   const result = await performProposalAction(pool, {
     proposalId,
     action: body.action,
@@ -164,6 +195,7 @@ export const POST = withSystemLog("/api/proposals/[id]/actions", async function 
     expectedRevisionNo: body.action === "accept" ? body.revisionNo ?? null : null,
     override: body.override,
     overrideReason: body.overrideReason ?? null,
+    targetNamespaceId: body.action === "accept" ? body.targetNamespaceId ?? null : null,
   });
 
   if (!result.ok) {

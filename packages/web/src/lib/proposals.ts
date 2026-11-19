@@ -63,6 +63,7 @@ import {
   SKILL_MOVED_CODE,
   SLUG_EXISTS_IN_DESTINATION_CODE,
   SLUG_RESERVED_CODE,
+  RETARGETABLE_STATES,
 } from "@skilly/shared";
 import {
   applySkillMove,
@@ -95,6 +96,8 @@ import { syncGrants, validateGrantTargets, GRANT_TARGET_MESSAGES, type GrantVia 
 import { fulfilOriginRequest } from "./requests";
 import { M } from "./metrics";
 import { aiAvailable } from "./ai";
+import { listMoveTargets, prepareRetarget, retargetInTx, type MoveTargetView, type RetargetOutcome, type RetargetPrep } from "./proposalRetarget";
+import { getProposalsOpen } from "./settings";
 
 export interface ProposalMetadata {
   skillSlug: string;
@@ -665,7 +668,7 @@ async function notifyReviewersNeedsReview(
  */
 export async function notifyNamespaceReviewers(
   client: PoolClient,
-  input: { namespaceId: string; submitterId: string; type: string; payload: Record<string, unknown> },
+  input: { namespaceId: string; submitterId: string; type: string; payload: Record<string, unknown>; excludeUserIds?: readonly string[] },
 ): Promise<void> {
   const bootstrap = process.env.SKILLY_BOOTSTRAP_ADMIN_GROUP?.trim() || null;
   await client.query(
@@ -684,8 +687,8 @@ export async function notifyNamespaceReviewers(
         where u.status = 'active' and $4::text is not null and g.entra_object_id = $4
      )
      insert into notifications (user_id, type, payload)
-     select id, $5, $2::jsonb from reviewers where id <> $3`,
-    [input.namespaceId, JSON.stringify(input.payload), input.submitterId, bootstrap, input.type],
+     select id, $5, $2::jsonb from reviewers where id <> $3 and not (id = any($6::uuid[]))`,
+    [input.namespaceId, JSON.stringify(input.payload), input.submitterId, bootstrap, input.type, [...(input.excludeUserIds ?? [])]],
   );
 }
 
@@ -890,6 +893,12 @@ export interface ActionInput {
   /** explicit reviewer override required to accept over high/critical scan findings (§9) */
   override?: boolean;
   overrideReason?: string | null;
+  /**
+   * §74.3 Move & accept: on `accept` of a NEW-SKILL proposal, move it to this namespace first, in
+   * the same transaction, and accept it there. The caller must review both namespaces; any
+   * refusal leaves the proposal unmoved.
+   */
+  targetNamespaceId?: string | null;
 }
 
 export type ActionResult =
@@ -900,7 +909,7 @@ export type ActionResult =
       scanPending?: boolean; scanPendingReason?: ScanVerdictReason;
       /** §8 slug match: accept found a same-slug skill the PROPOSER can now see. §70: a move found
        *  the slug taken at the destination, the skill moved since, or the new slug reserved. */
-      code?: typeof SLUG_EXISTS_CODE | typeof SLUG_EXISTS_IN_DESTINATION_CODE | typeof SKILL_MOVED_CODE | typeof SLUG_RESERVED_CODE;
+      code?: typeof SLUG_EXISTS_CODE | typeof SLUG_EXISTS_IN_DESTINATION_CODE | typeof SKILL_MOVED_CODE | typeof SLUG_RESERVED_CODE | string;
       matches?: Omit<SlugMatch, "skillId">[];
     };
 
@@ -1066,6 +1075,8 @@ export async function performProposalAction(
     const sub = (await pool.query<{ submitted_by: string; target_skill_id: string | null }>(`select submitted_by, target_skill_id from proposals where id = $1`, [input.proposalId])).rows[0];
     if (sub && !sub.target_skill_id) proposerAccess = await resolveUserAccessById(sub.submitted_by);
   }
+  // §74.3 Move & accept: what the move needs from outside the transaction (proposer, policy, thread).
+  const retargetPrep: RetargetPrep | null = input.action === "accept" && input.targetNamespaceId ? await prepareRetarget(pool, input.proposalId) : null;
   const client = await pool.connect();
   // Staged upload superseded by a revise (§8) — deleted from storage AFTER commit (eager cleanup).
   let supersededKey: string | null = null;
@@ -1077,6 +1088,52 @@ export async function performProposalAction(
     if (!p) {
       await client.query("rollback");
       return { ok: false, status: 404, error: "proposal not found" };
+    }
+
+    // §74.3 Move & accept: pin the revision on screen, move the new-skill proposal (one revision,
+    // the re-target, the thread clean-up, the audit row), then accept it below against the NEW
+    // namespace's gates, pinned to the move's revision. Every refusal rolls both back.
+    let retarget: Extract<RetargetOutcome, { ok: true }> | null = null;
+    if (input.action === "accept" && input.targetNamespaceId && input.targetNamespaceId !== p.target_namespace_id) {
+      const { rows: mx } = await client.query<{ max: number | null }>(
+        `select max(revision_no)::int as max from proposal_revisions where proposal_id = $1`,
+        [input.proposalId],
+      );
+      if (input.expectedRevisionNo == null) {
+        await client.query("rollback");
+        return { ok: false, status: 422, error: "accept requires the reviewed revision number (revisionNo)" };
+      }
+      if (input.expectedRevisionNo !== (mx[0]?.max ?? 0)) {
+        await client.query("rollback");
+        return { ok: false, status: 409, error: "the proposal changed since you reviewed it — a newer revision exists; review the current revision and accept again" };
+      }
+      if (canReviewNamespace(input.access, p.target_namespace_id) && !canReviewNamespace(input.access, input.targetNamespaceId)) {
+        await client.query("rollback");
+        return { ok: false, status: 403, error: "you don't review that namespace — move the proposal there without accepting, and its reviewers decide" };
+      }
+      if (!retargetPrep) {
+        await client.query("rollback");
+        return { ok: false, status: 404, error: "proposal not found" };
+      }
+      const rt = await retargetInTx(client, {
+        p,
+        access: input.access,
+        actorUserId: input.actorUserId,
+        targetNamespaceId: input.targetNamespaceId,
+        newPayload: input.newPayload,
+        note: input.note ?? null,
+        keepState: true,
+        via: "move_accept",
+        prep: retargetPrep,
+      });
+      if (!rt.ok) {
+        await client.query("rollback");
+        return { ok: false, status: rt.status, error: rt.error, ...(rt.code ? { code: rt.code } : {}) };
+      }
+      retarget = rt;
+      p.target_namespace_id = rt.to.id;
+      // The edited payload is now the move's revision; the accept is pinned to it.
+      input = { ...input, newPayload: undefined, expectedRevisionNo: rt.revisionNo };
     }
 
     // §70.3: at the destination stage the DESTINATION's reviewers act; otherwise the owner's.
@@ -1480,7 +1537,7 @@ export async function performProposalAction(
       await client.query(
         `insert into notifications (user_id, type, payload)
          values ($1, $2, $3::jsonb)`,
-        [p.submitted_by, `proposal.${input.action}`, JSON.stringify({ proposalId: input.proposalId, state: decision.to, note: input.note ?? null })],
+        [p.submitted_by, `proposal.${input.action}`, JSON.stringify({ proposalId: input.proposalId, state: decision.to, note: input.note ?? null, ...(retarget ? { movedToNamespaceSlug: retarget.to.slug } : {}) })],
       );
 
       // On resubmit, alert the namespace's reviewers that it's back and needs another look (§8) —
@@ -1517,6 +1574,88 @@ export async function performProposalAction(
 
     M.proposalActions.inc({ action: input.action });
     return { ok: true, state: decision.to, materializedVersionId };
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export interface MoveProposalInput {
+  proposalId: string;
+  actorUserId: string;
+  access: EffectiveAccess;
+  targetNamespaceId: string;
+  /** The reviewer's edited payload, verified by the route against the NEW namespace (or none). */
+  newPayload?: RevisionPayload;
+  note?: string | null;
+}
+
+export type MoveProposalResult =
+  | { ok: true; state: ProposalState; targetNamespaceSlug: string; canRead: boolean }
+  | { ok: false; status: number; error: string; code?: string };
+
+/**
+ * §74.3: move a new-skill proposal to another namespace — a hand-off to that namespace's reviewers.
+ * One transaction: the move revision, the re-target (a reviewer-turn proposal goes back to
+ * `proposed`, the assignee is cleared, a fresh turn starts), the thread clean-up and the audit row;
+ * then `proposal.retargeted` to the proposer and, when it waits on reviewers, `proposal.needs_review`
+ * to the new namespace's reviewers (§74.8).
+ */
+export async function moveProposal(pool: Pool, input: MoveProposalInput): Promise<MoveProposalResult> {
+  const prep = await prepareRetarget(pool, input.proposalId);
+  if (!prep) return { ok: false, status: 404, error: "proposal not found" };
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const p = await loadProposal(client, input.proposalId, { forUpdate: true });
+    if (!p) {
+      await client.query("rollback");
+      return { ok: false, status: 404, error: "proposal not found" };
+    }
+    const rt = await retargetInTx(client, {
+      p,
+      access: input.access,
+      actorUserId: input.actorUserId,
+      targetNamespaceId: input.targetNamespaceId,
+      newPayload: input.newPayload,
+      note: input.note ?? null,
+      keepState: false,
+      via: "move",
+      prep,
+    });
+    if (!rt.ok) {
+      await client.query("rollback");
+      return rt;
+    }
+    if (p.submitted_by !== input.actorUserId) {
+      const by = (await client.query<{ name: string }>(`select ${nameSql("display_name", "email")} as name from users where id = $1`, [input.actorUserId])).rows[0]?.name ?? null;
+      await client.query(
+        `insert into notifications (user_id, type, payload) values ($1, 'proposal.retargeted', $2::jsonb)`,
+        [p.submitted_by, JSON.stringify({
+          proposalId: input.proposalId,
+          skillSlug: rt.skillSlug,
+          fromNamespaceSlug: rt.from.slug,
+          namespaceSlug: rt.to.slug,
+          state: rt.state,
+          byName: by,
+          note: (input.note ?? "").trim() || null,
+        })],
+      );
+    }
+    if (rt.state === "proposed") {
+      await notifyNamespaceReviewers(client, {
+        namespaceId: rt.to.id,
+        submitterId: p.submitted_by,
+        type: "proposal.needs_review",
+        payload: { proposalId: input.proposalId, skillSlug: rt.skillSlug, semver: p.proposed_semver },
+        excludeUserIds: [input.actorUserId],
+      });
+    }
+    await client.query("commit");
+    M.proposalActions.inc({ action: "move" });
+    return { ok: true, state: rt.state, targetNamespaceSlug: rt.to.slug, canRead: rt.canRead };
   } catch (e) {
     await client.query("rollback");
     throw e;
@@ -2534,6 +2673,10 @@ export interface ProposalDetail {
   assignment: AssignmentView;
   /** §65.6: the reviewer turn's target and due instant, or null (no target / not the reviewer turn). */
   reviewTarget: ReviewTargetView | null;
+  /** §74.11: where this reviewer may move a new-skill proposal (empty for anyone else, or once decided). */
+  moveTargets: MoveTargetView[];
+  /** §74.6: the contribution policy (members only) narrowed `moveTargets` to the proposer's namespaces. */
+  moveTargetsLimited: boolean;
 }
 
 /** The target skill's live state, for the review page's old → new metadata diff (§8). */
@@ -2740,6 +2883,27 @@ export async function getProposalDetail(
     }
   }
 
+  // §74.11: a reviewer of an open NEW-skill proposal (never a promotion) may move it elsewhere.
+  let moveTargets: MoveTargetView[] = [];
+  let moveTargetsLimited = false;
+  if (
+    !p.target_skill_id &&
+    !latest?.payload.promotedFromSkillVersionId &&
+    RETARGETABLE_STATES.includes(p.state) &&
+    canReviewNamespace(access, p.target_namespace_id)
+  ) {
+    const proposer = await resolveUserAccessById(p.submitted_by);
+    const proposalsOpen = await getProposalsOpen(pool);
+    moveTargetsLimited = !proposalsOpen;
+    moveTargets = await listMoveTargets(pool, {
+      access,
+      proposerAccess: proposer.userId ? proposer : null,
+      proposalsOpen,
+      currentNamespaceId: p.target_namespace_id,
+      slug: latest?.payload.metadata?.skillSlug ?? "",
+    });
+  }
+
   return {
     id: p.id,
     state: p.state,
@@ -2788,6 +2952,8 @@ export async function getProposalDetail(
       assignment: { assignee: null, assignedAt: null, canAssign: false, canSelfAssign: false, viewerId: actorUserId },
       reviewTarget: null,
     }),
+    moveTargets,
+    moveTargetsLimited,
   };
 }
 
@@ -2799,7 +2965,8 @@ export async function getProposalDetail(
 async function proposalImportView(db: Pool, proposalId: string): Promise<ProposalDetail["import"]> {
   const { rows } = await db.query<{ id: string; origin_url: string; ref: string; commit: string | null; others: string }>(
     `select pi.id, pi.origin_url, pi.ref, pi.commit,
-            (select count(*) from proposals o where o.import_id = pi.id and o.id <> p.id)::text as others
+            -- §74.6: a proposal moved to another namespace keeps its chip but leaves N.
+            (select count(*) from proposals o where o.import_id = pi.id and o.id <> p.id and o.target_namespace_id = pi.target_namespace_id)::text as others
        from proposals p join proposal_imports pi on pi.id = p.import_id
       where p.id = $1`,
     [proposalId],

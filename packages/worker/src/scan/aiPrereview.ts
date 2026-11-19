@@ -24,7 +24,7 @@ import {
   settlePrereviewNotification, createPrereviewRun, linkPrereviewRun, currentPrereviewRun, prereviewSourceOfPayload, samePrereviewSource,
   sourceProposalOfVersion, pruneOrphanPrereviews,
   applicablePolicyRules, policyRulesForRun, policyFingerprintInput, policyRulesFingerprint, keyPolicyRules, parsePolicyResponse, verifyPolicyResults,
-  notifyProposalPolicyViolations, settleVersionPolicyRun, policyReconcile, countPolicyFlaggedVersions,
+  notifyProposalPolicyViolations, settleVersionPolicyRun, policyReconcile, countPolicyFlaggedVersions, policyRunCovers,
   PREREVIEW_FEATURE, PREREVIEW_MAX_TOKENS, PREREVIEW_PROPOSAL_DAILY_CAP, PREREVIEW_OPEN_STATES,
   type BundleEntry, type PrereviewRunRow, type PrereviewSetting, type PrereviewTrigger, type PolicyRuleRow, type PolicySubject, type PrereviewSource,
 } from "@skilly/shared";
@@ -90,7 +90,13 @@ export async function enqueueProposalPrereviews(pool: Pool, setting: PrereviewSe
       let reuse = await findReusableRun(pool, src.contentSha256, fp);
       if (!reuse && r.revision_no > 1) {
         const prev = await currentPrereviewRun(pool, { kind: "proposal", proposalId: r.id, revision: r.revision_no - 1 });
-        if (prev && prev.status !== "failed" && samePrereviewSource(prev.source, src.source) && prev.rulesFingerprint === fp) reuse = prev;
+        if (prev && prev.status !== "failed" && samePrereviewSource(prev.source, src.source)) {
+          if (prev.rulesFingerprint === fp) reuse = prev;
+          // §74.5: the same bytes under different rules — a proposal moved to another namespace, or a
+          // rule disabled since — keep a DONE run that already judged every rule now in scope
+          // (enforced and shadow). A rule it never saw gets a new run below.
+          else if (prev.status === "done" && (await policyRunCovers(pool, prev.id, await applicablePolicyRules(pool, r.target_namespace_id)))) reuse = prev;
+        }
       }
       if (reuse) {
         await linkPrereviewRun(pool, reuse.id, subject, true);
