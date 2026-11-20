@@ -15,12 +15,43 @@ const REDIRECT = "http://127.0.0.1:8976/callback";
 // worker, so the e2e only needs a well-formed one.
 const CODE_CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
-async function registerClient(page: import("@playwright/test").Page, name = "e2e MCP client") {
-  const res = await page.request.post("/oauth/register", {
-    data: { client_name: name, redirect_uris: [REDIRECT], token_endpoint_auth_method: "none" },
-  });
+type RegisteredClient = { client_id: string; token_endpoint_auth_method: string };
+
+// THE REGISTRATION BUDGET. POST /oauth/register allows 10 requests a minute per client IP
+// (oauth/register/route.ts), and the e2e stack sets no TRUST_PROXY, so every caller here shares ONE
+// bucket (§22 Rate limiting, §49.9). The limiter counts refused registrations too. A fast CI agent
+// runs this whole file inside a single window, so an 11th POST is a 429 — and so is its retry,
+// which lands in the same window. Two rules keep the file under the limit:
+//   1. a test that only needs "some registered client" to look at the authorize page takes
+//      sharedClient() below; only a test that looks its connection up BY NAME registers its own;
+//   2. registerClient() waits a 429 out, so a rerun inside the same minute (a Playwright retry, two
+//      local runs back to back) is slower, never red.
+async function registerClient(page: import("@playwright/test").Page, name = "e2e MCP client"): Promise<RegisteredClient> {
+  const post = () =>
+    page.request.post("/oauth/register", {
+      data: { client_name: name, redirect_uris: [REDIRECT], token_endpoint_auth_method: "none" },
+    });
+  let res = await post();
+  if (res.status() === 429) {
+    // The window is fixed, so `retry-after` is exactly how long until it reopens (lib/ratelimit.ts).
+    const waitMs = (Number(res.headers()["retry-after"]) || 60) * 1000 + 1000;
+    console.log(`[mcp-connect] /oauth/register is rate-limited: waiting ${Math.round(waitMs / 1000)}s for the window to reopen`);
+    test.info().setTimeout(test.info().timeout + waitMs);
+    await page.waitForTimeout(waitMs);
+    res = await post();
+  }
   expect(res.status(), await res.text()).toBe(201);
-  return (await res.json()) as { client_id: string; token_endpoint_auth_method: string };
+  return (await res.json()) as RegisteredClient;
+}
+
+// One registration for every test that only reads the authorize page. Nothing ever approves it, so
+// it never has a connection. Cached per worker process: the file runs in the single-worker
+// `exclusive` project (groups.ts), in order, and a worker restarted after a failure registers anew.
+const SHARED_CLIENT_NAME = "Consent Screen Client";
+let shared: RegisteredClient | undefined;
+async function sharedClient(page: import("@playwright/test").Page): Promise<RegisteredClient> {
+  shared ??= await registerClient(page, SHARED_CLIENT_NAME);
+  return shared;
 }
 
 // The click-to-copy toast specifically. `role="status"` is NOT unique on an authed page — the shell
@@ -78,10 +109,10 @@ test.describe("MCP connect flow (§29)", () => {
 
   test("the consent screen names the client and states what it can and cannot do", async ({ page }) => {
     await devSignIn(page);
-    const client = await registerClient(page, "Consent Screen Client");
+    const client = await sharedClient(page);
     await page.goto(authorizeUrl(client.client_id));
 
-    await expect(page.getByRole("heading", { name: /Connect Consent Screen Client to skilly/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `Connect ${SHARED_CLIENT_NAME} to skilly` })).toBeVisible();
     // The boundaries a user is agreeing to must be on the screen, not just in the docs.
     await expect(page.getByText(/approve or reject proposals/)).toBeVisible();
     await expect(page.getByText(/administer the platform/)).toBeVisible();
@@ -96,7 +127,7 @@ test.describe("MCP connect flow (§29)", () => {
     expect(page.url()).toContain("/oauth/authorize");
 
     // A single, genuinely unregistered redirect_uri: the mismatch is what's reported.
-    const client = await registerClient(page, "Redirect Mismatch Client");
+    const client = await sharedClient(page);
     const mismatch = new URLSearchParams({
       response_type: "code",
       client_id: client.client_id,
@@ -117,7 +148,7 @@ test.describe("MCP connect flow (§29)", () => {
   // registered one must NOT resolve to the registered value and sail through as verified. §29.
   test("a redirect_uri supplied twice is rejected rather than resolved to the registered one", async ({ page }) => {
     await devSignIn(page);
-    const client = await registerClient(page, "Duplicate Param Client");
+    const client = await sharedClient(page);
     await page.goto(`${authorizeUrl(client.client_id)}&redirect_uri=${encodeURIComponent("https://evil.example.com/cb")}`);
     await expect(page.getByText(/redirect_uri parameter was supplied more than once/)).toBeVisible();
     // Still on the registry's own authorize URL. Assert on the parsed host/path, not the raw string:
@@ -131,7 +162,7 @@ test.describe("MCP connect flow (§29)", () => {
 
   test("a missing PKCE challenge renders the error page — it is never redirected to the client (§49.5)", async ({ page }) => {
     await devSignIn(page);
-    const client = await registerClient(page, "No PKCE Client");
+    const client = await sharedClient(page);
     const p = new URLSearchParams({
       response_type: "code",
       client_id: client.client_id,
