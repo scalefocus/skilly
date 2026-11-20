@@ -6,7 +6,7 @@
 // test, 30-day usage and the data-egress notice. Platform admins only (every API call re-verifies).
 //
 // Deliberately imports nothing from @skilly/shared/ai — that subpath is server-only (node:crypto).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AI_CALL_TIMEOUT_MAX_MS,
   AI_CALL_TIMEOUT_MIN_MS,
@@ -14,6 +14,14 @@ import {
   AI_DRAFT_RUN_CAP_MIN_MS,
   type AiTimeoutsView,
 } from "@skilly/shared/ai-timeouts";
+import {
+  AI_TRY_LIMIT_KEYS,
+  AI_TRY_LIMIT_LABELS,
+  formatTryWorstCase,
+  tryWorstCaseInputTokens,
+  type TryLimitKey,
+  type TryLimitsView,
+} from "@skilly/shared/ai-try";
 import { Pill, Switch, formatCount, useApi } from "../../components/ui";
 import { useDateFmt } from "../../components/DateFormat";
 import { CollapsibleCard } from "./CollapsibleCard";
@@ -55,6 +63,8 @@ interface AiState {
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
   /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
   try: { enabled: boolean; effective: boolean };
+  /** §40.18 the five Try limits, each with its default, override and admin range. */
+  tryLimits: TryLimitsView;
   /** §40.16 the private-network switch; `operatorAllowed` = AI_ALLOW_PRIVATE_BASE_URL=1. */
   privateNetwork: { enabled: boolean; operatorAllowed: boolean };
 }
@@ -486,6 +496,7 @@ export function AiCard({ open, onToggle }: { open: boolean; onToggle: () => void
       {data && <PrivateNetworkRow state={data.privateNetwork} onSaved={reload} />}
       {data && <PrereviewRow state={data.prereview} providerLabel={data.providerLabel} onSaved={reload} />}
       {data && <TryRow state={data.try} providerLabel={data.providerLabel} onSaved={reload} />}
+      {data && <TryLimitsRow saved={data.tryLimits} onSaved={reload} />}
       {data && <DraftLimitRow saved={data.draftLimit} onSaved={reload} />}
       {data && <TimeoutsRow saved={data.timeouts} onSaved={reload} />}
       {data && <DisplayNameRow saved={data.displayName} onSaved={reload} />}
@@ -634,6 +645,183 @@ function TryRow({ state, providerLabel, onSaved }: { state: AiState["try"]; prov
         )}
       </div>
       {err && <p role="alert" style={{ fontSize: 13, margin: "8px 0 0", color: "var(--danger, crimson)" }}>{err}</p>}
+    </div>
+  );
+}
+
+/** What each Try limit counts, for the hint beside its field. */
+const TRY_LIMIT_UNITS: Record<TryLimitKey, string> = {
+  dailyCap: "messages",
+  perMinute: "messages",
+  maxTurns: "messages",
+  maxMessageChars: "characters",
+  maxTranscriptChars: "characters",
+};
+
+/** 200000 → "200,000": the limits are easier to read grouped. */
+const grouped = (v: number) => v.toLocaleString("en-US");
+
+/**
+ * §40.18 the five Try limits: messages per person per day and per minute, messages per
+ * conversation, characters per message and per conversation. Blank = the default (its placeholder).
+ * Below the fields a worst-case line, recomputed as the admin types, says what the numbers can cost.
+ * Its own Save, independent of the provider form and of the Try switch — usable with no provider
+ * configured and without AI_TOKEN_ENC_KEY, kept on Remove integration.
+ */
+function TryLimitsRow({ saved, onSaved }: { saved: TryLimitsView; onSaved: () => void }) {
+  // Keyed on the stored overrides themselves, not on the status object: the card reloads its status
+  // whenever another row saves or a Test runs, and that must not wipe what the admin is typing here.
+  const storedKey = AI_TRY_LIMIT_KEYS.map((k) => saved[k].override ?? "").join("|");
+  const initial = useMemo(
+    () => Object.fromEntries(storedKey.split("|").map((v, i) => [AI_TRY_LIMIT_KEYS[i], v])) as Record<TryLimitKey, string>,
+    [storedKey],
+  );
+  const [form, setForm] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<Partial<Record<TryLimitKey, string>>>({});
+  const [msg, setMsg] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+  useEffect(() => setForm(initial), [initial]);
+  const dirty = AI_TRY_LIMIT_KEYS.some((k) => form[k].trim() !== initial[k]);
+  const blank = AI_TRY_LIMIT_KEYS.every((k) => form[k].trim() === "");
+
+  /** A field as the API takes it: null = the default, undefined = not a whole number in range. */
+  const parse = (key: TryLimitKey): number | null | undefined => {
+    const t = form[key].trim();
+    if (t === "") return null;
+    if (!/^\d+$/.test(t)) return undefined;
+    const v = Number(t);
+    return v >= saved[key].min && v <= saved[key].max ? v : undefined;
+  };
+  const rangeError = (key: TryLimitKey) => `Enter a whole number from ${grouped(saved[key].min)} to ${grouped(saved[key].max)}, or leave it empty for the default.`;
+
+  // The worst case from the values in the fields (an empty one counts as its default); hidden while
+  // either field it depends on holds an invalid value.
+  const daily = parse("dailyCap");
+  const total = parse("maxTranscriptChars");
+  const defaults = { dailyCap: saved.dailyCap.default, maxTranscriptChars: saved.maxTranscriptChars.default };
+  const worst =
+    daily === undefined || total === undefined
+      ? null
+      : tryWorstCaseInputTokens({ dailyCap: daily ?? defaults.dailyCap, maxTranscriptChars: total ?? defaults.maxTranscriptChars });
+  const defaultWorst = tryWorstCaseInputTokens(defaults);
+
+  const save = async () => {
+    setMsg(null);
+    const body = {} as Record<TryLimitKey, number | null>;
+    const bad: Partial<Record<TryLimitKey, string>> = {};
+    for (const key of AI_TRY_LIMIT_KEYS) {
+      const v = parse(key);
+      if (v === undefined) bad[key] = rangeError(key);
+      else body[key] = v;
+    }
+    setErrors(bad);
+    if (Object.keys(bad).length) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/ai/try-limits", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; detail?: string | null; field?: string | null };
+      if (!r.ok) {
+        // The server names the field it refused: show its message beneath that field.
+        const field = AI_TRY_LIMIT_KEYS.find((k) => k === j.field);
+        if (field) return setErrors({ [field]: rangeError(field) });
+        throw new Error(j.detail ?? j.error ?? `HTTP ${r.status}`);
+      }
+      setMsg({ tone: "ok", text: "Saved — the next message uses these limits." });
+      onSaved();
+    } catch (e) {
+      setMsg({ tone: "danger", text: String((e as Error).message ?? e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }} data-testid="ai-try-limits">
+      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Try limits</h3>
+      <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 10px", lineHeight: 1.5 }}>
+        Limits for trying a skill, the same for everyone. Leave a field empty for its default. A change applies to the next
+        message. The per-minute limit is counted per web instance.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, max-content) auto", gap: "8px 16px", alignItems: "center" }}>
+        {AI_TRY_LIMIT_KEYS.map((key) => {
+          const f = saved[key];
+          const label = AI_TRY_LIMIT_LABELS[key];
+          return (
+            <div key={key} style={{ display: "contents" }}>
+              <label style={{ display: "contents" }}>
+                <span style={{ fontSize: 13 }}>{label}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <input
+                    className="input"
+                    style={{ width: 112 }}
+                    type="number"
+                    inputMode="numeric"
+                    min={f.min}
+                    max={f.max}
+                    step={1}
+                    value={form[key]}
+                    placeholder={String(f.default)}
+                    aria-label={label}
+                    aria-invalid={errors[key] ? true : undefined}
+                    aria-describedby={errors[key] ? `ai-try-limit-${key}-error` : undefined}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setForm((p) => ({ ...p, [key]: e.target.value }));
+                      setErrors((p) => ({ ...p, [key]: undefined }));
+                    }}
+                    data-testid={`ai-try-limit-${key}`}
+                  />
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {TRY_LIMIT_UNITS[key]} · default {grouped(f.default)} · {grouped(f.min)}–{grouped(f.max)}
+                  </span>
+                </span>
+              </label>
+              {errors[key] && (
+                <p
+                  id={`ai-try-limit-${key}-error`}
+                  role="alert"
+                  style={{ gridColumn: "1 / -1", fontSize: 12.5, margin: 0, color: "var(--danger, crimson)" }}
+                  data-testid={`ai-try-limit-${key}-error`}
+                >
+                  {label}: {errors[key]}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {worst !== null && (
+        <p style={{ fontSize: 13, margin: "10px 0 0", lineHeight: 1.5 }} data-testid="ai-try-limits-worst">
+          Worst case: about {formatTryWorstCase(worst)} input tokens per person per day.
+          {worst !== defaultWorst && <> With the defaults: about {formatTryWorstCase(defaultWorst)}.</>}{" "}
+          <span className="muted">
+            An estimate, not a bill: it assumes every message carries a full skill and a full conversation. The usage table above
+            shows what was actually sent.
+          </span>
+        </p>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+        <button type="button" className="btn btn-sm" disabled={busy || !dirty} onClick={() => void save()} data-testid="ai-try-limits-save">
+          {busy ? "saving…" : "Save limits"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          disabled={busy || blank}
+          onClick={() => {
+            setForm(Object.fromEntries(AI_TRY_LIMIT_KEYS.map((k) => [k, ""])) as Record<TryLimitKey, string>);
+            setErrors({});
+          }}
+          data-testid="ai-try-limits-reset"
+        >
+          Reset to defaults
+        </button>
+      </div>
+      {msg && (
+        <p role="status" style={{ fontSize: 13, margin: "8px 0 0", color: msg.tone === "ok" ? "var(--ok, var(--muted))" : "var(--danger, crimson)" }} data-testid="ai-try-limits-msg">
+          {msg.text}
+        </p>
+      )}
     </div>
   );
 }

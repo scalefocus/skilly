@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.68.0",
+    date: "2026-11-20",
+    summary:
+      "Platform admins can now set the limits for trying a skill: messages per person per day and per minute, messages per conversation, and characters per message and per conversation. The new Try limits row on the AI integration card shows a worst-case token estimate as you type. The Try panel now always shows how many messages you have left today.",
+  },
+  {
     version: "2.67.0",
     date: "2026-11-20",
     summary:

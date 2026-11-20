@@ -1,31 +1,33 @@
 // Try a skill before installing (SKILLY_SPEC.md §61): the web half. Resolves the tried version the
 // way the Install card does (latest, or any active git-published version), loads its stored
-// artifact through the §46 selection with the lower total, enforces the per-minute and rolling-daily
-// limits, and sends the validated transcript to the §40 helper with the skill in the system prompt.
+// artifact through the §46 selection with the lower total, enforces the admin-adjustable limits
+// (§40.18: per minute, rolling daily, per conversation — read on every request), and sends the
+// validated transcript to the §40 helper with the skill in the system prompt. Every response from
+// the daily-cap check onward tells the panel the limits in force and the caller's daily allowance.
 // Nothing is persisted except the helper's own ai_usage row; nothing is audited (§61.5). The routes
 // only authenticate and parse.
 import { randomUUID } from "node:crypto";
 import {
-  AI_TRY_DAILY_CAP,
   AI_TRY_FEATURE,
   AI_TRY_MAX_TOKENS,
-  AI_TRY_PER_MINUTE,
   AI_TRY_WINDOW_MS,
   buildTrySystemPrompt,
   bundleContentCap,
-  draftDailyCapDecision,
   isSecretLikeLine,
   isSkillVisible,
   resolveLatest,
   selectTryInput,
+  tryDailyAllowance,
+  tryPanelLimits,
   validateTryTranscript,
   type EffectiveAccess,
   type TryContext,
+  type TryDaily,
   type TrySelection,
 } from "@skilly/shared";
 import { AiError, loadAiConfig } from "@skilly/shared/ai";
 import { pool } from "./db";
-import { aiComplete, aiOperational } from "./ai";
+import { aiComplete, aiOperational, aiTryLimits } from "./ai";
 import { extractBundle } from "./bundle";
 import { findSkill } from "./catalog";
 import { versionContentRiskStatus } from "./contentRisk";
@@ -119,23 +121,6 @@ async function loadSelection(v: TryVersion, deps: TryDeps): Promise<TrySelection
   }
 }
 
-/**
- * `GET /api/skills/:ns/:slug/try?semver=` (§61.6): resolve the version and fill the panel header.
- * No provider call. Order: visible (404) → effective (409) → version (404) → artifact (422).
- */
-export async function tryContext(access: EffectiveAccess, ns: string, slug: string, semver: string | null, deps: TryDeps = {}): Promise<TryOutcome> {
-  const skill = await visibleSkill(access, ns, slug);
-  if (!skill) return outcome(404, { error: "not found" }, null);
-  if (!(await tryEffective())) return outcome(409, UNAVAILABLE, null);
-  const v = await installableVersion(skill, semver);
-  if (!v) return outcome(404, VERSION_GONE, null);
-  const sel = await loadSelection(v, deps);
-  if (!sel) return outcome(422, SOURCE_FAILED, null);
-  const [contentCheck, config] = await Promise.all([versionContentRiskStatus(skill.id, v.semver), loadAiConfig(pool)]);
-  const body: TryContext = { semver: v.semver, model: config?.model ?? "", usage: v.usage, contentCheck: contentCheck ?? "pending", files: sel.states };
-  return outcome(200, body as unknown as Record<string, unknown>, null);
-}
-
 /** The caller's skill_try calls in the rolling window (only calls that reached the provider are rows). */
 async function recentTryCalls(userId: string, now: Date): Promise<Date[]> {
   const { rows } = await pool.query<{ created_at: Date }>(
@@ -147,10 +132,44 @@ async function recentTryCalls(userId: string, now: Date): Promise<Date[]> {
   return rows.map((r) => r.created_at);
 }
 
+/** The caller's daily allowance under the cap in force (§61.6 `daily`), counted from ai_usage now. */
+async function dailyAllowance(userId: string, cap: number, deps: TryDeps): Promise<TryDaily> {
+  const now = deps.now?.() ?? new Date();
+  return tryDailyAllowance(await recentTryCalls(userId, now), now, cap);
+}
+
+/**
+ * `GET /api/skills/:ns/:slug/try?semver=` (§61.6): resolve the version and fill the panel header,
+ * with the per-conversation limits in force and the caller's daily allowance (§40.18). No provider
+ * call. Order: visible (404) → effective (409) → version (404) → artifact (422).
+ */
+export async function tryContext(access: EffectiveAccess & { userId: string }, ns: string, slug: string, semver: string | null, deps: TryDeps = {}): Promise<TryOutcome> {
+  const skill = await visibleSkill(access, ns, slug);
+  if (!skill) return outcome(404, { error: "not found" }, null);
+  if (!(await tryEffective())) return outcome(409, UNAVAILABLE, null);
+  const v = await installableVersion(skill, semver);
+  if (!v) return outcome(404, VERSION_GONE, null);
+  const sel = await loadSelection(v, deps);
+  if (!sel) return outcome(422, SOURCE_FAILED, null);
+  const [contentCheck, config, limits] = await Promise.all([versionContentRiskStatus(skill.id, v.semver), loadAiConfig(pool), aiTryLimits()]);
+  const body: TryContext = {
+    semver: v.semver,
+    model: config?.model ?? "",
+    usage: v.usage,
+    contentCheck: contentCheck ?? "pending",
+    files: sel.states,
+    limits: tryPanelLimits(limits),
+    daily: await dailyAllowance(access.userId, limits.dailyCap, deps),
+  };
+  return outcome(200, body as unknown as Record<string, unknown>, null);
+}
+
 /**
  * `POST /api/skills/:ns/:slug/try` (§61.6): one message. Order: visible (404) → effective (409) →
  * per-minute limit → rolling daily cap (429) → transcript (422) → version (404) and artifact (422)
- * → one provider call, no retry (§43.9) → the reply, or 502 with no provider detail (§40.7).
+ * → one provider call, no retry (§43.9) → the reply, or 502 with no provider detail (§40.7). The
+ * limits are the ones in force right now (§40.18), and every response from the daily-cap check
+ * onward carries them (`limits`) with the caller's allowance (`daily`).
  */
 export async function trySend(access: EffectiveAccess & { userId: string }, ns: string, slug: string, body: unknown, deps: TryDeps = {}): Promise<TryOutcome> {
   const b = (body && typeof body === "object" ? body : {}) as { semver?: unknown; messages?: unknown };
@@ -158,31 +177,37 @@ export async function trySend(access: EffectiveAccess & { userId: string }, ns: 
   if (!skill) return outcome(404, { error: "not found" }, "rejected");
   if (!(await tryEffective())) return outcome(409, UNAVAILABLE, "rejected");
 
-  const minute = rateLimit(`ai-try:${access.userId}`, AI_TRY_PER_MINUTE, 60_000);
+  const all = await aiTryLimits();
+  // The in-memory window keeps its count across a change: the next request meets the new number.
+  const minute = rateLimit(`ai-try:${access.userId}`, all.perMinute, 60_000);
   if (!minute.ok) {
     M.rateLimited.inc({ route: "ai-try" });
     return outcome(429, { error: "try_rate_limited", scope: "minute", message: "Too many messages in a row. Wait a minute and try again." }, "rate_limited");
   }
-  const now = deps.now?.() ?? new Date();
-  const daily = draftDailyCapDecision(await recentTryCalls(access.userId, now), now, AI_TRY_DAILY_CAP, AI_TRY_WINDOW_MS);
-  if (!daily.ok) {
+  const limits = tryPanelLimits(all);
+  const daily = await dailyAllowance(access.userId, all.dailyCap, deps);
+  const state = { limits, daily };
+  if (daily.remaining === 0) {
     return outcome(
       429,
-      { error: "try_rate_limited", scope: "day", cap: AI_TRY_DAILY_CAP, retryAt: daily.retryAt.toISOString(), message: `Daily limit reached (${AI_TRY_DAILY_CAP} messages in 24 hours).` },
+      { error: "try_rate_limited", scope: "day", cap: daily.cap, retryAt: daily.retryAt, message: `Daily limit reached (${daily.cap} messages in 24 hours).`, ...state },
       "rate_limited",
     );
   }
 
-  const t = validateTryTranscript(b.messages);
-  if (!t.ok) return outcome(422, { error: t.error, message: t.message }, "rejected");
+  const t = validateTryTranscript(b.messages, limits);
+  if (!t.ok) return outcome(422, { error: t.error, message: t.message, ...state }, "rejected");
   const semver = typeof b.semver === "string" ? b.semver.trim() : "";
-  if (!semver) return outcome(422, { error: "invalid_transcript", message: "semver is required" }, "rejected");
+  if (!semver) return outcome(422, { error: "invalid_transcript", message: "semver is required", ...state }, "rejected");
 
   const v = await installableVersion(skill, semver);
-  if (!v) return outcome(404, VERSION_GONE, "rejected");
+  if (!v) return outcome(404, { ...VERSION_GONE, ...state }, "rejected");
   const sel = await loadSelection(v, deps);
-  if (!sel) return outcome(422, SOURCE_FAILED, "rejected");
+  if (!sel) return outcome(422, { ...SOURCE_FAILED, ...state }, "rejected");
 
+  // After a call that reached the provider the allowance is counted again, so it includes that
+  // call whatever its outcome (a failed or timed-out reply still wrote its ai_usage row, §61.7).
+  const after = async () => ({ limits, daily: await dailyAllowance(access.userId, all.dailyCap, deps) });
   try {
     const res = await aiComplete({
       feature: AI_TRY_FEATURE,
@@ -194,10 +219,11 @@ export async function trySend(access: EffectiveAccess & { userId: string }, ns: 
     });
     const reply = res.text.trim();
     // An empty reply is a provider failure (§61.4).
-    if (!reply) return outcome(502, FAILED, "failed");
-    return outcome(200, { reply, model: res.model }, "ok");
+    if (!reply) return outcome(502, { ...FAILED, ...(await after()) }, "failed");
+    return outcome(200, { reply, model: res.model, ...(await after()) }, "ok");
   } catch (e) {
-    if (e instanceof AiError && UNAVAILABLE_CODES.has(e.code)) return outcome(409, UNAVAILABLE, "rejected");
-    return outcome(502, FAILED, "failed");
+    // Refused before the network: no ai_usage row, so the allowance is unchanged.
+    if (e instanceof AiError && UNAVAILABLE_CODES.has(e.code)) return outcome(409, { ...UNAVAILABLE, ...state }, "rejected");
+    return outcome(502, { ...FAILED, ...(await after()) }, "failed");
   }
 }

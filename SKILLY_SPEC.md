@@ -49,7 +49,7 @@ Every decision below was explicitly confirmed.
 | Content risk | **Rule-based content-risk scanner** (§37): flags hidden Unicode, look-alike letters, override phrasing and credential theft in a skill's text; advisory with the audited override, and a flagged **direct publish goes to review** |
 | AI pre-review | **Advisory LLM review of every submission** (§46): when a platform switch is on, the AI integration reads `SKILL.md`, scripts and references and reports prompt injection, overreaching tool permissions, unsafe shell, exposed secrets and description mismatches, with a severity, in a review-page section reviewers can agree with or dismiss per finding. **Never a gate**, never in `scan_reports`; owners keep the result after publish, consumers never see it — **except** admin-written policy rules judged in the same run (§47) |
 | Policy rules | **Policy-as-prompt** (§47): namespace admins (platform admins, org-wide) write rules in plain language; the §46 pre-review judges every proposal, direct publish and published latest version against them **in the same call**, citing the rule and server-verified evidence. A violated **enforced** rule — or one with no verdict (fail-closed) — trips the accept gate and needs the audited override (platform rules: platform admins only); members' direct publishes route to review; published violators are flagged, never yanked, and carry a status chip everyone sees. Rules start in Shadow |
-| Try before install | **Chat with the AI integration with a skill loaded** (§61), from the skill page's Install card: behind a platform switch (off by default) and only while the integration is *Operational*. The version's `SKILL.md`, scripts and references plus the user's typed messages go to the provider; no tools, no stored conversation, per-user caps |
+| Try before install | **Chat with the AI integration with a skill loaded** (§61), from the skill page's Install card: behind a platform switch (off by default) and only while the integration is *Operational*. The version's `SKILL.md`, scripts and references plus the user's typed messages go to the provider; no tools, no stored conversation, per-user limits a platform admin can adjust (§40.18) |
 | Search gaps | **What people search for and don't find** (§62), with no identity attached: opt-in (off by default), recorded on an explicit search only, counted per day under a salt deleted after the day. A periodic sweep groups them into gaps; while the AI integration is operational it drafts a synonym or a skill request for each. Platform admins accept or dismiss every one on `/admin/search-gaps`; accepted requests are posted by *Platform*. |
 | Usage insights | **How often a skill is used, not only installed** (§68): every marketplace plugin carries a small reporting hook that tells skilly which skill, version and trigger Claude Code invoked — only for people who ticked *Share usage* and hold a usage key. Uses per skill, version, trigger and UTC day, people counted per day under a day-salted hash; the third metric of the owner-only `/usage` dashboard. Off by default; a lower bound (`npx skills add` and MCP never report) |
 | Agent sync API | **A desktop agent keeps a user's skills in step without manual keys** (§69; first client: AION). `POST /api/agent/v1/sync` takes an **Entra access token** (scope `Skills.Sync`) and returns every skill the user may see plus one **short-lived agent key** (12 h default, 24 h max) that the git gateway accepts for cloning any of them, visibility re-checked on every request. The token only authenticates: roles still come from SCIM, and the API never creates a user. Agent installs are **listed on the Installed page (client AION) but not counted** as adoption. Off by default (env) |
@@ -307,7 +307,7 @@ Core entities (Postgres). Field lists are indicative, not exhaustive.
 - Pointer-mirror work queue: `id`, `skill_id`, `semver`, `external_url`, `external_ref`, `is_prerelease`, `usage_examples`, `external_subdir`, `created_by`, `attempts`, `last_error`, `created_at`. The leader worker drains it (clone → scan → store → synth, §6), retrying up to `MIRROR_MAX_ATTEMPTS` (default 5) before dead-lettering; a Platform Admin's **Retry mirroring** resets `attempts → 0` / `last_error → null` to re-arm it (§6).
 
 ### `platform_settings` (migration 0011)
-- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), **`ai_draft_daily_cap`** (admin override of the §43 daily *Draft with AI* cap per user, a whole number 1–1000; absent ⇒ 50, §40.17), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§66 department-row switch** (`department_popular_enabled` — default `true`, §66.6), the **§67 visits keys** (`visits_enabled` — default `true`, the *Visits & new users* switch; `visits_since` — the UTC date visit-day collection began, written once by migration 0108; §67.6), etc.
+- Key/value platform config: `key`, `value` (jsonb), `updated_by`, `updated_at`. Holds `proposals_open`, `date_format` (§13), `duplicate_proposal_enforcement` (§8), `max_bundle_bytes` (§6), `upload_chunk_bytes` (chunked-upload chunk size, §6), `chat_poll_intervals` (smart-polling cadence, §24), `max_featured_skills` (Featured-skills homepage cap, §7), `system_log_notify_at` watermark (§25), `email_wrapper_html` (the sanitized §12 email wrapper), the **§29 MCP keys** (`mcp_enabled` — default `true`, `mcp_access_token_ttl_minutes`, `mcp_refresh_token_ttl_days`, `mcp_max_inline_upload_bytes`, `mcp_max_resource_bytes`), **`marketplace_public_enabled`** / **`marketplace_sync_minutes`** / **`marketplace_name_prefix`** (§30), **`achievements_enabled`** (default `true`, §31.7), **`rum_enabled`** (default `true`) / **`rum_sample_rate`** (integer 1–100, default `100`) (§32.6), **`search_language`** (a built-in PostgreSQL text-search configuration name; absent ⇒ `english`, §34.9), **`survey_enabled`** (default `true`, §36.8), **`bug_reports_enabled`** (default `true`, §36.17), the **§50 hype keys** (`hype_enabled` — default `true`, `hype_budget` — default `3`, `hype_recency_days` — default `90`, `hype_install_threshold` — default `25`, `hype_top_n` — default `5`; §50.8), **`ai_display_name`** (the end-user name for the AI, 1–24 chars; absent ⇒ `AI`, §40.14), **`ai_timeouts`** (admin overrides of the AI per-call timeouts and the §44 draft run cap; absent ⇒ the code defaults, §40.15), **`ai_draft_daily_cap`** (admin override of the §43 daily *Draft with AI* cap per user, a whole number 1–1000; absent ⇒ 50, §40.17), **`ai_try_limits`** (admin overrides of the five §61 *Try a skill* limits; absent ⇒ the code defaults, §40.18), the **§48 email-digest keys** (`email_digests_enabled` — default `true`, `email_digest_default_mode` — default `immediate`, `email_digest_hour` — default `8`, `email_digest_weekday` — default `1` (Monday), `email_digest_types` — default the *digestible by default* tier, §48.3), the **§60 feature-ideas switch** (`feature_ideas_enabled` — default `true`; whether users who are not platform admins may suggest features, §60.9), the **§62 search-gap keys** (`search_gaps_enabled` — default `false`, `search_gaps_sweep_hours` — default `6`, `search_gaps_min_searchers` — default `2`, `search_gaps_lookback_days` — default `30`, plus the worker-written `search_gaps_last_run` and the *Run now* marker `search_gaps_run_requested_at`; §62.8), the **§63 upstream-release switch** (`upstream_releases_enabled` — default `true`, §63.10), the **§66 department-row switch** (`department_popular_enabled` — default `true`, §66.6), the **§67 visits keys** (`visits_enabled` — default `true`, the *Visits & new users* switch; `visits_since` — the UTC date visit-day collection began, written once by migration 0108; §67.6), etc.
 
 ### `upload_sessions` (migration 0058 — chunked hosted-bundle upload staging, §6)
 - `id` (uuid PK), `user_id` (FK → `users`, `ON DELETE CASCADE`), `skill_slug`, `filename`, `total_bytes`, `chunk_bytes` (frozen from the `upload_chunk_bytes` setting at session start), `created_at`.
@@ -1317,7 +1317,7 @@ owner's accept and publication, **Awaiting destination** (§70.3).
   - **Skill quality (§41.10):** `skill.quality_reassess_requested` (actor; skill, version) and `job.quality_rescore_requested` (actor; row count). The sweep's own writes, AI calls and notifications are telemetry, **not audited**.
   - **Policy rules (§47.12):** `policy.rule_created`, `policy.rule_updated` (text before/after + revision numbers), `policy.rule_state_changed`, `policy.rule_deleted`, `proposal.policy_override`, `skill.policy_flagged` (system actor) and `skill.policy_flag_dismissed`; `proposal.routed_to_review` gains `reason: 'policy'`. Re-checks are `ai_prereview.rerun_requested`.
   - **AI pre-review (§46.12):** `ai_prereview.rerun_requested` (actor; proposal or skill+semver; run id) and `ai_prereview.finding_dispositioned` (actor; subject; fingerprint, category, severity, verdict, reason); the `ai_prereview_enabled` switch as `settings.updated`. Runs themselves are not audited.
-  - **Try a skill (§61.8):** the `ai_try_enabled` switch as `settings.updated`. Try messages are **not audited** (telemetry in `ai_usage`).
+  - **Try a skill (§61.8, §40.18):** the `ai_try_enabled` switch and the `ai_try_limits` overrides as `settings.updated` (before/after). Try messages are **not audited** (telemetry in `ai_usage`).
   - **Search gaps (§62.12):** `search_gap.accepted` (outcome, created request or synonym group id, query hash, searcher count, restricted-match count) and `search_gap.dismissed` (query hash, AI kind) — **never the query text**; `job.search_gaps_run_requested`; `request.updated` when a platform admin edits a *Platform* request; and `settings.updated` for the four §62.8 keys. Hits, sweeps and drafts are **not audited**.
   - **AI-drafted quality improvements (§44.8):** `skill.ai_draft_generated` (actor; skill, base semver, model, per-status file counts, call count — **never file contents or AI output**), written once per run however it ends; the proposal's creation audit (and a direct publish's) carries `aiDraftModel` when the §44 token was valid. The AI display name (§40.14) is audited as `settings.updated`.
   - **AI integration (§40.11):** `ai.config_updated` (provider / base URL / model before→after plus a `token_rotated` flag — **never the token or any part of it**), `ai.enabled`, `ai.disabled`, `ai.config_cleared`. Tests, model-list calls and AI runtime calls are **not audited** (they are telemetry in `ai_usage`).
@@ -1853,7 +1853,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/skills/:ns/:slug` — detail + versions + rating aggregate & caller's own rating (§18) + maintainer/watch flags + `latestInstallable`/`publishing` (§6) + `featured`/`canFeature` (§7) + `deprecation` / `replaces[]` / `canDeprecate` (§45.8).
 - `GET /api/skills/:ns/:slug/readme` — rendered `SKILL.md`. `GET .../download?semver=` — governed, visibility-checked download: streams the **original uploaded bundle verbatim** with its original extension (§6/§10). It is **not** a git-clone install, but a user's **first** download of a skill **does** count toward `install_count` (and the monthly `install_counters`) — deduped per `(skill, user)` via `skill_downloads`, recorded once **and only for a same-site request** (a `Sec-Fetch-Site: cross-site` navigation is served but never counted — a GET must not be a cross-site state trigger, §49.9), and **never listed as an installation** on the Installed Skills page (§23).
 - `POST /api/skills/:ns/:slug/install` — mint a **reusable** skill-scoped install command (interactive); body `{ semver?, expiresAt?, system? }` — `system: true` mints a **system installation** (§23), **platform-admin only, re-verified server-side**; **409** for a not-yet-`git_published` version (§6/§23). *(Endpoint is `install`, not `install-url`; tokens are reusable, not one-time.)*
-- `GET /api/skills/:ns/:slug/try?semver=` → `{ semver, model, usage, contentCheck, files }` and `POST /api/skills/:ns/:slug/try` `{ semver, messages }` → `{ reply, model }` — **Try a skill before installing** (§61.6): any user who can see the skill, while the Try switch is on and AI is operational; 404 invisible / `version_not_found`, 409 `try_unavailable`, 422 `invalid_transcript` / `conversation_full` / `try_source_failed`, 429 `try_rate_limited`, 502 `try_failed`. `GET /api/skills/:ns/:slug` gains `tryAvailable`.
+- `GET /api/skills/:ns/:slug/try?semver=` → `{ semver, model, usage, contentCheck, files, limits, daily }` and `POST /api/skills/:ns/:slug/try` `{ semver, messages }` → `{ reply, model, limits, daily }` — **Try a skill before installing** (§61.6): any user who can see the skill, while the Try switch is on and AI is operational; `limits` are the per-conversation limits in force and `daily` the caller's allowance (`cap`, `remaining`, `retryAt`), both admin-adjustable (§40.18); 404 invisible / `version_not_found`, 409 `try_unavailable`, 422 `invalid_transcript` / `conversation_full` / `try_source_failed`, 429 `try_rate_limited`, 502 `try_failed`. `GET /api/skills/:ns/:slug` gains `tryAvailable`.
 - `PUT|DELETE /api/skills/:ns/:slug/rating` (§18). `POST /api/skills/:ns/:slug/versions/:semver/quality/reassess` + `GET /api/admin/jobs/quality` (§41.11); `GET /api/skills` accepts `sort=quality` and `?minQuality=`; skill payloads carry `quality` (§41.11). `GET|PUT|DELETE /api/skills/:ns/:slug/maintainers` + `GET .../maintainers/candidates?q=` (§19). `POST /api/skills/:ns/:slug/watch` (watch/follow).
 - `GET /api/skills/:ns/:slug/usage-series?range=<7d|30d|90d|all>` — aggregate installs+views over time (visibility-gated; §21).
 - `GET /api/skills/:ns/:slug/versions/:semver/changes` — the published version's **file changes vs its immediate predecessor** (§10): `{ available, baselineSemver, added, modified, removed, unchanged, files[] }`, or `{ available: false, reason }` when there's no predecessor / no stored artifact yet. `?path=<file>` returns that file's unified line diff (or a `binary` / `tooLarge` marker). Gated by the **skill's own visibility** (invariant #3; archived → owners only, §7), rate-limited like `download`, cached by `(skill, semver)` — the reviewer counterpart is `GET /api/proposals/:id/changes` (§8).
@@ -1926,6 +1926,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `PUT /api/admin/ai/prereview { enabled }` — the AI pre-review switch (§46.2, platform-admin); `GET /api/admin/ai` gains `prereview`.
 - `PUT /api/admin/ai/try { enabled }` — the Try skills switch (§61.8, platform-admin); `GET /api/admin/ai` gains `try`.
+- `PUT /api/admin/ai/try-limits { dailyCap, perMinute, maxTurns, maxMessageChars, maxTranscriptChars }` — the five Try limits, each a whole number in its range or `null` for the default (§40.18, platform-admin); 422 `invalid_try_limit`; `GET /api/admin/ai` gains `tryLimits`.
 - **Feedback survey (§36.10, all platform-admin):** `GET /api/admin/survey/summary`, `GET /api/admin/survey/comments`, `DELETE /api/admin/survey/responses/:id` (audited `survey.response_deleted`); `survey_enabled` and `bug_reports_enabled` (§36.17) on `GET|PATCH /api/admin/settings`.
 - **Feature ideas (§60.11):** `GET /api/coming-soon`, `POST /api/coming-soon/ideas`, `PATCH|DELETE /api/coming-soon/ideas/:id`, `PUT|DELETE /api/coming-soon/ideas/:id/vote`, `GET /api/coming-soon/ideas/:id/voters`; platform-admin `GET /api/admin/ideas`, `POST /api/admin/ideas/:id/publish|reject|close|ship`, `PATCH /api/admin/ideas/:id`; `featureIdeasEnabled` on `GET|PATCH /api/admin/settings`, `ideaAttributionHidden` / `ideaNotifications` / `ideaVotesHidden` on `GET|PATCH /api/me`, `ideas` on `GET /api/nav-badges`.
 - **Search gaps (§62.11):** platform-admin `GET /api/admin/search-gaps?tab=`, `POST /api/admin/search-gaps/:id/request|synonym|redraft`, `DELETE /api/admin/search-gaps/:id`, `POST /api/admin/search-gaps/run`; the four `search_gaps_*` keys on `GET|PATCH /api/admin/settings`, `searchGaps` on `GET /api/nav-badges`; `gap=1` on `GET /api/skills`; `PATCH /api/requests/:id` for a platform admin on a *Platform* request.
@@ -2214,7 +2215,8 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
       validation and the client-safe limit constants; `ai_cancelled` stops updating
       `last_call_*` (§61.10).
     - **Web:** `tryAvailable` on the skill detail payload, `GET|POST /api/skills/:ns/:slug/try`
-      with the 10/min + 100/24 h limits, the **Try with ‹name›** button and side panel
+      with the 10/min + 100/24 h limits (the defaults since §40.18 made the limits adjustable),
+      the **Try with ‹name›** button and side panel
       (disclosure, loaded-files line, flagged warning, Usage empty state, `sessionStorage`
       conversation, Start over), and the *Try skills* switch row on the AI integration card with
       `PUT /api/admin/ai/try`.
@@ -10114,7 +10116,11 @@ pattern), with the **status pill** as its header accessory.
   integration*.
 - **Try skills** (§61.8): a separate row below *Pre-review proposals* with the Try switch (off by
   default, saves on toggle); independent of the provider form and kept on *Remove integration*.
-- **Draft limit** (§40.17): a separate row below *Try skills* and above *Timeouts* — how many times
+- **Try limits** (§40.18): a separate row below *Try skills* — the five *Try a skill* limits
+  (messages per day, per minute and per conversation; characters per message and per conversation)
+  and a worst-case cost line, with its **own Save** (no test, no token re-entry); it survives
+  *Remove integration*.
+- **Draft limit** (§40.17): a separate row below *Try limits* and above *Timeouts* — how many times
   a day one person may use *Draft with AI* (§43), with its **own Save** (no test, no token
   re-entry); it survives *Remove integration*.
 - **Timeouts** (§40.15): a separate row above *Display name* — one per-call timeout per registered
@@ -10250,6 +10256,12 @@ pattern), with the **status pill** as its header accessory.
   not a whole number or outside 1–1000; **not** subject to `ai_key_missing`. `GET /api/admin/ai`
   also returns `draftLimit: { defaultCap, overrideCap, effectiveCap, min, max }` (`overrideCap`
   null when unset; `min` 1, `max` 1000).
+- `PUT /api/admin/ai/try-limits` `{ dailyCap, perMinute, maxTurns, maxMessageChars,
+  maxTranscriptChars }`, each `number | null` → the `tryLimits` object below (§40.18; `null`
+  restores that field's default); **422 `invalid_try_limit`** (with the offending `field`) when a
+  key is missing, not a whole number or outside its range; **not** subject to `ai_key_missing`.
+  `GET /api/admin/ai` also returns `tryLimits: { <key>: { default, override, effective, min, max } }`
+  for the five keys (`override` null when unset).
 - `PUT /api/admin/ai/private-network` `{ enabled }` → `{ enabled, operatorAllowed, test }` (§40.16),
   where `test` is the re-test's result (the `POST /api/admin/ai/test` shape) or `null` when none
   ran; **422** when `enabled` is not a boolean; **not** subject to `ai_key_missing` (without the
@@ -10295,9 +10307,9 @@ model-list calls and runtime calls are **not audited** (telemetry, in `ai_usage`
 - Any AI task (each is its own gated spec).
 - Streaming, tool use, images/files, embeddings.
 - Multiple simultaneous providers, per-feature model choice, fallback providers.
-- Usage caps / budgets, cost estimates in currency, per-user quotas. (The one admin-adjustable
-  limit is the platform-wide daily *Draft with AI* cap, §40.17 — one number for everyone, not a
-  quota per person.)
+- Usage caps / budgets, cost estimates in currency, per-user quotas. (The admin-adjustable limits
+  are the platform-wide daily *Draft with AI* cap, §40.17, and the five *Try a skill* limits,
+  §40.18 — the same numbers for everyone, not a quota per person.)
 - Env-var configuration of the integration (it is UI-only).
 - Storing prompts or responses for debugging.
 
@@ -10514,9 +10526,9 @@ cost.
   (§43.7). **A whole number from 1 to 1000; default 50.** It is the same cap on the propose form
   and in the repository import (§64.5), which share it, and it applies to **everyone alike,
   platform admins included** — there is no per-user, per-role or per-namespace value.
-  - **Not adjustable:** the 10-per-minute draft limit (§43.7), the 24-hour rolling window, the *Try
-    a skill* cap (§61), the pre-review per-proposal cap (§46) and the repository import's limit of
-    50 ticked skills (§64.1 #14).
+  - **Not adjustable:** the 10-per-minute draft limit (§43.7), the 24-hour rolling window, the
+    pre-review per-proposal cap (§46) and the repository import's limit of 50 ticked skills (§64.1
+    #14). The *Try a skill* limits are separate settings with their own row (§40.18).
   - **No "off" and no "unlimited".** Drafting is switched off with the integration's own enable
     toggle (§40.4); 0 and values above 1000 are refused.
 - **Storage.** Platform setting **`ai_draft_daily_cap`** in `platform_settings` (no migration): the
@@ -10562,6 +10574,115 @@ cost.
     /api/propose/ai-draft` returns `dailyCap: N` and `remainingToday` counted from *N*.
   - **e2e:** set the limit → Save → reload shows it; empty the field → Save → the placeholder `50`
     shows again.
+
+### 40.18 Try limits
+*Try a skill* (§61) shipped with five fixed limits. A platform admin may now change them — up for a
+team that evaluates many skills, down to hold provider cost. Each is one platform-wide whole number
+that applies to **everyone alike, platform admins included**: there is no per-user, per-role or
+per-namespace value.
+
+| Key | Field label | Default | Range | What it limits |
+|---|---|---|---|---|
+| `dailyCap` | Messages per person per day | 100 | 1–1000 | Try messages one person may send in any rolling 24 hours, across all skills |
+| `perMinute` | Messages per person per minute | 10 | 1–60 | Try messages one person may send in one minute, counted per web instance |
+| `maxTurns` | Messages per conversation | 20 | 1–100 | User messages in one Try conversation |
+| `maxMessageChars` | Characters per message | 4,000 | 500–20,000 | The length of one typed message |
+| `maxTranscriptChars` | Characters per conversation | 200,000 | 20,000–400,000 | The messages and replies of one conversation together |
+
+- **Why these ranges.**
+  - The smallest conversation total (20,000) still holds the largest message (20,000), so every
+    combination of values is valid and there is **no cross-field rule**.
+  - The largest conversation (400,000 characters) plus the skill (100,000, §61.4) is about 125,000
+    tokens, inside a 200,000-token context window. A call the provider rejects for size turns the
+    status *Failing* and hides Try for everyone (§61.11), so the ceilings stay below that.
+- **Not adjustable:** the rolling 24-hour and one-minute windows, the skill content sent with each
+  message (25 files, 100,000 characters, §61.4), the reply size (8,192 tokens) and the *Draft with
+  AI* cap, which has its own row (§40.17).
+- **No "off" and no "unlimited".** Trying is switched off with the *Try skills* switch (§61.8); 0
+  and any value outside a range are refused.
+- **Storage.** Platform setting **`ai_try_limits`** in `platform_settings` (no migration): a JSON
+  object holding **only the overrides**, `{ dailyCap?, perMinute?, maxTurns?, maxMessageChars?,
+  maxTranscriptChars? }`. Clearing a field removes its key, and the row is deleted when nothing is
+  left. On read, an unknown key is ignored (and dropped on the next save), a value that is not a
+  whole number falls back to the default, and one outside its range is clamped into it.
+- **Resolution.** A pure function in `@skilly/shared`, `resolveTryLimits(stored)`, returns the five
+  effective values. It is exported from the client-safe Try subpath together with the defaults and
+  ranges; the former constants (`AI_TRY_DAILY_CAP` and the three `AI_TRY_MAX_*`) become those
+  defaults. Transcript validation and the panel's "can send more" check take the limits as an
+  argument.
+- **Editing.** The *Try limits* row of the AI integration card (§40.4), heading **"Try limits"**,
+  directly below the *Try skills* switch:
+  - five number fields with the labels above (placeholder = the default, for example `100`);
+  - the line *"Limits for trying a skill, the same for everyone. Leave a field empty for its
+    default. A change applies to the next message. The per-minute limit is counted per web
+    instance."* (Administration pages say "AI", not the display name, §40.14);
+  - the **worst-case line** (below);
+  - a **Reset to defaults** action that clears every field (it still needs Save);
+  - its **own Save**, **"Save limits"** — `PUT /api/admin/ai/try-limits` (§40.9). An empty field
+    sends `null`.
+
+  Like the draft limit it is independent of the provider config: no test, no token re-entry, works
+  with no provider configured and without `AI_TOKEN_ENC_KEY`, kept on *Remove integration*, and
+  editable while the *Try skills* switch is off. Validation (→ **422 `invalid_try_limit`** naming
+  the field, shown beneath that field): not a whole number, or outside the field's range. Saving
+  the effective values unchanged is a no-op (no write, no audit); otherwise audited
+  **`settings.updated`** (`key: 'ai_try_limits'`, before/after).
+- **Worst-case line.** Raising a limit multiplies provider cost, because every message resends the
+  skill and the whole conversation. Under the fields, recomputed as the admin types: *"Worst case:
+  about ‹N› input tokens per person per day."*
+  - `N = dailyCap × (100,000 + maxTranscriptChars) ÷ 4`, from the values in the fields (an empty
+    field counts as its default): every message carrying a full skill (§61.4) and a full
+    conversation, at 4 characters per token. A pure function in `@skilly/shared`
+    (`tryWorstCaseInputTokens`).
+  - ‹N› reads *"7.5 million"* (one decimal below 10 million), *"125 million"* (whole millions from
+    10 million) or, below one million, the number rounded to the nearest thousand (*"30,000"*).
+  - When the result differs from the defaults' result, the line adds *"With the defaults: about 7.5
+    million."*
+  - It is followed by *"An estimate, not a bill: it assumes every message carries a full skill and
+    a full conversation. The usage table above shows what was actually sent."*
+  - While the daily or the characters-per-conversation field holds an invalid value, the line is
+    hidden.
+  - With both at their ceilings (1000 a day, 400,000 characters) the worst case is about 125
+    million.
+- **Taking effect.** Both Try routes read the setting on every request (no cache), so a change
+  applies to the **next message**:
+  - **Daily cap raised:** a person stopped by the old cap can send again at once, as long as their
+    calls in the last 24 hours are below the new cap. **Lowered:** a person who already made that
+    many calls is stopped on their next message, and `retryAt` is when enough of those calls age
+    out to fall below the **new** cap (the §43.7 rule). Nothing is counted again or refunded.
+  - **Per minute:** the in-memory window keeps its count, and the next request is compared with
+    the new number. It is counted **per web instance** (§16 #20): with several replicas a person
+    can exceed it by up to the number of replicas. The daily cap is counted in the database and is
+    exact.
+  - **Per conversation:** every `POST` is checked against the values in force. A conversation that
+    is already over a lowered limit gets **`conversation_full`** (§61.6) and the panel's
+    full-conversation state: the server is stateless, so it can't know that the conversation is
+    older than the change. After a raise, an open panel keeps the old numbers until its next
+    response.
+  - **Open panels** learn the values in force from every Try response (`limits` and `daily`,
+    §61.6).
+- **Tests.**
+  - **Unit** (`@skilly/shared`): limit resolution (override → default; a stored out-of-range value
+    clamped; a non-integer or non-number ignored; an unknown key dropped); input validation (each
+    field's bounds, whole numbers, `null` clears, a missing key, the offending field named);
+    transcript validation and the "can send more" check with non-default limits, including an
+    earlier message over a lowered per-message limit (`conversation_full`) and a last message over
+    it (`invalid_transcript`); the worst-case function and its wording (30,000 · 7.5 million · 125
+    million).
+  - **Integration** (web API + DB, provider stubbed): `PUT` is platform-admin-only (403 otherwise),
+    works with no config and no key, audits `settings.updated`, saving the same values is a no-op,
+    `null` restores a default and clearing the last override deletes the row, the setting survives
+    `DELETE /api/admin/ai`, and `GET /api/admin/ai` returns default/override/effective/min/max for
+    each field. With `dailyCap` *N* the Try `POST` answers the daily **429** at *N* `ai_usage` rows
+    with `cap: N`; with `perMinute` 2 the third `POST` in a minute answers the per-minute **429**;
+    with `maxTurns` 1 a second user message answers **422 `conversation_full`**. `GET …/try` and a
+    `POST` 200 return `limits` and `daily`, with `remaining` one lower after the call and `retryAt`
+    set at 0.
+  - **e2e** (stub provider, operational, switch on): set *Messages per conversation* to 1 → Save →
+    reload shows it and the worst-case line; open a skill → **Try**: the header reads *"… of 100
+    messages left today"* → send one message → the reply renders, the count drops by one and the
+    composer gives way to the full-conversation state; **Reset to defaults** → Save → the
+    placeholders show again.
 
 ---
 
@@ -13931,7 +14052,7 @@ is cloned, no install token is minted, and the conversation is kept only in the 
 | 5 | **Always active, no tools.** The skill is in context from the first message. The model can't run scripts, read other files or reach anything, and says what it would do instead. | §40 has no tool use (§40.12). Simulating the agent's choice to load a skill would test the description, not the skill. |
 | 6 | **Whole replies**: one non-streaming call per message, no retry. | The §40 helper is non-streaming (§40.1 #10), and an interactive call must fail fast (§43.9). Streaming is deferred. |
 | 7 | **The conversation lives only in the browser tab** (`sessionStorage`). The server is stateless: each message carries the transcript, and the server rebuilds the skill context from the stored artifact. | Nothing to retain, erase or visibility-filter later. Same discipline as §43 and §44: no stored AI output. |
-| 8 | **Fixed limits.** Per user: 10 messages a minute and 100 per rolling 24 hours. Per conversation: 20 user messages of up to 4,000 characters, 200,000 characters in total. | The cost of an open-ended chat grows with every turn, and §40 has no caps of its own. |
+| 8 | **Limits a platform admin can adjust** (§40.18). The defaults, per user: 10 messages a minute and 100 per rolling 24 hours. Per conversation: 20 user messages of up to 4,000 characters, 200,000 characters in total. The panel always shows how many messages the user has left today. | The cost of an open-ended chat grows with every turn, and §40 has no caps of its own. The right numbers differ between organizations, so they are settings, and a visible allowance means the cap never comes as a surprise. |
 | 9 | **The panel says what it is**: the model, the absence of tools, that the user's own agent may behave differently, and that typed messages go to ‹name›. | A preview that hides its limits builds false trust, and users must know their text leaves skilly. |
 | 10 | **Flagged versions can be tried**, with the content-check label repeated in the panel. | With no tools the risk stays inside the user's own chat. The label warns them before they act on a suggested command. |
 | 11 | **Counted only in `ai_usage`.** No usage event, analytics or leaderboard signal, badge, survey feature key or audit row. | Like the other AI tasks. A skill-level "tried" signal is deferred. |
@@ -13966,14 +14087,20 @@ is cloned, no install token is minted, and the conversation is kept only in the 
     confidential data."*
   - What was loaded: *"Loaded SKILL.md + 4 files"*, plus *"· 1 cut short · 2 left out"* when the
     caps bite, with an expandable list of the paths and their state.
+  - The daily allowance, always shown: *"‹N› of ‹M› messages left today"* (`daily`, §61.6; "today"
+    means the rolling 24 hours). It is filled when the panel opens and updated from every
+    response. After **Cancel** the panel lowers it by one at once, because the abandoned call still
+    counts; the next response corrects it. If that leaves 0, the daily-limit message (§61.9) shows
+    without its time until the panel is reopened.
   - When the version's §37.7 status is **flagged**, a warning line: *"Content check: flagged,
     awaiting review. Check any command it suggests before you run it."* No findings, excerpts or rule
     names: consumers never see them (§37.8).
 - **Empty conversation:** the tried version's **Usage** (§20), rendered with the existing Markdown
   renderer under the heading *"How to use it"*. With no Usage: *"Ask what you'd ask an agent that has
   this skill installed."*
-- **Composer:** a text box (Enter sends, Shift+Enter adds a line), a character counter shown from
-  3,500 of 4,000, and a **Send** button disabled while the box is empty or a reply is pending.
+- **Composer:** a text box (Enter sends, Shift+Enter adds a line), a character counter shown once
+  500 or fewer characters remain (from 3,500 of 4,000 with the default limit), and a **Send** button
+  disabled while the box is empty or a reply is pending.
 - **Waiting:** a *"Thinking…"* bubble with a **Cancel** link. Cancel abandons the reply in the
   browser and puts the unsent message back in the composer. The server's call is not aborted: it
   completes and still counts, as in §43.3.
@@ -13981,10 +14108,17 @@ is cloned, no install token is minted, and the conversation is kept only in the 
   support**: image syntax renders as a plain link and nothing is ever fetched (the enforced CSP
   `img-src 'self' data:` blocks remote images too, §22). Links open in a new tab with the renderer's
   `rel="noreferrer noopener"`. User messages render as plain text.
-- **Limits in the panel.** *"N of 20 messages left"* appears once 5 or fewer remain. At 20 user
-  messages, or when the next message would push the transcript past 200,000 characters, the
-  composer is replaced by *"This conversation is full. Start over to keep trying."* with **Start
-  over**.
+- **Limits in the panel.** The panel takes every limit from the server's responses (`limits` and
+  `daily`, §61.6), never from constants, because a platform admin can change them (§40.18). The
+  numbers below are the defaults.
+  - *"‹N› of 20 messages left in this conversation"* appears once 5 or fewer remain.
+  - At 20 user messages, or when the next message would push the transcript past 200,000
+    characters, the composer is replaced by *"This conversation is full. Start over to keep
+    trying."* with **Start over**. The same state shows when an earlier message is longer than the
+    per-message limit in force, which happens only after an admin lowered that limit.
+  - At 0 messages left today the composer is disabled and the daily-limit message (§61.9) shows,
+    from the moment the panel opens. The conversation stays readable, and the **Try with ‹name›**
+    button on the skill page is unaffected.
 - **Start over** clears the conversation, after a confirm when it isn't empty, and puts focus in the
   composer (the button itself goes disabled on an empty conversation, so focus must not stay on it —
   Esc keeps closing the panel either way, §33's shared `Modal`).
@@ -14060,22 +14194,34 @@ is cloned, no install token is minted, and the conversation is kept only in the 
   git-published (**404 `version_not_found`** otherwise). It reads the artifact to run the selection,
   makes **no provider call**, and is covered by the default per-user web limit only. Response:
   `{ semver, model, usage, contentCheck: 'pending' | 'passed' | 'noted' | 'flagged', files: [{ path,
-  state: 'loaded' | 'truncated' | 'skipped' }] }`.
+  state: 'loaded' | 'truncated' | 'skipped' }], limits, daily }`.
+- **`limits` and `daily`** are the values in force for the caller (§40.18):
+  - `limits: { maxTurns, maxMessageChars, maxTranscriptChars }`;
+  - `daily: { cap, remaining, retryAt }`. `remaining` is the cap minus the caller's `skill_try`
+    calls in the last 24 hours, never below 0. `retryAt` is `null` while `remaining` is above 0,
+    else the time the caller can send again (§61.7).
+
+  `GET` returns both, and so does every `POST` response from the daily-cap check onward, whatever
+  its status. After a call that reached the provider (200 or 502), `remaining` already counts that
+  call. The per-minute 429 is answered before the count is read and carries neither.
 - **`POST /api/skills/:ns/:slug/try`** `{ semver, messages: [{ role: 'user' | 'assistant', content }] }`:
   any authenticated user; `semver` is required (the version `GET` resolved). Checks, in order:
   1. auth (401) → skill visible (**404**) → effective (**409 `try_unavailable`**);
   2. the per-minute limit, then the daily cap (**429**, §61.7);
-  3. the transcript (**422**):
-     - **`invalid_transcript`**: not a non-empty array that starts and ends with `user` and
-       alternates; a `content` that is empty after trimming; a user message over **4,000**
-       characters;
-     - **`conversation_full`**: more than **20** user messages, or more than **200,000** characters
-       in total;
+  3. the transcript, against the limits in force (**422**; the numbers are the defaults), in this
+     order:
+     - **`invalid_transcript`** for its shape: not a non-empty array that starts and ends with
+       `user` and alternates; a `content` that is empty after trimming;
+     - **`conversation_full`**: more than **20** user messages; more than **200,000** characters in
+       total; or an **earlier** user message over 4,000 characters, which a conversation can hold
+       only after an admin lowered the limit (or its owner edited it);
+     - **`invalid_transcript`** for length: the **last** user message (the one being sent) over
+       **4,000** characters;
   4. the version (**404 `version_not_found`**: unknown, yanked, quarantined, not git-published, or
      the skill archived since the panel opened) and its stored artifact (**422 `try_source_failed`**
      when it can't be read);
   5. the provider call.
-- **Response 200:** `{ reply, model }`.
+- **Response 200:** `{ reply, model, limits, daily }`.
 - **Provider failure** (`ai_timeout`, `ai_provider_error` including budget-exhausted, an empty
   reply): **502 `try_failed`**, with no provider detail (§40.7). An `AiError` raised before the
   network (`ai_disabled`, `ai_not_configured`, `ai_key_missing`, `ai_token_undecryptable`) maps to
@@ -14085,16 +14231,20 @@ is cloned, no install token is minted, and the conversation is kept only in the 
   subject to `ai_key_missing`.
 
 ### 61.7 Limits & recording
-- **Per minute:** `enforceRateLimit("ai-try", userId, 10/min)`, counting every `POST` (per-instance,
-  §16 #20). **429** `{ error: 'try_rate_limited', scope: 'minute' }`.
-- **Daily cap: 100 messages per user per rolling 24 hours**, a hard-coded constant
-  (`AI_TRY_DAILY_CAP`). Counted from `ai_usage` rows with `feature = 'skill_try'` and the caller's
-  `user_id` in the last 24 hours, so only calls that reached the provider count, and no migration is
-  needed. **429** `{ error: 'try_rate_limited', scope: 'day', retryAt }`. Two concurrent calls at 99
+All five limits are **platform settings with defaults** (§40.18). Both routes resolve them on every
+request; the numbers below are the defaults.
+- **Per minute:** the in-memory limiter under the key `ai-try:<userId>`, **10 a minute**, counting
+  every `POST` (per-instance, §16 #20). **429** `{ error: 'try_rate_limited', scope: 'minute' }`.
+- **Daily cap: 100 messages per user per rolling 24 hours.** Counted from `ai_usage` rows with
+  `feature = 'skill_try'` and the caller's `user_id` in the last 24 hours, so only calls that reached
+  the provider count, and no migration is needed. **Every such call counts**, including a reply
+  that failed or timed out and one the user cancelled (§61.3): each of them cost tokens. **429**
+  `{ error: 'try_rate_limited', scope: 'day', cap, retryAt, limits, daily }`; `retryAt` is when
+  enough calls age out to fall below the cap in force (the §43.7 rule). Two concurrent calls at 99
   may both pass, an accepted overshoot as in §43.7.
-- **Per conversation:** `AI_TRY_MAX_TURNS` (20), `AI_TRY_MAX_MESSAGE_CHARS` (4,000) and
-  `AI_TRY_MAX_TRANSCRIPT_CHARS` (200,000), exported from a client-safe `@skilly/shared` subpath so
-  the panel enforces them before sending.
+- **Per conversation:** 20 user messages, 4,000 characters per message and 200,000 characters in
+  total. The server checks every `POST` (§61.6). The panel checks before sending with the same pure
+  functions from the client-safe `@skilly/shared` subpath, given the `limits` it last received.
 - **Recording:** the §40.7 bookkeeping applies unchanged: one `ai_usage` row per call that reached
   the provider, `last_call_*` updated, runtime failures into the throttled `system_event` path
   (§40.8).
@@ -14114,14 +14264,21 @@ is cloned, no install token is minted, and the conversation is kept only in the 
 - **Audited** as `settings.updated` (`key: 'ai_try_enabled'`, before/after).
 - Turning it off hides the button on the next page load. An open panel's next message gets **409
   `try_unavailable`**.
+- The limits are a separate setting with their own row, *Try limits* (§40.18). They can be edited
+  while the switch is off.
 
 ### 61.9 Messages in the panel
 All shown inline below the last message; none closes the panel.
 - Provider failure: *"Couldn't get a reply from ‹name›. Try again."* with **Retry**, which resends
   the same transcript.
 - Per-minute limit: *"Too many messages in a row. Wait a minute and try again."*
-- Daily cap: *"Daily limit reached (100 messages in 24 hours). You can try again after ‹time›."*
-  The time is `retryAt`, in the viewer's timezone and date style via `useDateFmt()`.
+- Daily cap: *"Daily limit reached (‹cap› messages in 24 hours). You can try again after ‹time›."*
+  ‹cap› is the cap in force, from the response. The time is `retryAt`, in the viewer's timezone and
+  date style via `useDateFmt()`. The same message shows, with the composer disabled, when the panel
+  opens with 0 messages left (§61.3).
+- A message over a lowered per-message limit (`invalid_transcript` whose `limits.maxMessageChars`
+  is below the message's length): *"A message can be at most ‹N› characters. Shorten it and send
+  again."* The text goes back into the composer.
 - `try_unavailable`: *"Trying skills is no longer available."* The composer is disabled.
 - `version_not_found`: *"This version can no longer be tried."* The composer is disabled.
 - `try_source_failed`: *"Couldn't load this skill's files. Try again later."*
@@ -14145,16 +14302,26 @@ run. Every other failure updates `last_call_*` as before.
 - **Fidelity.** No tools, and possibly a different model from the user's own agent. The panel says
   so, but a skill whose value lives in its scripts will feel thin here.
 - **Cost.** Each message resends up to 100,000 characters of skill plus the conversation (up to
-  200,000 more): worst case about 75k input tokens per message, so one user at the daily cap can
-  spend several million input tokens a day. The switch (off by default) and the caps are the
-  controls, and the card's 30-day usage shows the spend.
+  200,000 more by default): worst case about 75k input tokens per message, so one user at the
+  default daily cap can spend about 7.5 million input tokens a day. A platform admin can raise the
+  limits (§40.18) up to a worst case of about 125 million; the *Try limits* row shows that number
+  as they type. The switch (off by default) and the limits are the controls, and the card's 30-day
+  usage shows the spend.
+- **Limits change under open conversations.** A lowered limit can end a conversation that was
+  within the old one. The daily count a panel shows is as fresh as its last response: messages
+  sent from another tab or on another skill, and calls ageing out of the 24 hours, show up only
+  with the next response or when the panel is reopened.
+- **The per-minute limit is per web instance** (§16 #20): with several replicas a person can exceed
+  the configured number by up to the number of replicas. The daily cap is exact.
 - **Tab-scoped history** is lost when the tab closes and isn't shared across tabs or devices.
 
 ### 61.12 Out of scope (deferred)
 - Trying a proposal on the review page; trying over MCP.
 - Streaming replies, tool use or running scripts, file or image attachments.
 - Saving, sharing or exporting a conversation; server-side history.
-- Admin-tunable caps; per-namespace enablement.
+- Per-user, per-role or per-namespace limits; an "unlimited" setting; per-namespace enablement.
+- An adjustable skill-content size, reply size or time window.
+- Reporting on who uses Try or reaches a limit.
 - Simulating whether the skill triggers from its description.
 - A skill-level "tried" signal (analytics, leaderboard, catalog), a badge, a survey feature key.
 
@@ -14163,8 +14330,9 @@ run. Every other failure updates `last_call_*` as before.
   cut, file cap, `skipped`, redaction, file paths capped at 200); the prompt builder (preamble, the
   cut-short and left-out list, the delimited skill block); transcript validation (starts and ends
   with `user`, alternation, empty content, 4,000 per message, 20 user messages, 200,000 in total, the
-  two error codes); `aiOperational` over all four statuses; the §61.10 change (`ai_cancelled` writes
-  `ai_usage` and leaves `last_call_*` untouched; a timeout still updates it).
+  two error codes; non-default limits are covered in §40.18); `aiOperational` over all four
+  statuses; the §61.10 change (`ai_cancelled` writes `ai_usage` and leaves `last_call_*` untouched; a
+  timeout still updates it).
 - **Integration** (web API + DB, provider stubbed): `tryAvailable` is false with the switch off, AI
   off, *Failing*, an undecryptable token, an archived skill or no installable version, and true when
   everything holds; `GET …/try` resolves latest, answers 404 for a restricted skill the caller can't
@@ -14173,12 +14341,15 @@ run. Every other failure updates `last_call_*` as before.
   row (`feature = 'skill_try'`, the caller's `user_id`) and no audit row, and the stub receives
   exactly the §61.5 egress (a secret line redacted, an `assets/` file absent, the transcript
   intact); 422 for each transcript rule; 429 per minute and per day, with `retryAt` at 100 rows;
+  `GET` returns `limits` and `daily`, with `remaining` 0 and a `retryAt` at 100 rows; a 502 still
+  lowers `remaining` by one;
   502 `try_failed` with no provider text; a version yanked between `GET` and `POST` → 404; `PUT
   /api/admin/ai/try` is platform-admin only, audits `settings.updated`, works with no config and no
   key, and survives `DELETE /api/admin/ai`.
-- **e2e** (stub provider, operational, switch on): open a skill → **Try with AI** → the Usage shows →
-  send a message → the reply renders → reload and reopen: the conversation is still there → **Start
-  over** clears it. With the switch off, the button is absent.
+- **e2e** (stub provider, operational, switch on): open a skill → **Try with AI** → the Usage shows
+  and the header shows the daily allowance (*"100 of 100 messages left today"* on a fresh stack) →
+  send a message → the reply renders and the count drops by one → reload and reopen: the
+  conversation is still there → **Start over** clears it. With the switch off, the button is absent.
 
 ## 62. Search gaps
 

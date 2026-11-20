@@ -3,17 +3,19 @@
 // version (GET …/try) and fills the header — the disclosure, what was loaded, the flagged warning.
 // Each message sends the whole transcript (POST …/try); the server rebuilds the skill context from
 // the stored artifact and keeps nothing. The transcript lives in this tab's sessionStorage only.
+// Every limit comes from the server's responses (`limits`, `daily`), never from constants: a
+// platform admin can change them (§40.18), and the panel adopts the values in force as they arrive.
 import { useEffect, useRef, useState } from "react";
 import {
-  AI_TRY_COUNTER_FROM,
-  AI_TRY_DAILY_CAP,
-  AI_TRY_MAX_MESSAGE_CHARS,
-  AI_TRY_MAX_TURNS,
+  AI_TRY_COUNTER_WITHIN,
   AI_TRY_TURNS_WARN,
   tryCanSendMore,
+  tryMessageTooLong,
   tryUserTurns,
   type TryContext,
+  type TryDaily,
   type TryMessage,
+  type TryPanelLimits,
 } from "@skilly/shared/ai-try";
 import { Modal } from "../../../../components/ui";
 import { Markdown } from "../../../../components/Markdown";
@@ -49,6 +51,10 @@ export function TryPanel({
   const base = `/api/skills/${ns}/${slug}/try`;
   const [ctx, setCtx] = useState<TryContext | null>(null);
   const [ctxErr, setCtxErr] = useState<string | null>(null);
+  // The values in force as of the last response (§61.6): the per-conversation limits and the
+  // caller's daily allowance.
+  const [limits, setLimits] = useState<TryPanelLimits | null>(null);
+  const [daily, setDaily] = useState<TryDaily | null>(null);
   const [messages, setMessages] = useState<TryMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
@@ -59,6 +65,12 @@ export function TryPanel({
   const scroll = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const key = ctx && userId ? tryStoreKey(userId, ns, slug, ctx.semver) : null;
+
+  /** Take the limits and the allowance a response carries; every Try response may (§61.6). */
+  const adopt = (j: { limits?: TryPanelLimits; daily?: TryDaily }) => {
+    if (j.limits) setLimits(j.limits);
+    if (j.daily) setDaily(j.daily);
+  };
 
   // Resolve the version once per open; the version is fixed for the panel's life (§61.3).
   useEffect(() => {
@@ -79,6 +91,8 @@ export function TryPanel({
           return;
         }
         setCtx(j as TryContext);
+        setLimits((j as TryContext).limits);
+        setDaily((j as TryContext).daily);
       } catch {
         if (live) setCtxErr("Couldn’t load this skill’s files. Try again later.");
       }
@@ -93,9 +107,16 @@ export function TryPanel({
     if (key) setMessages(loadTryConversation(key));
   }, [key]);
 
-  const turnsLeft = AI_TRY_MAX_TURNS - tryUserTurns(messages);
-  const isFull = full || !tryCanSendMore(messages);
-  const stopped = !!err?.stop || !!ctxErr;
+  const turnsLeft = limits ? limits.maxTurns - tryUserTurns(messages) : 0;
+  const isFull = !!limits && (full || !tryCanSendMore(messages, limits));
+  // At 0 messages left today the composer is disabled and the daily-limit message shows, from the
+  // moment the panel opens (§61.3). The conversation stays readable.
+  const dailyOut = daily?.remaining === 0;
+  const dailyText =
+    daily && dailyOut
+      ? `Daily limit reached (${daily.cap.toLocaleString("en-US")} messages in 24 hours).${daily.retryAt ? ` You can try again after ${fmt.dateTime(daily.retryAt)}.` : ""}`
+      : null;
+  const stopped = !!err?.stop || !!ctxErr || dailyOut;
 
   // The composer only renders once the version resolves, and again after Start over on a full
   // conversation — focus it then.
@@ -121,8 +142,14 @@ export function TryPanel({
 
   const send = async () => {
     const text = draft.trim();
-    if (!ctx || !text || pending || stopped) return;
-    if (!tryCanSendMore(messages, text.length)) {
+    if (!ctx || !limits || !text || pending || stopped) return;
+    // Possible only when the limit was lowered under a draft already typed: the box's maxLength
+    // stops anything longer from being entered.
+    if (text.length > limits.maxMessageChars) {
+      setErr({ text: tryMessageTooLong(limits), retry: false, stop: false });
+      return;
+    }
+    if (!tryCanSendMore(messages, limits, text.length)) {
       setFull(true);
       return;
     }
@@ -141,6 +168,8 @@ export function TryPanel({
         signal: ctrl.signal,
       });
       const j = await r.json().catch(() => ({}));
+      // The limits in force and the allowance, counted after this call when it reached the provider.
+      adopt(j);
       if (r.ok && typeof j.reply === "string") {
         persist([...next, { role: "assistant", content: j.reply }]);
         return;
@@ -149,15 +178,17 @@ export function TryPanel({
         setMessages((m) => m.slice(0, -1));
         setDraft((d) => d || text);
         setFull(true);
+      } else if (j.error === "invalid_transcript" && j.limits && text.length > j.limits.maxMessageChars) {
+        // The per-message limit was lowered since this panel last heard from the server (§61.9).
+        unsend(text, { text: tryMessageTooLong(j.limits), retry: false, stop: false });
+      } else if (j.error === "try_rate_limited" && j.scope === "day") {
+        // The daily-limit message renders from the allowance (adopted above), which also disables
+        // the composer; the message goes back into it.
+        if (!j.daily) setDaily({ cap: Number(j.cap) || 0, remaining: 0, retryAt: typeof j.retryAt === "string" ? j.retryAt : null });
+        setMessages((m) => m.slice(0, -1));
+        setDraft((d) => d || text);
       } else if (j.error === "try_rate_limited") {
-        unsend(text, {
-          text:
-            j.scope === "day"
-              ? `Daily limit reached (${AI_TRY_DAILY_CAP} messages in 24 hours). You can try again after ${fmt.dateTime(j.retryAt)}.`
-              : "Too many messages in a row. Wait a minute and try again.",
-          retry: false,
-          stop: false,
-        });
+        unsend(text, { text: "Too many messages in a row. Wait a minute and try again.", retry: false, stop: false });
       } else if (j.error === "try_unavailable") {
         unsend(text, { text: "Trying skills is no longer available.", retry: false, stop: true });
       } else if (j.error === "version_not_found") {
@@ -173,6 +204,9 @@ export function TryPanel({
       if (ctrl.signal.aborted) {
         setMessages((m) => m.slice(0, -1));
         setDraft((d) => d || text);
+        // The abandoned call still counts: lower the shown allowance at once; the next response
+        // corrects it.
+        setDaily((d) => d && { ...d, remaining: Math.max(0, d.remaining - 1) });
       } else {
         unsend(text, { text: `Couldn’t get a reply from ${aiName}. Try again.`, retry: true, stop: false });
       }
@@ -218,7 +252,7 @@ export function TryPanel({
     </div>
   );
 
-  const footer = !ctx ? null : isFull ? (
+  const footer = !ctx || !limits ? null : isFull ? (
     <div className="try-composer" data-testid="try-full">
       <p className="try-notice" style={{ margin: 0 }}>This conversation is full. Start over to keep trying.</p>
       <div className="try-composer-row">
@@ -233,7 +267,7 @@ export function TryPanel({
         aria-label={`Message ${aiName}`}
         placeholder={stopped ? "" : `Message ${aiName} with this skill loaded…`}
         value={draft}
-        maxLength={AI_TRY_MAX_MESSAGE_CHARS}
+        maxLength={limits.maxMessageChars}
         disabled={stopped}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
@@ -247,12 +281,12 @@ export function TryPanel({
       <div className="try-composer-row">
         {turnsLeft <= AI_TRY_TURNS_WARN && (
           <span className="muted" style={{ fontSize: 12 }} data-testid="try-left">
-            {turnsLeft} of {AI_TRY_MAX_TURNS} messages left
+            {turnsLeft} of {limits.maxTurns} messages left in this conversation
           </span>
         )}
-        {draft.length >= AI_TRY_COUNTER_FROM && (
-          <span className="muted mono" style={{ fontSize: 12 }}>
-            {draft.length.toLocaleString("en-US")} / {AI_TRY_MAX_MESSAGE_CHARS.toLocaleString("en-US")}
+        {limits.maxMessageChars - draft.length <= AI_TRY_COUNTER_WITHIN && (
+          <span className="muted mono" style={{ fontSize: 12 }} data-testid="try-counter">
+            {draft.length.toLocaleString("en-US")} / {limits.maxMessageChars.toLocaleString("en-US")}
           </span>
         )}
         <button
@@ -294,6 +328,11 @@ export function TryPanel({
             ))}
           </ul>
         )}
+        {daily && (
+          <p data-testid="try-daily">
+            {daily.remaining.toLocaleString("en-US")} of {daily.cap.toLocaleString("en-US")} messages left today
+          </p>
+        )}
         {ctx?.contentCheck === "flagged" && (
           <p className="try-flagged" data-testid="try-flagged">
             Content check: flagged, awaiting review. Check any command it suggests before you run it.
@@ -330,6 +369,11 @@ export function TryPanel({
               Cancel
             </button>
           </div>
+        )}
+        {dailyText && (
+          <p className="try-notice" role="alert" data-testid="try-daily-reached">
+            {dailyText}
+          </p>
         )}
         {err?.text && (
           <p className="try-notice" role="alert" data-testid="try-error">

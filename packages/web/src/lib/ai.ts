@@ -7,13 +7,22 @@
 import { aiHostGuard, aiAllowPrivateBaseUrl } from "@skilly/shared/ai-egress";
 import {
   AI_DRAFT_DAILY_CAP_SETTING,
+  AI_TRY_LIMITS_SETTING,
   aiDraftLimitView,
   effectiveAiDraftDailyCap,
   loadPrereviewSetting,
   parseAiDraftDailyCapOverride,
+  parseTryLimitOverrides,
   prereviewCounts,
+  resolveTryLimits,
+  tryLimitOverridesEmpty,
+  tryLimitsView,
   validateAiDraftLimitInput,
+  validateTryLimitsInput,
   type AiDraftLimitView,
+  type TryLimitOverrides,
+  type TryLimits,
+  type TryLimitsView,
 } from "@skilly/shared";
 import { pool } from "./db";
 import { appendAudit } from "./audit";
@@ -145,6 +154,8 @@ export interface AiAdminStatus {
   prereview: { enabled: boolean; effective: boolean; pending: number; failed24h: number };
   /** §61.8 the Try skills switch; `effective` = on and the integration is Operational. */
   try: { enabled: boolean; effective: boolean };
+  /** §40.18 the five Try limits (independent of the provider config and of the Try switch). */
+  tryLimits: TryLimitsView;
   /** §40.16 the private-network switch; `operatorAllowed` = AI_ALLOW_PRIVATE_BASE_URL=1 on web. */
   privateNetwork: { enabled: boolean; operatorAllowed: boolean };
 }
@@ -211,6 +222,7 @@ export async function getAiAdminStatus(): Promise<AiAdminStatus> {
     draftLimit: aiDraftLimitView(await loadAiDraftDailyCapOverride()),
     prereview: await prereviewAdminState(row?.enabled === true && decryptable),
     try: await tryAdminState(st.status === "operational"),
+    tryLimits: tryLimitsView(await loadAiTryLimitOverrides()),
     privateNetwork: { enabled: row ? row.allowPrivateNetwork === true : await loadAiAllowPrivateNetwork(), operatorAllowed: aiAllowPrivateBaseUrl() },
   };
 }
@@ -313,6 +325,52 @@ export async function saveAiDraftLimit(body: unknown, userId: string): Promise<A
   return aiDraftLimitView(v.value);
 }
 
+// ── Try limits (§40.18) ──────────────────────────────────────────────────────────────────────
+
+/** The stored overrides as served (unknown keys dropped, non-integers ignored, out of range clamped). */
+export async function loadAiTryLimitOverrides(): Promise<TryLimitOverrides> {
+  const { rows } = await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [AI_TRY_LIMITS_SETTING]);
+  return parseTryLimitOverrides(rows[0]?.value);
+}
+
+/** The five Try limits in force — read uncached, so a change applies to the next message. */
+export async function aiTryLimits(): Promise<TryLimits> {
+  return resolveTryLimits(await loadAiTryLimitOverrides());
+}
+
+/**
+ * PUT /api/admin/ai/try-limits: all five limits, each a whole number in its range or null for the
+ * default. Independent of the provider config and of the Try switch — no test, no token, no
+ * AI_TOKEN_ENC_KEY needed. Only overrides are stored; the row is deleted when none is left. An
+ * unchanged save writes and audits nothing; otherwise audited as settings.updated.
+ */
+export async function saveAiTryLimits(body: unknown, userId: string): Promise<TryLimitsView | AiApiError> {
+  const v = validateTryLimitsInput(body);
+  if (!v.ok) return { error: "invalid_try_limit", field: v.field, detail: `${v.field}: ${v.error}`, status: 422 };
+  const before = await loadAiTryLimitOverrides();
+  const beforeView = tryLimitsView(before);
+  const afterView = tryLimitsView(v.value);
+  if (JSON.stringify(beforeView) === JSON.stringify(afterView)) return afterView;
+  if (tryLimitOverridesEmpty(v.value)) {
+    await pool.query(`delete from platform_settings where key = $1`, [AI_TRY_LIMITS_SETTING]);
+  } else {
+    await pool.query(
+      `insert into platform_settings (key, value, updated_by, updated_at) values ($1, $2::jsonb, $3, now())
+       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+      [AI_TRY_LIMITS_SETTING, JSON.stringify(v.value), userId],
+    );
+  }
+  await appendAudit(pool, {
+    actorUserId: userId,
+    action: "settings.updated",
+    targetType: "platform_settings",
+    targetId: AI_TRY_LIMITS_SETTING,
+    before: { aiTryLimits: before },
+    after: { aiTryLimits: v.value },
+  });
+  return afterView;
+}
+
 // ── Private-network providers (§40.16) ───────────────────────────────────────────────────────
 
 export interface AiPrivateNetworkResult {
@@ -357,7 +415,7 @@ export async function setAiAllowPrivateNetwork(enabled: boolean, userId: string)
 
 // ── Form input → a connection (shared by models / test / save) ───────────────────────────────
 
-export type AiApiError = { error: string; status: number; detail?: string };
+export type AiApiError = { error: string; status: number; detail?: string; /** The offending input field, when one is to blame (§40.18). */ field?: string };
 
 interface ResolvedInput {
   provider: AiProvider;
