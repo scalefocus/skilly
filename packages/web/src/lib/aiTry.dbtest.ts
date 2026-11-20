@@ -10,7 +10,13 @@
 // not effective, usage/model/content check/file states); POST (one ai_usage row for the caller, no
 // audit row, the exact §61.5 egress), the transcript 422s, the per-minute and daily 429s, 502
 // without provider text in one attempt, an empty reply, a version yanked mid-conversation; the
-// switch (audited, unchanged = no-op, survives Remove integration).
+// switch (audited, unchanged = no-op, survives Remove integration). And the §40.18 limits: `limits`
+// and `daily` on GET and on every POST from the daily-cap check onward (a failed reply still lowers
+// the allowance; the per-minute 429 carries neither); the admin save (422 naming the field, no-op
+// when unchanged, only overrides stored, audited, works without the key, survives Remove
+// integration, null restores the defaults and deletes the row, a hand-edited row is clamped); and
+// each limit taking effect on the next message — a lowered and a raised daily cap, the per-minute
+// number, messages per conversation and a lowered per-message limit.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
@@ -84,6 +90,7 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
   process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
   const { pool } = await import("./db");
   const { tryAvailability, tryContext, trySend } = await import("./aiTry");
+  const ai = await import("./ai");
   const { setAiTryEnabled, invalidatePlatformSettings } = await import("./settings");
   const { encryptAiToken, parseAiTokenKey } = await import("@skilly/shared/ai");
   const stub = await startStub();
@@ -91,6 +98,12 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
   const started = new Date();
   const savedAi = (await pool.query(`select * from ai_integration where id = 1`)).rows[0] ?? null;
   const savedSwitch = (await pool.query(`select value from platform_settings where key = 'ai_try_enabled'`)).rows[0]?.value ?? null;
+  // §40.18: the limits are a platform setting — the test starts from the defaults and puts any stored value back.
+  const LIMITS = "ai_try_limits";
+  const storedLimits = async () => (await pool.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [LIMITS])).rows[0]?.value;
+  const savedLimits = await storedLimits();
+  const DEFAULT_PANEL = { maxTurns: 20, maxMessageChars: 4000, maxTranscriptChars: 200_000 };
+  type Daily = { cap: number; remaining: number; retryAt: string | null };
   // A fixed actor: the switch writes audit rows, which are append-only — never delete it.
   const admin = (await pool.query<{ id: string }>(
     `insert into users (entra_object_id, email, display_name) values ('aitry-admin', 'aitry-admin@org', 'aitry-admin')
@@ -149,6 +162,7 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
   };
 
   try {
+    await pool.query(`delete from platform_settings where key = $1`, [LIMITS]);
     const orgSkill = await mkSkill(`${K}-org`, "org");
     await mkVersion(orgSkill, "1.0.0", { usage: "Ask it to **review this contract**." });
     await mkVersion(orgSkill, "1.1.0-beta.1");
@@ -195,6 +209,8 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
       { path: "scripts/review.sh", state: "loaded" },
       { path: "references/clauses.md", state: "loaded" },
     ]);
+    assert.deepEqual(ctx.body.limits, DEFAULT_PANEL, "§40.18: the per-conversation limits in force");
+    assert.deepEqual(ctx.body.daily, { cap: 100, remaining: 100, retryAt: null }, "the caller's daily allowance");
     assert.equal((await tryContext(who(u1), "aitry-ns", orgSlug, "1.1.0-beta.1", deps)).body.semver, "1.1.0-beta.1", "a prerelease by name");
     for (const gone of ["0.9.0", "0.8.0", "2.0.0", "9.9.9"]) {
       const r = await tryContext(who(u1), "aitry-ns", orgSlug, gone, deps);
@@ -218,6 +234,8 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.match(String(ok.body.reply), /scripts\/review\.sh/);
     assert.equal(ok.body.model, "stub-model");
+    assert.deepEqual(ok.body.limits, DEFAULT_PANEL);
+    assert.deepEqual(ok.body.daily, { cap: 100, remaining: 99, retryAt: null }, "the allowance already counts this call");
     assert.deepEqual(await usageRows(u1), [{ ok: true, error_code: null }]);
     assert.equal((await pool.query(`select 1 from audit_log where actor_user_id = $1`, [u1])).rowCount, 0, "Try is not audited");
     const sent = JSON.parse(stub.state.bodies.at(-1)!) as { system: string; messages: { role: string; content: string }[]; max_tokens: number };
@@ -243,6 +261,7 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     }
     const full = await trySend(who(u2), "aitry-ns", orgSlug, { semver: "1.0.0", messages: many }, deps);
     assert.deepEqual([full.status, full.body.error], [422, "conversation_full"]);
+    assert.deepEqual([full.body.limits, full.body.daily], [DEFAULT_PANEL, { cap: 100, remaining: 100, retryAt: null }], "a 422 tells the panel the values in force");
     assert.deepEqual(await usageRows(u2), [], "refused messages never reach the provider");
 
     // ── Version yanked mid-conversation; restricted skill on POST ─────────────────────────
@@ -262,6 +281,7 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     assert.deepEqual([fail.status, fail.body.error], [502, "try_failed"]);
     assert.ok(!JSON.stringify(fail.body).includes("secret-detail"), "provider text never reaches the caller");
     assert.equal(stub.state.hits - hits, 1, "retry: false — exactly one attempt");
+    assert.deepEqual(fail.body.daily, { cap: 100, remaining: 99, retryAt: null }, "§61.7: a failed reply still counts");
     // §61.11: that failed call turned the pill Failing, which hides Try until a later success.
     assert.equal(await tryAvailability(live), false, "a failed Try call hides Try");
     const hidden = await trySend(who(u4), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
@@ -270,6 +290,7 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     stub.state.mode = "empty";
     const empty = await trySend(who(u4), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
     assert.deepEqual([empty.status, empty.body.error], [502, "try_failed"]);
+    assert.equal((empty.body.daily as Daily).remaining, 98, "the 409 before it reached no provider and cost nothing; this call did");
     assert.equal(await tryAvailability(live), true, "an empty reply is a 502 to the user, but the provider answered — the pill stays Operational");
     stub.state.mode = "ok";
 
@@ -281,6 +302,7 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     }
     const limited = await trySend(who(uMin), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
     assert.deepEqual([limited.status, limited.body.error, limited.body.scope], [429, "try_rate_limited", "minute"]);
+    assert.deepEqual([limited.body.limits, limited.body.daily], [undefined, undefined], "answered before the count is read");
 
     // ── Rolling daily cap: 100 calls in the last 24 h → 429 with retryAt ──────────────────
     const uDay = await mkUser("uday");
@@ -293,8 +315,119 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     assert.deepEqual([capped.status, capped.body.scope, capped.body.cap], [429, "day", 100]);
     const retryAt = new Date(String(capped.body.retryAt)).getTime();
     assert.ok(Math.abs(retryAt - (Date.now() - 100 * 60_000 + 24 * 3600_000)) < 120_000, "retryAt = when the oldest counted call ages out");
+    assert.deepEqual(capped.body.daily, { cap: 100, remaining: 0, retryAt: capped.body.retryAt });
+    // The panel opens blocked: GET already says 0 left and when to come back (§61.3).
+    const cappedGet = await tryContext(who(uDay), "aitry-ns", orgSlug, null, deps);
+    assert.equal(cappedGet.status, 200);
+    assert.deepEqual([(cappedGet.body.daily as Daily).remaining, (cappedGet.body.daily as Daily).retryAt], [0, capped.body.retryAt]);
     await pool.query(`update ai_usage set created_at = created_at - interval '1 day' where user_id = $1 and feature = 'skill_try'`, [uDay]);
     assert.equal((await trySend(who(uDay), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps)).status, 200);
+
+    // ── §40.18 the Try limits: their own save, independent of the provider config and the switch ──
+    const limitAudits = async () =>
+      (await pool.query<{ before: unknown; after: unknown }>(
+        `select before, after from audit_log where action = 'settings.updated' and target_id = $1 and created_at >= $2 order by created_at`,
+        [LIMITS, started],
+      )).rows;
+    const NONE = { dailyCap: null, perMinute: null, maxTurns: null, maxMessageChars: null, maxTranscriptChars: null };
+    const DEFAULT_VIEW = {
+      dailyCap: { default: 100, override: null, effective: 100, min: 1, max: 1000 },
+      perMinute: { default: 10, override: null, effective: 10, min: 1, max: 60 },
+      maxTurns: { default: 20, override: null, effective: 20, min: 1, max: 100 },
+      maxMessageChars: { default: 4000, override: null, effective: 4000, min: 500, max: 20_000 },
+      maxTranscriptChars: { default: 200_000, override: null, effective: 200_000, min: 20_000, max: 400_000 },
+    };
+    assert.deepEqual((await ai.getAiAdminStatus()).tryLimits, DEFAULT_VIEW);
+    // Invalid input → 422 invalid_try_limit naming the field; nothing stored, nothing audited.
+    const refused = async (body: unknown) => {
+      const r = await ai.saveAiTryLimits(body, admin);
+      return ai.isAiApiError(r) ? [r.error, r.status, r.field] : null;
+    };
+    const invalid: [unknown, string][] = [
+      [null, "body"],
+      [{}, "dailyCap"],
+      [{ ...NONE, dailyCap: 0 }, "dailyCap"],
+      [{ ...NONE, perMinute: 61 }, "perMinute"],
+      [{ ...NONE, maxTurns: 1.5 }, "maxTurns"],
+      [{ ...NONE, maxMessageChars: "500" }, "maxMessageChars"],
+      [{ ...NONE, maxTranscriptChars: 400_001 }, "maxTranscriptChars"],
+    ];
+    for (const [body, field] of invalid) assert.deepEqual(await refused(body), ["invalid_try_limit", 422, field], JSON.stringify(body));
+    // Restoring defaults that are already in force is a no-op.
+    assert.deepEqual(await ai.saveAiTryLimits(NONE, admin), DEFAULT_VIEW);
+    assert.equal(await storedLimits(), undefined);
+    assert.equal((await limitAudits()).length, 0);
+    // Saved without AI_TOKEN_ENC_KEY (not subject to ai_key_missing): only the overrides are stored; audited.
+    delete process.env.AI_TOKEN_ENC_KEY;
+    const tightened = await ai.saveAiTryLimits({ ...NONE, dailyCap: 3, perMinute: 2 }, admin);
+    process.env.AI_TOKEN_ENC_KEY = AI_KEY_B64;
+    assert.deepEqual(tightened, {
+      ...DEFAULT_VIEW,
+      dailyCap: { default: 100, override: 3, effective: 3, min: 1, max: 1000 },
+      perMinute: { default: 10, override: 2, effective: 2, min: 1, max: 60 },
+    });
+    assert.deepEqual(await storedLimits(), { dailyCap: 3, perMinute: 2 });
+    assert.deepEqual((await ai.getAiAdminStatus()).tryLimits, tightened);
+    // Saving the values already stored writes and audits nothing.
+    assert.deepEqual(await ai.saveAiTryLimits({ ...NONE, dailyCap: 3, perMinute: 2 }, admin), tightened);
+    assert.deepEqual(await limitAudits(), [{ before: { aiTryLimits: {} }, after: { aiTryLimits: { dailyCap: 3, perMinute: 2 } } }]);
+
+    // A lowered daily cap applies to the next message: 3 calls in the last 24 hours → 429 naming the cap in force.
+    const seedCalls = (userId: string, count: number) =>
+      pool.query(
+        `insert into ai_usage (created_at, feature, user_id, provider, model, latency_ms, ok)
+         select now() - (g || ' minutes')::interval, 'skill_try', $1, 'anthropic', 'stub-model', 5, true from generate_series(1, $2::int) g`,
+        [userId, count],
+      );
+    const uLow = await mkUser("ulow");
+    await seedCalls(uLow, 3);
+    const low = await trySend(who(uLow), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
+    assert.deepEqual([low.status, low.body.scope, low.body.cap], [429, "day", 3]);
+    assert.deepEqual([(low.body.daily as Daily).cap, (low.body.daily as Daily).remaining], [3, 0]);
+    assert.ok(Math.abs(new Date(String(low.body.retryAt)).getTime() - (Date.now() - 3 * 60_000 + 24 * 3600_000)) < 120_000, "retryAt is computed against the new cap");
+    // perMinute 2: this person's third POST in a minute is refused, whatever the first two were.
+    assert.equal((await trySend(who(uLow), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps)).body.scope, "day");
+    const third = await trySend(who(uLow), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
+    assert.deepEqual([third.status, third.body.scope], [429, "minute"]);
+
+    // A raised daily cap lets the same history through at once; the allowance counts the new call.
+    const uRaise = await mkUser("uraise");
+    await seedCalls(uRaise, 3);
+    assert.equal((await trySend(who(uRaise), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps)).status, 429);
+    await ai.saveAiTryLimits({ ...NONE, dailyCap: 5 }, admin);
+    const raised = await trySend(who(uRaise), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs() }, deps);
+    assert.equal(raised.status, 200, JSON.stringify(raised.body));
+    assert.deepEqual(raised.body.daily, { cap: 5, remaining: 1, retryAt: null });
+
+    // Per conversation: with maxTurns 1 a second user message is conversation_full; a message over
+    // a lowered per-message limit is invalid_transcript when it is the one being sent…
+    await ai.saveAiTryLimits({ ...NONE, maxTurns: 1, maxMessageChars: 500 }, admin);
+    const uConv = await mkUser("uconv");
+    const tight = { maxTurns: 1, maxMessageChars: 500, maxTranscriptChars: 200_000 };
+    assert.deepEqual((await tryContext(who(uConv), "aitry-ns", orgSlug, null, deps)).body.limits, tight, "GET returns the limits in force");
+    const second = await trySend(who(uConv), "aitry-ns", orgSlug, { semver: "1.0.0", messages: [{ role: "user", content: "q" }, { role: "assistant", content: "a" }, { role: "user", content: "q" }] }, deps);
+    assert.deepEqual([second.status, second.body.error, second.body.limits], [422, "conversation_full", tight]);
+    const tooLong = await trySend(who(uConv), "aitry-ns", orgSlug, { semver: "1.0.0", messages: msgs("x".repeat(501)) }, deps);
+    assert.deepEqual([tooLong.status, tooLong.body.error, tooLong.body.limits], [422, "invalid_transcript", tight]);
+    // …and conversation_full when it is an earlier one: the conversation was within the old limit.
+    await ai.saveAiTryLimits({ ...NONE, maxMessageChars: 500 }, admin);
+    const older = await trySend(who(uConv), "aitry-ns", orgSlug, { semver: "1.0.0", messages: [{ role: "user", content: "x".repeat(600) }, { role: "assistant", content: "a" }, { role: "user", content: "q" }] }, deps);
+    assert.deepEqual([older.status, older.body.error], [422, "conversation_full"]);
+    assert.deepEqual(await usageRows(uConv), [], "none of them reached the provider");
+
+    // A hand-edited row: out of range is clamped, a non-number falls back to the default, an unknown key is ignored.
+    await pool.query(`update platform_settings set value = $2::jsonb where key = $1`, [LIMITS, JSON.stringify({ dailyCap: 0, perMinute: 9999, maxTurns: "many", bogus: 1 })]);
+    assert.deepEqual(await ai.aiTryLimits(), { dailyCap: 1, perMinute: 60, maxTurns: 20, maxMessageChars: 4000, maxTranscriptChars: 200_000 });
+
+    // The limits survive Remove integration; null restores every default and deletes the row.
+    await ai.saveAiTryLimits({ ...NONE, dailyCap: 250 }, admin);
+    assert.deepEqual(await ai.removeAiIntegration(admin), { ok: true });
+    assert.deepEqual(await storedLimits(), { dailyCap: 250 }, "Remove integration keeps the limits");
+    assert.equal((await ai.getAiAdminStatus()).tryLimits.dailyCap.effective, 250);
+    assert.deepEqual(await ai.saveAiTryLimits(NONE, admin), DEFAULT_VIEW);
+    assert.equal(await storedLimits(), undefined);
+    assert.deepEqual((await limitAudits()).at(-1), { before: { aiTryLimits: { dailyCap: 250 } }, after: { aiTryLimits: {} } });
+    await operational();
 
     // ── The switch: off → 409 on an open panel; audited; unchanged = no-op; survives removal ─
     const before = await auditCount();
@@ -331,6 +464,10 @@ test("§61 Try a skill: availability, context, egress, failures, limits and the 
     }
     if (savedSwitch === null) await pool.query(`delete from platform_settings where key = 'ai_try_enabled'`);
     else await pool.query(`update platform_settings set value = $1::jsonb where key = 'ai_try_enabled'`, [JSON.stringify(savedSwitch)]);
+    await pool.query(`delete from platform_settings where key = $1`, [LIMITS]);
+    if (savedLimits !== undefined) {
+      await pool.query(`insert into platform_settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value`, [LIMITS, JSON.stringify(savedLimits)]);
+    }
     invalidatePlatformSettings();
   }
 }));

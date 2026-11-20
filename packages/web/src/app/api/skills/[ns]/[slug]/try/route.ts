@@ -1,7 +1,9 @@
 // Try a skill before installing (SKILLY_SPEC.md §61.6). Any authenticated user who can see the
 // skill, while the Try switch is on and the AI integration is Operational.
-// GET ?semver= → { semver, model, usage, contentCheck, files } — resolves the version and fills the
-// panel header; no provider call. POST { semver, messages } → { reply, model } — one message.
+// GET ?semver= → { semver, model, usage, contentCheck, files, limits, daily } — resolves the version
+// and fills the panel header; no provider call. POST { semver, messages } →
+// { reply, model, limits, daily } — one message. `limits` and `daily` are the admin-adjustable
+// limits in force and the caller's daily allowance (§40.18).
 // The conversation is never stored and request bodies are never logged (§61.5).
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../../../lib/auth";
@@ -14,8 +16,11 @@ import { canonicalSkillParams } from "../../../../../../lib/skillMoves";
 
 export const dynamic = "force-dynamic";
 
-/** A full 200,000-character transcript fits with room for JSON escaping; anything larger is refused unread. */
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
+/**
+ * A transcript at the highest conversation total an admin can set (400,000 characters, §40.18) fits
+ * with room for multi-byte text and JSON escaping; anything larger is refused unread.
+ */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 async function authenticate(): Promise<{ error: Response } | { access: EffectiveAccess & { userId: string } }> {
   const session = await getServerSession(authOptions);
