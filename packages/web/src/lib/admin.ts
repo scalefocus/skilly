@@ -2,11 +2,12 @@
 // All mutations are audit-logged. Roles still resolve from SCIM-synced membership; this
 // only manages the (group → namespace → role) bindings.
 import type { Pool } from "pg";
-import type { Role } from "@skilly/shared";
+import type { EffectiveAccess, Role } from "@skilly/shared";
 import { marketplaceName, reservedNameConflicts, maintainerContactError, normalizeMaintainerContact } from "@skilly/shared";
 import { appendAudit } from "./audit";
 import { invalidateAccessCaches } from "./access";
 import { slugAwaitingPurge } from "./namespaceDelete";
+import { proposalCountsByNamespace, updateNamespaceSettings } from "./namespaceAdmin";
 import { getMarketplaceNamePrefix, getPlatformSettings, type PlatformSettings } from "./settings";
 
 export interface RoleMappingView {
@@ -25,6 +26,12 @@ export interface NamespaceView {
   maintainerContact: string | null;
   /** Is this namespace's Claude plugin marketplace served? (§30.6) */
   marketplaceEnabled: boolean;
+  /** §65.3: the review target in business days, or null for none (§75.5). */
+  reviewTargetDays: number | null;
+  /** §65.7: live open / unassigned / overdue proposal counts (§75.5). */
+  openProposals: number;
+  unassignedProposals: number;
+  overdueProposals: number;
   mappings: RoleMappingView[];
 }
 export interface GroupView { id: string; externalId: string; displayName: string }
@@ -76,8 +83,8 @@ export async function countNamespaces(pool: Pool, q?: string, requireReview?: bo
 export async function listNamespacePage(pool: Pool, offset: number, limit = NS_PAGE_SIZE, q?: string, requireReview?: boolean): Promise<NamespaceView[]> {
   const f = nsFilter(q, requireReview);
   const [nsRows, mappings] = await Promise.all([
-    pool.query<{ id: string; slug: string; display_name: string; require_review: boolean; maintainer_contact: string | null; marketplace_enabled: boolean }>(
-      `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled from namespaces ${f.where} order by slug limit $${f.params.length + 1} offset $${f.params.length + 2}`,
+    pool.query<{ id: string; slug: string; display_name: string; require_review: boolean; maintainer_contact: string | null; marketplace_enabled: boolean; review_target_days: number | null }>(
+      `select id, slug, display_name, require_review, maintainer_contact, marketplace_enabled, review_target_days from namespaces ${f.where} order by slug limit $${f.params.length + 1} offset $${f.params.length + 2}`,
       [...f.params, Math.min(200, limit), Math.max(0, offset)],
     ),
     allMappings(pool),
@@ -86,15 +93,24 @@ export async function listNamespacePage(pool: Pool, offset: number, limit = NS_P
   for (const m of mappings) {
     if (m.namespaceId != null) (byNs.get(m.namespaceId) ?? byNs.set(m.namespaceId, []).get(m.namespaceId)!).push(m);
   }
-  return nsRows.rows.map((n) => ({
-    id: n.id,
-    slug: n.slug,
-    displayName: n.display_name,
-    requireReview: n.require_review,
-    maintainerContact: n.maintainer_contact,
-    marketplaceEnabled: n.marketplace_enabled,
-    mappings: byNs.get(n.id) ?? [],
-  }));
+  // §75.5: the page's live proposal counts in one query, not one per namespace.
+  const counts = await proposalCountsByNamespace(nsRows.rows.map((n) => n.id), pool);
+  return nsRows.rows.map((n) => {
+    const c = counts.get(n.id);
+    return {
+      id: n.id,
+      slug: n.slug,
+      displayName: n.display_name,
+      requireReview: n.require_review,
+      maintainerContact: n.maintainer_contact,
+      marketplaceEnabled: n.marketplace_enabled,
+      reviewTargetDays: n.review_target_days,
+      openProposals: c?.open ?? 0,
+      unassignedProposals: c?.unassigned ?? 0,
+      overdueProposals: c?.overdue ?? 0,
+      mappings: byNs.get(n.id) ?? [],
+    };
+  });
 }
 
 async function allMappings(pool: Pool): Promise<RoleMappingView[]> {
@@ -213,6 +229,57 @@ export async function updateNamespace(
   );
   await appendAudit(pool, { actorUserId, action: "namespace.updated", targetType: "namespace", targetId: id, namespaceId: id, after: patch });
   return null;
+}
+
+/** The body of `PATCH /api/admin/namespaces/:id`. `reviewTargetDays` is validated by the writer. */
+export interface AdminNamespacePatch {
+  requireReview?: boolean;
+  maintainerContact?: string | null;
+  marketplaceEnabled?: boolean;
+  reviewTargetDays?: unknown;
+}
+
+export type AdminNamespacePatchResult =
+  | { ok: true; tokensRevoked?: number }
+  | { ok: false; status: 403 | 404 | 422; error: string };
+
+/**
+ * `PATCH /api/admin/namespaces/:id` — the Administration → Namespaces card's writes (§30.6, §75.5).
+ * Platform admins only.
+ *
+ * The marketplace switch and the review target go through lib/namespaceAdmin's writer, the one the
+ * Namespace administration page uses, so token revocation, the shared review-target check, the
+ * re-dating of open proposals (§65.3) and the audit rows are identical on both surfaces. The review
+ * policy and the maintainer contact keep this file's own writer, as before.
+ */
+export async function patchNamespaceFromAdministration(
+  pool: Pool,
+  access: EffectiveAccess,
+  id: string,
+  body: AdminNamespacePatch,
+  actorUserId: string,
+): Promise<AdminNamespacePatchResult> {
+  if (!access.isPlatformAdmin) return { ok: false, status: 403, error: "platform admin required" };
+
+  if (typeof body.marketplaceEnabled === "boolean" || body.reviewTargetDays !== undefined) {
+    const prefix = await getMarketplaceNamePrefix(pool);
+    const result = await updateNamespaceSettings(
+      access,
+      id,
+      {
+        ...(typeof body.marketplaceEnabled === "boolean" ? { marketplaceEnabled: body.marketplaceEnabled } : {}),
+        ...(body.reviewTargetDays !== undefined ? { reviewTargetDays: body.reviewTargetDays } : {}),
+      },
+      actorUserId,
+      prefix,
+    );
+    if (!result.ok) return { ok: false, status: result.status, error: result.error };
+    return { ok: true, tokensRevoked: result.tokensRevoked };
+  }
+
+  const err = await updateNamespace(pool, id, { requireReview: body.requireReview, maintainerContact: body.maintainerContact }, actorUserId);
+  if (err) return { ok: false, status: 422, error: err.error };
+  return { ok: true };
 }
 
 export async function createRoleMapping(

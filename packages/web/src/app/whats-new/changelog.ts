@@ -15,6 +15,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "2.67.0",
+    date: "2026-11-20",
+    summary:
+      "Platform admins now manage namespaces in one place: the Namespaces card on Platform administration. Each namespace there gains its review target, with open, unassigned and overdue counts, and its own policy rules. Namespace administration is no longer in a platform admin's sidebar, and its old link opens that card. Namespace admins see no change.",
+  },
+  {
     version: "2.66.1",
     date: "2026-11-19",
     summary:

@@ -1,6 +1,7 @@
 // e2e: review assignments and targets (SKILLY_SPEC.md §65.12).
 //
-// Covers: a namespace admin sets a 1-day review target on /namespaces; a proposal in that namespace
+// Covers: the platform-admin dev user sets a 1-day review target on the Administration → Namespaces
+// card (§75.4 — a platform admin has no Namespace administration page); a proposal in that namespace
 // shows *Reviewer: Unassigned* and the *Review target* line with its due pill; the proposer is never
 // offered *Assign to me* on their own proposal and never appears in the picker; on the queue,
 // *Unassigned* keeps the row (with its due pill) and *Assigned to me* drops it.
@@ -11,6 +12,7 @@
 import { test, expect, devSignIn, signedInDisplayName } from "./fixtures";
 import { clickAndAwait, gotoLoaded } from "./helpers/ready";
 import { createHostedProposal } from "./helpers/skills";
+import { openAdminNamespace } from "./helpers/adminNamespaces";
 
 const NS = "team-a"; // seeded by db/seed.dev.sql
 
@@ -23,16 +25,21 @@ test("§65 review target, reviewer line, picker and queue filters", async ({ pag
   const slug = `e2e-assign-${Date.now().toString(36)}`;
   let proposalId: string | null = null;
   try {
-    // 1. A 1-business-day target, set on the Namespace administration page — from no target, so the
-    //    field is dirty and Save enabled whatever an earlier attempt left behind.
+    // 1. A 1-business-day target, set on the Administration → Namespaces card — from no target, so
+    //    the field is dirty and Save enabled whatever an earlier attempt left behind.
     const cleared = await page.request.patch(`/api/namespaces/${team!.id}/settings`, { data: { reviewTargetDays: null } });
     expect(cleared.ok(), await cleared.text()).toBeTruthy();
-    await gotoLoaded(page, "/namespaces", "/api/namespaces/administered");
-    const card = page.locator("div.row").filter({ hasText: `@${NS}` }).first();
+    const card = await openAdminNamespace(page, NS);
+    // No target yet: the counts line has no "overdue" entry.
+    await expect(card.getByTestId("ns-review-counts")).toContainText("unassigned");
+    await expect(card.getByTestId("ns-review-counts")).not.toContainText("overdue");
     await card.getByTestId("ns-review-target-input").fill("1");
-    await clickAndAwait(page, () => card.getByTestId("ns-review-target-save").click(), `/api/namespaces/${team!.id}/settings`, { method: "PATCH" });
+    await clickAndAwait(page, () => card.getByTestId("ns-review-target-save").click(), `/api/admin/namespaces/${team!.id}`, { method: "PATCH" });
     await expect(card.getByText("Review target saved.")).toBeVisible();
     await expect(card.getByTestId("ns-review-counts")).toContainText("overdue");
+    // The card wrote through the same writer the namespace-admin endpoint reads back (§75.5).
+    const stored = await (await page.request.get(`/api/namespaces/${team!.id}/settings`)).json();
+    expect(stored.namespace.reviewTargetDays).toBe(1);
 
     // 2. A proposal in that namespace: unassigned, with a due date.
     proposalId = await createHostedProposal(page, { namespaceSlug: NS, skillSlug: slug });

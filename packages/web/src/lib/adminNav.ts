@@ -1,5 +1,6 @@
 // The sidebar's Administration group (SKILLY_SPEC.md §71): which admin pages a viewer sees, in what
 // order, which one is active, the collapsed header's badge sum, and the group's starting state.
+// Also the gate of the one page whose item a platform admin does not get, /namespaces (§75).
 // Pure — no React, no storage, no fetch — so the client shell and the unit tests share it.
 
 /** The badge counts the shell polls from GET /api/nav-badges that belong to group items. */
@@ -10,8 +11,11 @@ export type AdminNavItem = {
   label: string;
   /** SVG path for the 24×24 nav glyph. */
   icon: string;
-  /** "platform" = platform admins only; "admin" = platform admins and namespace admins. */
-  audience: "platform" | "admin";
+  /**
+   * "platform" = platform admins only; "admin" = platform admins and namespace admins;
+   * "namespace" = namespace admins who are NOT platform admins (§75).
+   */
+  audience: "platform" | "admin" | "namespace";
   badge?: { key: AdminBadgeKey; label: string };
 };
 
@@ -25,7 +29,8 @@ export const ADMIN_NAV_STORAGE_KEY = "skilly-nav-admin";
 export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
   // Sidebar-only label: the page's eyebrow. Presence and RUM keep "Administration" (§71.7).
   { href: "/admin", label: "Platform administration", audience: "platform", icon: "M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4" },
-  { href: "/namespaces", label: "Namespace administration", audience: "admin", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" },
+  // §75: not for platform admins — their Administration page's Namespaces card holds the same settings.
+  { href: "/namespaces", label: "Namespace administration", audience: "namespace", icon: "M3 7h18M3 12h18M3 17h18M7 4v16" },
   { href: "/audit", label: "Audit log", audience: "admin", icon: "M5 4h11l3 3v13H5zM8 11h8M8 15h5M8 7h4" },
   { href: "/system-log", label: "System log", audience: "platform", icon: "M4 5h16v14H4zM7 9h2M7 13h2M7 17h2M12 9h5M12 13h5", badge: { key: "systemLog", label: "new" } },
   // §32.7 the sidebar label only; the page title stays "Real user monitoring."
@@ -37,13 +42,29 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
 ];
 
 /**
- * The items this viewer sees: all of them for a platform admin, the shared-audience items for a
- * namespace admin, none for anyone else (then the group is not drawn at all).
+ * The items this viewer sees: every item but Namespace administration for a platform admin (§75 —
+ * a platform admin who is also a namespace admin counts as a platform admin), Namespace
+ * administration and the shared-audience items for a namespace admin, none for anyone else (then
+ * the group is not drawn at all).
  */
 export function adminNavItems(viewer: { isPlatformAdmin: boolean; isNamespaceAdmin: boolean }): AdminNavItem[] {
-  if (viewer.isPlatformAdmin) return [...ADMIN_NAV_ITEMS];
-  if (viewer.isNamespaceAdmin) return ADMIN_NAV_ITEMS.filter((i) => i.audience === "admin");
+  if (viewer.isPlatformAdmin) return ADMIN_NAV_ITEMS.filter((i) => i.audience !== "namespace");
+  if (viewer.isNamespaceAdmin) return ADMIN_NAV_ITEMS.filter((i) => i.audience !== "platform");
   return [];
+}
+
+/** What `/namespaces` does for the signed-in viewer (§75.3). */
+export type NamespacesPageGate = "wait" | "redirect" | "render";
+
+/**
+ * The Namespace administration page's gate (§75.3): wait (skeleton) until the viewer's role is
+ * known, send a platform admin to Administration, render for anyone else. `me` is the `/api/me`
+ * answer, null while it is loading; `failed` = that request errored, so the role will not arrive
+ * and the page renders its own error or empty state instead of a skeleton forever.
+ */
+export function namespacesPageGate(me: { isPlatformAdmin?: boolean } | null | undefined, failed = false): NamespacesPageGate {
+  if (!me) return failed ? "render" : "wait";
+  return me.isPlatformAdmin === true ? "redirect" : "render";
 }
 
 /** `pathname` is `href` itself or a path under it — a whole-segment match, so /admins ≠ /admin. */

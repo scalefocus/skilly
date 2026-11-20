@@ -1,8 +1,9 @@
 // e2e: policy rules — policy-as-prompt, judged in the §46 pre-review (SKILLY_SPEC.md §47.14). Runs against the dev stack
 // (SKILLY_DEV_AUTH=1) as the seeded platform admin.
 //
-// Journey: a namespace admin writes an ENFORCED rule on the Namespace administration page → the
-// propose form shows it in the "Policy rules (1)" panel once that namespace is picked → a hosted
+// Journey: the platform admin writes an ENFORCED rule in the namespace's Policy rules section on the
+// Administration → Namespaces card (§75.4 — a platform admin has no Namespace administration page) →
+// the propose form shows it in the "Policy rules (1)" panel once that namespace is picked → a hosted
 // proposal there gets a Policy section → accepting needs the override, whose dialog names the rule
 // → after an override-accept the skill page carries the policy chip.
 //
@@ -16,7 +17,8 @@
 // rule and skill in `finally`.
 import { test, expect, devSignIn } from "./fixtures";
 import { createHostedProposal, deleteSkillFully } from "./helpers/skills";
-import { gotoReady, NAV_TIMEOUT } from "./helpers/ready";
+import { awaitApi, gotoReady, NAV_TIMEOUT } from "./helpers/ready";
+import { openAdminNamespace } from "./helpers/adminNamespaces";
 import type { Page } from "@playwright/test";
 
 const NS = "e2e-policy";
@@ -46,13 +48,19 @@ test.describe.serial("policy rules (§47)", () => {
     const slug = `e2e-policy-${Date.now().toString(36)}`;
 
     try {
-      // ── 1. Write the rule on the Namespace administration page, enforced from the start. ──
-      await gotoReady(page, "/namespaces");
-      const card = page.locator("[data-last-card]").filter({ hasText: `@${NS}` });
-      await expect(card).toBeVisible({ timeout: NAV_TIMEOUT });
-      await card.getByTestId("ns-policy-rules").locator("summary").click();
-      const editor = card.getByTestId("policy-rules-editor");
+      // ── 1. Write the rule on the Administration → Namespaces card, enforced from the start. ──
+      const card = await openAdminNamespace(page, NS);
+      // The section is lazy there (§75.4): nothing is fetched until it is first opened, and
+      // opening it requests this namespace's rules.
+      const section = card.getByTestId("ns-policy-rules");
+      await expect(section.getByTestId("policy-rules-editor")).toHaveCount(0);
+      await Promise.all([
+        awaitApi(page, new RegExp(`/api/policy/rules\\?all=1&ns=${NS}`)),
+        section.locator("summary").click(),
+      ]);
+      const editor = section.getByTestId("policy-rules-editor");
       await expect(editor).toBeVisible({ timeout: NAV_TIMEOUT });
+      await expect(section.getByTestId("policy-flags")).toBeVisible();
       await editor.getByTestId("policy-add-rule").click();
       await editor.getByLabel("Title").fill(title);
       await editor.getByLabel("Rule").fill("No skill may call an external HTTP API except through an approved adapter.");
@@ -80,12 +88,12 @@ test.describe.serial("policy rules (§47)", () => {
       // ── 3. A proposal there gets a Policy section; with no worker the check never lands. ──
       const id = await createHostedProposal(page, { namespaceSlug: NS, skillSlug: slug, title: "E2E Policy" });
       await gotoReady(page, `/proposals/${id}`);
-      const section = page.getByTestId("policy-section");
-      await expect(section).toBeVisible({ timeout: NAV_TIMEOUT });
+      const policySection = page.getByTestId("policy-section");
+      await expect(policySection).toBeVisible({ timeout: NAV_TIMEOUT });
       // No worker in the e2e stack: the §46 run never lands — pending, or off / unavailable when the
       // pre-review switch or the AI integration is off (the usual case here).
-      await expect(section).toHaveAttribute("data-status", /^(pending|off|unavailable|skipped)$/);
-      await expect(section.getByTestId("policy-status-line")).toContainText(/Policy check (pending|unavailable|skipped)/);
+      await expect(policySection).toHaveAttribute("data-status", /^(pending|off|unavailable|skipped)$/);
+      await expect(policySection.getByTestId("policy-status-line")).toContainText(/Policy check (pending|unavailable|skipped)/);
 
       // ── 4. Accepting needs the override; the decision area names the rule. ──
       expect((await page.request.post(`/api/proposals/${id}/actions`, { data: { action: "start_review" } })).ok()).toBeTruthy();

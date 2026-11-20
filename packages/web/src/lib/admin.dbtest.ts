@@ -5,12 +5,27 @@
 //   SKILLY_DB_E2E=1 DATABASE_URL=postgres://… pnpm --filter @skilly/web test:db
 //
 // Validates: namespace create/update (incl. global review guard), role-mapping create with
-// the platform/namespace invariants, delete, and that each mutation writes an audit row.
-import { test } from "node:test";
+// the platform/namespace invariants, delete, and that each mutation writes an audit row. Also the
+// Administration → Namespaces card's review target (§75.5): the list carries the target and the
+// live proposal counts, and the admin PATCH saves, clears, refuses and audits it.
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { createNamespace, updateNamespace, createRoleMapping, deleteRoleMapping, getAdminConfig } from "./admin";
+import { randomUUID } from "node:crypto";
+import { addBusinessDays, type EffectiveAccess } from "@skilly/shared";
+import {
+  createNamespace, updateNamespace, createRoleMapping, deleteRoleMapping, getAdminConfig,
+  listNamespacePage, patchNamespaceFromAdministration,
+} from "./admin";
 
 const enabled = process.env.SKILLY_DB_E2E === "1";
+
+// The §75.5 test goes through lib/namespaceAdmin's writer, which uses the app's own pool.
+after(async () => {
+  if (enabled) {
+    const { pool } = await import("./db");
+    await pool.end();
+  }
+});
 
 test("admin flows: namespaces + role mappings + audit", { skip: !enabled }, async () => {
   const { Pool } = await import("pg");
@@ -127,4 +142,135 @@ test("admin flows: namespaces + role mappings + audit", { skip: !enabled }, asyn
   } finally {
     await pool.end();
   }
+});
+
+// §75.5 — the Administration → Namespaces card. Per-run rows (namespace, submitter, proposals) are
+// never deleted: audit_log is append-only and references the namespace. Every exact assertion is
+// scoped to this run's own namespace, since the DB test files share one database.
+test("§75.5 Administration card: review target and live proposal counts", { skip: !enabled }, async () => {
+  const { pool } = await import("./db");
+  const tag = `adm75${Date.now().toString(36)}`;
+  const one = async <T>(sql: string, params: unknown[] = []): Promise<T> => (await pool.query(sql, params)).rows[0] as T;
+
+  // A fixed, upserted actor: its audit rows pin it forever (FK + append-only).
+  const actor = (await one<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ('admin-oid','admin@org','Admin')
+     on conflict (entra_object_id) do update set email = excluded.email returning id`,
+  )).id;
+  const submitter = (await one<{ id: string }>(
+    `insert into users (entra_object_id, email, display_name) values ($1, $2, $3) returning id`,
+    [`${tag}-submitter`, `${tag}-submitter@org`, `${tag} submitter`],
+  )).id;
+  const nsSlug = `${tag}-ns`;
+  const ns = (await one<{ id: string }>(
+    `insert into namespaces (slug, display_name, require_review) values ($1, $1, true) returning id`,
+    [nsSlug],
+  )).id;
+
+  const platform: EffectiveAccess = { isPlatformAdmin: true, namespaceRoles: new Map() };
+  const nsAdmin: EffectiveAccess = { isPlatformAdmin: false, namespaceRoles: new Map([[ns, "namespace_admin"]]) };
+
+  const mkProposal = async (slug: string, state = "proposed") => {
+    const id = (await one<{ id: string }>(
+      `insert into proposals (target_namespace_id, proposed_semver, state, submitted_by)
+       values ($1, '1.0.0', $2, $3) returning id`,
+      [ns, state, submitter],
+    )).id;
+    await pool.query(
+      `insert into proposal_revisions (proposal_id, revision_no, payload, author) values ($1, 1, $2::jsonb, $3)`,
+      [id, JSON.stringify({ metadata: { skillSlug: slug, title: slug, description: "d", categories: [], toolHarness: "generic" } }), submitter],
+    );
+    return id;
+  };
+  const turn = (id: string) =>
+    one<{ turn_started_at: Date; turn_due_at: Date | null }>(`select turn_started_at, turn_due_at from proposals where id = $1`, [id]);
+  // The card's row for this namespace, through the paged-list form (the search narrows to it).
+  const row = async () => {
+    const page = await listNamespacePage(pool, 0, 200, nsSlug);
+    const mine = page.find((n) => n.id === ns);
+    assert.ok(mine, "the namespace is listed");
+    return mine;
+  };
+  const patch = (access: EffectiveAccess, id: string, body: Parameters<typeof patchNamespaceFromAdministration>[3]) =>
+    patchNamespaceFromAdministration(pool, access, id, body, actor);
+
+  // ── a namespace with nothing open ───────────────────────────────────────────────────────
+  let v = await row();
+  assert.equal(v.reviewTargetDays, null);
+  assert.deepEqual([v.openProposals, v.unassignedProposals, v.overdueProposals], [0, 0, 0]);
+
+  // ── the three counts ────────────────────────────────────────────────────────────────────
+  // Three open proposals (one of them assigned) and a decided one, which never counts.
+  const pWaiting = await mkProposal(`${tag}-waiting`);
+  const pAssigned = await mkProposal(`${tag}-assigned`, "under_review");
+  await mkProposal(`${tag}-changes`, "changes_requested");
+  await mkProposal(`${tag}-rejected`, "rejected");
+  await pool.query(`update proposals set assignee_id = $2 where id = $1`, [pAssigned, actor]);
+  v = await row();
+  assert.deepEqual([v.openProposals, v.unassignedProposals, v.overdueProposals], [3, 2, 0], "open, unassigned, overdue");
+
+  // ── saving the target: stored, and the namespace's open proposals re-dated (§65.3) ──────
+  assert.equal((await turn(pWaiting)).turn_due_at, null, "no target, no due date");
+  assert.deepEqual(await patch(platform, ns, { reviewTargetDays: 2 }), { ok: true, tokensRevoked: 0 });
+  v = await row();
+  assert.equal(v.reviewTargetDays, 2);
+  let t = await turn(pWaiting);
+  assert.equal(t.turn_due_at?.toISOString(), addBusinessDays(t.turn_started_at, 2).toISOString(), "the save re-dated the open proposal");
+  // A reviewer-turn proposal past its due instant is the one overdue.
+  await pool.query(`update proposals set turn_started_at = now() - interval '30 days' where id = $1`, [pWaiting]);
+  assert.ok((await turn(pWaiting)).turn_due_at!.getTime() < Date.now());
+  v = await row();
+  assert.deepEqual([v.openProposals, v.unassignedProposals, v.overdueProposals], [3, 2, 1]);
+  // The full-config form carries the same fields on every namespace it returns.
+  const cfg = await getAdminConfig(pool);
+  assert.ok(cfg.namespaces.length > 0);
+  for (const n of cfg.namespaces) {
+    assert.ok(n.reviewTargetDays === null || Number.isInteger(n.reviewTargetDays), `${n.slug}: reviewTargetDays`);
+    for (const k of ["openProposals", "unassignedProposals", "overdueProposals"] as const) {
+      assert.ok(Number.isInteger(n[k]) && n[k] >= 0, `${n.slug}: ${k}`);
+    }
+  }
+
+  // ── refused values: 422 with the shared validator's message, and the row untouched ──────
+  for (const bad of [0, 31, 2.5, "soon", true]) {
+    const res = await patch(platform, ns, { reviewTargetDays: bad });
+    assert.ok(!res.ok && res.status === 422, `expected 422 for ${JSON.stringify(bad)}`);
+    if (!res.ok) assert.match(res.error, /whole number of business days from 1 to 30/);
+    assert.equal((await row()).reviewTargetDays, 2, `a refused write must not change the row (${JSON.stringify(bad)})`);
+  }
+
+  // ── authority: platform admins only, even for an admin of this very namespace ───────────
+  const refused = await patch(nsAdmin, ns, { reviewTargetDays: 5 });
+  assert.deepEqual(refused, { ok: false, status: 403, error: "platform admin required" });
+  assert.equal((await row()).reviewTargetDays, 2);
+  const unknown = await patch(platform, randomUUID(), { reviewTargetDays: 5 });
+  assert.ok(!unknown.ok && unknown.status === 404);
+
+  // ── clearing: null stored, and the due dates gone with it ───────────────────────────────
+  assert.deepEqual(await patch(platform, ns, { reviewTargetDays: null }), { ok: true, tokensRevoked: 0 });
+  v = await row();
+  assert.equal(v.reviewTargetDays, null);
+  assert.equal(v.overdueProposals, 0, "no target, nothing overdue");
+  t = await turn(pWaiting);
+  assert.equal(t.turn_due_at, null);
+
+  // ── audit: one `namespace.updated` per accepted change, none for a refusal ──────────────
+  const audits = (await pool.query<{ before: { reviewTargetDays?: number | null }; after: { reviewTargetDays?: number | null } }>(
+    `select before, after from audit_log
+      where action = 'namespace.updated' and namespace_id = $1 and actor_user_id = $2 order by seq`,
+    [ns, actor],
+  )).rows;
+  assert.deepEqual(
+    audits.map((a) => [a.before.reviewTargetDays ?? null, a.after.reviewTargetDays ?? null]),
+    [[null, 2], [2, null]],
+  );
+
+  // ── the card's other writes still land through the same PATCH ───────────────────────────
+  assert.deepEqual(await patch(platform, ns, { requireReview: false }), { ok: true });
+  assert.equal((await row()).requireReview, false);
+  assert.deepEqual(await patch(platform, ns, { maintainerContact: `${tag}@example.com` }), { ok: true });
+  assert.equal((await row()).maintainerContact, `${tag}@example.com`);
+  const badContact = await patch(platform, ns, { maintainerContact: "not an email" });
+  assert.ok(!badContact.ok && badContact.status === 422);
+  assert.equal((await row()).reviewTargetDays, null, "an unrelated write leaves the target alone");
 });
