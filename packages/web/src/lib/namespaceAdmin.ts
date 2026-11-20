@@ -3,6 +3,7 @@
 //
 // This is deliberately a DUAL surface, not a migration: Administration → Namespaces keeps every
 // control it had, and both paths write through here so validation and audit are identical.
+import type { Pool } from "pg";
 import type { EffectiveAccess } from "@skilly/shared";
 import { PUBLIC_SCOPE, canManageNamespaceSettings, marketplaceName, maintainerContactError, normalizeMaintainerContact, normalizeReviewTarget, reviewTargetError } from "@skilly/shared";
 import { pool } from "./db";
@@ -36,17 +37,43 @@ export interface NamespaceAdminView {
   overdueProposals: number;
 }
 
-/** §65.7: one namespace's live open / unassigned / overdue proposal counts. */
-async function proposalCounts(namespaceId: string): Promise<{ open: number; unassigned: number; overdue: number }> {
-  const { rows } = await pool.query<{ open: number; unassigned: number; overdue: number }>(
-    `select count(*)::int as open,
+/** §65.7 live proposal counts: open (the open states), open with no assignee, and reviewer-turn
+ *  proposals past their due instant. */
+export interface ProposalCounts { open: number; unassigned: number; overdue: number }
+
+const NO_PROPOSALS: ProposalCounts = { open: 0, unassigned: 0, overdue: 0 };
+
+/**
+ * §65.7 counts for several namespaces in ONE query — the Administration → Namespaces card reads a
+ * page of up to 100 namespaces at a time (§75.5). A namespace with no open proposal is absent from
+ * the map; read it with `?? { open: 0, … }`. `db` lets a caller holding its own pool reuse it.
+ */
+export async function proposalCountsByNamespace(
+  namespaceIds: readonly string[],
+  db: Pick<Pool, "query"> = pool,
+): Promise<Map<string, ProposalCounts>> {
+  const out = new Map<string, ProposalCounts>();
+  if (namespaceIds.length === 0) return out;
+  const { rows } = await db.query<{ ns: string; open: number; unassigned: number; overdue: number }>(
+    `select ns, count(*)::int as open,
             count(*) filter (where assignee_id is null)::int as unassigned,
             count(*) filter (where state in ('proposed','under_review') and turn_due_at is not null and turn_due_at <= now())::int as overdue
-       from proposals
-      where (case when state = 'awaiting_destination' and destination_namespace_id is not null then destination_namespace_id else target_namespace_id end) = $1 and state in ('proposed','under_review','changes_requested','awaiting_destination')`,
-    [namespaceId],
+       from (select p.state, p.assignee_id, p.turn_due_at,
+                    (case when p.state = 'awaiting_destination' and p.destination_namespace_id is not null
+                          then p.destination_namespace_id else p.target_namespace_id end) as ns
+               from proposals p
+              where p.state in ('proposed','under_review','changes_requested','awaiting_destination')) q
+      where ns = any($1::uuid[])
+      group by ns`,
+    [namespaceIds],
   );
-  return rows[0] ?? { open: 0, unassigned: 0, overdue: 0 };
+  for (const r of rows) out.set(r.ns, { open: r.open, unassigned: r.unassigned, overdue: r.overdue });
+  return out;
+}
+
+/** §65.7: one namespace's live open / unassigned / overdue proposal counts. */
+async function proposalCounts(namespaceId: string): Promise<ProposalCounts> {
+  return (await proposalCountsByNamespace([namespaceId])).get(namespaceId) ?? NO_PROPOSALS;
 }
 
 /** Namespace ids the caller may administer: all of them for a platform admin, else the ones

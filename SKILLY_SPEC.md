@@ -570,7 +570,9 @@ Two role scopes. Roles derive **only** from `role_mappings` against SCIM-synced 
     - **What sets it (answers 1a+1b, 2).** Two gestures write the key: **expanding** a card via
       its header, and **any interaction inside a card's body** — a pointer press or keyboard focus
       landing anywhere in the body (a click, typing in a field, saving), so keyboard-only admins
-      get the same behavior. **Collapsing never counts** as watching.
+      get the same behavior. **Collapsing never counts** as watching. One navigation writes it
+      too: a platform admin who opens `/namespaces` is redirected here with the key set to
+      `namespaces` (§75.3).
     - **What clears it (answers 4, 2, 15).** Three gestures clear the key: **Expand all /
       Collapse all** (a bulk choice is not "watching" a card); **collapsing the currently
       remembered card** (otherwise the auto-expand on return would silently override the admin's
@@ -1919,7 +1921,7 @@ REST under `/api`, **session-authenticated** (Auth.js/Entra — there is **no PA
 - `GET /api/admin/rum/summary?range=7|30|90|all` (chart series + per-route table incl. the `all` row), `GET /api/admin/rum/routes/:route/users?range=7|30` (top-20 affected users; 422 for 90/all), `GET /api/admin/rum/errors?range=&offset=&limit=` (fingerprinted client errors) — all **platform-admin only** (403), §32.8. `GET|PATCH /api/admin/settings` gains `rum_enabled` / `rum_sample_rate`, §32.6.
 
 **Administration**
-- `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin.
+- `GET/POST /api/admin/namespaces` (+ `:id`), `GET/POST /api/admin/role-mappings` (+ `:id`) — platform-admin. `GET` returns each namespace's review target and live proposal counts, and `PATCH :id` accepts `reviewTargetDays` (§75.5).
 - `GET /api/admin/namespaces/:id/deletion` (the preflight) and `DELETE /api/admin/namespaces/:id` `{ confirmSlug, reason? }` — platform-admin; deletes an empty namespace (§72.9).
 - `GET /api/admin/users/online` (presence, §4), `GET /api/admin/users/search?q=`, `POST /api/admin/users/:id/erase` (GDPR, §4).
 - `PUT /api/admin/ai/prereview { enabled }` — the AI pre-review switch (§46.2, platform-admin); `GET /api/admin/ai` gains `prereview`.
@@ -5896,9 +5898,10 @@ false`; `marketplace_public_enabled` starts `false`. Nothing is served until som
 - Both transitions are **audited** (§30.8).
 
 **Page 1 — Namespace administration (`/namespaces`), new.** One page listing **every
-namespace the caller administers** (platform admins see all; namespace admins see theirs;
-anyone else gets 403 and no nav entry). It is the **new home for namespace settings
-generally**, not a single-toggle page:
+namespace the caller administers**. It is the page for **namespace admins who are not platform
+admins**: a platform admin has no nav entry for it and is redirected to Administration, whose
+Namespaces card carries the same settings (§75). Anyone else gets 403 and no nav entry. It is
+the **new home for namespace settings generally**, not a single-toggle page:
 
 - **Claude plugin marketplace** — an **on/off switch** (the shared `Switch`, below), the
   computed marketplace name, the **shared add-command panel** (Page 3, below — same three route
@@ -5967,9 +5970,11 @@ generally**, not a single-toggle page:
   policy saved.*, and the marketplace enable/disable messages alike). Skeletons are therefore for
   the **first load only** (`loading && data === null`); while a refetch is in flight the
   already-rendered list stays put.
-- **The platform Administration → Namespaces card keeps all three.** Platform admins edit
-  from either surface; the two write through the same endpoints and audit identically. This
-  is a deliberate dual surface, not a migration. Its **review** and **marketplace** controls
+- **The platform Administration → Namespaces card keeps all three.** It is the platform
+  admin's surface for namespace settings — since §75 their only one, because Page 1 is no
+  longer offered to them. The card and Page 1 write through the same writer, validate
+  identically and audit identically. It also carries the **review target** and each namespace's
+  **policy rules** (§75.4). Its **review** and **marketplace** controls
   are the **same `Switch`** as Page 1 — labelled **"Require review"** and **"Marketplace"**
   in the card's compact header row — with the **same confirm dialogs** on switching off
   (review-off and marketplace-disable) and the same read-only rendering for `global`'s
@@ -6011,8 +6016,8 @@ generally**, not a single-toggle page:
   is expanded because nothing here collapses. Browser preference only — never in the URL, never
   server-side.
 - Nav: a **Namespace administration** entry in the sidebar's **Administration** group (§71),
-  directly under **Platform administration**, rendered only when the caller administers ≥ 1
-  namespace.
+  rendered only when the caller administers ≥ 1 namespace **and is not a platform admin**
+  (§75).
 
 **Leaderboard note on Pages 2 and 3.** The add-command panel (Page 3, and Page 1 after a mint,
 which share it) and Page 2's introduction carry one line: *"Adding a marketplace delivers every skill in it. Those deliveries do not
@@ -6047,7 +6052,9 @@ per marketplace, a bubble for the namespace's contact, and per-row actions. Avai
   surfaces were admin pages (Namespace administration, Administration) plus the public card on
   Page 2. A namespace *member* had no UI at all. This page closes that gap and becomes the
   **single consumer-side mint surface**; the two admin surfaces keep their Generate buttons
-  (an admin verifying a freshly enabled marketplace should not have to leave the page).
+  (an admin verifying a freshly enabled marketplace should not have to leave the page). A
+  platform admin, who no longer opens Namespace administration (§75), mints a namespace's add
+  command here: this page lists every enabled namespace marketplace for them.
 - **Which rows appear — and nothing else.** Served by `GET /api/marketplaces/directory`:
   - the **public marketplace**, **pinned first**, iff `marketplace_public_enabled` is on;
   - then **every namespace the caller may mint for** — namespaces they hold **any role in**
@@ -12236,8 +12243,9 @@ audited override. The model informs the decision and never takes it.
 - **Who:** namespace rules — that namespace's admins and platform admins; platform rules —
   platform admins only. Explicit maintainers and grantee-namespace admins have no authority.
 - **Where:** a **"Policy rules"** section on each namespace's block on the Namespace administration
-  page (§30.6), and a collapsed-by-default **"Platform policy rules"** card on the Administration
-  page. One shared editor: the scope's rules (title, a Shadow / Enforced / Disabled switch-group,
+  page (§30.6); the same section on each namespace of the Administration → Namespaces card, which
+  is where a platform admin writes a namespace's rules (§75.4); and a collapsed-by-default
+  **"Platform policy rules"** card on the Administration page. One shared editor: the scope's rules (title, a Shadow / Enforced / Disabled switch-group,
   revision count, last edited by/at, catalog violation counts) plus an **Add rule** form (**Title**,
   **Rule**, **Context for the pre-reviewer (optional)**, starting state, default Shadow).
 - **Validation (shared, browser and server):** the §47.2 lengths; titles unique per scope,
@@ -12472,7 +12480,8 @@ telemetry, not audit.
   evidence verification and downgrade; the cache reused only under identical rules; a rule change
   queues open proposals (not for Shadow) and latest versions; a stale landing re-queues; onset
   notification + audit once; `proposal.policy_violation` once and never for a cached link.
-- **e2e:** write an enforced rule on the Namespace administration page → the propose form shows it →
+- **e2e:** write an enforced rule in a namespace's Policy rules section (on the Administration →
+  Namespaces card, §75.6) → the propose form shows it →
   a proposal in that namespace shows the Policy section → accepting needs the override, which lists
   the rule → the published skill shows the policy chip. (With the stub provider and the switch on:
   the run reports a violation with its excerpt.)
@@ -15366,7 +15375,7 @@ machine.
 | 16 | **The proposer is reminded once** when their *changes requested* turn runs past the same target. That reminder has no escalation. | A proposal waiting on its proposer shouldn't be forgotten either. |
 | 17 | **Changing the target re-dates every open proposal in the namespace.** | The target is the namespace's current promise, not a contract fixed per proposal. |
 | 18 | **A repository import can be assigned in one action** (§64), with *Assign all open* on the queue filtered to that import. There is no general multi-select. | An import lands up to 50 proposals at once. No other bulk assignment has been asked for. |
-| 19 | **Live counts only.** The Namespace administration page shows each namespace's open, unassigned and overdue counts. It shows no turnaround history. | It answers *"what needs attention now?"* Metrics over time are out of scope. |
+| 19 | **Live counts only.** The Namespace administration page, and the Administration → Namespaces card (§75.4), show each namespace's open, unassigned and overdue counts. They show no turnaround history. | It answers *"what needs attention now?"* Metrics over time are out of scope. |
 
 ### 65.2 Eligibility and assigning
 - **Eligible assignee.** An active user who, when checked, is a platform admin, a namespace admin of
@@ -15403,8 +15412,9 @@ machine.
 - **The setting.** `namespaces.review_target_days`: empty, or a whole number of business days from
   1 to 30. One shared validator, in the client-safe `@skilly/shared/review-target`, runs in the
   browser and on the server (**422** otherwise). It is edited on the Namespace administration page
-  (§65.7) through `PATCH /api/namespaces/:id/settings`, and `global` may have a target. A change is
-  audited as the existing `namespace.updated`.
+  (§65.7) through `PATCH /api/namespaces/:id/settings`, and by platform admins on the
+  Administration → Namespaces card through `PATCH /api/admin/namespaces/:id` (§75.4). `global` may
+  have a target. A change is audited as the existing `namespace.updated`.
 - **Turns.** An open proposal is always in one turn. The **reviewer turn** covers `proposed` and
   `under_review`, and the **proposer turn** covers `changes_requested`. A decided proposal has no
   turn. `proposals.turn_started_at` is stamped whenever the proposal moves into a different turn: at
@@ -15535,8 +15545,8 @@ A **leader-only worker sweep** runs every **15 minutes**. Each pass does four st
 - **A *Review target* field** on each namespace on `/namespaces` (§30.6): a number input labelled
   *business days*, where empty means no target. Its help text reads *"Proposals waiting longer than
   this remind their reviewer. Leave empty for no target."* It has a **Save** button and the success
-  message *Review target saved.* `global` is editable by platform admins, unlike its `require_review`
-  switch. The field is not on the Administration → Namespaces card.
+  message *Review target saved.* `global` is editable, unlike its `require_review` switch. Platform
+  admins get the same field and counts on the Administration → Namespaces card (§75.4).
 - **Live counts** for each namespace: **open** (the three open states), **unassigned** (open with no
   assignee) and, while a target is set, **overdue** (§65.3). Each links to the To review queue
   narrowed with `ns=`, and with `assignee=none` or `overdue=1` for the last two.
@@ -15669,7 +15679,8 @@ count, byName }`. The three reminders carry `{ nsId, ns, days, count, proposalId
   - an ineligible assignee is cleared before reminders, and the pool is alerted only in the
     reviewer turn.
 - **e2e:**
-  - a namespace admin sets a 1-day target on `/namespaces`;
+  - the platform-admin dev user sets a 1-day target on the Administration → Namespaces card
+    (§75.6);
   - on a seeded proposal they choose **Assign to me**, and the queue row shows their name;
   - *Assigned to me* and *Unassigned* narrow the list;
   - a seeded proposal past its due instant shows **Overdue** and is listed by the *Overdue* filter;
@@ -17104,7 +17115,7 @@ Top to bottom. Each item is shown only to its audience, which is unchanged from 
 | # | Sidebar label | Route | Shown to | Badge |
 |---|---|---|---|---|
 | 1 | Platform administration | `/admin` | platform admins | — |
-| 2 | Namespace administration | `/namespaces` | platform admins and namespace admins (§30.6) | — |
+| 2 | Namespace administration | `/namespaces` | namespace admins who are **not** platform admins (§30.6, §75) | — |
 | 3 | Audit log | `/audit` | platform admins and namespace admins (§11) | — |
 | 4 | System log | `/system-log` | platform admins | events since the last visit (§25) |
 | 5 | Monitoring | `/admin/rum` | platform admins | — |
@@ -17112,8 +17123,9 @@ Top to bottom. Each item is shown only to its audience, which is unchanged from 
 | 7 | Search gaps | `/admin/search-gaps` | platform admins | reviewable gaps (§62.7) |
 | 8 | Signing | `/admin/signing` | platform admins (§73.8) | — |
 
-- A platform admin sees all eight. A namespace admin who is not a platform admin sees items 2 and
-  3. Everyone else sees no group.
+- A platform admin sees seven: every item except Namespace administration, which duplicates the
+  Namespaces card of their own Administration page (§75). A namespace admin who is not a platform
+  admin sees items 2 and 3. Everyone else sees no group.
 - **Glyphs.** The header takes the shield glyph the `/admin` link used. *Platform administration*
   gets a settings (sliders) glyph so the two rows don't repeat one icon. Every other item keeps its
   glyph.
@@ -17145,8 +17157,9 @@ Top to bottom. Each item is shown only to its audience, which is unchanged from 
 - **It opens on its own pages.** Every navigation that lands on a group route opens the group and
   stores `open`. That covers a sidebar click, a link from a notification or another page, a reload
   and a deep link. The group routes are `/admin` and every path under it, `/namespaces`, `/audit`,
-  `/system-log`, and any path under those three. A navigation to any other page leaves the state
-  as it is.
+  `/system-log`, and any path under those three. A route counts only for a viewer who has its
+  item, so `/namespaces` is not a group route for a platform admin (§75); they are redirected to
+  `/admin`, which is. A navigation to any other page leaves the state as it is.
 - **Collapsing on one of its pages is allowed.** The header then takes the active highlight (the
   style of an active nav item) so the viewer can still see where they are. The group stays shut
   until the next navigation to a group route, which opens it again.
@@ -17190,8 +17203,9 @@ Top to bottom. Each item is shown only to its audience, which is unchanged from 
 ### 71.8 Tests (ship with the change, §16 discipline)
 
 - **Unit** (a pure helper in `packages/web/src/lib/`):
-  - the items for a viewer: a platform admin gets all seven in order, a namespace admin gets
-    Namespace administration and Audit log, anyone else gets none;
+  - the items for a viewer: a platform admin gets every item except Namespace administration, in
+    order (§75), a namespace admin gets Namespace administration and Audit log, anyone else gets
+    none;
   - whether a path is a group route;
   - which item is active (longest prefix, so `/admin/rum` lights Monitoring only);
   - the collapsed header's badge sum, including 9+ and a zero sum;
@@ -17199,7 +17213,8 @@ Top to bottom. Each item is shown only to its audience, which is unchanged from 
     unavailable storage means collapsed.
 - **E2E:** `access-gating.spec.ts` stops looking up the *Administration* link by exact name. As the
   dev admin: the *Administration* button is present and collapsed on the home page, opening it
-  shows the seven items in order, and the open state survives a reload. Going to Feature ideas
+  shows the platform admin's seven items in order (no Namespace administration, §75), and the open
+  state survives a reload. Going to Feature ideas
   from a page outside the group opens it. Collapsing it there gives the header the active
   highlight.
 - **No DB or API tests.** Nothing server-side changes.
@@ -18325,3 +18340,154 @@ list.
     belong to, even when that is the right home.
   - The audit row lives under A, so B's admins don't find the move in their namespace's audit
     view. The proposal's History shows it to them.
+
+---
+
+## 75. Namespace administration is for namespace admins
+
+A platform admin manages namespaces on the **Namespaces card** of the Administration page (§5).
+The **Namespace administration** page (`/namespaces`, §30.6) showed them the same namespaces a
+second time. It is now the page for **namespace admins who are not platform admins**. A platform
+admin has no sidebar item for it and is sent to Administration when they open it.
+
+Two settings existed only on Namespace administration: a namespace's **review target** (§65.7) and
+its **policy rules** (§47.3). Both are added to the Namespaces card, so a platform admin loses
+nothing.
+
+### 75.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | A platform admin gets **no sidebar item** for Namespace administration. | The Namespaces card already lists every namespace. One job had two screens. |
+| 2 | A platform admin who opens `/namespaces` is **redirected to `/admin`**, where the Namespaces card opens. | Bookmarks and old links still lead to the settings they were for. |
+| 3 | **Platform admin wins.** A platform admin who is also a namespace admin through a group mapping is treated as a platform admin. | They already administer every namespace from Administration. |
+| 4 | The Namespaces card gains the **review target with its live counts** and each namespace's **policy rules**. | The card must hold everything the page did before the page is taken away. |
+| 5 | **No endpoint changes who it answers.** Every endpoint the page uses still answers a platform admin. | This removes a duplicate screen. It removes no permission. |
+| 6 | The card gains **no** *Generate add command* button. A platform admin mints a namespace's add command on the Marketplaces page (§30.6 Page 3). | That page lists every enabled namespace marketplace for a platform admin, and the card never had the button. |
+| 7 | Nothing changes for a namespace admin who is not a platform admin. | The page was built for them. |
+
+### 75.2 The sidebar and the links
+
+- The **Namespace administration** item (§71.2) is shown to a viewer who administers at least one
+  namespace and is **not** a platform admin.
+- A platform admin's Administration group has seven items: Platform administration, Audit log,
+  System log, Monitoring, Feature ideas, Search gaps and Signing.
+- The Administration page's *Claude plugin marketplaces* card no longer links to `/namespaces`.
+  Its sentence about namespace marketplaces points to the Namespaces card on the same page.
+- The Namespace administration page's introduction drops the sentence *"Platform admins can also
+  edit most of these from Administration."* No platform admin reads that page any more.
+
+### 75.3 Opening `/namespaces` as a platform admin
+
+- **Redirect.** The page replaces itself with `/admin`. It is a replace, so *Back* does not
+  return to `/namespaces`. A query string or `#hash` on the old URL is dropped.
+- **Which card opens.** Before it navigates, the page sets the Administration page's last-watched
+  card to `namespaces` (`skilly.admin.last-card`, §5). The Administration page's existing arrival
+  behavior then expands the Namespaces card, scrolls its header to the center and flashes it. No
+  URL parameter and no anchor are added. Where storage is unavailable, the admin lands at the top
+  of Administration with the card as they left it.
+- **No flash of the page.** `/namespaces` shows its loading skeleton until the viewer's role is
+  known (`GET /api/me`). A platform admin never sees the namespace list, and the page does not
+  request `GET /api/namespaces/administered` for them.
+- **A convenience.** The redirect runs in the browser, on the role the server reports (resolved
+  from SCIM groups, invariant #1). It is not an access control (§75.5).
+- The `skilly.namespaces.last-card` preference (§30.6) stays as it is in a platform admin's
+  browser. Nothing reads it for them.
+
+### 75.4 What the Namespaces card gains
+
+Each namespace's block on the Administration → Namespaces card (§30.6) gains two parts. Both reuse
+the components Namespace administration uses, so the two surfaces can't drift.
+
+**Review target (§65.7).**
+
+- **Placement.** Directly under *Maintainer contact*, above the *Role mappings* divider.
+- **The same field.** A number input with *business days*, **Save**, the help text *"Proposals
+  waiting longer than this remind their reviewer. Leave empty for no target."*, the shared
+  validator (empty, or 1–30) and the confirmation *Review target saved.*
+- **One shared component, two layouts**, as for the maintainer contact (§30.6). This card puts its
+  uppercase micro-label above the field. Namespace administration keeps the label beside it.
+- **Live counts** under the field: **open**, **unassigned** and, while a target is set,
+  **overdue** (§65.7). Each links to the To review queue narrowed to that namespace, as on
+  Namespace administration.
+- `global` has the field too.
+- Saving writes through `PATCH /api/admin/namespaces/:id` (§75.5).
+
+**Policy rules (§47.3).**
+
+- **Placement.** A **"Policy rules"** disclosure at the end of the namespace's block, after *Role
+  mappings*. It is collapsed by default and its open state is not remembered.
+- **Content.** The shared rule editor for that namespace, then the namespace's flagged and noted
+  versions with the Shadow preview (§47.9). The content, notices and validation are those of
+  Namespace administration.
+- **Loaded on first open.** The card shows up to 100 namespaces per page, so a block fetches its
+  rules and its flagged versions only when its disclosure is first opened. Namespace
+  administration keeps loading them with the page.
+- The *Platform policy rules* card and the platform flag list on the same page are unchanged.
+  They cover the platform's rules and every namespace's flags. This disclosure covers one
+  namespace's own rules.
+- No new endpoint. The rule endpoints (§47.11) and `GET /api/namespaces/:id/policy/flags` already
+  answer a platform admin.
+
+**Not added.** The marketplace name, the *"N skills in M plugins"* line and *Generate add
+command* stay on Namespace administration only. A platform admin finds all three on the
+Marketplaces page, for every enabled marketplace (decision 6).
+
+**Last-watched card.** Using either new part is an interaction inside the Namespaces card, so it
+marks that card as last watched (§5), like every other control in it.
+
+### 75.5 API
+
+- **`GET /api/admin/namespaces`**, in both its full-config and paged-list forms, returns for each
+  namespace `reviewTargetDays` (`null` or 1–30), `openProposals`, `unassignedProposals` and
+  `overdueProposals`, with the §65.7 definitions. The counts for a page of namespaces come from
+  one query.
+- **`PATCH /api/admin/namespaces/:id`** accepts `reviewTargetDays` (`null` or 1–30, otherwise
+  **422** with the shared validator's message). It goes through the same writer as `PATCH
+  /api/namespaces/:id/settings`, so the re-dating of the namespace's open proposals (§65.3) and
+  the `namespace.updated` audit row are identical. It stays platform admins only (**403**).
+- **Unchanged, and still open to a platform admin:** `GET /api/namespaces/administered`,
+  `GET|PATCH /api/namespaces/:id/settings`, `GET /api/namespaces/:id/policy/flags`, the policy
+  rule endpoints and `POST /api/marketplaces/tokens`.
+- **No migration.** No new audit action, notification or setting.
+
+### 75.6 Tests (ship with the change, §16 discipline)
+
+- **Unit** (web):
+  - the sidebar helper: a platform admin gets every item except Namespace administration; a
+    platform admin who is also a namespace admin gets that same list; a namespace admin gets
+    Namespace administration and Audit log; `/namespaces` is not a group route for a platform
+    admin;
+  - the page's gate, as a pure helper: role unknown waits, a platform admin redirects, anyone
+    else renders.
+- **Integration** (web + DB):
+  - `GET /api/admin/namespaces` returns the target and the three counts for a namespace with
+    seeded proposals;
+  - `PATCH /api/admin/namespaces/:id` saves and clears the target, refuses 0, 31 and a
+    non-number with **422**, writes `namespace.updated`, re-dates an open proposal, and answers
+    **403** to a namespace admin.
+- **E2E** (as the platform-admin dev user):
+  - the Administration group lists no Namespace administration item;
+  - opening `/namespaces` lands on `/admin` with the Namespaces card open;
+  - the specs that drove these controls on `/namespaces` drive them on the card: the review
+    target (`review-assignments`), an enforced policy rule (`policy`), the maintainer contact
+    (`maintainer-contact`) and the two switches (`namespace-switches`). The Namespace
+    administration half of `last-watched-card` is removed.
+- **Accepted gap.** The dev sign-in provider signs in platform admins only (§16 item 18), so no
+  e2e spec can open `/namespaces` as a namespace admin any more. The page is built from the
+  shared components the card specs exercise, its last-watched rules keep their unit tests, and
+  its endpoints keep their integration tests as a namespace admin.
+
+### 75.7 Out of scope and accepted trade-offs
+
+- **Out of scope:**
+  - changing Namespace administration for namespace admins;
+  - an e2e identity that is a namespace admin and not a platform admin;
+  - marketplace minting on the Namespaces card;
+  - a deep link to one namespace on the Administration page.
+- **Accepted trade-offs:**
+  - A platform admin no longer sees how many skills a **disabled** namespace marketplace would
+    publish. The Marketplaces page shows the count once it is enabled.
+  - The redirect opens the Namespaces card and no particular namespace. The card's search finds
+    one.
+  - A platform admin who opens `/namespaces` sees a skeleton for a moment before the redirect.

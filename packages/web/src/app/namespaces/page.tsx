@@ -1,16 +1,17 @@
 "use client";
-import { useId, useState } from "react";
-import Link from "next/link";
-import { normalizeReviewTarget, reviewTargetError } from "@skilly/shared/review-target";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useApi, Pill, EmptyState, ScrollToTop, Switch } from "../../components/ui";
-import { PolicyFlagsList, PolicyRulesEditor } from "../../components/PolicyRulesEditor";
+import { NamespacePolicyRules } from "../../components/PolicyRulesEditor";
 import { RequireAuth } from "../../components/RequireAuth";
 import { ExpiryPicker } from "../../components/ExpiryPicker";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
+import { ReviewTargetField } from "../../components/ReviewTargetField";
 import { MarketplaceAddCommand, type MarketplaceMint } from "../../components/MarketplaceAddCommand";
 import { ShareUsageCheckbox, useUsageSharing } from "../../components/UsageShare";
 import { useLastWatched } from "../../lib/useLastWatched";
-import { PREF_NS_LAST_CARD } from "../../lib/prefs";
+import { namespacesPageGate } from "../../lib/adminNav";
+import { PREF_ADMIN_LAST_CARD, PREF_NS_LAST_CARD, writePref } from "../../lib/prefs";
 
 /** One namespace the caller administers (SKILLY_SPEC.md §30.6). */
 interface NamespaceRow {
@@ -30,61 +31,6 @@ interface NamespaceRow {
   openProposals: number;
   unassignedProposals: number;
   overdueProposals: number;
-}
-
-/**
- * §65.7 the namespace's review target (empty = none, else 1–30 business days — the shared validator
- * the server runs too) and its live proposal counts, each linking to the narrowed To review queue.
- */
-function ReviewTargetField({ ns, busy, onSave }: { ns: NamespaceRow; busy: boolean; onSave: (days: number | null) => Promise<boolean> }) {
-  const id = useId();
-  const [text, setText] = useState(ns.reviewTargetDays == null ? "" : String(ns.reviewTargetDays));
-  const error = reviewTargetError(text);
-  const dirty = !error && normalizeReviewTarget(text) !== ns.reviewTargetDays;
-  const q = (extra: string) => `/proposals?tab=review&ns=${encodeURIComponent(ns.slug)}${extra}`;
-  return (
-    <div data-testid="ns-review-target">
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <label htmlFor={id} style={{ fontSize: 13.5 }}>Review target</label>
-        <input
-          id={id}
-          className="input"
-          type="number"
-          min={1}
-          max={30}
-          step={1}
-          inputMode="numeric"
-          placeholder="none"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && dirty && !busy) { e.preventDefault(); void onSave(normalizeReviewTarget(text)); } }}
-          aria-describedby={`${id}-help`}
-          aria-invalid={!!error}
-          style={{ width: 90 }}
-          data-testid="ns-review-target-input"
-        />
-        <span className="muted" style={{ fontSize: 12.5 }}>business days</span>
-        <button type="button" className="btn btn-sm" disabled={busy || !dirty} onClick={() => void onSave(normalizeReviewTarget(text))} data-testid="ns-review-target-save">
-          Save
-        </button>
-      </div>
-      <div id={`${id}-help`} className="muted" style={{ fontSize: 12, marginTop: 5 }}>
-        Proposals waiting longer than this remind their reviewer. Leave empty for no target.
-      </div>
-      {error && <div role="alert" style={{ fontSize: 12.5, color: "var(--danger)", marginTop: 4 }}>{error}</div>}
-      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }} data-testid="ns-review-counts">
-        <Link href={q("")}>{ns.openProposals} open</Link>
-        {" · "}
-        <Link href={q("&assignee=none")}>{ns.unassignedProposals} unassigned</Link>
-        {ns.reviewTargetDays != null && (
-          <>
-            {" · "}
-            <Link href={q("&overdue=1")} style={ns.overdueProposals > 0 ? { color: "var(--danger)" } : undefined}>{ns.overdueProposals} overdue</Link>
-          </>
-        )}
-      </div>
-    </div>
-  );
 }
 
 // `watch` / `flash`: the last-watched card behavior (§30.6) — any pointer press or keyboard focus
@@ -209,8 +155,16 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
         onSave={(v) => patch({ maintainerContact: v }, null)}
       />
 
-      {/* --- Review target (§65.7) — editable for global too, unlike its review switch. */}
-      <ReviewTargetField ns={ns} busy={busy} onSave={(days) => patch({ reviewTargetDays: days }, "Review target saved.")} />
+      {/* --- Review target (§65.7) — editable for global too, unlike its review switch. The same
+          component the Administration card uses (§75.4), in its `inline` layout. */}
+      <ReviewTargetField
+        slug={ns.slug}
+        value={ns.reviewTargetDays}
+        counts={{ open: ns.openProposals, unassigned: ns.unassignedProposals, overdue: ns.overdueProposals }}
+        busy={busy}
+        layout="inline"
+        onSave={(days) => patch({ reviewTargetDays: days }, "Review target saved.")}
+      />
 
       {/* --- Claude plugin marketplace ------------------------------------ */}
       <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }}>
@@ -248,21 +202,15 @@ function NamespaceCard({ ns, maxMonths, onChanged, watch, flash }: {
       </div>
 
       {/* --- Policy rules (§47.3, §47.9) -------------------------------------
-          The shared editor (the same one the Administration card uses at platform scope), then
-          this namespace's flagged / noted versions and the Shadow preview. Collapsed by default. */}
-      <details style={{ borderTop: "1px solid var(--line)", paddingTop: 12 }} data-testid="ns-policy-rules">
-        <summary style={{ cursor: "pointer", fontWeight: 600 }}>Policy rules</summary>
-        <div style={{ marginTop: 10, display: "grid", gap: 14 }}>
-          <PolicyRulesEditor nsSlug={ns.slug} />
-          <PolicyFlagsList endpoint={`/api/namespaces/${ns.id}/policy/flags`} />
-        </div>
-      </details>
+          The shared disclosure (the Administration → Namespaces card shows the same one, §75.4):
+          the rule editor, then this namespace's flagged / noted versions and the Shadow preview.
+          Collapsed by default; here it loads with the page. */}
+      <NamespacePolicyRules nsId={ns.id} nsSlug={ns.slug} />
     </div>
   );
 }
 
-function NamespacesInner() {
-  const { data: me } = useApi<{ installMaxTtlMonths?: number }>("/api/me");
+function NamespacesInner({ maxMonths }: { maxMonths: number }) {
   const { data, loading, error, reload } = useApi<{ namespaces: NamespaceRow[] }>("/api/namespaces/administered");
   const namespaces = data?.namespaces ?? [];
   // Skeletons are for the FIRST load only. `reload()` (which every save calls, to pick up
@@ -288,8 +236,8 @@ function NamespacesInner() {
         <div className="eyebrow">Namespace administration</div>
         <h1 className="page-title">Run your namespaces.</h1>
         <p className="page-sub">
-          Settings for every namespace you administer — review policy and target, maintainer contact, and the
-          Claude plugin marketplace. Platform admins can also edit most of these from Administration.
+          Settings for every namespace you administer — review policy and target, maintainer contact, the
+          Claude plugin marketplace and policy rules.
         </p>
       </div>
 
@@ -311,7 +259,7 @@ function NamespacesInner() {
             <NamespaceCard
               key={ns.id}
               ns={ns}
-              maxMonths={me?.installMaxTtlMonths ?? 12}
+              maxMonths={maxMonths}
               onChanged={reload}
               watch={lastWatched.watch}
               flash={lastWatched.flashId === ns.id}
@@ -323,10 +271,47 @@ function NamespacesInner() {
   );
 }
 
+/**
+ * §75.3 the page's gate. Namespace administration is for namespace admins who are not platform
+ * admins: a platform admin administers every namespace on the Administration page's Namespaces
+ * card, so they are sent there. The redirect marks that card as the Administration page's
+ * last-watched card first, so its own arrival behavior (§5) expands it, scrolls to it and flashes
+ * it — no URL parameter or anchor. `replace`, so Back does not return here.
+ *
+ * Until `/api/me` says who the viewer is, only a skeleton shows: the list below is not mounted, so
+ * a platform admin never sees it and never requests `/api/namespaces/administered`. A convenience,
+ * not an access control — every endpoint keeps its own check.
+ */
+function NamespacesGate() {
+  const router = useRouter();
+  const { data: me, error } = useApi<{ isPlatformAdmin?: boolean; installMaxTtlMonths?: number }>("/api/me");
+  const gate = namespacesPageGate(me, error !== null);
+  useEffect(() => {
+    if (gate !== "redirect") return;
+    writePref(PREF_ADMIN_LAST_CARD, "namespaces");
+    router.replace("/admin");
+  }, [gate, router]);
+
+  if (gate !== "render") {
+    return (
+      <div style={{ maxWidth: 860 }} data-testid="ns-gate-skeleton">
+        <div className="rows">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div className="row" key={i}>
+              <div className="skeleton" style={{ height: 16, width: "45%" }} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return <NamespacesInner maxMonths={me?.installMaxTtlMonths ?? 12} />;
+}
+
 export default function NamespacesPage() {
   return (
     <RequireAuth>
-      <NamespacesInner />
+      <NamespacesGate />
     </RequireAuth>
   );
 }

@@ -17,12 +17,19 @@ import { ContentRiskAdminCard, ContentCheckLine } from "./ContentRiskCard";
 import { QualityLine } from "./QualityLine";
 import { PlatformPolicyRulesCard, PolicyFlagsAdminCard } from "./PolicyCards";
 import { MaintainerContactField } from "../../components/MaintainerContactField";
+import { ReviewTargetField } from "../../components/ReviewTargetField";
+import { NamespacePolicyRules } from "../../components/PolicyRulesEditor";
 import { DeleteNamespaceDialog } from "./DeleteNamespaceDialog";
 import { DEPARTMENT_POPULAR_MIN_COLLEAGUES, DEPARTMENT_POPULAR_WINDOW_DAYS } from "@skilly/shared/department-popular";
 
 type Role = "platform_admin" | "namespace_admin" | "namespace_member";
 interface Mapping { id: string; role: Role; namespaceId: string | null; groupId: string; groupDisplayName: string; groupExternalId: string }
-interface Namespace { id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean; mappings: Mapping[] }
+interface Namespace {
+  id: string; slug: string; displayName: string; requireReview: boolean; maintainerContact: string | null; marketplaceEnabled: boolean;
+  /** §65.3 the review target in business days (null = none) and §65.7 the live proposal counts (§75.5). */
+  reviewTargetDays: number | null; openProposals: number; unassignedProposals: number; overdueProposals: number;
+  mappings: Mapping[];
+}
 interface Group { id: string; externalId: string; displayName: string }
 interface ScimStatus { groupCount: number; userCount: number; lastGroupSyncAt: string | null }
 interface Config { namespaces: Namespace[]; namespacesTotal: number; platformAdminMappings: Mapping[]; groups: Group[]; scim: ScimStatus; settings: { proposalsOpen: boolean; dateFormat: "eu" | "us"; duplicateEnforcement: "block" | "warn"; maxBundleBytes: number; uploadChunkBytes: number; chatPollIntervals: number[]; installMaxTtlMonths: number; maxFeaturedSkills: number; marketplacePublicEnabled: boolean; marketplaceSyncMinutes: number; marketplaceNamePrefix: string; achievementsEnabled: boolean; featureIdeasEnabled: boolean; upstreamReleasesEnabled: boolean; departmentPopularEnabled: boolean; visitsEnabled: boolean; usageInsightsEnabled: boolean } }
@@ -416,7 +423,9 @@ function UsageInsightsSettings({
 
 // Claude plugin marketplaces (§30). Platform admins own the PUBLIC marketplace — the one
 // marketplace with no namespace behind it, carrying every org-visible skill across the platform.
-// Per-namespace marketplaces are toggled on the Namespace administration page instead.
+// Per-namespace marketplaces are toggled by their admins on the Namespace administration page, and
+// by platform admins on this page's Namespaces card (§75 — no link to /namespaces from here: a
+// platform admin who follows it is redirected straight back).
 // Also holds the two platform-wide knobs: the rebuild interval and the name prefix.
 function MarketplaceSettings({
   settings, busy, call, open, onToggle,
@@ -460,7 +469,7 @@ function MarketplaceSettings({
         skilly can serve its catalog to Claude Code as plugin marketplaces (<code>/plugin marketplace add</code>). The
         <strong> public</strong> marketplace below carries every <strong>org-visible</strong> skill across the platform and is
         yours to switch on. Each namespace has its own marketplace for its <strong>restricted</strong> skills, toggled by
-        its admins on <a href="/namespaces">Namespace administration</a>.
+        its admins on Namespace administration, or by you on the <strong>Namespaces</strong> card on this page.
       </p>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
@@ -959,7 +968,7 @@ export default function AdminPage() {
                 <div className="card card-pad muted">No namespaces match your search.</div>
               )}
               {data.namespaces.map((ns) => (
-                <section key={ns.id} className="card card-pad reveal">
+                <section key={ns.id} className="card card-pad reveal" data-ns-card={ns.slug}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <span className="ns" style={{ fontSize: 17 }}>@{ns.slug}</span>
                     <span className="muted">{ns.displayName}</span>
@@ -1013,6 +1022,20 @@ export default function AdminPage() {
                     onSave={(v) => call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ maintainerContact: v }) })}
                   />
 
+                  {/* §75.4: the review target and its live counts — the same component /namespaces
+                      uses, in its `stacked` layout. Platform admins no longer open that page, so
+                      this is where they set a namespace's target (`global` included). */}
+                  <ReviewTargetField
+                    slug={ns.slug}
+                    value={ns.reviewTargetDays}
+                    counts={{ open: ns.openProposals, unassigned: ns.unassignedProposals, overdue: ns.overdueProposals }}
+                    busy={busy}
+                    layout="stacked"
+                    labelStyle={label}
+                    confirmSaved
+                    onSave={(days) => call(`/api/admin/namespaces/${ns.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewTargetDays: days }) })}
+                  />
+
                   <hr className="divider" style={{ margin: "16px 0" }} />
                   <div className="nav-label" style={{ padding: "0 0 10px" }}>Role mappings</div>
                   <MappingList mappings={ns.mappings} onRemove={(id) => call(`/api/admin/role-mappings/${id}`, { method: "DELETE" })} busy={busy} />
@@ -1022,6 +1045,10 @@ export default function AdminPage() {
                     onAdd={(groupId, role) => call(`/api/admin/role-mappings`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId, namespaceId: ns.id, role }) })}
                     busy={busy}
                   />
+
+                  {/* §75.4: this namespace's own policy rules and flagged versions — the disclosure
+                      /namespaces shows, loaded on first open (up to 100 namespaces per page here). */}
+                  <NamespacePolicyRules nsId={ns.id} nsSlug={ns.slug} lazy style={{ marginTop: 16 }} />
                 </section>
               ))}
             </div>

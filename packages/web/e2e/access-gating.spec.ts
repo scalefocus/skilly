@@ -63,7 +63,8 @@ test.describe("access gating", () => {
     await expect(group).toHaveAttribute("aria-expanded", "false", { timeout: 20_000 });
     await expect(items.first()).toBeHidden();
 
-    // Opening shows the eight items, settings first (§71.2). Usage stays in the main nav.
+    // Opening shows the platform admin's seven items, settings first (§71.2) — no Namespace
+    // administration, which is for namespace admins only (§75). Usage stays in the main nav.
     await group.click();
     await expect(group).toHaveAttribute("aria-expanded", "true");
     await expect(items.first()).toBeVisible();
@@ -73,7 +74,6 @@ test.describe("access gating", () => {
     );
     expect(labels).toEqual([
       "Platform administration",
-      "Namespace administration",
       "Audit log",
       "System log",
       "Monitoring",

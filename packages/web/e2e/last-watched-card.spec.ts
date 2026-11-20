@@ -1,18 +1,22 @@
-// e2e: the last-watched card on Administration (§5) and Namespace administration (§30.6). The card
-// the admin last expanded or worked inside is remembered per browser (localStorage
-// `skilly.admin.last-card` / `skilly.namespaces.last-card`) and, on the next visit, auto-expanded
-// (admin only), scrolled to the viewport centre and flashed. Runs against the dev stack
-// (SKILLY_DEV_AUTH=1) — the dev user is a platform admin. Opt-in, not part of `pnpm -r test`.
+// e2e: the last-watched card on Administration (§5). The card the admin last expanded or worked
+// inside is remembered per browser (localStorage `skilly.admin.last-card`) and, on the next visit,
+// auto-expanded, scrolled to the viewport centre and flashed. Also the §75.3 redirect, which rides
+// on it: a platform admin who opens /namespaces lands here with the Namespaces card open. Runs
+// against the dev stack (SKILLY_DEV_AUTH=1) — the dev user is a platform admin. Opt-in, not part of
+// `pnpm -r test`.
+//
+// Namespace administration has the same behavior under `skilly.namespaces.last-card` (§30.6), but
+// no e2e user can open that page: the dev sign-in provider signs in platform admins only, and they
+// are redirected (§75.6). Its rules are the shared ones in lib/lastWatched.ts, unit-tested there.
 //
 // Hardening (helpers/ready.ts): every `page.reload()` here re-runs hydration, and the old spec
 // clicked a card header the instant the server-rendered heading appeared — before the toggle
 // handler existed — so the click was dropped and no key was written. Each navigation and reload
 // now waits for the interactive shell, and stored values are polled rather than read once.
 import { test, expect, devSignIn, type Page } from "./fixtures";
-import { NAV_TIMEOUT, gotoLoaded, gotoReady, reloadReady } from "./helpers/ready";
+import { NAV_TIMEOUT, gotoReady, reloadReady, shellReady } from "./helpers/ready";
 
 const ADMIN_KEY = "skilly.admin.last-card";
-const NS_KEY = "skilly.namespaces.last-card";
 
 const header = (page: Page, title: string) => page.getByRole("button", { name: new RegExp(`^${title}`) });
 const stored = (page: Page, key: string) => page.evaluate((k) => window.localStorage.getItem(k), key);
@@ -119,36 +123,37 @@ test.describe("last-watched card — Administration (§5)", () => {
     await top.click();
     await expect.poll(() => stored(page, ADMIN_KEY)).toBeNull();
   });
-});
 
-test.describe("last-watched card — Namespace administration (§30.6)", () => {
-  test.beforeEach(async ({ page }) => {
-    await devSignIn(page);
-    await gotoLoaded(page, "/namespaces", "/api/namespaces/administered");
-    await expect(page.locator("[data-last-card]").first()).toBeVisible();
-    await page.evaluate((k) => localStorage.removeItem(k), NS_KEY);
-  });
+  test("a platform admin who opens /namespaces lands here with the Namespaces card open (§75.3)", async ({ page }) => {
+    // beforeEach left every card collapsed and nothing remembered. Come from a page outside the
+    // admin group, so Back has somewhere distinct to return to.
+    await gotoReady(page, "/catalog");
+    // The page must never ask for the namespace list on a platform admin's behalf.
+    const listRequests: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("/api/namespaces/administered")) listRequests.push(r.url()); });
 
-  test("interacting inside a namespace card remembers it; return flashes it; a stale id is cleared", async ({ page }) => {
-    const cards = page.locator("[data-last-card]");
-    const last = cards.last();
-    const id = (await last.getAttribute("data-last-card"))!;
-    // Any control inside the card counts — focus the review-policy switch (v1.146.1's `Switch`).
-    await last.getByRole("switch").first().focus();
-    await expect.poll(() => stored(page, NS_KEY)).toBe(id);
+    await page.goto("/namespaces");
+    await page.waitForURL((u) => u.pathname === "/admin", { timeout: NAV_TIMEOUT });
+    await expect(shellReady(page)).toBeVisible({ timeout: NAV_TIMEOUT });
+    await adminLoaded(page);
 
-    await reloadReady(page);
-    const again = page.locator(`[data-last-card="${id}"]`);
-    await expect(again).toBeVisible();
-    // Flash on arrival, then gone. (Scrolling is dropped when the card is already in view — with
-    // the dev seed's short list it usually is — so the flash is the reliable arrival signal.)
-    await expect(again).not.toHaveClass(/card-flash/, { timeout: 4_000 });
-    expect(await stored(page, NS_KEY)).toBe(id);
+    // The redirect marked the Namespaces card as last watched; the page's own arrival opened it,
+    // exactly as a manual expand would have (its open preference is written too).
+    await expect(header(page, "Namespaces")).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(() => stored(page, ADMIN_KEY)).toBe("namespaces");
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("skilly.admin.card.namespaces-open"))).toBe("1");
+    await expect(page.getByLabel("Search namespaces")).toBeVisible();
+    // No query string or anchor was added, and the list was never requested.
+    expect(new URL(page.url()).search).toBe("");
+    expect(new URL(page.url()).hash).toBe("");
+    expect(listRequests).toEqual([]);
 
-    // A namespace no longer administered (or deleted) is forgotten on arrival.
-    await page.evaluate((k) => localStorage.setItem(k, "00000000-0000-0000-0000-000000000000"), NS_KEY);
-    await reloadReady(page);
-    await expect(page.locator("[data-last-card]").first()).toBeVisible();
-    await expect.poll(() => stored(page, NS_KEY)).toBeNull();
+    // The sidebar has no Namespace administration item for a platform admin.
+    await expect(page.locator("aside.sidebar").getByRole("link", { name: "Namespace administration" })).toHaveCount(0);
+
+    // A replace, not a push: Back returns to where the admin came from, not to /namespaces (which
+    // would bounce them straight back here).
+    await page.goBack();
+    await page.waitForURL((u) => u.pathname === "/catalog", { timeout: NAV_TIMEOUT });
   });
 });

@@ -1,7 +1,8 @@
 "use client";
 // The shared policy-rule editor (SKILLY_SPEC.md §47.3): one component for a namespace's "Policy
-// rules" section on the Namespace administration page and the Administration page's "Platform
-// policy rules" card. A list of the scope's rules — title, the Shadow / Enforced / Disabled
+// rules" section (on the Namespace administration page and, for platform admins, on the
+// Administration → Namespaces card — §75.4) and the Administration page's "Platform policy rules"
+// card. A list of the scope's rules — title, the Shadow / Enforced / Disabled
 // switch-group, revision count, last edit, catalog violations — with Edit / History / Delete, plus
 // an Add rule form. Plain text everywhere. Also exports the flagged-versions list both pages use.
 import { useCallback, useEffect, useState } from "react";
@@ -148,6 +149,37 @@ function RuleRow({ rule, busy, onState, onEdit, onDelete }: {
         </ol>
       )}
     </div>
+  );
+}
+
+/**
+ * One namespace's "Policy rules" disclosure (§47.3, §47.9): the rule editor at that namespace's
+ * scope, then its flagged / noted versions and the Shadow preview. Collapsed by default, open state
+ * not remembered. Shared by the Namespace administration page and the Administration → Namespaces
+ * card (§75.4) so the two cannot drift.
+ *
+ * `lazy` = fetch nothing until the disclosure is first opened — the Administration card lists up to
+ * 100 namespaces per page, and an eager section would cost two requests per namespace on load.
+ * Once opened the content stays mounted, so closing it keeps a half-written rule.
+ */
+export function NamespacePolicyRules({ nsId, nsSlug, lazy = false, style }: {
+  nsId: string; nsSlug: string; lazy?: boolean; style?: React.CSSProperties;
+}) {
+  const [opened, setOpened] = useState(!lazy);
+  return (
+    <details
+      style={{ borderTop: "1px solid var(--line)", paddingTop: 12, ...style }}
+      data-testid="ns-policy-rules"
+      onToggle={(e) => { if (e.currentTarget.open) setOpened(true); }}
+    >
+      <summary style={{ cursor: "pointer", fontWeight: 600 }}>Policy rules</summary>
+      {opened && (
+        <div style={{ marginTop: 10, display: "grid", gap: 14 }}>
+          <PolicyRulesEditor nsSlug={nsSlug} />
+          <PolicyFlagsList endpoint={`/api/namespaces/${nsId}/policy/flags`} />
+        </div>
+      )}
+    </details>
   );
 }
 
